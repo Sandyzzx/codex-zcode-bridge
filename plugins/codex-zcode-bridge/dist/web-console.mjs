@@ -6,10 +6,10 @@ var __export = (target, all) => {
 };
 
 // src/web/main.ts
-import { randomUUID as randomUUID3 } from "node:crypto";
-import path6 from "node:path";
+import { randomUUID as randomUUID8 } from "node:crypto";
+import path22 from "node:path";
 import process2 from "node:process";
-import { fileURLToPath as fileURLToPath3 } from "node:url";
+import { fileURLToPath as fileURLToPath9 } from "node:url";
 
 // src/runtime/host-profile.ts
 import { homedir } from "node:os";
@@ -67,7 +67,7 @@ function windowsPowerShellExecutable() {
 }
 function windowsBatchQuery(pids, timeoutMs, onFailure) {
   return new Promise((resolve) => {
-    const script = `$ErrorActionPreference = 'Stop'; foreach ($id in @(${pids.join(",")})) { try { $target = [System.Diagnostics.Process]::GetProcessById($id); try { [Console]::Out.WriteLine(("{0}|{1}" -f $id, $target.StartTime.Ticks)) } finally { $target.Dispose() } } catch [System.ArgumentException] { } }; [Console]::Out.WriteLine('bridge_probe_complete_v1')`;
+    const script = `$ErrorActionPreference = 'Stop'; foreach ($id in @(${pids.join(",")})) { $target = $null; try { try { $target = [System.Diagnostics.Process]::GetProcessById($id) } catch [System.ArgumentException] { continue }; try { [Console]::Out.WriteLine(("{0}|{1}" -f $id, $target.StartTime.Ticks)) } catch [System.InvalidOperationException] { continue } } finally { if ($null -ne $target) { $target.Dispose() } } }; [Console]::Out.WriteLine('bridge_probe_complete_v1')`;
     const child = spawn(windowsPowerShellExecutable(), ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script], {
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
@@ -208,8 +208,8 @@ function createPlatformProbe(options = {}) {
         const map = /* @__PURE__ */ new Map();
         for (const pid of distinct) {
           try {
-            const stat = await readFile(`/proc/${pid}/stat`, "utf8");
-            const afterComm = stat.slice(stat.lastIndexOf(")") + 2);
+            const stat4 = await readFile(`/proc/${pid}/stat`, "utf8");
+            const afterComm = stat4.slice(stat4.lastIndexOf(")") + 2);
             const fields = afterComm.split(" ");
             const starttime = fields[19];
             if (starttime) map.set(pid, starttime.trim());
@@ -248,8 +248,8 @@ function createPlatformProbe(options = {}) {
       if (process.platform === "linux") {
         const map = /* @__PURE__ */ new Map();
         try {
-          const stat = await readFile(`/proc/${pid}/stat`, "utf8");
-          const afterComm = stat.slice(stat.lastIndexOf(")") + 2);
+          const stat4 = await readFile(`/proc/${pid}/stat`, "utf8");
+          const afterComm = stat4.slice(stat4.lastIndexOf(")") + 2);
           const starttime = afterComm.split(" ")[19];
           if (starttime) map.set(pid, starttime.trim());
         } catch {
@@ -272,28 +272,530 @@ function createPlatformProbe(options = {}) {
 }
 
 // src/runtime/sqlite-install-config.ts
-import { existsSync as existsSync2, lstatSync, mkdirSync, readFileSync as readFileSync2, realpathSync } from "node:fs";
+import { existsSync as existsSync3, lstatSync, mkdirSync, readFileSync as readFileSync3, realpathSync } from "node:fs";
 import os from "node:os";
-import path3 from "node:path";
+import path4 from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 
 // src/runtime/resolver.ts
-import { accessSync, existsSync, readFileSync, statSync } from "node:fs";
-import path2 from "node:path";
+import { accessSync, existsSync as existsSync2, readFileSync as readFileSync2, statSync } from "node:fs";
+import { homedir as homedir2 } from "node:os";
+import path3 from "node:path";
 import { fileURLToPath } from "node:url";
+
+// src/runtime/errors.ts
+var BridgeError = class extends Error {
+  code;
+  memberPids;
+  constructor(code, message, options) {
+    super(message, options);
+    this.name = "BridgeError";
+    this.code = code;
+    if (options?.memberPids?.length) this.memberPids = [...new Set(options.memberPids.filter((pid) => Number.isSafeInteger(pid) && pid > 0))];
+  }
+};
+
+// src/runtime/paths.ts
+import { existsSync, readFileSync } from "node:fs";
+import path2 from "node:path";
+function resolveUserHome(env, options = {}) {
+  const platform = options.platform ?? process.platform;
+  const pathImpl = platform === "win32" ? path2.win32 : path2.posix;
+  const homeRaw = env["HOME"]?.trim() || null;
+  const userProfileRaw = env["USERPROFILE"]?.trim() || null;
+  if (platform !== "win32") {
+    if (homeRaw) {
+      return { userHome: pathImpl.resolve(homeRaw), source: "HOME", homeRaw, homeConflict: null };
+    }
+    const fallback2 = userProfileRaw ?? options.fallbackHomeDir ?? "";
+    if (!fallback2) {
+      throw new Error("no user home directory available (HOME is empty and no fallback provided)");
+    }
+    return { userHome: pathImpl.resolve(fallback2), source: userProfileRaw ? "USERPROFILE" : "FALLBACK", homeRaw: null, homeConflict: null };
+  }
+  if (homeRaw) {
+    const rooted = isWindowsAbsolutePath(homeRaw);
+    const matchesUserProfile = userProfileRaw !== null && sameCleanPath(homeRaw, userProfileRaw, pathImpl, true);
+    if (rooted && matchesUserProfile) {
+      return { userHome: pathImpl.resolve(homeRaw), source: "HOME", homeRaw, homeConflict: null };
+    }
+    const conflict = !rooted ? "HOME is set but is not an absolute path" : userProfileRaw === null ? "HOME is set but USERPROFILE is not, so HOME cannot be verified as the current Windows user directory" : "HOME is set but does not match USERPROFILE (test or WSL directories must not override the Windows user directory)";
+    if (userProfileRaw) {
+      return { userHome: pathImpl.resolve(userProfileRaw), source: "USERPROFILE", homeRaw, homeConflict: conflict };
+    }
+    const fallback2 = options.fallbackHomeDir;
+    if (!fallback2) {
+      throw new Error("no Windows user directory available (HOME is invalid and no USERPROFILE or fallback provided)");
+    }
+    return { userHome: pathImpl.resolve(fallback2), source: "FALLBACK", homeRaw, homeConflict: conflict };
+  }
+  if (userProfileRaw) {
+    return { userHome: pathImpl.resolve(userProfileRaw), source: "USERPROFILE", homeRaw: null, homeConflict: null };
+  }
+  const fallback = options.fallbackHomeDir;
+  if (!fallback) {
+    throw new Error("no Windows user directory available (HOME and USERPROFILE are unset and no fallback provided)");
+  }
+  return { userHome: pathImpl.resolve(fallback), source: "FALLBACK", homeRaw: null, homeConflict: null };
+}
+function discoverZCodeData(env, options = {}) {
+  const platform = options.platform ?? process.platform;
+  const pathImpl = platform === "win32" ? path2.win32 : path2.posix;
+  const readFile7 = options.readFile ?? ((filePath) => readFileSync(filePath, "utf8"));
+  const fileExists = options.fileExists ?? existsSync;
+  const home = resolveUserHome(env, options);
+  const settingFile = pathImpl.join(home.userHome, ".zcode", "v2", "setting.json");
+  let settingStatus = "ok";
+  let settingError = null;
+  let configuredDataBaseDir = null;
+  if (!fileExists(settingFile)) {
+    settingStatus = "absent";
+  } else {
+    let text2;
+    try {
+      text2 = readFile7(settingFile);
+    } catch (error2) {
+      settingStatus = isPermissionDeniedCode(error2) ? "permission_denied" : "unreadable";
+      settingError = error2 instanceof Error ? error2.message : String(error2);
+      text2 = "";
+    }
+    if (settingStatus === "ok") {
+      let parsed;
+      try {
+        parsed = JSON.parse(text2);
+      } catch (error2) {
+        settingStatus = "invalid_json";
+        settingError = error2 instanceof Error ? error2.message : String(error2);
+      }
+      if (settingStatus === "ok") {
+        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+          settingStatus = "invalid_shape";
+          settingError = "setting.json must contain a JSON object";
+        } else {
+          const raw = parsed["dataBaseDir"];
+          if (raw === void 0 || raw === null) {
+          } else if (typeof raw !== "string") {
+            settingStatus = "invalid_shape";
+            settingError = "dataBaseDir must be a string when present";
+          } else {
+            const trimmed = raw.trim();
+            if (trimmed && isAbsolutePathForPlatform(trimmed, platform)) {
+              configuredDataBaseDir = pathImpl.resolve(trimmed);
+            } else if (trimmed) {
+              settingError = "dataBaseDir is a relative path and was ignored";
+            }
+          }
+        }
+      }
+    }
+  }
+  const dataBaseDir = configuredDataBaseDir ?? home.userHome;
+  return {
+    userHome: home.userHome,
+    settingFile,
+    settingStatus,
+    settingError,
+    configuredDataBaseDir,
+    dataBaseDir,
+    dataBaseDirSource: configuredDataBaseDir ? "setting.json" : "default",
+    zcodeDataDir: pathImpl.join(dataBaseDir, ".zcode"),
+    zcodeV2Dir: pathImpl.join(dataBaseDir, ".zcode", "v2"),
+    migrated: configuredDataBaseDir !== null
+  };
+}
+function isWindowsAbsolutePath(value) {
+  return /^[A-Za-z]:[\\/]/u.test(value) || /^\/\/[^\\/]+[\\/][^\\/]+(?:[\\/].*)?$/u.test(value) || /^\\\\[^\\/]+[\\/][^\\/]+(?:[\\/].*)?$/u.test(value);
+}
+function isAbsolutePathForPlatform(value, platform = process.platform) {
+  return platform === "win32" ? isWindowsAbsolutePath(value) : path2.isAbsolute(value);
+}
+function isPermissionDeniedCode(error2) {
+  const code = error2?.code;
+  return code === "EACCES" || code === "EPERM";
+}
+function discoverZCodeInstall(env, options = {}) {
+  const platform = options.platform ?? process.platform;
+  const pathImpl = platform === "win32" ? path2.win32 : path2.posix;
+  const fileExists = options.fileExists ?? existsSync;
+  const requireBuiltin = options.requireBuiltin ?? true;
+  const roots = [];
+  const explicit = env["ZCODE_WINDOWS_APP_INSTALL_DIR"]?.trim();
+  if (explicit) roots.push({ root: explicit, source: "ZCODE_WINDOWS_APP_INSTALL_DIR" });
+  const localAppData = env["LOCALAPPDATA"]?.trim();
+  if (localAppData) roots.push({ root: pathImpl.join(localAppData, "Programs", "ZCode"), source: "LOCALAPPDATA" });
+  const programFiles = env["ProgramFiles"]?.trim() ?? env["PROGRAMFILES"]?.trim();
+  if (programFiles) roots.push({ root: pathImpl.join(programFiles, "ZCode"), source: "ProgramFiles" });
+  const candidates = roots.map(({ root, source }) => ({
+    root,
+    source,
+    runtimeExists: fileExists(pathImpl.join(root, "resources", "glm", "zcode.cjs")),
+    builtinExists: fileExists(pathImpl.join(root, "resources", "config", "provider", "zcode-builtin.json"))
+  }));
+  for (const candidate of candidates) {
+    if (!candidate.runtimeExists) continue;
+    if (requireBuiltin && !candidate.builtinExists) continue;
+    return {
+      installDir: candidate.root,
+      source: candidate.source,
+      zcodeEntrypoint: pathImpl.join(candidate.root, "resources", "glm", "zcode.cjs"),
+      builtinConfigFile: requireBuiltin || candidate.builtinExists ? pathImpl.join(candidate.root, "resources", "config", "provider", "zcode-builtin.json") : null,
+      candidates
+    };
+  }
+  return { installDir: null, source: null, zcodeEntrypoint: null, builtinConfigFile: null, candidates };
+}
+function builtinConfigForRuntime(zcodeEntrypoint, platform = process.platform) {
+  const pathImpl = platform === "win32" ? path2.win32 : path2.posix;
+  const resourcesDir = pathImpl.dirname(pathImpl.dirname(zcodeEntrypoint));
+  return pathImpl.join(resourcesDir, "config", "provider", "zcode-builtin.json");
+}
+function sameFileSystemPath(left, right, platform = process.platform) {
+  const pathImpl = platform === "win32" ? path2.win32 : path2.posix;
+  return sameCleanPath(left, right, pathImpl, platform === "win32");
+}
+function sameCleanPath(left, right, pathImpl, caseInsensitive) {
+  const cleanLeft = pathImpl.normalize(left);
+  const cleanRight = pathImpl.normalize(right);
+  return caseInsensitive ? cleanLeft.toLowerCase() === cleanRight.toLowerCase() : cleanLeft === cleanRight;
+}
+
+// src/runtime/resolver.ts
+var PERSISTED_RUNTIME_KEYS = [
+  "ZCODE_BRIDGE_NODE",
+  "ZCODE_BRIDGE_ZCODE_CJS",
+  "ZCODE_BRIDGE_DATA_DIR",
+  "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE",
+  "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE",
+  "ZCODE_HOME",
+  "ZCODE_DATA_BASE_DIR",
+  "ZCODE_WINDOWS_APP_INSTALL_DIR",
+  "ZCODE_BRIDGE_EXPERIMENTAL_RUNTIME_AUTHORIZATION_FILE",
+  "ZCODE_BRIDGE_DEFAULT_PROVIDER_ID",
+  "ZCODE_BRIDGE_DEFAULT_MODEL_ID",
+  "ZCODE_BRIDGE_DEFAULT_REASONING_LEVEL",
+  "ZCODE_BRIDGE_PREFER_STARTPLAN",
+  "ZCODE_BRIDGE_MODE",
+  "ZCODE_BRIDGE_MAX_CONCURRENT_WORKERS",
+  "ZCODE_BRIDGE_TIMEOUT_MS",
+  "ZCODE_BRIDGE_BROWSER_USE",
+  "ZCODE_BRIDGE_BROWSER_EXECUTABLE"
+];
+function loadPersistedRuntimeEnvironment(source, homeDir = homedir2(), host = codexHostProfile(homeDir)) {
+  validateHostProfile(host);
+  const settingsPaths = [host.settingsDirectory, ...host.legacySettingsDirectories ?? []].map((directory) => path3.join(directory, "runtime-config.json"));
+  const legacyDataRoot = source["ZCODE_BRIDGE_DATA_DIR"]?.trim();
+  if (legacyDataRoot && path3.isAbsolute(legacyDataRoot)) {
+    settingsPaths.push(path3.join(legacyDataRoot, "runtime-config.json"));
+  }
+  let parsed = null;
+  const seenPaths = /* @__PURE__ */ new Set();
+  for (const settingsPath of settingsPaths) {
+    const normalized = path3.resolve(settingsPath);
+    const identity = process.platform === "win32" ? normalized.toLocaleLowerCase("en-US") : normalized;
+    if (seenPaths.has(identity)) continue;
+    seenPaths.add(identity);
+    try {
+      if (statSync(normalized).size > 64 * 1024) throw new Error("runtime settings exceed 64 KB");
+      const candidate = JSON.parse(readFileSync2(normalized, "utf8"));
+      if (isPlainObject(candidate)) {
+        parsed = candidate;
+        break;
+      }
+      throw new Error("runtime settings must be an object");
+    } catch (error2) {
+      if (error2.code === "ENOENT") continue;
+      throw new BridgeError("provider_config_invalid", `invalid Bridge runtime settings: ${normalized}`, { cause: error2 });
+    }
+  }
+  if (!parsed) return { ...source };
+  const env = { ...source };
+  for (const key of PERSISTED_RUNTIME_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(parsed, key)) continue;
+    const value = parsed[key];
+    if (typeof value === "string") env[key] = value.trim();
+    else if (value === null) env[key] = "";
+    else throw new BridgeError("provider_config_invalid", `Bridge runtime setting ${key} must be a string or null`);
+  }
+  return env;
+}
+var NodeRuntimeResolver = class {
+  #env;
+  #homeDir;
+  #packageRoot;
+  #host;
+  constructor(options = {}) {
+    this.#env = options.env ?? process.env;
+    this.#homeDir = options.homeDir ?? homedir2();
+    this.#packageRoot = options.packageRoot ?? null;
+    this.#host = validateHostProfile(options.host ?? codexHostProfile(this.#homeDir));
+  }
+  async resolve() {
+    const env = loadPersistedRuntimeEnvironment(this.#env, this.#homeDir, this.#host);
+    const data = discoverZCodeData(env, { fallbackHomeDir: this.#homeDir });
+    const zcodeHome = resolveZcodeHome(env);
+    const explicitDataBaseDir = env["ZCODE_DATA_BASE_DIR"]?.trim() || null;
+    if (explicitDataBaseDir && !isAbsolutePathForPlatform(explicitDataBaseDir)) {
+      throw new BridgeError("provider_config_invalid", "ZCODE_DATA_BASE_DIR must be an absolute path");
+    }
+    if (zcodeHome && explicitDataBaseDir && !sameFileSystemPath(path3.dirname(zcodeHome), explicitDataBaseDir)) {
+      throw new BridgeError(
+        "provider_config_invalid",
+        `ZCODE_HOME (${zcodeHome}) and ZCODE_DATA_BASE_DIR (${explicitDataBaseDir}) conflict; ZCODE_HOME must name <ZCODE_DATA_BASE_DIR>/.zcode. Fix one of them instead of relying on silent selection.`
+      );
+    }
+    let nodeExecutable = "node";
+    const nodeOverride = env["ZCODE_BRIDGE_NODE"]?.trim();
+    if (nodeOverride) {
+      this.#assertReadableFile(
+        nodeOverride,
+        "ZCODE_BRIDGE_NODE is set but is not a readable file"
+      );
+      nodeExecutable = nodeOverride;
+    }
+    const builtinEnv = env["ZCODE_BUILTIN_PROVIDER_CONFIG_FILE"]?.trim() || null;
+    const personalEnv = env["ZCODE_PERSONAL_PROVIDER_CONFIG_FILE"]?.trim() || null;
+    let zcodeEntrypoint;
+    let explicitRuntime = false;
+    const entryOverride = env["ZCODE_BRIDGE_ZCODE_CJS"]?.trim();
+    if (entryOverride) {
+      this.#assertReadableFile(
+        entryOverride,
+        "ZCODE_BRIDGE_ZCODE_CJS is set but is not a readable file"
+      );
+      zcodeEntrypoint = entryOverride;
+      explicitRuntime = true;
+    } else {
+      const install = discoverZCodeInstall(env, { requireBuiltin: !builtinEnv });
+      if (!install.zcodeEntrypoint) {
+        throw new BridgeError(
+          "runtime_not_found",
+          `zcode.cjs${builtinEnv ? "" : " with a same-install zcode-builtin.json"} was not found; searched: ` + (install.candidates.map((candidate) => `${candidate.root} (runtime: ${candidate.runtimeExists}, builtin: ${candidate.builtinExists})`).join(", ") || "(no installation roots available)")
+        );
+      }
+      zcodeEntrypoint = install.zcodeEntrypoint;
+    }
+    let builtinConfigFile;
+    let personalConfigFile;
+    if (builtinEnv && personalEnv) {
+      this.#validateBuiltinConfig(builtinEnv);
+      this.#validatePersonalConfig(personalEnv);
+      builtinConfigFile = builtinEnv;
+      personalConfigFile = personalEnv;
+    } else {
+      if (builtinEnv) {
+        this.#validateBuiltinConfig(builtinEnv);
+        builtinConfigFile = builtinEnv;
+      } else if (explicitRuntime) {
+        const derived2 = builtinConfigForRuntime(zcodeEntrypoint);
+        if (!isReadableFile(derived2)) {
+          throw new BridgeError(
+            "provider_config_missing",
+            `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE is not set and the builtin config was not found next to the configured runtime; expected: ${derived2}`
+          );
+        }
+        this.#validateBuiltinConfig(derived2);
+        builtinConfigFile = derived2;
+      } else {
+        const install = discoverZCodeInstall(env, { requireBuiltin: true });
+        if (!install.builtinConfigFile) {
+          throw new BridgeError(
+            "provider_config_missing",
+            "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE is not set and no builtin provider config was found in the ZCode installation; searched: " + (install.candidates.map((candidate) => `${candidate.root} (runtime: ${candidate.runtimeExists}, builtin: ${candidate.builtinExists})`).join(", ") || "(no installation roots available)")
+          );
+        }
+        this.#validateBuiltinConfig(install.builtinConfigFile);
+        builtinConfigFile = install.builtinConfigFile;
+      }
+      if (personalEnv) {
+        this.#validatePersonalConfig(personalEnv);
+        personalConfigFile = personalEnv;
+      } else {
+        const candidates = zcodeHome ? [path3.join(zcodeHome, "v2", "provider_config.json")] : [
+          explicitDataBaseDir,
+          data.configuredDataBaseDir,
+          data.userHome
+        ].filter((base) => Boolean(base)).filter((base, index, values) => values.indexOf(base) === index).map((base) => path3.join(base, ".zcode", "v2", "provider_config.json"));
+        const existing = candidates.filter((candidate) => existsSync2(candidate));
+        if (existing.length === 0) {
+          throw new BridgeError(
+            "provider_config_missing",
+            "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE is not set and no personal provider config exists at any of: " + candidates.join(", ")
+          );
+        }
+        let accepted = null;
+        let lastError = null;
+        for (const candidate of existing) {
+          try {
+            this.#validatePersonalConfig(candidate);
+            accepted = candidate;
+            break;
+          } catch (error2) {
+            lastError = error2 instanceof Error ? error2.message : String(error2);
+          }
+        }
+        if (!accepted) {
+          throw new BridgeError(
+            "provider_config_invalid",
+            `No usable personal provider config among: ${existing.join(", ")}; last validation failure: ${lastError ?? "unknown"}`
+          );
+        }
+        personalConfigFile = accepted;
+      }
+    }
+    if (zcodeHome && !samePath(personalConfigFile, path3.join(zcodeHome, "v2", "provider_config.json"))) {
+      throw new BridgeError(
+        "provider_config_invalid",
+        `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE must be ZCODE_HOME/v2/provider_config.json (${zcodeHome})`
+      );
+    }
+    const dataOverride = env["ZCODE_BRIDGE_DATA_DIR"]?.trim();
+    let dataRoot;
+    if (dataOverride) {
+      if (!path3.isAbsolute(dataOverride)) {
+        throw new Error(
+          `ZCODE_BRIDGE_DATA_DIR must be an absolute path when set, got: ${dataOverride}`
+        );
+      }
+      dataRoot = path3.normalize(dataOverride);
+    } else {
+      dataRoot = this.#packageRoot ?? findPackageRoot();
+    }
+    return {
+      nodeExecutable,
+      zcodeEntrypoint,
+      providerBuiltinConfigFile: builtinConfigFile,
+      providerPersonalConfigFile: personalConfigFile,
+      zcodeDataRoot: data.zcodeDataDir,
+      dataRoot
+    };
+  }
+  #assertReadableFile(filePath, label) {
+    if (!isReadableFile(filePath)) {
+      throw new BridgeError("runtime_not_found", `${label}: ${filePath}`);
+    }
+  }
+  /**
+   * Structure validation only. The verified differential signal for the
+   * CLI-created stub is an empty providerRules map (see docs/ZCODE_RUNTIME.md);
+   * rejecting it implements "never silently select a known stub".
+   */
+  #validatePersonalConfig(filePath) {
+    const parsed = this.#readJsonConfig(filePath, "personal provider config");
+    const config2 = parsed["config"];
+    if (!isPlainObject(config2)) {
+      throw new BridgeError(
+        "provider_config_invalid",
+        `Personal provider config has no config object: ${filePath}`
+      );
+    }
+    const providerConfigRules = config2["providerConfigRules"];
+    const rules = isPlainObject(providerConfigRules) ? providerConfigRules["providerRules"] : void 0;
+    if (!isNonEmptyCollection(rules)) {
+      throw new BridgeError(
+        "provider_config_invalid",
+        `Personal provider config contains no provider rules (this matches the known CLI-created stub shape): ${filePath}`
+      );
+    }
+  }
+  #validateBuiltinConfig(filePath) {
+    const parsed = this.#readJsonConfig(filePath, "builtin provider config");
+    if (!isPlainObject(parsed["config"])) {
+      throw new BridgeError(
+        "provider_config_invalid",
+        `Builtin provider config has no config object: ${filePath}`
+      );
+    }
+  }
+  #readJsonConfig(filePath, label) {
+    if (!isReadableFile(filePath)) {
+      throw new BridgeError("provider_config_missing", `${label} not found: ${filePath}`);
+    }
+    let text2;
+    try {
+      text2 = readFileSync2(filePath, "utf8");
+    } catch (error2) {
+      throw new BridgeError(
+        "provider_config_invalid",
+        `${label} is not readable: ${filePath} (${errorText(error2)})`
+      );
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(text2);
+    } catch (error2) {
+      throw new BridgeError(
+        "provider_config_invalid",
+        `${label} is not valid JSON: ${filePath}`
+      );
+    }
+    if (!isPlainObject(parsed)) {
+      throw new BridgeError("provider_config_invalid", `${label} is not a JSON object: ${filePath}`);
+    }
+    return parsed;
+  }
+};
+function resolveZcodeHome(env) {
+  const configured = env["ZCODE_HOME"]?.trim();
+  if (!configured) return null;
+  if (!isAbsolutePathForPlatform(configured)) {
+    throw new BridgeError("provider_config_invalid", "ZCODE_HOME must be an absolute path");
+  }
+  const resolved = path3.normalize(configured);
+  if (path3.basename(resolved).toLowerCase() !== ".zcode") {
+    throw new BridgeError(
+      "provider_config_invalid",
+      "ZCODE_HOME must name a .zcode directory so app-server can use the same data root"
+    );
+  }
+  try {
+    if (!statSync(resolved).isDirectory()) {
+      throw new BridgeError("provider_config_invalid", `ZCODE_HOME is not a directory: ${resolved}`);
+    }
+  } catch (error2) {
+    if (error2 instanceof BridgeError) throw error2;
+    throw new BridgeError("provider_config_missing", `ZCODE_HOME directory does not exist: ${resolved}`);
+  }
+  return resolved;
+}
+function samePath(left, right) {
+  const resolvedLeft = path3.resolve(left);
+  const resolvedRight = path3.resolve(right);
+  return process.platform === "win32" ? resolvedLeft.toLowerCase() === resolvedRight.toLowerCase() : resolvedLeft === resolvedRight;
+}
+function isReadableFile(filePath) {
+  try {
+    if (!existsSync2(filePath) || !statSync(filePath).isFile()) return false;
+    accessSync(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
 function findPackageRoot(startDir) {
-  let current = startDir ?? path2.dirname(fileURLToPath(import.meta.url));
+  let current = startDir ?? path3.dirname(fileURLToPath(import.meta.url));
   for (let depth = 0; depth < 10; depth++) {
-    if (existsSync(path2.join(current, "package.json"))) {
+    if (existsSync2(path3.join(current, "package.json"))) {
       return current;
     }
-    const parent = path2.dirname(current);
+    const parent = path3.dirname(current);
     if (parent === current) break;
     current = parent;
   }
   throw new Error(
     `Cannot locate the Bridge package root (no package.json above ${startDir ?? "module directory"})`
   );
+}
+function isPlainObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function isNonEmptyCollection(value) {
+  if (Array.isArray(value)) return value.length > 0;
+  if (isPlainObject(value)) return Object.keys(value).length > 0;
+  return false;
+}
+function errorText(error2) {
+  const message = error2 instanceof Error ? error2.message : String(error2);
+  return message.length > 300 ? `${message.slice(0, 300)}\u2026` : message;
 }
 
 // src/runtime/sqlite-install-config.ts
@@ -310,12 +812,12 @@ var SqliteInstallConfigurationError = class extends Error {
 };
 function loadInstallAuthoritySelection(host) {
   validateHostProfile(host);
-  const configPath = path3.join(host.settingsDirectory, CONFIG_FILE);
+  const configPath = path4.join(host.settingsDirectory, CONFIG_FILE);
   try {
-    const stat = lstatSync(configPath);
-    if (!stat.isFile() || stat.isSymbolicLink()) throw new SqliteInstallConfigurationError("authority_config_not_regular_file");
-    if (stat.size > CONFIG_LIMIT) throw new SqliteInstallConfigurationError("authority_config_too_large");
-    const parsed = JSON.parse(readFileSync2(configPath, "utf8"));
+    const stat4 = lstatSync(configPath);
+    if (!stat4.isFile() || stat4.isSymbolicLink()) throw new SqliteInstallConfigurationError("authority_config_not_regular_file");
+    if (stat4.size > CONFIG_LIMIT) throw new SqliteInstallConfigurationError("authority_config_too_large");
+    const parsed = JSON.parse(readFileSync3(configPath, "utf8"));
     if (!isRecord(parsed)) throw new SqliteInstallConfigurationError("authority_config_invalid_shape");
     const keys = Object.keys(parsed).sort().join("|");
     if (parsed.schema_version !== 1) throw new SqliteInstallConfigurationError("authority_config_version_unsupported");
@@ -338,12 +840,12 @@ function loadInstallAuthoritySelection(host) {
 }
 function sqliteInstallationRoot(env) {
   const modulePath = fileURLToPath2(import.meta.url);
-  const dist = path3.dirname(modulePath);
-  const entry = path3.basename(modulePath);
+  const dist = path4.dirname(modulePath);
+  const entry = path4.basename(modulePath);
   const pluginEntry = entry === "wait-task.mjs" || entry === "bridge.mjs" && env["ZCODE_BRIDGE_PLUGIN_MODE"] === "1";
-  if (pluginEntry && path3.basename(dist) === "dist") {
-    const pluginRoot = path3.dirname(dist);
-    if (!existsSync2(path3.join(pluginRoot, ".codex-plugin", "plugin.json")) || !existsSync2(path3.join(pluginRoot, "launch-node24.mjs"))) {
+  if (pluginEntry && path4.basename(dist) === "dist") {
+    const pluginRoot = path4.dirname(dist);
+    if (!existsSync3(path4.join(pluginRoot, ".codex-plugin", "plugin.json")) || !existsSync3(path4.join(pluginRoot, "launch-node24.mjs"))) {
       throw new SqliteInstallConfigurationError("sqlite_plugin_layout_invalid");
     }
     return pluginRoot;
@@ -356,10 +858,10 @@ function resolveSqliteStateDirectory(selection, env) {
 function resolveStateDirectory(selection, env, packageRootValue, tempRootValue) {
   const appRoot = selection.configuredDataRoot || defaultDataRoot(env);
   if (!isLocalAbsolutePath(appRoot)) throw new SqliteInstallConfigurationError("sqlite_data_root_not_local_absolute");
-  const normalizedRoot = path3.resolve(appRoot);
-  const stateDirectory = path3.join(normalizedRoot, "state");
-  const packageRoot = path3.resolve(packageRootValue);
-  const tempRoot = path3.resolve(tempRootValue);
+  const normalizedRoot = path4.resolve(appRoot);
+  const stateDirectory = path4.join(normalizedRoot, "state");
+  const packageRoot = path4.resolve(packageRootValue);
+  const tempRoot = path4.resolve(tempRootValue);
   if (within(packageRoot, normalizedRoot) || within(tempRoot, normalizedRoot) || within(packageRoot, stateDirectory) || within(tempRoot, stateDirectory)) {
     throw new SqliteInstallConfigurationError("sqlite_data_root_reserved_location");
   }
@@ -368,26 +870,26 @@ function resolveStateDirectory(selection, env, packageRootValue, tempRootValue) 
 function defaultDataRoot(env) {
   const localAppData = env["LOCALAPPDATA"]?.trim();
   if (!localAppData || !isLocalAbsolutePath(localAppData)) throw new SqliteInstallConfigurationError("local_app_data_unavailable");
-  return path3.join(localAppData, "CodexZCodeBridge");
+  return path4.join(localAppData, "CodexZCodeBridge");
 }
 function isLocalAbsolutePath(value) {
-  if (process.platform === "win32") return /^[A-Za-z]:\\/u.test(value) && path3.win32.isAbsolute(value) && !value.startsWith("\\\\");
-  return path3.isAbsolute(value) && !value.startsWith("/proc/") && !value.startsWith("/sys/") && !value.startsWith("/dev/");
+  if (process.platform === "win32") return /^[A-Za-z]:\\/u.test(value) && path4.win32.isAbsolute(value) && !value.startsWith("\\\\");
+  return path4.isAbsolute(value) && !value.startsWith("/proc/") && !value.startsWith("/sys/") && !value.startsWith("/dev/");
 }
 function within(root, candidate) {
-  const relative = path3.relative(root, candidate);
-  return relative === "" || relative !== ".." && !relative.startsWith(`..${path3.sep}`) && !path3.isAbsolute(relative);
+  const relative = path4.relative(root, candidate);
+  return relative === "" || relative !== ".." && !relative.startsWith(`..${path4.sep}`) && !path4.isAbsolute(relative);
 }
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value) && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
 }
 
 // src/executor/lease.ts
-import path4 from "node:path";
+import path5 from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 var LEASE_LIMIT_BYTES = 64 * 1024;
 function authorityRootDigest(root) {
-  return createHash("sha256").update(path4.resolve(root).toLowerCase(), "utf8").digest("hex");
+  return createHash("sha256").update(path5.resolve(root).toLowerCase(), "utf8").digest("hex");
 }
 
 // src/executor/pipe.ts
@@ -447,7 +949,7 @@ __export(util_exports, {
   hide: () => hide,
   installLazyProp: () => installLazyProp,
   isObject: () => isObject,
-  isPlainObject: () => isPlainObject,
+  isPlainObject: () => isPlainObject2,
   issue: () => issue,
   joinValues: () => joinValues,
   jsonStringifyReplacer: () => jsonStringifyReplacer,
@@ -638,10 +1140,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path7) {
-  if (!path7)
+function getElementAtPath(obj, path23) {
+  if (!path23)
     return obj;
-  return path7.reduce((acc, key) => acc?.[key], obj);
+  return path23.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -688,7 +1190,7 @@ var allowsEval = /* @__PURE__ */ cached(() => {
     return false;
   }
 });
-function isPlainObject(o) {
+function isPlainObject2(o) {
   if (isObject(o) === false)
     return false;
   const ctor = o.constructor;
@@ -705,7 +1207,7 @@ function isPlainObject(o) {
   return true;
 }
 function shallowClone(o) {
-  if (isPlainObject(o))
+  if (isPlainObject2(o))
     return { ...o };
   if (Array.isArray(o))
     return [...o];
@@ -894,7 +1396,7 @@ function omit(schema, mask) {
   return clone(schema, mergeDefs(currDef, { shape: newShape, checks: [] }));
 }
 function extend(schema, shape) {
-  if (!isPlainObject(shape)) {
+  if (!isPlainObject2(shape)) {
     throw new Error("Invalid input to extend: expected a plain object");
   }
   const checks = schema._zod.def.checks;
@@ -916,7 +1418,7 @@ function extended(schema, shape) {
   return newShape;
 }
 function safeExtend(schema, shape) {
-  if (!isPlainObject(shape)) {
+  if (!isPlainObject2(shape)) {
     throw new Error("Invalid input to safeExtend: expected a plain object");
   }
   return clone(schema, mergeDefs(schema._zod.def, { shape: extended(schema, shape) }));
@@ -981,11 +1483,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path7, issues) {
+function prefixIssues(path23, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path7);
+    iss.path.unshift(path23);
     return iss;
   });
 }
@@ -1431,16 +1933,16 @@ function flattenError(error2, mapper = (issue2) => issue2.message) {
 }
 function formatError(error2, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error3, path7 = []) => {
+  const processError = (error3, path23 = []) => {
     for (const issue2 of error3.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path7, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path23, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path7, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path23, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path7, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path23, ...issue2.path]);
       } else {
-        const fullpath = [...path7, ...issue2.path];
+        const fullpath = [...path23, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -3043,7 +3545,7 @@ function mergeValues(a, b) {
   if (a instanceof Date && b instanceof Date && +a === +b) {
     return { valid: true, data: a };
   }
-  if (isPlainObject(a) && isPlainObject(b)) {
+  if (isPlainObject2(a) && isPlainObject2(b)) {
     const bKeys = Object.keys(b);
     const sharedKeys = Object.keys(a).filter((key) => bKeys.indexOf(key) !== -1);
     const newObj = { ...a, ...b };
@@ -3141,7 +3643,7 @@ var $ZodRecord = /* @__PURE__ */ $constructor("$ZodRecord", (inst, def) => {
   memo2?.attach(inst);
   inst._zod.parse = (payload, ctx) => {
     const input = payload.value;
-    if (!isPlainObject(input)) {
+    if (!isPlainObject2(input)) {
       payload.issues.push({
         expected: "record",
         code: "invalid_type",
@@ -5457,8 +5959,8 @@ function rewriteKeyNames(ctx) {
       bySchema.set(entry.schema, entry);
   }
   const rewrites = /* @__PURE__ */ new Map();
-  for (const record2 of pendingRecords.get(ctx) ?? []) {
-    const seen = ctx.seen.get(record2);
+  for (const record3 of pendingRecords.get(ctx) ?? []) {
+    const seen = ctx.seen.get(record3);
     const names = (seen?.def ?? seen?.schema)?.propertyNames;
     if (!names || names === true || rewrites.has(names))
       continue;
@@ -6909,9 +7411,5666 @@ var RemoteTaskManager = class {
   }
 };
 
-// src/web/server.ts
-import { randomBytes } from "node:crypto";
+// src/web/cost-lab-integration.ts
+import { createHash as createHash9 } from "node:crypto";
+import { existsSync as existsSync6 } from "node:fs";
+import path19 from "node:path";
+import { fileURLToPath as fileURLToPath8 } from "node:url";
+
+// src/adapters/official-host-adapter.ts
+import { createHash as createHash4 } from "node:crypto";
+import { createReadStream as createReadStream2 } from "node:fs";
+import { lstat as lstat3, realpath as realpath2 } from "node:fs/promises";
+import path9 from "node:path";
+import { fileURLToPath as fileURLToPath3, pathToFileURL } from "node:url";
+
+// src/runtime/desktop-host-launch.ts
+import { closeSync, openSync, readSync } from "node:fs";
+import path6 from "node:path";
+var ZCODE_APP_VERSION_ENV = "ZCODE_APP_VERSION";
+var ZCODE_BUILD_COMMIT_ID_ENV = "ZCODE_BUILD_COMMIT_ID";
+var APP_SERVER_ARGS = ["app-server", "--stdio", "--surface", "desktop"];
+var BUILD_METADATA_PATH = ["out", "metadata", "build-meta.json"];
+var MAX_ASAR_HEADER_BYTES = 32 * 1024 * 1024;
+var MAX_METADATA_BYTES = 64 * 1024;
+var VERSION_PATTERN = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
+var BUILD_COMMIT_PATTERN = /^[0-9a-f]{8}$/u;
+function buildZCodeAppServerLaunch(zcodeEntrypoint, baseEnv) {
+  const metadata = readDesktopMetadata(zcodeEntrypoint);
+  return {
+    args: [...APP_SERVER_ARGS],
+    env: metadata === null ? { ...baseEnv } : {
+      ...baseEnv,
+      [ZCODE_APP_VERSION_ENV]: metadata.appVersion,
+      [ZCODE_BUILD_COMMIT_ID_ENV]: metadata.buildCommitId
+    }
+  };
+}
+function readDesktopMetadata(zcodeEntrypoint) {
+  const archivePath = path6.resolve(path6.dirname(zcodeEntrypoint), "..", "app.asar");
+  let archive;
+  try {
+    archive = readAsarMetadataFiles(archivePath);
+  } catch (error2) {
+    if (isMissingFile(error2)) return null;
+    throw invalidMetadata("could not be read");
+  }
+  const packageJson = parseObject(archive.packageJson, "package.json");
+  const buildMetadata = parseObject(archive.buildMetadata, "build-meta.json");
+  const packageVersion = packageJson["version"];
+  const appVersion = buildMetadata["appVersion"];
+  const buildCommitId = buildMetadata["buildCommitId"];
+  if (typeof packageVersion !== "string" || typeof appVersion !== "string" || typeof buildCommitId !== "string") {
+    throw invalidMetadata("is missing required fields");
+  }
+  if (!VERSION_PATTERN.test(packageVersion) || !VERSION_PATTERN.test(appVersion) || !BUILD_COMMIT_PATTERN.test(buildCommitId)) {
+    throw invalidMetadata("uses an unsupported version or build commit format");
+  }
+  if (packageVersion !== appVersion) {
+    throw invalidMetadata("contains conflicting application versions");
+  }
+  return { appVersion, buildCommitId };
+}
+function readAsarMetadataFiles(archivePath) {
+  const fd = openSync(archivePath, "r");
+  try {
+    const sizeHeader = Buffer.alloc(16);
+    readExact(fd, sizeHeader, 16, 0);
+    if (sizeHeader.readUInt32LE(0) !== 4) throw new Error("invalid asar header");
+    const headerPayloadBytes = sizeHeader.readUInt32LE(4);
+    const headerBytes = sizeHeader.readUInt32LE(12);
+    if (headerBytes === 0 || headerBytes > MAX_ASAR_HEADER_BYTES || headerPayloadBytes < headerBytes) {
+      throw new Error("invalid asar header size");
+    }
+    const headerBuffer = Buffer.alloc(headerBytes);
+    readExact(fd, headerBuffer, headerBytes, 16);
+    const root = parseObject(headerBuffer, "asar header");
+    if (!isRecord2(root.files)) throw new Error("asar header file table is not an object");
+    const buildEntry = findEntry(root.files, BUILD_METADATA_PATH);
+    if (buildEntry === null) throw new Error("asar build metadata is missing");
+    const packageEntry = findEntry(root.files, ["package.json"]);
+    if (packageEntry === null) throw new Error("asar package.json is missing");
+    return {
+      packageJson: readEntry(fd, packageEntry, 8 + headerPayloadBytes),
+      buildMetadata: readEntry(fd, buildEntry, 8 + headerPayloadBytes)
+    };
+  } finally {
+    closeSync(fd);
+  }
+}
+function findEntry(root, parts) {
+  let files = root;
+  for (let index = 0; index < parts.length; index += 1) {
+    const part = parts[index];
+    if (!Object.hasOwn(files, part)) return null;
+    const current = files[part];
+    if (!isRecord2(current)) throw new Error(`asar ${part} entry is not an object`);
+    if (index === parts.length - 1) return current;
+    if (!isRecord2(current.files)) throw new Error(`asar ${part} entry is not a directory`);
+    files = current.files;
+  }
+  return null;
+}
+function readEntry(fd, entry, contentOffset) {
+  const offset = asNonNegativeSafeInteger(entry.offset);
+  const size = asNonNegativeSafeInteger(entry.size);
+  if (entry.files || entry.unpacked || entry.link || offset === null || size === null || size > MAX_METADATA_BYTES || !Number.isSafeInteger(contentOffset + offset)) {
+    throw new Error("invalid asar metadata entry");
+  }
+  const output = Buffer.alloc(size);
+  readExact(fd, output, output.length, contentOffset + offset);
+  return output;
+}
+function asNonNegativeSafeInteger(value) {
+  if (typeof value === "number") {
+    return Number.isSafeInteger(value) && value >= 0 ? value : null;
+  }
+  if (typeof value !== "string" || !/^(?:0|[1-9]\d*)$/u.test(value)) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
+function readExact(fd, target, length, position) {
+  let offset = 0;
+  while (offset < length) {
+    const read = readSync(fd, target, offset, length - offset, position + offset);
+    if (read === 0) throw new Error("unexpected end of asar file");
+    offset += read;
+  }
+}
+function parseObject(buffer, label) {
+  let parsed;
+  try {
+    parsed = JSON.parse(buffer.toString("utf8"));
+  } catch {
+    throw invalidMetadata(`${label} is not valid JSON`);
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw invalidMetadata(`${label} is not an object`);
+  }
+  return parsed;
+}
+function invalidMetadata(reason) {
+  return new BridgeError(
+    "provider_config_invalid",
+    `Installed ZCode Desktop metadata ${reason}; refusing to invent a Desktop identity.`
+  );
+}
+function isMissingFile(error2) {
+  return typeof error2 === "object" && error2 !== null && "code" in error2 && error2.code === "ENOENT";
+}
+function isRecord2(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// src/runtime/official-app-server-runtime.ts
+import { createHash as createHash3 } from "node:crypto";
+import { execFile } from "node:child_process";
+import { closeSync as closeSync2, createReadStream, openSync as openSync2, readSync as readSync2 } from "node:fs";
+import { lstat as lstat2, realpath } from "node:fs/promises";
+import { homedir as homedir3 } from "node:os";
+import path8 from "node:path";
+import { promisify } from "node:util";
+
+// src/runtime/node-runtime.ts
+var SUPPORTED_NODE_RANGE = ">=24.16.0 <25";
+function isSupportedNodeVersion(version2) {
+  const match = /^(\d+)\.(\d+)\.(\d+)$/u.exec(version2);
+  if (!match) return false;
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  const patch = Number(match[3]);
+  return major === 24 && minor >= 16 && patch >= 0;
+}
+
+// src/runtime/official-runtime-authorization.ts
+import { createHash as createHash2 } from "node:crypto";
+import { lstat, readFile as readFile2 } from "node:fs/promises";
+import path7 from "node:path";
+var OFFICIAL_RUNTIME_PROBE_SCOPES = Object.freeze([
+  "coding_plan_probe",
+  "start_plan_probe",
+  "other_provider_probe"
+]);
+var MAX_AUTHORIZATION_BYTES = 64 * 1024;
+var FINGERPRINT_PATTERN = /^[0-9a-f]{64}$/u;
+var VERSION_PATTERN2 = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:\.(?:0|[1-9]\d*))?(?:-[0-9A-Za-z.-]+)?$/u;
+function computeOfficialInstallationFingerprint(input) {
+  const normalized = {
+    schema_version: 1,
+    desktop_version: input.desktop_version,
+    desktop_app_version: input.desktop_app_version,
+    desktop_build_commit_id: input.desktop_build_commit_id,
+    desktop_executable: {
+      bytes: input.desktop_executable_bytes,
+      sha256: input.desktop_executable_sha256.toLowerCase()
+    },
+    desktop_archive: {
+      bytes: input.desktop_archive_bytes,
+      sha256: input.desktop_archive_sha256.toLowerCase()
+    },
+    appserver_bundle: {
+      bytes: input.bundle_bytes,
+      sha256: input.bundle_sha256.toLowerCase()
+    },
+    builtin_provider_config: {
+      bytes: input.builtin_provider_config_bytes,
+      sha256: input.builtin_provider_config_sha256.toLowerCase()
+    },
+    runtime_host: {
+      bytes: input.runtime_host_bytes,
+      sha256: input.runtime_host_sha256.toLowerCase()
+    },
+    signers: {
+      desktop: input.desktop_signer_thumbprint.replace(/[^0-9A-F]/giu, "").toUpperCase(),
+      runtime_host: input.runtime_host_signer_thumbprint.replace(/[^0-9A-F]/giu, "").toUpperCase()
+    },
+    node_version: input.node_version
+  };
+  return createHash2("sha256").update(JSON.stringify(normalized), "utf8").digest("hex");
+}
+async function lookupOfficialRuntimeAuthorization(options) {
+  if (!options.filePath) {
+    return {
+      state: "not_configured",
+      file_path: null,
+      reason: null,
+      record: null,
+      scopes: []
+    };
+  }
+  if (!isAbsolutePathForPlatform(options.filePath, options.platform)) {
+    return invalid(options.filePath, "experimental authorization path is not absolute");
+  }
+  const filePath = path7.resolve(options.filePath);
+  let metadata;
+  try {
+    metadata = await lstat(filePath);
+  } catch (error2) {
+    if (error2.code === "ENOENT") {
+      return {
+        state: "required",
+        file_path: filePath,
+        reason: null,
+        record: null,
+        scopes: []
+      };
+    }
+    return invalid(filePath, "experimental authorization file could not be inspected");
+  }
+  if (!metadata.isFile() || metadata.isSymbolicLink()) {
+    return invalid(filePath, "experimental authorization path is not a regular file");
+  }
+  if (metadata.size > MAX_AUTHORIZATION_BYTES) {
+    return invalid(filePath, "experimental authorization file exceeds 64 KB");
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(await readFile2(filePath, "utf8"));
+  } catch {
+    return invalid(filePath, "experimental authorization file is not valid JSON");
+  }
+  const root = asRecord(parsed);
+  if (!root || root["schema_version"] !== 1 || !Array.isArray(root["authorizations"])) {
+    return invalid(filePath, "experimental authorization file has an unsupported schema");
+  }
+  const records = [];
+  const identities = /* @__PURE__ */ new Set();
+  for (const raw of root["authorizations"]) {
+    const record4 = parseRecord(raw);
+    if (!record4) {
+      return invalid(filePath, "experimental authorization file contains a malformed record");
+    }
+    const identity = `${record4.desktop_version}\0${record4.installation_fingerprint}`;
+    if (identities.has(identity)) {
+      return invalid(filePath, "experimental authorization file contains duplicate records");
+    }
+    identities.add(identity);
+    records.push(record4);
+  }
+  const matches = [];
+  for (const record4 of records) {
+    if (record4.desktop_version !== options.desktopVersion) continue;
+    if (record4.installation_fingerprint === options.installationFingerprint) matches.push(record4);
+  }
+  if (matches.length === 0) {
+    return {
+      state: "required",
+      file_path: filePath,
+      reason: null,
+      record: null,
+      scopes: []
+    };
+  }
+  if (matches.length !== 1) {
+    return invalid(filePath, "experimental authorization file contains duplicate matching records");
+  }
+  const record3 = matches[0];
+  return {
+    state: "authorized",
+    file_path: filePath,
+    reason: null,
+    record: record3,
+    scopes: record3.scopes
+  };
+}
+function parseRecord(value) {
+  const record3 = asRecord(value);
+  if (!record3) return null;
+  const fingerprint = text(record3["installation_fingerprint"]);
+  const desktopVersion = text(record3["desktop_version"]);
+  const authorizedAt = text(record3["authorized_at"]);
+  const authorizedBy = text(record3["authorized_by"]);
+  const rawScopes = record3["scopes"];
+  if (!fingerprint || !FINGERPRINT_PATTERN.test(fingerprint) || !desktopVersion || !VERSION_PATTERN2.test(desktopVersion) || !authorizedAt || Number.isNaN(new Date(authorizedAt).getTime()) || !authorizedBy || !Array.isArray(rawScopes) || rawScopes.length === 0) {
+    return null;
+  }
+  const scopes = [];
+  for (const rawScope of rawScopes) {
+    if (typeof rawScope !== "string" || !OFFICIAL_RUNTIME_PROBE_SCOPES.includes(rawScope)) {
+      return null;
+    }
+    const scope = rawScope;
+    if (!scopes.includes(scope)) scopes.push(scope);
+  }
+  return {
+    installation_fingerprint: fingerprint,
+    desktop_version: desktopVersion,
+    authorized_at: new Date(authorizedAt).toISOString(),
+    authorized_by: authorizedBy,
+    scopes
+  };
+}
+function invalid(filePath, reason) {
+  return {
+    state: "invalid",
+    file_path: filePath,
+    reason,
+    record: null,
+    scopes: []
+  };
+}
+function asRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value : null;
+}
+function text(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+// src/runtime/official-app-server-runtime.ts
+var execFileAsync = promisify(execFile);
+var OFFICIAL_APPSERVER_COMPATIBILITY_MANIFEST = Object.freeze([
+  Object.freeze({
+    desktop_version: "3.18.2.10443",
+    desktop_app_version: "3.18.2",
+    desktop_build_commit_id: "2681f4af",
+    bundle_sha256: "08726b5ef69e1e9072828baa4656713cb3aac93bb096938681278c5600312b2c",
+    bundle_bytes: 15675386,
+    builtin_provider_config_sha256: "ef3d64656cb5281cce292b77ef12e96b5251582cfb00cdf9eb08e3d4565abb69",
+    builtin_provider_config_bytes: 261659,
+    runtime_host_sha256: "c2c8ff5ff28cbddc4f177c094aa67c322830889612251bd173baaabc89379ab4",
+    runtime_host_bytes: 179608,
+    node_compatibility: SUPPORTED_NODE_RANGE,
+    appserver_protocol: "zcode-app-server-stdio-desktop-v1",
+    request_security_capability: "official-installed-bundle-signing",
+    coding_plan_discount_verified: true,
+    start_plan_static_compatibility: "OFFLINE_COMPATIBLE",
+    verification_date: "2026-11-18",
+    desktop_asset_pinning: "LEGACY_SAFETY_ONLY"
+  }),
+  Object.freeze({
+    desktop_version: "3.19.0.10774",
+    desktop_app_version: "3.19.0",
+    desktop_build_commit_id: "a7ed1054",
+    desktop_executable_sha256: "c5afb161a2d9389761d417ca668bc94311e3d2aff6ca3d0117b0b15701666f27",
+    desktop_executable_bytes: 246332312,
+    desktop_archive_sha256: "2421850970f361aaa1b3f1d6c960b101a5d476ad95631359d0413a19de1197cb",
+    desktop_archive_bytes: 385171742,
+    bundle_sha256: "6b84e928d9258fe020c6ab8c75fa2c123b0cd658fe43c0ce141a13df677fb0ea",
+    bundle_bytes: 15843692,
+    builtin_provider_config_sha256: "ef3d64656cb5281cce292b77ef12e96b5251582cfb00cdf9eb08e3d4565abb69",
+    builtin_provider_config_bytes: 261659,
+    runtime_host_sha256: "c87a9f3cf9cf920e4b5993aad69f8840a5d9bc7c0ae90b32acb29c15a1db0aae",
+    runtime_host_bytes: 179608,
+    node_compatibility: SUPPORTED_NODE_RANGE,
+    appserver_protocol: "zcode-app-server-stdio-desktop-v1",
+    request_security_capability: "identity-observed-provider-verification-pending",
+    coding_plan_discount_verified: false,
+    start_plan_static_compatibility: "OFFLINE_RESEARCH_PENDING",
+    verification_date: "2026-11-20",
+    verification_stage: "EXPERIMENTAL",
+    desktop_asset_pinning: "FULL"
+  })
+]);
+var OfficialAppServerRuntimeResolver = class {
+  #env;
+  #homeDir;
+  #host;
+  #baseResolver;
+  #manifest;
+  #platform;
+  #architecture;
+  #hashFile;
+  #probeNodeVersion;
+  #probeDesktopVersion;
+  #inspectExecutable;
+  #experimentalAuthorizationFile;
+  #readDesktopLaunch;
+  constructor(options = {}) {
+    this.#env = options.env ?? process.env;
+    this.#homeDir = options.homeDir ?? homedir3();
+    this.#host = options.host;
+    this.#baseResolver = options.baseResolver ?? null;
+    this.#manifest = options.manifest ?? OFFICIAL_APPSERVER_COMPATIBILITY_MANIFEST;
+    this.#platform = options.platform ?? process.platform;
+    this.#architecture = options.architecture ?? process.arch;
+    this.#hashFile = options.hashFile ?? sha256File;
+    this.#probeNodeVersion = options.probeNodeVersion ?? probeNodeCliVersion;
+    this.#probeDesktopVersion = options.probeDesktopVersion ?? probeWindowsFileVersion;
+    this.#inspectExecutable = options.inspectExecutable ?? inspectWindowsExecutable;
+    this.#experimentalAuthorizationFile = options.experimentalAuthorizationFile;
+    this.#readDesktopLaunch = options.readDesktopLaunch ?? ((bundlePath) => buildZCodeAppServerLaunch(bundlePath, {}));
+  }
+  async inspect() {
+    let env;
+    try {
+      env = loadPersistedRuntimeEnvironment(
+        this.#env,
+        this.#homeDir,
+        this.#host ?? codexHostProfile(this.#homeDir)
+      );
+    } catch (error2) {
+      return unverified(`Bridge runtime settings could not be loaded: ${errorMessage(error2)}`, "node");
+    }
+    const nodeExecutable = env["ZCODE_BRIDGE_NODE"]?.trim() || "node";
+    if (this.#platform !== "win32" || this.#architecture !== "x64") {
+      return unverified(
+        `installed Official AppServer requires Windows x64, got ${this.#platform}/${this.#architecture}`,
+        nodeExecutable
+      );
+    }
+    const discovery = discoverZCodeInstall(env, { requireBuiltin: true });
+    if (!discovery.installDir || !discovery.zcodeEntrypoint || !discovery.builtinConfigFile) {
+      return unverified(
+        "installed ZCode Desktop AppServer with same-root builtin provider config was not found",
+        nodeExecutable
+      );
+    }
+    if (!isAbsolutePathForPlatform(discovery.installDir)) {
+      return unverified("installed ZCode path is not absolute", nodeExecutable);
+    }
+    let installDir;
+    let bundlePath;
+    let builtinPath;
+    let runtimeHostPath;
+    let desktopExecutablePath;
+    let desktopArchivePath;
+    try {
+      installDir = await canonicalDirectory(discovery.installDir);
+      bundlePath = await canonicalFileInside(
+        installDir,
+        discovery.zcodeEntrypoint,
+        "installed AppServer bundle"
+      );
+      builtinPath = await canonicalFileInside(
+        installDir,
+        discovery.builtinConfigFile,
+        "installed builtin provider config"
+      );
+      runtimeHostPath = await canonicalFileInside(
+        installDir,
+        path8.join(installDir, "resources", "tools", "runtime-host", "zcode-runtime-host.exe"),
+        "installed runtime-host"
+      );
+      desktopExecutablePath = await canonicalFileInside(
+        installDir,
+        path8.join(installDir, "ZCode.exe"),
+        "installed Desktop executable"
+      );
+      desktopArchivePath = await canonicalFileInside(
+        installDir,
+        path8.join(installDir, "resources", "app.asar"),
+        "installed Desktop archive"
+      );
+    } catch (error2) {
+      return unverified(errorMessage(error2), nodeExecutable);
+    }
+    let bundleBytes;
+    let builtinBytes;
+    let runtimeHostBytes;
+    let bundleSha256;
+    let builtinSha256;
+    let runtimeHostSha256;
+    let desktopExecutableBytes;
+    let desktopExecutableSha256;
+    let desktopArchiveBytes;
+    let desktopArchiveSha256;
+    try {
+      [{ size: bundleBytes }, bundleSha256] = await Promise.all([
+        lstat2(bundlePath),
+        this.#hashFile(bundlePath)
+      ]);
+      [{ size: builtinBytes }, builtinSha256] = await Promise.all([
+        lstat2(builtinPath),
+        this.#hashFile(builtinPath)
+      ]);
+      [{ size: runtimeHostBytes }, runtimeHostSha256] = await Promise.all([
+        lstat2(runtimeHostPath),
+        this.#hashFile(runtimeHostPath)
+      ]);
+      [{ size: desktopExecutableBytes }, desktopExecutableSha256] = await Promise.all([
+        lstat2(desktopExecutablePath),
+        this.#hashFile(desktopExecutablePath)
+      ]);
+      [{ size: desktopArchiveBytes }, desktopArchiveSha256] = await Promise.all([
+        lstat2(desktopArchivePath),
+        this.#hashFile(desktopArchivePath)
+      ]);
+    } catch (error2) {
+      return unverified(`could not verify installed Official runtime assets: ${errorMessage(error2)}`, nodeExecutable);
+    }
+    let desktopExecutableIdentity;
+    let runtimeHostIdentity;
+    try {
+      desktopExecutableIdentity = await this.#inspectExecutable(desktopExecutablePath);
+      runtimeHostIdentity = await this.#inspectExecutable(runtimeHostPath);
+    } catch (error2) {
+      return unsafe(
+        `official executable safety inspection failed: ${errorMessage(error2)}`,
+        nodeExecutable,
+        {
+          install_dir: installDir,
+          install_source: discovery.source,
+          bundle_path: bundlePath,
+          bundle_bytes: bundleBytes,
+          bundle_sha256: bundleSha256,
+          builtin_provider_config_path: builtinPath,
+          builtin_provider_config_bytes: builtinBytes,
+          builtin_provider_config_sha256: builtinSha256,
+          runtime_host_path: runtimeHostPath,
+          runtime_host_bytes: runtimeHostBytes,
+          runtime_host_sha256: runtimeHostSha256,
+          desktop_executable_path: desktopExecutablePath,
+          desktop_executable_bytes: desktopExecutableBytes,
+          desktop_executable_sha256: desktopExecutableSha256,
+          desktop_archive_path: desktopArchivePath,
+          desktop_archive_bytes: desktopArchiveBytes,
+          desktop_archive_sha256: desktopArchiveSha256
+        }
+      );
+    }
+    const unsafeExecutableReason = executableSafetyFailure(
+      desktopExecutableIdentity,
+      "Desktop executable"
+    ) ?? executableSafetyFailure(runtimeHostIdentity, "runtime-host");
+    if (unsafeExecutableReason) {
+      return unsafe(unsafeExecutableReason, nodeExecutable, {
+        install_dir: installDir,
+        install_source: discovery.source,
+        bundle_path: bundlePath,
+        bundle_bytes: bundleBytes,
+        bundle_sha256: bundleSha256,
+        builtin_provider_config_path: builtinPath,
+        builtin_provider_config_bytes: builtinBytes,
+        builtin_provider_config_sha256: builtinSha256,
+        runtime_host_path: runtimeHostPath,
+        runtime_host_bytes: runtimeHostBytes,
+        runtime_host_sha256: runtimeHostSha256,
+        runtime_host_signer_subject: runtimeHostIdentity.signer_subject,
+        runtime_host_signer_thumbprint: runtimeHostIdentity.signer_thumbprint,
+        desktop_executable_path: desktopExecutablePath,
+        desktop_executable_bytes: desktopExecutableBytes,
+        desktop_executable_sha256: desktopExecutableSha256,
+        desktop_executable_signer_subject: desktopExecutableIdentity.signer_subject,
+        desktop_executable_signer_thumbprint: desktopExecutableIdentity.signer_thumbprint,
+        desktop_archive_path: desktopArchivePath,
+        desktop_archive_bytes: desktopArchiveBytes,
+        desktop_archive_sha256: desktopArchiveSha256
+      });
+    }
+    let launchEnv;
+    try {
+      launchEnv = this.#readDesktopLaunch(bundlePath).env;
+    } catch (error2) {
+      return unverified(`installed Desktop launch metadata could not be inspected: ${errorMessage(error2)}`, nodeExecutable);
+    }
+    let desktopVersion = null;
+    try {
+      desktopVersion = normalizeDesktopVersion(await this.#probeDesktopVersion(desktopExecutablePath));
+    } catch (error2) {
+      return unverified(`installed Desktop version could not be inspected: ${errorMessage(error2)}`, nodeExecutable, {
+        install_dir: installDir,
+        install_source: discovery.source,
+        bundle_path: bundlePath,
+        bundle_bytes: bundleBytes,
+        bundle_sha256: bundleSha256,
+        builtin_provider_config_path: builtinPath,
+        builtin_provider_config_bytes: builtinBytes,
+        builtin_provider_config_sha256: builtinSha256,
+        runtime_host_path: runtimeHostPath,
+        runtime_host_bytes: runtimeHostBytes,
+        runtime_host_sha256: runtimeHostSha256
+      });
+    }
+    if (!launchEnv.ZCODE_APP_VERSION || !launchEnv.ZCODE_BUILD_COMMIT_ID) {
+      return unverified("installed Desktop AppServer launch identity metadata is unavailable", nodeExecutable, {
+        install_dir: installDir,
+        install_source: discovery.source,
+        desktop_version: desktopVersion,
+        bundle_path: bundlePath,
+        bundle_bytes: bundleBytes,
+        bundle_sha256: bundleSha256,
+        builtin_provider_config_path: builtinPath,
+        builtin_provider_config_bytes: builtinBytes,
+        builtin_provider_config_sha256: builtinSha256,
+        runtime_host_path: runtimeHostPath,
+        runtime_host_bytes: runtimeHostBytes,
+        runtime_host_sha256: runtimeHostSha256
+      });
+    }
+    let nodeVersion = null;
+    try {
+      nodeVersion = normalizeNodeVersion(await this.#probeNodeVersion(nodeExecutable));
+    } catch (error2) {
+      return unverified(`configured Node runtime could not be inspected: ${errorMessage(error2)}`, nodeExecutable, {
+        install_dir: installDir,
+        install_source: discovery.source,
+        desktop_version: desktopVersion,
+        bundle_path: bundlePath,
+        bundle_bytes: bundleBytes,
+        bundle_sha256: bundleSha256,
+        builtin_provider_config_path: builtinPath,
+        builtin_provider_config_bytes: builtinBytes,
+        builtin_provider_config_sha256: builtinSha256,
+        runtime_host_path: runtimeHostPath,
+        runtime_host_bytes: runtimeHostBytes,
+        runtime_host_sha256: runtimeHostSha256
+      });
+    }
+    const nodeCompatible = isSupportedNodeVersion(nodeVersion);
+    const observedDesktopVersion = desktopVersion;
+    const observedAppVersion = launchEnv.ZCODE_APP_VERSION;
+    const observedBuildCommitId = launchEnv.ZCODE_BUILD_COMMIT_ID;
+    if (!observedDesktopVersion || !observedAppVersion || !observedBuildCommitId || !nodeVersion) {
+      return unverified("installed Official runtime identity is incomplete", nodeExecutable, {
+        install_dir: installDir,
+        install_source: discovery.source,
+        desktop_version: observedDesktopVersion,
+        bundle_path: bundlePath,
+        bundle_bytes: bundleBytes,
+        bundle_sha256: bundleSha256,
+        builtin_provider_config_path: builtinPath,
+        builtin_provider_config_bytes: builtinBytes,
+        builtin_provider_config_sha256: builtinSha256,
+        runtime_host_path: runtimeHostPath,
+        runtime_host_bytes: runtimeHostBytes,
+        runtime_host_sha256: runtimeHostSha256,
+        runtime_host_signer_subject: runtimeHostIdentity.signer_subject,
+        runtime_host_signer_thumbprint: runtimeHostIdentity.signer_thumbprint,
+        desktop_executable_path: desktopExecutablePath,
+        desktop_executable_bytes: desktopExecutableBytes,
+        desktop_executable_sha256: desktopExecutableSha256,
+        desktop_executable_signer_subject: desktopExecutableIdentity.signer_subject,
+        desktop_executable_signer_thumbprint: desktopExecutableIdentity.signer_thumbprint,
+        desktop_archive_path: desktopArchivePath,
+        desktop_archive_bytes: desktopArchiveBytes,
+        desktop_archive_sha256: desktopArchiveSha256,
+        node_version: nodeVersion,
+        node_compatible: nodeCompatible
+      });
+    }
+    const installationFingerprint = computeOfficialInstallationFingerprint({
+      desktop_version: observedDesktopVersion,
+      desktop_app_version: observedAppVersion,
+      desktop_build_commit_id: observedBuildCommitId,
+      desktop_executable_bytes: desktopExecutableBytes,
+      desktop_executable_sha256: desktopExecutableSha256,
+      desktop_archive_bytes: desktopArchiveBytes,
+      desktop_archive_sha256: desktopArchiveSha256,
+      bundle_bytes: bundleBytes,
+      bundle_sha256: bundleSha256,
+      builtin_provider_config_bytes: builtinBytes,
+      builtin_provider_config_sha256: builtinSha256,
+      runtime_host_bytes: runtimeHostBytes,
+      runtime_host_sha256: runtimeHostSha256,
+      desktop_signer_thumbprint: desktopExecutableIdentity.signer_thumbprint ?? "",
+      runtime_host_signer_thumbprint: runtimeHostIdentity.signer_thumbprint ?? "",
+      node_version: nodeVersion
+    });
+    const manifestCandidate = this.#manifest.find(
+      (entry) => entry.desktop_version === desktopVersion && entry.bundle_bytes === bundleBytes && entry.bundle_sha256.toLowerCase() === bundleSha256.toLowerCase()
+    ) ?? null;
+    const mismatches = [];
+    if (!manifestCandidate) {
+      mismatches.push("desktop version/bundle bytes/SHA-256 are not in the compatibility manifest");
+    } else {
+      if (manifestCandidate.desktop_app_version !== observedAppVersion || manifestCandidate.desktop_build_commit_id !== observedBuildCommitId) {
+        mismatches.push("Desktop launch identity does not match the compatibility manifest");
+      }
+      if (manifestCandidate.builtin_provider_config_bytes !== builtinBytes || manifestCandidate.builtin_provider_config_sha256.toLowerCase() !== builtinSha256.toLowerCase()) {
+        mismatches.push("builtin provider config identity does not match the compatibility manifest");
+      }
+      if (manifestCandidate.runtime_host_bytes !== runtimeHostBytes || manifestCandidate.runtime_host_sha256.toLowerCase() !== runtimeHostSha256.toLowerCase()) {
+        mismatches.push("runtime-host identity does not match the compatibility manifest");
+      }
+      if (manifestCandidate.desktop_executable_bytes !== void 0 && (manifestCandidate.desktop_executable_bytes !== desktopExecutableBytes || manifestCandidate.desktop_executable_sha256?.toLowerCase() !== desktopExecutableSha256.toLowerCase())) {
+        mismatches.push("Desktop executable identity does not match the compatibility manifest");
+      }
+      if (manifestCandidate.desktop_archive_bytes !== void 0 && (manifestCandidate.desktop_archive_bytes !== desktopArchiveBytes || manifestCandidate.desktop_archive_sha256?.toLowerCase() !== desktopArchiveSha256.toLowerCase())) {
+        mismatches.push("Desktop archive identity does not match the compatibility manifest");
+      }
+      if (manifestCandidate.node_compatibility !== SUPPORTED_NODE_RANGE || !nodeCompatible) {
+        mismatches.push(`Node ${nodeVersion} is outside the verified compatibility range ${manifestCandidate.node_compatibility}`);
+      }
+    }
+    const authorizationHost = this.#host ?? codexHostProfile(this.#homeDir);
+    const configuredAuthorizationFile = env["ZCODE_BRIDGE_EXPERIMENTAL_RUNTIME_AUTHORIZATION_FILE"]?.trim();
+    const authorizationFile = this.#experimentalAuthorizationFile !== void 0 ? this.#experimentalAuthorizationFile : configuredAuthorizationFile || path8.join(
+      authorizationHost.settingsDirectory,
+      "experimental-runtime-authorization.json"
+    );
+    const experimentalAuthorization = await lookupOfficialRuntimeAuthorization({
+      filePath: authorizationFile,
+      installationFingerprint,
+      desktopVersion: observedDesktopVersion
+    });
+    const manifest = manifestCandidate && mismatches.length === 0 ? manifestCandidate : null;
+    const manifestStage = manifest?.verification_stage ?? "VERIFIED";
+    const common = {
+      install_dir: installDir,
+      install_source: discovery.source,
+      installation_safety: "OFFICIAL_INSTALLATION_SAFE",
+      installation_fingerprint: installationFingerprint,
+      experimental_authorization: experimentalAuthorization,
+      desktop_version: observedDesktopVersion,
+      desktop_app_version: observedAppVersion,
+      desktop_build_commit_id: observedBuildCommitId,
+      bundle_path: bundlePath,
+      bundle_bytes: bundleBytes,
+      bundle_sha256: bundleSha256,
+      builtin_provider_config_path: builtinPath,
+      builtin_provider_config_bytes: builtinBytes,
+      builtin_provider_config_sha256: builtinSha256,
+      runtime_host_path: runtimeHostPath,
+      runtime_host_bytes: runtimeHostBytes,
+      runtime_host_sha256: runtimeHostSha256,
+      runtime_host_signer_subject: runtimeHostIdentity.signer_subject,
+      runtime_host_signer_thumbprint: runtimeHostIdentity.signer_thumbprint,
+      desktop_executable_path: desktopExecutablePath,
+      desktop_executable_bytes: desktopExecutableBytes,
+      desktop_executable_sha256: desktopExecutableSha256,
+      desktop_executable_signer_subject: desktopExecutableIdentity.signer_subject,
+      desktop_executable_signer_thumbprint: desktopExecutableIdentity.signer_thumbprint,
+      desktop_archive_path: desktopArchivePath,
+      desktop_archive_bytes: desktopArchiveBytes,
+      desktop_archive_sha256: desktopArchiveSha256,
+      node_version: nodeVersion,
+      node_compatible: nodeCompatible,
+      manifest
+    };
+    if (!nodeCompatible) {
+      return unverified(`Node ${nodeVersion} is outside the supported compatibility range ${SUPPORTED_NODE_RANGE}`, nodeExecutable, common);
+    }
+    if (manifest && manifestStage === "VERIFIED") {
+      return {
+        status: "OFFICIAL_RUNTIME_VERIFIED",
+        ...common,
+        discount_capability: manifest.coding_plan_discount_verified ? "OFFICIAL_DISCOUNT_VERIFIED" : "OFFICIAL_DISCOUNT_NOT_VERIFIED",
+        start_plan_static_compatibility: manifest.start_plan_static_compatibility,
+        reason: null,
+        node_executable: nodeExecutable
+      };
+    }
+    if (experimentalAuthorization.state === "invalid") {
+      return unverified(
+        `EXPERIMENTAL_AUTHORIZATION_INVALID: ${experimentalAuthorization.reason}`,
+        nodeExecutable,
+        common
+      );
+    }
+    if (experimentalAuthorization.state !== "authorized") {
+      return unverified(
+        `EXPERIMENTAL_AUTHORIZATION_REQUIRED: ${mismatches.join("; ") || "runtime identity is not production-verified"}`,
+        nodeExecutable,
+        common
+      );
+    }
+    return {
+      status: "OFFICIAL_RUNTIME_EXPERIMENTAL",
+      ...common,
+      discount_capability: "OFFICIAL_DISCOUNT_NOT_VERIFIED",
+      start_plan_static_compatibility: manifest?.start_plan_static_compatibility ?? "OFFLINE_RESEARCH_PENDING",
+      reason: mismatches.length > 0 ? `explicit experimental authorization accepted for an unverified runtime identity: ${mismatches.join("; ")}` : "explicit experimental authorization accepted; Provider capabilities remain independently unverified",
+      node_executable: nodeExecutable
+    };
+  }
+  async resolve() {
+    const descriptor = await this.inspect();
+    if (descriptor.status !== "OFFICIAL_RUNTIME_VERIFIED" && descriptor.status !== "OFFICIAL_RUNTIME_EXPERIMENTAL" || !descriptor.bundle_path || !descriptor.builtin_provider_config_path) {
+      throw new BridgeError(
+        "provider_config_invalid",
+        `OFFICIAL_RUNTIME_UNVERIFIED: ${descriptor.reason ?? "installed Official AppServer is unavailable"}; OFFICIAL_DISCOUNT_NOT_VERIFIED`
+      );
+    }
+    const base = this.#baseResolver ?? new NodeRuntimeResolver({
+      env: this.#env,
+      ...this.#homeDir ? { homeDir: this.#homeDir } : {},
+      ...this.#host ? { host: this.#host } : {}
+    });
+    const configured = await base.resolve();
+    return {
+      ...configured,
+      nodeExecutable: descriptor.node_executable,
+      zcodeEntrypoint: descriptor.bundle_path,
+      providerBuiltinConfigFile: descriptor.builtin_provider_config_path
+    };
+  }
+};
+function unverified(reason, nodeExecutable, details = {}) {
+  return {
+    status: "OFFICIAL_RUNTIME_UNVERIFIED",
+    installation_safety: details.installation_safety ?? "OFFICIAL_INSTALLATION_INCOMPLETE",
+    installation_fingerprint: details.installation_fingerprint ?? null,
+    experimental_authorization: details.experimental_authorization ?? null,
+    discount_capability: "OFFICIAL_DISCOUNT_NOT_VERIFIED",
+    start_plan_static_compatibility: null,
+    reason,
+    install_dir: details.install_dir ?? null,
+    install_source: details.install_source ?? null,
+    desktop_version: details.desktop_version ?? null,
+    desktop_app_version: details.desktop_app_version ?? null,
+    desktop_build_commit_id: details.desktop_build_commit_id ?? null,
+    bundle_path: details.bundle_path ?? null,
+    bundle_bytes: details.bundle_bytes ?? null,
+    bundle_sha256: details.bundle_sha256 ?? null,
+    builtin_provider_config_path: details.builtin_provider_config_path ?? null,
+    builtin_provider_config_bytes: details.builtin_provider_config_bytes ?? null,
+    builtin_provider_config_sha256: details.builtin_provider_config_sha256 ?? null,
+    runtime_host_path: details.runtime_host_path ?? null,
+    runtime_host_bytes: details.runtime_host_bytes ?? null,
+    runtime_host_sha256: details.runtime_host_sha256 ?? null,
+    runtime_host_signer_subject: details.runtime_host_signer_subject ?? null,
+    runtime_host_signer_thumbprint: details.runtime_host_signer_thumbprint ?? null,
+    desktop_executable_path: details.desktop_executable_path ?? null,
+    desktop_executable_bytes: details.desktop_executable_bytes ?? null,
+    desktop_executable_sha256: details.desktop_executable_sha256 ?? null,
+    desktop_executable_signer_subject: details.desktop_executable_signer_subject ?? null,
+    desktop_executable_signer_thumbprint: details.desktop_executable_signer_thumbprint ?? null,
+    desktop_archive_path: details.desktop_archive_path ?? null,
+    desktop_archive_bytes: details.desktop_archive_bytes ?? null,
+    desktop_archive_sha256: details.desktop_archive_sha256 ?? null,
+    node_executable: nodeExecutable,
+    node_version: details.node_version ?? null,
+    node_compatible: details.node_compatible === true,
+    manifest: details.manifest ?? null
+  };
+}
+function unsafe(reason, nodeExecutable, details = {}) {
+  return unverified(reason, nodeExecutable, {
+    ...details,
+    installation_safety: "OFFICIAL_INSTALLATION_UNSAFE"
+  });
+}
+function executableSafetyFailure(identity, label) {
+  if (identity.architecture !== "x64") {
+    return `OFFICIAL_INSTALLATION_UNSAFE: ${label} is not an x64 PE executable`;
+  }
+  if (identity.signature_status.trim().toLowerCase() !== "valid") {
+    return `OFFICIAL_INSTALLATION_UNSAFE: ${label} Authenticode signature is not valid`;
+  }
+  const signerSubject = identity.signer_subject?.replace(/\s+/gu, " ").trim() ?? "";
+  if (!signerSubject.includes("CN=\u5317\u4EAC\u667A\u8C31\u534E\u7AE0\u79D1\u6280\u80A1\u4EFD\u6709\u9650\u516C\u53F8")) {
+    return `OFFICIAL_INSTALLATION_UNSAFE: ${label} signer is not the official Zhipu publisher`;
+  }
+  if (!identity.signer_thumbprint || !/^[0-9A-F]{40,64}$/u.test(identity.signer_thumbprint.replace(/\s+/gu, ""))) {
+    return `OFFICIAL_INSTALLATION_UNSAFE: ${label} signer thumbprint is unavailable`;
+  }
+  return null;
+}
+async function inspectWindowsExecutable(filePath) {
+  const architecture = readPortableExecutableArchitecture(filePath);
+  const systemRoot = process.env["SystemRoot"]?.trim();
+  if (!systemRoot) throw new Error("SystemRoot is unavailable for Authenticode inspection");
+  const powershell = path8.join(
+    systemRoot,
+    "System32",
+    "WindowsPowerShell",
+    "v1.0",
+    "powershell.exe"
+  );
+  const script = [
+    "$ProgressPreference = 'SilentlyContinue'",
+    "$ErrorActionPreference = 'Stop'",
+    "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)",
+    "$target = $env:ZCODE_BRIDGE_AUTHENTICODE_FILE",
+    "if ([string]::IsNullOrWhiteSpace($target)) { exit 2 }",
+    "$signature = Get-AuthenticodeSignature -LiteralPath $target",
+    "$certificate = $signature.SignerCertificate",
+    "[pscustomobject]@{",
+    "status = [string]$signature.Status;",
+    "subject = if ($null -eq $certificate) { $null } else { [string]$certificate.Subject };",
+    "thumbprint = if ($null -eq $certificate) { $null } else { [string]$certificate.Thumbprint }",
+    "} | ConvertTo-Json -Compress"
+  ].join("\n");
+  const encoded = Buffer.from(script, "utf16le").toString("base64");
+  const { stdout } = await execFileAsync(powershell, [
+    "-NoProfile",
+    "-NonInteractive",
+    "-EncodedCommand",
+    encoded
+  ], {
+    encoding: "utf8",
+    timeout: 3e4,
+    windowsHide: true,
+    env: {
+      SystemRoot: systemRoot,
+      ZCODE_BRIDGE_AUTHENTICODE_FILE: filePath
+    }
+  });
+  let parsed;
+  try {
+    parsed = JSON.parse(stdout.trim());
+  } catch {
+    throw new Error("Authenticode probe returned invalid JSON");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Authenticode probe returned an invalid object");
+  }
+  const value = parsed;
+  return {
+    architecture,
+    signature_status: typeof value["status"] === "string" ? value["status"] : "",
+    signer_subject: typeof value["subject"] === "string" ? value["subject"] : null,
+    signer_thumbprint: typeof value["thumbprint"] === "string" ? value["thumbprint"] : null
+  };
+}
+function readPortableExecutableArchitecture(filePath) {
+  const fd = openSync2(filePath, "r");
+  try {
+    const dosHeader = Buffer.alloc(64);
+    if (readSync2(fd, dosHeader, 0, dosHeader.length, 0) !== dosHeader.length || dosHeader.toString("ascii", 0, 2) !== "MZ") {
+      return "unknown";
+    }
+    const peOffset = dosHeader.readUInt32LE(60);
+    if (!Number.isSafeInteger(peOffset) || peOffset < 64 || peOffset > 64 * 1024 * 1024) {
+      return "unknown";
+    }
+    const coffHeader = Buffer.alloc(6);
+    if (readSync2(fd, coffHeader, 0, coffHeader.length, peOffset) !== coffHeader.length || coffHeader.toString("ascii", 0, 4) !== "PE\0\0") {
+      return "unknown";
+    }
+    return coffHeader.readUInt16LE(4) === 34404 ? "x64" : "unknown";
+  } finally {
+    closeSync2(fd);
+  }
+}
+async function canonicalDirectory(candidate) {
+  const stat4 = await lstat2(candidate);
+  if (!stat4.isDirectory() || stat4.isSymbolicLink()) throw new Error("installed ZCode root is not a real directory");
+  return realpath(candidate);
+}
+async function canonicalFileInside(root, candidate, label) {
+  const stat4 = await lstat2(candidate);
+  if (!stat4.isFile() || stat4.isSymbolicLink()) throw new Error(`${label} is not a regular file`);
+  const resolved = await realpath(candidate);
+  const relative = path8.relative(root, resolved);
+  if (!relative || relative === ".." || relative.startsWith(`..${path8.sep}`) || path8.isAbsolute(relative)) {
+    throw new Error(`${label} resolves outside the installed ZCode root`);
+  }
+  return resolved;
+}
+async function sha256File(filePath) {
+  const hash = createHash3("sha256");
+  await new Promise((resolve, reject) => {
+    const stream = createReadStream(filePath);
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.once("error", reject);
+    stream.once("end", resolve);
+  });
+  return hash.digest("hex");
+}
+async function probeNodeCliVersion(executable) {
+  const { stdout } = await execFileAsync(executable, ["--version"], {
+    encoding: "utf8",
+    timeout: 5e3,
+    windowsHide: true
+  });
+  return stdout.trim();
+}
+function normalizeNodeVersion(value) {
+  const normalized = value.trim().replace(/^v/u, "");
+  if (!/^\d+\.\d+\.\d+$/u.test(normalized)) throw new Error(`invalid Node version output: ${value.slice(0, 80)}`);
+  return normalized;
+}
+function normalizeDesktopVersion(value) {
+  const normalized = value.trim();
+  if (!/^\d+\.\d+\.\d+(?:\.\d+)?(?:-[0-9A-Za-z.-]+)?$/u.test(normalized)) {
+    throw new Error(`invalid Desktop file version output: ${value.slice(0, 80)}`);
+  }
+  return normalized;
+}
+async function probeWindowsFileVersion(executable) {
+  const script = [
+    "$path = $env:ZCODE_BRIDGE_VERSION_FILE",
+    "if ([string]::IsNullOrWhiteSpace($path)) { exit 2 }",
+    "$version = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($path).FileVersion",
+    "[Console]::Out.Write($version)"
+  ].join("; ");
+  const encoded = Buffer.from(script, "utf16le").toString("base64");
+  const systemRoot = process.env["SystemRoot"]?.trim();
+  if (!systemRoot) throw new Error("SystemRoot is unavailable for the Windows version probe");
+  const powershell = path8.join(
+    systemRoot,
+    "System32",
+    "WindowsPowerShell",
+    "v1.0",
+    "powershell.exe"
+  );
+  const { stdout } = await execFileAsync(powershell, [
+    "-NoProfile",
+    "-NonInteractive",
+    "-EncodedCommand",
+    encoded
+  ], {
+    encoding: "utf8",
+    timeout: 5e3,
+    windowsHide: true,
+    env: {
+      SystemRoot: systemRoot,
+      ZCODE_BRIDGE_VERSION_FILE: executable
+    }
+  });
+  return stdout.trim();
+}
+function errorMessage(error2) {
+  const message = error2 instanceof Error ? error2.message : String(error2);
+  return message.slice(0, 500);
+}
+
+// src/adapters/official-host-adapter.ts
+var OFFICIAL_HOST_TRANSPORT_MAX_FRAME_BYTES = 16 * 1024 * 1024;
+var OFFICIAL_HOST_ASSET_RELATIVE_ROOT = "./vendor/official-host/win32-x64-node24.16.0-zcode3.18.2-fec97590";
+var OFFICIAL_HOST_ASSETS = {
+  hostModule: {
+    relativePath: "official-host-runtime.mjs",
+    bytes: 1829872,
+    sha256: "7E2B8B772F1DD83135903B64D569D634C7E7FC6F303460E08C98E27D311B6A91"
+  },
+  runtimeHost: {
+    relativePath: "zcode-runtime-host.exe",
+    bytes: 179608,
+    sha256: "C2C8FF5FF28CBDDC4F177C094AA67C322830889612251BD173BAAABC89379AB4"
+  },
+  keyringLoader: {
+    relativePath: "node_modules/@napi-rs/keyring/index.js",
+    bytes: 29176,
+    sha256: "8A89DB37F981D05B484EB063ADAE3399660AE7734AD38797463E5691382F5036"
+  },
+  keyringPackage: {
+    relativePath: "node_modules/@napi-rs/keyring/package.json",
+    bytes: 3325,
+    sha256: "4BA8C90AC72BE27FCB3337ED7BC0159C68747E0824294DF5F2AAAEB03130CD4F"
+  },
+  keyringNativePackage: {
+    relativePath: "node_modules/@napi-rs/keyring-win32-x64-msvc/package.json",
+    bytes: 641,
+    sha256: "1552C08589EEAEBC3680642883A8CAFEA8C72F80ED62908DE814177498562121"
+  },
+  keyringNative: {
+    relativePath: "node_modules/@napi-rs/keyring-win32-x64-msvc/keyring.win32-x64-msvc.node",
+    bytes: 1912832,
+    sha256: "52B16658275B7848F8081A6542FEE3448F1B1C5D3A36487107AE0E7CEC95AC6F"
+  }
+};
+async function loadOfficialStartPlanAuthenticationResolverFactory(workerModuleUrl = import.meta.url) {
+  const assets = await verifyOfficialHostAssets(workerModuleUrl);
+  const module = await loadOfficialHostModule(assets.hostModulePath);
+  if (typeof module.createOfficialStartPlanAuthenticationResolver !== "function") {
+    throw new BridgeError(
+      "provider_config_invalid",
+      "The Official Host module is missing the Start Plan authentication resolver."
+    );
+  }
+  return module.createOfficialStartPlanAuthenticationResolver;
+}
+async function loadOfficialHostProductVersion(workerModuleUrl = import.meta.url) {
+  const assets = await verifyOfficialHostAssets(workerModuleUrl);
+  const module = await loadOfficialHostModule(assets.hostModulePath);
+  return normalizeOfficialHostProductVersion(module.ZCODE_PRODUCT_VERSION);
+}
+async function verifyOfficialHostAssets(workerModuleUrl = import.meta.url) {
+  const workerUrl = workerModuleUrl instanceof URL ? workerModuleUrl : new URL(workerModuleUrl);
+  const root = fileURLToPath3(new URL(`${OFFICIAL_HOST_ASSET_RELATIVE_ROOT}/`, workerUrl));
+  let rootReal;
+  try {
+    const rootStat = await lstat3(root);
+    if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new Error("not a real directory");
+    rootReal = await realpath2(root);
+  } catch (error2) {
+    throw new BridgeError("runtime_not_found", "The shipped Official Host asset directory is absent.", { cause: error2 });
+  }
+  const verified = /* @__PURE__ */ new Map();
+  for (const [name, definition] of Object.entries(OFFICIAL_HOST_ASSETS)) {
+    const candidate = path9.resolve(rootReal, definition.relativePath);
+    try {
+      const candidateStat = await lstat3(candidate);
+      if (!candidateStat.isFile() || candidateStat.isSymbolicLink()) throw new Error("not a regular file");
+      const candidateReal = await realpath2(candidate);
+      if (!isPathInside(rootReal, candidateReal)) throw new Error("resolved outside the shipped asset root");
+      if (candidateStat.size !== definition.bytes) throw new Error("byte length mismatch");
+      const sha2562 = await sha256File2(candidateReal);
+      if (sha2562.toUpperCase() !== definition.sha256) throw new Error("SHA-256 mismatch");
+      verified.set(name, candidateReal);
+    } catch (error2) {
+      throw new BridgeError("provider_config_invalid", "A shipped Official Host asset failed presence or integrity validation.", {
+        cause: error2
+      });
+    }
+  }
+  const manifestDigest = createHash4("sha256").update(JSON.stringify(
+    Object.entries(OFFICIAL_HOST_ASSETS).sort(([left], [right]) => left.localeCompare(right)).map(([name, definition]) => ({
+      name,
+      relativePath: definition.relativePath,
+      bytes: definition.bytes,
+      sha256: definition.sha256
+    }))
+  ), "utf8").digest("hex");
+  return {
+    root: rootReal,
+    hostModulePath: verified.get("hostModule"),
+    runtimeHostPath: verified.get("runtimeHost"),
+    manifestDigest
+  };
+}
+async function loadOfficialHostModule(modulePath) {
+  return resolveOfficialHostModule(await import(pathToFileURL(modulePath).href));
+}
+async function resolveOfficialHostModule(source) {
+  const value = typeof source === "function" ? await source() : source;
+  if (!value || typeof value.ZCodeAgentProcessManager !== "function" || typeof value.ZCodeProtocolClient !== "function") {
+    throw new BridgeError("provider_config_invalid", "The Official Host module is missing required exports.");
+  }
+  return value;
+}
+function normalizeOfficialHostProductVersion(value) {
+  const version2 = typeof value === "string" ? value.trim() : "";
+  if (!/^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$/u.test(version2)) {
+    throw new BridgeError(
+      "provider_config_invalid",
+      "The Official Host module is missing a valid product version."
+    );
+  }
+  return version2;
+}
+var officialHostEnvironmentTail = Promise.resolve();
+function isPathInside(root, candidate) {
+  const relative = path9.relative(root, candidate);
+  return relative !== "" && !relative.startsWith(`..${path9.sep}`) && relative !== ".." && !path9.isAbsolute(relative);
+}
+async function sha256File2(filePath) {
+  const hash = createHash4("sha256");
+  await new Promise((resolve, reject) => {
+    const stream = createReadStream2(filePath);
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.once("error", reject);
+    stream.once("end", resolve);
+  });
+  return hash.digest("hex");
+}
+
+// src/runtime/start-plan-production-auth.ts
+import { version as readOsVersion } from "node:os";
+function isRecord3(value) {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+function asOfficialBillingEnvelope(value) {
+  if (!isRecord3(value)) return null;
+  const data = isRecord3(value.data) ? value.data : void 0;
+  return {
+    success: value.success,
+    code: value.code,
+    msg: value.msg,
+    ...data ? { data: {
+      plans: data.plans,
+      balances: data.balances,
+      server_time: data.server_time
+    } } : {}
+  };
+}
+function isSuccessfulBusinessEnvelope(envelope) {
+  return envelope.success !== false && (envelope.code === void 0 || envelope.code === 0 || envelope.code === 200);
+}
+function stringKeyedArray(value) {
+  return Array.isArray(value) ? value.filter(isRecord3) : [];
+}
+function isActiveStartPlan(plan) {
+  const status = typeof plan.status === "string" ? plan.status.trim().toLowerCase() : "";
+  const planId = typeof plan.plan_id === "string" ? plan.plan_id.trim().toLowerCase() : "";
+  const name = typeof plan.name === "string" ? plan.name.trim().toLowerCase() : "";
+  const startPlanIdentity = planId.includes("start-plan") || planId.includes("start plan") || name.includes("start-plan") || name.includes("start plan");
+  return status === "active" && startPlanIdentity;
+}
+function activeStartPlans(envelope) {
+  return stringKeyedArray(envelope.data?.plans).filter(isActiveStartPlan);
+}
+function hasActiveStartPlan(envelope) {
+  return activeStartPlans(envelope).length > 0;
+}
+function startPlanBalanceModelIds(balances) {
+  const seen = /* @__PURE__ */ new Set();
+  const models = [];
+  for (const balance of balances) {
+    const capabilities = Array.isArray(balance.capabilities) ? balance.capabilities : [];
+    const capabilityModels = capabilities.flatMap((capability2) => {
+      const raw = typeof capability2 === "string" ? capability2.trim().toLowerCase() : "";
+      return raw.startsWith("model:") ? [raw.slice(6).trim()] : [];
+    }).filter(Boolean);
+    const candidates = capabilityModels.length > 0 ? capabilityModels : typeof balance.show_name === "string" ? [balance.show_name.trim().toLowerCase()] : [];
+    for (const model of candidates) {
+      if (!model || seen.has(model)) continue;
+      seen.add(model);
+      models.push(model);
+    }
+  }
+  return models;
+}
+function readIdentifier(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+function balanceBelongsToPlan(balance, plan) {
+  const balanceUserPlanId = readIdentifier(balance.user_plan_id);
+  const planUserPlanId = readIdentifier(plan.user_plan_id);
+  if (balanceUserPlanId && planUserPlanId) return balanceUserPlanId === planUserPlanId;
+  const balancePlanId = readIdentifier(balance.plan_id);
+  const planId = readIdentifier(plan.plan_id);
+  return Boolean(balancePlanId && planId && balancePlanId === planId);
+}
+function requestedModelBalances(balances, requestedModel) {
+  return balances.filter((balance) => {
+    const capabilities = Array.isArray(balance.capabilities) ? balance.capabilities : [];
+    const capabilityModels = capabilities.flatMap((capability2) => {
+      const raw = typeof capability2 === "string" ? capability2.trim().toLowerCase() : "";
+      return raw.startsWith("model:") ? [raw.slice(6).trim()] : [];
+    }).filter(Boolean);
+    const candidates = capabilityModels.length > 0 ? capabilityModels : typeof balance.show_name === "string" ? [balance.show_name.trim().toLowerCase()] : [];
+    return candidates.includes(requestedModel);
+  });
+}
+function numericUnit(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() && Number.isFinite(Number(value))) return Number(value);
+  return null;
+}
+function finiteEpochSeconds(value) {
+  const number3 = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : NaN;
+  return Number.isFinite(number3) && number3 >= 0 ? number3 : void 0;
+}
+function normalizeBillingAvailabilityEnvelope(envelope, responseTimeSeconds2) {
+  const data = envelope.data;
+  if (!data) return envelope;
+  const nowSeconds = responseTimeSeconds2 ?? (typeof data.server_time === "number" && Number.isFinite(data.server_time) && data.server_time >= 0 ? data.server_time : void 0) ?? Date.now() / 1e3;
+  const plans = stringKeyedArray(data.plans).map((plan) => {
+    const status = typeof plan.status === "string" ? plan.status.trim().toLowerCase() : "";
+    const end = finiteEpochSeconds(plan.ends_at);
+    return status === "active" && end !== void 0 && end > 0 && end <= nowSeconds ? { ...plan, status: "expired" } : plan;
+  });
+  const balances = stringKeyedArray(data.balances).filter((balance) => {
+    const userPlanId = typeof balance.user_plan_id === "string" ? balance.user_plan_id : "";
+    const planId = typeof balance.plan_id === "string" ? balance.plan_id : "";
+    const owners = plans.filter((plan) => {
+      const ownerUserPlanId = typeof plan.user_plan_id === "string" ? plan.user_plan_id : "";
+      const ownerPlanId = typeof plan.plan_id === "string" ? plan.plan_id : "";
+      return userPlanId && ownerUserPlanId ? userPlanId === ownerUserPlanId : planId === ownerPlanId;
+    });
+    return owners.length === 0 || owners.some((plan) => typeof plan.status === "string" && plan.status.trim().toLowerCase() !== "expired");
+  });
+  return {
+    ...envelope,
+    data: {
+      ...data,
+      plans,
+      balances
+    }
+  };
+}
+function hasPendingActivation(envelope) {
+  const data = envelope.data;
+  if (!data) return false;
+  const nowSeconds = typeof data.server_time === "number" && Number.isFinite(data.server_time) && data.server_time >= 0 ? data.server_time : Date.now() / 1e3;
+  const effectiveTimes = activeStartPlans(envelope).flatMap((plan) => {
+    const entitlements = stringKeyedArray(plan.entitlements);
+    return entitlements.length > 0 ? entitlements.map((entry) => entry.effective_at) : [plan.starts_at];
+  }).map((value) => value === null || value === void 0 || value === "" ? void 0 : Number(value));
+  return effectiveTimes.length > 0 && effectiveTimes.every((value) => value !== void 0 && Number.isFinite(value) && value > nowSeconds);
+}
+function extractProviderCode(value) {
+  if (!value) return void 0;
+  const error2 = isRecord3(value.error) ? value.error : void 0;
+  const candidates = [
+    value.providerCode,
+    error2?.providerCode,
+    error2 && isRecord3(error2) ? error2.code : void 0,
+    value.code
+  ];
+  const raw = candidates.find((candidate) => typeof candidate === "number" || typeof candidate === "string");
+  const code = typeof raw === "number" || typeof raw === "string" ? String(raw).trim() : "";
+  return /^[0-9A-Za-z_.-]{1,32}$/u.test(code) ? code : void 0;
+}
+function classifyEntitlementFailure(input) {
+  const code = input.providerCode?.trim();
+  const providerCode = code ? code : void 0;
+  if (code === "3007") return { status: "captcha_required", reason: "provider requested captcha verification", providerCode, failureClass: "captcha_required" };
+  if (code === "3012") return { status: "unusual_activity", reason: "provider blocked this identity due to unusual activity", providerCode, failureClass: "unusual_activity" };
+  if (code === "3001") return { status: "billing_parameter_error", reason: "billing request parameters were rejected", providerCode, failureClass: "billing_parameter_error" };
+  if (input.statusCode === 401) return { status: "unauthorized", reason: "credential was rejected as unauthenticated", failureClass: "unauthorized" };
+  if (input.statusCode === 403) return { status: "forbidden", reason: "credential is authenticated but forbidden from this plan or model", failureClass: "forbidden" };
+  const rawEnvelope = input.statusCode === 200 ? asOfficialBillingEnvelope(input.body) : void 0;
+  const envelope = rawEnvelope ? normalizeBillingAvailabilityEnvelope(rawEnvelope, input.responseTimeSeconds) : void 0;
+  const activePlans = envelope ? activeStartPlans(envelope) : [];
+  if (envelope && isSuccessfulBusinessEnvelope(envelope) && activePlans.length > 0) {
+    const balances = stringKeyedArray(envelope.data?.balances);
+    const attributedBalances = balances.filter((balance) => activePlans.some((plan) => balanceBelongsToPlan(balance, plan)));
+    const models = startPlanBalanceModelIds(attributedBalances);
+    const requested = input.model?.trim().toLowerCase();
+    if (!requested) {
+      return { status: "unavailable", reason: "billing response had no requested model identity to authorize", failureClass: "response_malformed" };
+    }
+    if (hasPendingActivation(envelope)) {
+      return {
+        status: "unavailable",
+        reason: "active Start Plan has not taken effect",
+        failureClass: "activation_pending"
+      };
+    }
+    if (models.length === 0) {
+      return {
+        status: "unavailable",
+        reason: "billing response did not prove available model quota for this Start Plan",
+        failureClass: "model_quota_unproven"
+      };
+    }
+    if (!models.includes(requested)) {
+      return { status: "model_unavailable", reason: "active Start Plan does not list the requested model", failureClass: "requested_model_absent" };
+    }
+    const relevant = requestedModelBalances(attributedBalances, requested);
+    const units = relevant.map((balance) => numericUnit(balance.remaining_units));
+    if (relevant.length === 0 || units.some((unit) => unit === null || unit < 0)) {
+      return {
+        status: "unavailable",
+        reason: "billing response did not prove positive remaining quota for the requested model",
+        failureClass: "model_quota_unproven"
+      };
+    }
+    if (units.every((unit) => unit === 0)) {
+      return {
+        status: "quota_exhausted",
+        reason: "Start Plan quota is exhausted for the requested model",
+        failureClass: "quota_exhausted"
+      };
+    }
+    return { status: "entitled", reason: "active Start Plan has positive quota for the requested model", failureClass: "unknown" };
+  } else if (envelope && isSuccessfulBusinessEnvelope(envelope) && !hasActiveStartPlan(envelope)) {
+    return { status: "no_entitlement", reason: "no active Start Plan was present in the billing response", failureClass: "active_plan_absent" };
+  }
+  if (input.statusCode === 429) return { status: "rate_limited", reason: "rate limited; quota state unknown from status alone", failureClass: "rate_limited" };
+  if (input.statusCode >= 500) return { status: "unavailable", reason: "entitlement service error", failureClass: "service_error" };
+  if (input.statusCode >= 400) return { status: "unavailable", reason: "entitlement query rejected without a recognized provider code", failureClass: "http_rejected" };
+  if (envelope) return { status: "unavailable", reason: "billing response reported an unsuccessful business outcome", failureClass: "business_rejected" };
+  return { status: "unavailable", reason: "entitlement response could not be interpreted", failureClass: "response_malformed" };
+}
+function sanitizeHeaderValue(value) {
+  const trimmed = value?.trim();
+  return trimmed && /^[\x20-\x7e]+$/u.test(trimmed) ? trimmed : void 0;
+}
+function clientLanguage() {
+  try {
+    return sanitizeHeaderValue(process.env.ZCODE_CLIENT_LANGUAGE) ?? sanitizeHeaderValue(Intl.DateTimeFormat().resolvedOptions().locale) ?? "unknown";
+  } catch {
+    return sanitizeHeaderValue(process.env.ZCODE_CLIENT_LANGUAGE) ?? "unknown";
+  }
+}
+function clientTimezone() {
+  try {
+    return sanitizeHeaderValue(Intl.DateTimeFormat().resolvedOptions().timeZone) ?? "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+function osCategory() {
+  if (process.platform === "darwin") return "macos";
+  if (process.platform === "win32") return "windows";
+  return "linux";
+}
+function officialBillingHeaders(input) {
+  return {
+    Authorization: `Bearer ${input.jwt}`,
+    "X-Device-Mid": input.deviceMid,
+    "User-Agent": `ZCode/${input.appVersion}`,
+    "HTTP-Referer": input.origin,
+    "X-Title": "Z Code@electron",
+    "X-ZCode-App-Version": input.appVersion,
+    "X-Release-Channel": process.env.ZCODE_ENV?.trim().toLowerCase() === "test" ? "test" : "production",
+    "X-Platform": `${process.platform}-${process.arch}`,
+    "X-Client-Language": clientLanguage(),
+    "X-Client-Timezone": clientTimezone(),
+    "X-Os-Category": osCategory(),
+    "X-Os-Version": sanitizeHeaderValue(readOsVersion()) ?? "unknown"
+  };
+}
+function failureVerdict(status) {
+  return status === "no_entitlement" || status === "model_unavailable" || status === "quota_exhausted" ? "not_entitled" : "unavailable";
+}
+function withFailureFacts(verdict2, input) {
+  const providerCode = verdict2.providerCode ?? null;
+  return {
+    status: verdict2.status,
+    reason: verdict2.reason,
+    ...providerCode ? { providerCode } : {},
+    observedAt: input.observedAt,
+    failureFacts: Object.freeze({
+      request_attempted: input.requestAttempted,
+      http_status: input.httpStatus,
+      provider_code: providerCode,
+      failure_class: verdict2.failureClass,
+      entitlement_verdict: failureVerdict(verdict2.status)
+    })
+  };
+}
+var OFFICIAL_START_PLAN_ORIGIN = "https://zcode.z.ai";
+var BILLING_REQUEST_TIMEOUT_MS = 15e3;
+var StartPlanBillingEntitlement = class {
+  #origin;
+  #getAppVersion;
+  #fetchImpl;
+  #now;
+  constructor(options) {
+    this.#origin = (options.origin ?? OFFICIAL_START_PLAN_ORIGIN).replace(/\/+$/, "");
+    this.#getAppVersion = options.getAppVersion;
+    this.#fetchImpl = options.fetchImpl ?? fetch;
+    this.#now = options.now ?? Date.now;
+  }
+  async check(input) {
+    const observedAt = this.#now();
+    const appVersion = await this.#getAppVersion();
+    if (!appVersion || !/^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$/u.test(appVersion)) {
+      return withFailureFacts({
+        status: "unavailable",
+        reason: "official cli version unavailable; refusing to guess",
+        failureClass: "not_attempted"
+      }, { observedAt, requestAttempted: false, httpStatus: null });
+    }
+    const deviceMid = sanitizeHeaderValue(input.deviceMid);
+    if (!deviceMid) {
+      return withFailureFacts({
+        status: "unavailable",
+        reason: "official device identity unavailable; refusing to guess",
+        failureClass: "not_attempted"
+      }, { observedAt, requestAttempted: false, httpStatus: null });
+    }
+    const url = `${this.#origin}/api/v1/zcode-plan/billing/balance?app_version=${encodeURIComponent(appVersion)}`;
+    let response;
+    try {
+      response = await this.#fetchImpl(url, {
+        method: "GET",
+        headers: officialBillingHeaders({
+          origin: this.#origin,
+          appVersion,
+          deviceMid,
+          jwt: input.jwt
+        }),
+        signal: AbortSignal.any([input.signal, AbortSignal.timeout(BILLING_REQUEST_TIMEOUT_MS)])
+      });
+    } catch (error2) {
+      if (input.signal.aborted) throw error2;
+      return withFailureFacts({
+        status: "unavailable",
+        reason: "entitlement transport failed",
+        failureClass: "transport"
+      }, { observedAt: this.#now(), requestAttempted: true, httpStatus: null });
+    }
+    if (response.status === 200) {
+      let body2;
+      let providerCode2;
+      try {
+        const parsed = await response.json();
+        if (isRecord3(parsed)) {
+          body2 = parsed;
+          providerCode2 = extractProviderCode(parsed);
+        }
+      } catch {
+      }
+      const classified = this.#interpretBillingBody({
+        statusCode: response.status,
+        providerCode: providerCode2,
+        body: body2,
+        model: input.model,
+        responseTimeSeconds: responseTimeSeconds(response)
+      });
+      if (classified.status === "entitled") {
+        let requestId = "";
+        try {
+          requestId = (response.headers.get("x-request-id") ?? "").trim();
+        } catch {
+        }
+        return { status: "entitled", observedAt: this.#now(), requestId };
+      }
+      return withFailureFacts(classified, {
+        observedAt: this.#now(),
+        requestAttempted: true,
+        httpStatus: response.status
+      });
+    }
+    let body;
+    let providerCode;
+    try {
+      const parsed = await response.json();
+      if (isRecord3(parsed)) {
+        body = parsed;
+        providerCode = extractProviderCode(parsed);
+      }
+    } catch {
+    }
+    return withFailureFacts(this.#interpretBillingBody({
+      statusCode: response.status,
+      providerCode,
+      body,
+      model: input.model,
+      responseTimeSeconds: responseTimeSeconds(response)
+    }), { observedAt, requestAttempted: true, httpStatus: response.status });
+  }
+  #interpretBillingBody(input) {
+    return classifyEntitlementFailure(input);
+  }
+};
+function responseTimeSeconds(response) {
+  try {
+    const parsed = Date.parse(response.headers.get("date") ?? "");
+    return Number.isFinite(parsed) ? parsed / 1e3 : void 0;
+  } catch {
+    return void 0;
+  }
+}
+
+// tools/cost-lab/web-services.mjs
+import { access as access2, stat as stat2 } from "node:fs/promises";
+import path13 from "node:path";
+
+// tools/cost-lab/path-discovery.mjs
+import { existsSync as existsSync4, readFileSync as readFileSync4 } from "node:fs";
+import path10 from "node:path";
+var USER_HOME_SOURCES = Object.freeze(["HOME", "USERPROFILE", "FALLBACK"]);
+var SETTING_FILE_STATUSES = Object.freeze([
+  "ok",
+  "absent",
+  "unreadable",
+  "invalid_json",
+  "invalid_shape",
+  "permission_denied"
+]);
+function isWindowsAbsolutePath2(value) {
+  return /^[A-Za-z]:[\\/]/u.test(value) || /^\/\/[^\\/]+[\\/][^\\/]+(?:[\\/].*)?$/u.test(value) || /^\\\\[^\\/]+[\\/][^\\/]+(?:[\\/].*)?$/u.test(value);
+}
+function isAbsolutePathForPlatform2(value, platform = process.platform) {
+  return platform === "win32" ? isWindowsAbsolutePath2(value) : path10.posix.isAbsolute(value);
+}
+function isPermissionDenied(error2) {
+  return error2?.code === "EACCES" || error2?.code === "EPERM";
+}
+function resolveUserHome2({
+  env = process.env,
+  platform = process.platform,
+  fallbackHomeDir = null
+} = {}) {
+  const pathImpl = platform === "win32" ? path10.win32 : path10.posix;
+  const homeRaw = env.HOME?.trim() || null;
+  const userProfileRaw = env.USERPROFILE?.trim() || null;
+  if (platform !== "win32") {
+    if (homeRaw) return { userHome: pathImpl.resolve(homeRaw), source: "HOME", homeRaw, homeConflict: null };
+    const fallback = userProfileRaw ?? fallbackHomeDir;
+    if (!fallback) throw new Error("user_home_unavailable");
+    return {
+      userHome: pathImpl.resolve(fallback),
+      source: userProfileRaw ? "USERPROFILE" : "FALLBACK",
+      homeRaw: null,
+      homeConflict: null
+    };
+  }
+  if (homeRaw) {
+    const rooted = isWindowsAbsolutePath2(homeRaw);
+    const matchesProfile = userProfileRaw !== null && pathImpl.normalize(homeRaw).toLowerCase() === pathImpl.normalize(userProfileRaw).toLowerCase();
+    if (rooted && matchesProfile) {
+      return { userHome: pathImpl.resolve(homeRaw), source: "HOME", homeRaw, homeConflict: null };
+    }
+    const conflict = !rooted ? "home_not_absolute" : userProfileRaw === null ? "home_without_userprofile" : "home_does_not_match_userprofile";
+    if (userProfileRaw) {
+      return {
+        userHome: pathImpl.resolve(userProfileRaw),
+        source: "USERPROFILE",
+        homeRaw,
+        homeConflict: conflict
+      };
+    }
+    if (!fallbackHomeDir) throw new Error("windows_user_home_unavailable");
+    return {
+      userHome: pathImpl.resolve(fallbackHomeDir),
+      source: "FALLBACK",
+      homeRaw,
+      homeConflict: conflict
+    };
+  }
+  if (userProfileRaw) {
+    return {
+      userHome: pathImpl.resolve(userProfileRaw),
+      source: "USERPROFILE",
+      homeRaw: null,
+      homeConflict: null
+    };
+  }
+  if (!fallbackHomeDir) throw new Error("windows_user_home_unavailable");
+  return {
+    userHome: pathImpl.resolve(fallbackHomeDir),
+    source: "FALLBACK",
+    homeRaw: null,
+    homeConflict: null
+  };
+}
+function discoverZCodeData2({
+  env = process.env,
+  platform = process.platform,
+  fallbackHomeDir = null,
+  fileExists = existsSync4,
+  readFile: readFile7 = (filePath) => readFileSync4(filePath, "utf8")
+} = {}) {
+  const pathImpl = platform === "win32" ? path10.win32 : path10.posix;
+  const home = resolveUserHome2({ env, platform, fallbackHomeDir });
+  const settingFile = pathImpl.join(home.userHome, ".zcode", "v2", "setting.json");
+  let settingStatus = "ok";
+  let settingError = null;
+  let configuredDataBaseDir = null;
+  if (!fileExists(settingFile)) {
+    settingStatus = "absent";
+  } else {
+    let text2;
+    try {
+      text2 = readFile7(settingFile);
+    } catch (error2) {
+      settingStatus = isPermissionDenied(error2) ? "permission_denied" : "unreadable";
+      settingError = error2 instanceof Error ? error2.message : String(error2);
+    }
+    if (settingStatus === "ok") {
+      let parsed;
+      try {
+        parsed = JSON.parse(text2);
+      } catch (error2) {
+        settingStatus = "invalid_json";
+        settingError = error2 instanceof Error ? error2.message : String(error2);
+      }
+      if (settingStatus === "ok") {
+        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+          settingStatus = "invalid_shape";
+          settingError = "setting_json_not_object";
+        } else {
+          const raw = parsed.dataBaseDir;
+          if (raw === void 0 || raw === null) {
+          } else if (typeof raw !== "string") {
+            settingStatus = "invalid_shape";
+            settingError = "data_base_dir_not_string";
+          } else {
+            const trimmed = raw.trim();
+            if (trimmed && isAbsolutePathForPlatform2(trimmed, platform)) {
+              configuredDataBaseDir = pathImpl.resolve(trimmed);
+            } else if (trimmed) {
+              settingError = "relative_data_base_dir_ignored";
+            }
+          }
+        }
+      }
+    }
+  }
+  const dataBaseDir = configuredDataBaseDir ?? home.userHome;
+  return {
+    userHome: home.userHome,
+    userHomeSource: home.source,
+    settingFile,
+    settingStatus,
+    settingError,
+    configuredDataBaseDir,
+    dataBaseDir,
+    dataBaseDirSource: configuredDataBaseDir ? "setting.json" : "default",
+    zcodeDataDir: pathImpl.join(dataBaseDir, ".zcode"),
+    zcodeV2Dir: pathImpl.join(dataBaseDir, ".zcode", "v2")
+  };
+}
+function resolveBillingDataBaseDir(explicitDataBaseDir, discoveryOptions = {}) {
+  if (explicitDataBaseDir !== null && explicitDataBaseDir !== void 0) {
+    if (typeof explicitDataBaseDir !== "string" || !explicitDataBaseDir.trim()) {
+      throw new Error("billing_data_base_dir_empty");
+    }
+    return {
+      dataBaseDir: path10.resolve(explicitDataBaseDir.trim()),
+      dataBaseDirSource: "explicit",
+      discovery: null
+    };
+  }
+  const discovery = discoverZCodeData2(discoveryOptions);
+  return {
+    dataBaseDir: discovery.dataBaseDir,
+    dataBaseDirSource: discovery.dataBaseDirSource,
+    discovery
+  };
+}
+
+// tools/cost-lab/official-runtime-manifest.mjs
+import { createHash as createHash5 } from "node:crypto";
+import { access } from "node:fs/promises";
+import path11 from "node:path";
+var resolverModule = new URL("../../dist/src/runtime/official-app-server-runtime.js", import.meta.url);
+async function inspectOfficialRuntimeAssets({ env, platform, arch } = {}) {
+  if (!await access(resolverModule).then(() => true, () => false)) {
+    return {
+      install_root: null,
+      install_root_fingerprint: null,
+      runtime_status: "OFFICIAL_RUNTIME_UNVERIFIED",
+      installation_safety: "OFFICIAL_INSTALLATION_INCOMPLETE",
+      installation_fingerprint: null,
+      discount_status: "OFFICIAL_DISCOUNT_NOT_VERIFIED",
+      reason: "bridge_build_missing",
+      manifest: null,
+      assets: {}
+    };
+  }
+  const { OfficialAppServerRuntimeResolver: OfficialAppServerRuntimeResolver2 } = await import(resolverModule.href);
+  const runtime = await new OfficialAppServerRuntimeResolver2({ env, platform, architecture: arch }).inspect();
+  const root = runtime.install_dir;
+  const assets = {};
+  for (const name of ["bundle", "runtime_host", "builtin_provider_config"]) {
+    const file = runtime[`${name}_path`];
+    if (root && file) {
+      assets[name] = {
+        relative_path: path11.relative(root, file).split(path11.sep).join("/"),
+        bytes: runtime[`${name}_bytes`],
+        sha256: runtime[`${name}_sha256`]
+      };
+    }
+  }
+  return {
+    install_root: root,
+    install_source: runtime.install_source,
+    install_root_fingerprint: root ? createHash5("sha256").update(root).digest("hex") : null,
+    runtime_status: runtime.status,
+    installation_safety: runtime.installation_safety ?? "OFFICIAL_INSTALLATION_INCOMPLETE",
+    installation_fingerprint: runtime.installation_fingerprint ?? null,
+    experimental_authorization: runtime.experimental_authorization ?? null,
+    discount_status: runtime.discount_capability,
+    desktop_version: runtime.desktop_version,
+    desktop_app_version: runtime.desktop_app_version ?? null,
+    desktop_build_commit_id: runtime.desktop_build_commit_id ?? null,
+    node_executable: runtime.node_executable,
+    reason: runtime.reason,
+    manifest: runtime.manifest && { ...runtime.manifest, version: runtime.manifest.desktop_version },
+    desktop_executable: runtime.desktop_executable_path ? {
+      bytes: runtime.desktop_executable_bytes,
+      sha256: runtime.desktop_executable_sha256,
+      signer_subject: runtime.desktop_executable_signer_subject,
+      signer_thumbprint: runtime.desktop_executable_signer_thumbprint
+    } : null,
+    desktop_archive: runtime.desktop_archive_path ? {
+      bytes: runtime.desktop_archive_bytes,
+      sha256: runtime.desktop_archive_sha256
+    } : null,
+    runtime_host_signer: {
+      subject: runtime.runtime_host_signer_subject ?? null,
+      thumbprint: runtime.runtime_host_signer_thumbprint ?? null
+    },
+    assets
+  };
+}
+
+// tools/cost-lab/vendor-loader.mjs
+import { createHash as createHash6 } from "node:crypto";
+import { existsSync as existsSync5 } from "node:fs";
+import { readFile as readFile3, stat } from "node:fs/promises";
+import { registerHooks } from "node:module";
+import path12 from "node:path";
+import { fileURLToPath as fileURLToPath4, pathToFileURL as pathToFileURL2 } from "node:url";
+var SCRIPT_ROOT = path12.dirname(fileURLToPath4(import.meta.url));
+var BUNDLED_VENDOR_ROOT = path12.basename(SCRIPT_ROOT) === "dist" && existsSync5(path12.join(SCRIPT_ROOT, "vendor", "official-billing-runtime.mjs"));
+var PROJECT_ROOT = BUNDLED_VENDOR_ROOT ? path12.resolve(SCRIPT_ROOT, "..") : path12.resolve(SCRIPT_ROOT, "..", "..");
+var OFFICIAL_RUNTIME_PATH = path12.join(
+  SCRIPT_ROOT,
+  "vendor",
+  "official-billing-runtime.mjs"
+);
+var OFFICIAL_RUNTIME_SHA256 = "dcb3fc7cb7a62e7a6dbe7ce8a9e1427075309458453641f6a4c7e8e1971a63e6";
+var OFFICIAL_KEYRING_NATIVE_SHA256 = "52b16658275b7848f8081a6542fee3448f1b1c5d3a36487107ae0e7cec95ac6f";
+var OFFICIAL_HOST_MODULES = BUNDLED_VENDOR_ROOT ? path12.join(
+  PROJECT_ROOT,
+  "worker",
+  "vendor",
+  "official-host",
+  "win32-x64-node24.16.0-zcode3.18.2-fec97590",
+  "node_modules",
+  "@napi-rs"
+) : path12.join(
+  PROJECT_ROOT,
+  "plugins",
+  "codex-zcode-bridge",
+  "worker",
+  "vendor",
+  "official-host",
+  "win32-x64-node24.16.0-zcode3.18.2-fec97590",
+  "node_modules",
+  "@napi-rs"
+);
+var OFFICIAL_KEYRING_JS_PATH = path12.join(OFFICIAL_HOST_MODULES, "keyring", "index.js");
+var OFFICIAL_KEYRING_NATIVE_PATH = path12.join(
+  OFFICIAL_HOST_MODULES,
+  "keyring-win32-x64-msvc",
+  "keyring.win32-x64-msvc.node"
+);
+var keyringHook;
+function sha256(data) {
+  return createHash6("sha256").update(data).digest("hex");
+}
+async function verifyFile(filePath, expectedSha256, code) {
+  const metadata = await stat(filePath).catch(() => null);
+  if (!metadata?.isFile()) throw new Error(`${code}_missing`);
+  const digest = sha256(await readFile3(filePath));
+  if (digest !== expectedSha256) throw new Error(`${code}_hash_mismatch`);
+  return digest;
+}
+async function verifyOfficialVendor() {
+  const runtimeSha256 = await verifyFile(
+    OFFICIAL_RUNTIME_PATH,
+    OFFICIAL_RUNTIME_SHA256,
+    "official_billing_runtime"
+  );
+  const keyringNativeSha256 = await verifyFile(
+    OFFICIAL_KEYRING_NATIVE_PATH,
+    OFFICIAL_KEYRING_NATIVE_SHA256,
+    "official_keyring_native"
+  );
+  await verifyFile(
+    OFFICIAL_KEYRING_JS_PATH,
+    "8a89db37f981d05b484eb063adae3399660ae7734ad38797463e5691382f5036",
+    "official_keyring_js"
+  );
+  return {
+    runtime_sha256: runtimeSha256,
+    keyring_native_sha256: keyringNativeSha256,
+    keyring_native_source: "official_host_vendor"
+  };
+}
+async function prepareOfficialBillingVendor({
+  env = process.env,
+  platform = process.platform,
+  arch = process.arch
+} = {}) {
+  if (platform !== "win32" || arch !== "x64") {
+    throw new Error(`official_billing_vendor_unsupported_platform:${platform}:${arch}`);
+  }
+  const integrity = await verifyOfficialVendor();
+  env.NAPI_RS_NATIVE_LIBRARY_PATH = OFFICIAL_KEYRING_NATIVE_PATH;
+  const bundleUrl = pathToFileURL2(OFFICIAL_RUNTIME_PATH).href;
+  keyringHook ??= registerHooks({
+    resolve(specifier, context, nextResolve) {
+      if (specifier === "@napi-rs/keyring" && context.parentURL === bundleUrl) {
+        return {
+          url: pathToFileURL2(OFFICIAL_KEYRING_JS_PATH).href,
+          format: "commonjs",
+          shortCircuit: true
+        };
+      }
+      return nextResolve(specifier, context);
+    }
+  });
+  return integrity;
+}
+
+// tools/cost-lab/web-services.mjs
+async function inspectCostLabEnvironment(options = {}) {
+  const env = options.env ?? process.env;
+  const platform = options.platform ?? process.platform;
+  const arch = options.arch ?? process.arch;
+  const nodeVersion = options.nodeVersion ?? process.versions.node;
+  const generatedAt = (options.now?.() ?? /* @__PURE__ */ new Date()).toISOString();
+  const data = resolveBillingDataBaseDir(null, {
+    env,
+    platform,
+    fallbackHomeDir: options.fallbackHomeDir,
+    fileExists: options.fileExists,
+    readFile: options.readFile
+  });
+  const runtime = await (options.inspectRuntime ?? inspectOfficialRuntimeAssets)({ env, platform, arch });
+  const billing = await inspectBillingAvailability(options);
+  const credentials = await inspectCredentialAvailability(data, options);
+  const nodeOk = /^24\.16\.\d+$/u.test(nodeVersion);
+  const deep = options.deep === true;
+  const protocolSmoke = deep && typeof options.protocolSmoke === "function" ? await runBoundedProtocolSmoke(options.protocolSmoke, options.protocolSmokeTimeoutMs ?? 3e4) : {
+    status: "NOT_RUN",
+    reason: deep ? "protocol_smoke_runner_not_configured" : "deep_check_not_requested",
+    model_requests: 0
+  };
+  return {
+    schema_version: 1,
+    kind: "cost_lab_environment",
+    generated_at: generatedAt,
+    host: {
+      platform,
+      arch,
+      node_version: nodeVersion,
+      node_compatible: nodeOk,
+      supported: platform === "win32" && arch === "x64" && nodeOk
+    },
+    zcode: {
+      installed: runtime.install_root !== null,
+      install_source: runtime.install_source ?? null,
+      install_root_fingerprint: runtime.install_root_fingerprint,
+      installation_fingerprint: runtime.installation_fingerprint ?? null,
+      installation_safety: runtime.installation_safety ?? null,
+      runtime_status: runtime.runtime_status,
+      experimental_authorization: runtime.experimental_authorization ?? null,
+      discount_status: runtime.discount_status,
+      version: runtime.desktop_version ?? null,
+      appserver_protocol: runtime.manifest?.appserver_protocol ?? null,
+      request_security_capability: runtime.manifest?.request_security_capability ?? null,
+      manifest: runtime.manifest,
+      assets: runtime.assets
+    },
+    billing_reader: billing,
+    credential_readability: credentials,
+    resource_isolation: {
+      status: "PASS",
+      server_binding: "127.0.0.1_ONLY",
+      evidence_root: ".run/cost-lab-web",
+      model_requests_on_page_load: 0
+    },
+    provider: {
+      id: "account:bigmodel-individual-coding-plan",
+      model: "GLM-5.3-Flash",
+      plan: "PERSONAL_CODING_PLAN"
+    },
+    appserver_protocol_smoke: protocolSmoke,
+    start_plan: {
+      status: "START_PLAN_OFFLINE_RESEARCH",
+      live_test: "UNAVAILABLE",
+      offline_compatibility: "AVAILABLE",
+      discount: "NOT_VERIFIED"
+    },
+    warnings: buildWarnings({ nodeOk, platform, arch, runtime, billing, credentials })
+  };
+}
+async function inspectBillingAvailability(options = {}) {
+  try {
+    const integrity = await (options.verifyBillingVendor ?? verifyOfficialVendor)();
+    return {
+      status: "PASS",
+      accessor: "usageStatsService.getCodingPlanUsageSnapshot",
+      runtime_sha256: integrity.runtime_sha256,
+      native_keyring_sha256: integrity.keyring_native_sha256
+    };
+  } catch (error2) {
+    return {
+      status: "BLOCKED",
+      accessor: "usageStatsService.getCodingPlanUsageSnapshot",
+      error: safeErrorCode(error2)
+    };
+  }
+}
+async function inspectCredentialAvailability(data, options) {
+  const credentialFile = path13.join(data.dataBaseDir, ".zcode", "v2", "credentials.json");
+  try {
+    const metadata = await (options.statFile ?? stat2)(credentialFile);
+    return {
+      status: "AVAILABLE",
+      source: data.dataBaseDirSource,
+      readable: await (options.accessFile ?? access2)(credentialFile).then(() => true, () => false),
+      file_present: metadata.isFile(),
+      content_read: false,
+      absolute_path_returned: false
+    };
+  } catch (error2) {
+    return {
+      status: errorCode(error2) === "ENOENT" ? "NOT_FOUND" : "UNAVAILABLE",
+      source: data.dataBaseDirSource,
+      readable: false,
+      file_present: false,
+      content_read: false,
+      absolute_path_returned: false
+    };
+  }
+}
+async function runBoundedProtocolSmoke(run2, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new Error("protocol_smoke_timeout")), timeoutMs);
+  try {
+    const result = await run2({ signal: controller.signal, timeoutMs, modelRequests: 0 });
+    if (result?.status === "PASS") controller.signal.throwIfAborted();
+    return {
+      status: result?.status === "PASS" ? "PASS" : "FAIL",
+      ...result?.reason ? { reason: safeErrorCode(result.reason) } : {},
+      duration_ms: result?.duration_ms ?? null,
+      model_requests: 0,
+      evidence: redactValue(result?.evidence ?? null)
+    };
+  } catch (error2) {
+    return {
+      status: "FAIL",
+      reason: safeErrorCode(error2),
+      model_requests: 0
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+function buildWarnings({ nodeOk, platform, arch, runtime, billing, credentials }) {
+  const warnings = [];
+  if (platform !== "win32" || arch !== "x64") warnings.push("PLATFORM_UNSUPPORTED");
+  if (!nodeOk) warnings.push("NODE_RUNTIME_INCOMPATIBLE");
+  if (runtime.runtime_status === "OFFICIAL_RUNTIME_EXPERIMENTAL") {
+    warnings.push("OFFICIAL_RUNTIME_EXPERIMENTAL");
+  } else if (runtime.runtime_status !== "OFFICIAL_RUNTIME_VERIFIED") {
+    warnings.push("OFFICIAL_RUNTIME_UNVERIFIED");
+  }
+  if (billing.status !== "PASS") warnings.push("BILLING_READER_UNAVAILABLE");
+  if (credentials.status !== "AVAILABLE") warnings.push("CREDENTIAL_SOURCE_UNAVAILABLE");
+  return warnings;
+}
+function redactValue(value, key = "") {
+  if (isSecretKey(key)) return "<redacted>";
+  if (Array.isArray(value)) return value.map((item) => redactValue(item));
+  if (typeof value === "string") return redactAbsolutePaths(value);
+  if (!value || typeof value !== "object") return value;
+  const output = {};
+  for (const [childKey, child] of Object.entries(value)) {
+    output[childKey] = redactValue(child, childKey);
+  }
+  return output;
+}
+function redactAbsolutePaths(value) {
+  return value.replace(/\b[A-Za-z]:[\\/][^\r\n\t"'<>|]*/gu, "<redacted-path>").replace(/\\\\[^\\/\s]+[\\/][^\r\n\t"'<>|]*/gu, "<redacted-path>").replace(/\/(?:Users|home|tmp|var|opt|private)\/[^\s"'<>|]*/gu, "<redacted-path>");
+}
+function isSecretKey(key) {
+  const normalized = key.replaceAll("-", "_").toLowerCase();
+  if (/^(api_key_id|organization_id|project_id|request_id|session_id)$/u.test(normalized)) return false;
+  if (/(status|readability|present|read|returned|source|capability)$/u.test(normalized)) return false;
+  if (/^(authorization|cookie|password|secret|credential|credentials|jwt|bearer)$/u.test(normalized)) return true;
+  return /(access_token|refresh_token|project_token|api_key|client_secret|private_key|authorization_header|cookie_header)$/u.test(normalized);
+}
+function safeErrorCode(error2) {
+  const message = error2 instanceof Error ? error2.message : String(error2);
+  return message.replace(/\b(authorization|api[_-]?key|access[_-]?token|project[_-]?token)\b\s*[:=]\s*(?:Bearer\s+)?[^\s,;]+/giu, "$1=<redacted>").replace(/\bBearer\s+[^\s,;]+/giu, "Bearer <redacted>").slice(0, 300);
+}
+function errorCode(error2) {
+  const code = error2 && typeof error2 === "object" && "code" in error2 ? error2.code : null;
+  return typeof code === "string" ? code : "unavailable";
+}
+
+// tools/cost-lab/official-app-server-protocol-smoke.mjs
+import { randomUUID as randomUUID3 } from "node:crypto";
+import { access as access3, mkdir, rm, stat as stat3 } from "node:fs/promises";
+import path14 from "node:path";
+import { fileURLToPath as fileURLToPath5, pathToFileURL as pathToFileURL3 } from "node:url";
+var SCRIPT_ROOT2 = path14.dirname(fileURLToPath5(import.meta.url));
+var PROJECT_ROOT2 = path14.resolve(SCRIPT_ROOT2, "..", "..");
+var OFFICIAL_PROTOCOL_SMOKE_METHOD = "runtime/capabilities";
+var DEFAULT_TIMEOUT_MS = 3e4;
+var RUNTIME_HOST_TRANSPORT_MAX_FRAME_BYTES = 16 * 1024 * 1024;
+var FIXED_HOST_MODULE_RELATIVE_PATH = path14.join(
+  "plugins",
+  "codex-zcode-bridge",
+  "worker",
+  "vendor",
+  "official-host",
+  "win32-x64-node24.16.0-zcode3.18.2-fec97590",
+  "official-host-runtime.mjs"
+);
+var runtimeHostEnvironmentTail = Promise.resolve();
+async function runOfficialAppServerProtocolSmoke(options = {}) {
+  const startedAt = Date.now();
+  const projectRoot = path14.resolve(options.projectRoot ?? PROJECT_ROOT2);
+  const platform = options.platform ?? process.platform;
+  const arch = options.arch ?? process.arch;
+  if (platform !== "win32" || arch !== "x64") {
+    return failed("unsupported_platform", startedAt);
+  }
+  const env = options.env ?? process.env;
+  const inspectRuntime = options.inspectRuntime ?? inspectOfficialRuntimeAssets;
+  const resolveDataRoot = options.resolveDataRoot ?? resolveBillingDataBaseDir;
+  const createId = options.createId ?? randomUUID3;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1e3 || timeoutMs > 12e4) {
+    return failed("timeout_invalid", startedAt);
+  }
+  const runtime = await inspectRuntime({ env, platform, arch });
+  if (runtime.runtime_status !== "OFFICIAL_RUNTIME_VERIFIED" && runtime.runtime_status !== "OFFICIAL_RUNTIME_EXPERIMENTAL" || !runtime.install_root) {
+    return failed("installed_official_runtime_unverified", startedAt);
+  }
+  if (!runtime.desktop_version || !runtime.desktop_app_version || !runtime.desktop_build_commit_id || !runtime.assets?.bundle?.relative_path || !runtime.assets?.runtime_host?.relative_path || !runtime.assets?.builtin_provider_config?.relative_path) {
+    return failed("runtime_manifest_incomplete", startedAt);
+  }
+  const account = resolveDataRoot(null, {
+    env,
+    platform,
+    fallbackHomeDir: options.fallbackHomeDir
+  });
+  const zcodeHome = path14.join(account.dataBaseDir, ".zcode");
+  const personalProviderConfig = path14.join(zcodeHome, "v2", "provider_config.json");
+  try {
+    await access3(personalProviderConfig);
+    await stat3(personalProviderConfig);
+  } catch {
+    return failed("personal_provider_config_unavailable", startedAt);
+  }
+  const runRootParent = path14.resolve(options.runRootParent ?? path14.join(projectRoot, ".run"));
+  const runRoot = path14.join(runRootParent, "cost-lab-web", `protocol-smoke-${createId()}`);
+  assertInside(runRootParent, runRoot);
+  const layout = {
+    root: runRoot,
+    home: path14.join(runRoot, "home"),
+    appData: path14.join(runRoot, "app-data"),
+    localAppData: path14.join(runRoot, "local-app-data"),
+    temp: path14.join(runRoot, "temp"),
+    workspace: path14.join(runRoot, "workspace")
+  };
+  let manager = null;
+  let workspace = null;
+  let capabilities = null;
+  let disposeError = null;
+  try {
+    options.signal?.throwIfAborted();
+    for (const directory of Object.values(layout).slice(1)) {
+      await mkdir(directory, { recursive: true });
+    }
+    const hostModulePath = path14.resolve(
+      options.hostModulePath ?? path14.join(projectRoot, FIXED_HOST_MODULE_RELATIVE_PATH)
+    );
+    if (!options.loadHostModule) await stat3(hostModulePath);
+    const module = await (options.loadHostModule ? options.loadHostModule(hostModulePath) : import(pathToFileURL3(hostModulePath).href));
+    if (typeof module.ZCodeAgentProcessManager !== "function") {
+      return failed("official_host_manager_missing", startedAt);
+    }
+    const bundlePath = path14.join(runtime.install_root, runtime.assets.bundle.relative_path);
+    const runtimeHostPath = path14.join(runtime.install_root, runtime.assets.runtime_host.relative_path);
+    const builtinProviderConfig = path14.join(
+      runtime.install_root,
+      runtime.assets.builtin_provider_config.relative_path
+    );
+    const childEnv = buildSmokeEnvironment(layout, env, {
+      version: runtime.desktop_app_version,
+      buildCommitId: runtime.desktop_build_commit_id,
+      builtinProviderConfig,
+      personalProviderConfig,
+      runtimeHostPath,
+      zcodeHome,
+      dataBaseDir: account.dataBaseDir
+    });
+    const managerOptions = {
+      useSharedTaskRuntime: () => false,
+      maxFrameBytes: RUNTIME_HOST_TRANSPORT_MAX_FRAME_BYTES,
+      requestTimeoutMs: timeoutMs,
+      processLifecycleReporter: {
+        onSpawn: () => void 0,
+        onExit: () => void 0,
+        onError: () => void 0,
+        onException: () => void 0
+      },
+      commandResolver: async ({ workspacePath }) => ({
+        command: runtime.node_executable ?? process.execPath,
+        args: [bundlePath, "app-server", "--stdio", "--surface", "desktop"],
+        cwd: workspacePath,
+        env: childEnv
+      })
+    };
+    manager = options.createManager ? options.createManager(module, managerOptions) : new module.ZCodeAgentProcessManager(managerOptions);
+    workspace = {
+      workspacePath: layout.workspace,
+      workspaceIdentity: layout.workspace
+    };
+    const client = await withRuntimeHostEnvironment(
+      runtimeHostPath,
+      () => {
+        options.signal?.throwIfAborted();
+        return manager.getClient(workspace);
+      }
+    );
+    options.signal?.throwIfAborted();
+    const runtimeIdentity = await manager.getRuntimeIdentity(workspace);
+    options.signal?.throwIfAborted();
+    capabilities = await client.request(
+      OFFICIAL_PROTOCOL_SMOKE_METHOD,
+      {},
+      void 0,
+      { signal: options.signal, timeoutMs, invalidateConnectionOnTimeout: false }
+    );
+    options.signal?.throwIfAborted();
+    if (!runtimeIdentity || !Number.isSafeInteger(runtimeIdentity.processId) || runtimeIdentity.processId < 1) {
+      return failed("official_process_identity_missing", startedAt, {
+        protocol_initialized: true,
+        model_requests: 0
+      });
+    }
+    return {
+      status: "PASS",
+      duration_ms: Date.now() - startedAt,
+      evidence: {
+        protocol_initialized: true,
+        protocol_method: OFFICIAL_PROTOCOL_SMOKE_METHOD,
+        capabilities_received: capabilities !== null && typeof capabilities === "object",
+        process_started: true,
+        session_created: false,
+        model_requests: 0,
+        runtime_status: runtime.runtime_status,
+        installation_fingerprint: runtime.installation_fingerprint,
+        installation_safety: runtime.installation_safety,
+        experimental_authorization_state: runtime.experimental_authorization?.state ?? null,
+        desktop_version: runtime.desktop_version,
+        bundle_sha256: runtime.assets.bundle.sha256
+      }
+    };
+  } catch (error2) {
+    return failed(safeErrorCode2(error2), startedAt, {
+      protocol_initialized: capabilities !== null,
+      model_requests: 0
+    });
+  } finally {
+    if (manager && workspace) {
+      try {
+        await manager.disposeWorkspace(workspace);
+      } catch (error2) {
+        disposeError = error2;
+      }
+    }
+    if (manager) {
+      try {
+        await manager.disposeAllAndWait();
+      } catch (error2) {
+        disposeError ??= error2;
+      }
+    }
+    let managedProcessesAfter = null;
+    try {
+      managedProcessesAfter = manager?.listManagedProcesses?.().length ?? null;
+    } catch {
+      managedProcessesAfter = null;
+    }
+    if (!disposeError && (managedProcessesAfter ?? 0) === 0) {
+      await rm(runRoot, { recursive: true, force: true }).catch((error2) => {
+        disposeError = error2;
+      });
+    }
+    if (disposeError || (managedProcessesAfter ?? 0) > 0) {
+      return failed(
+        disposeError ? "official_protocol_smoke_cleanup_failed" : "official_protocol_smoke_process_leak",
+        startedAt,
+        { protocol_initialized: capabilities !== null, model_requests: 0, managed_processes_after: managedProcessesAfter }
+      );
+    }
+  }
+}
+function buildSmokeEnvironment(layout, source, official) {
+  const homeDrive = path14.parse(layout.home).root.replace(/[\\/]+$/u, "");
+  const homePath = layout.home.slice(path14.parse(layout.home).root.length - 1);
+  const retained = {};
+  for (const key of [
+    "PATH",
+    "SystemRoot",
+    "WINDIR",
+    "COMSPEC",
+    "PATHEXT",
+    "OS",
+    "PROCESSOR_ARCHITECTURE",
+    "NUMBER_OF_PROCESSORS",
+    "PROGRAMDATA",
+    "ProgramFiles",
+    "ProgramFiles(x86)"
+  ]) {
+    if (source[key] !== void 0) retained[key] = source[key];
+  }
+  return {
+    ...retained,
+    HOME: layout.home,
+    USERPROFILE: layout.home,
+    HOMEDRIVE: homeDrive,
+    HOMEPATH: homePath,
+    APPDATA: layout.appData,
+    LOCALAPPDATA: layout.localAppData,
+    TEMP: layout.temp,
+    TMP: layout.temp,
+    TMPDIR: layout.temp,
+    ZCODE_APP_VERSION: official.version,
+    ZCODE_BUILD_COMMIT_ID: official.buildCommitId,
+    ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: official.builtinProviderConfig,
+    ZCODE_PERSONAL_PROVIDER_CONFIG_FILE: official.personalProviderConfig,
+    ZCODE_RUNTIME_HOST_PATH: official.runtimeHostPath,
+    ZCODE_HOME: official.zcodeHome,
+    ZCODE_DATA_BASE_DIR: official.dataBaseDir
+  };
+}
+async function withRuntimeHostEnvironment(runtimeHostPath, action) {
+  const previous = runtimeHostEnvironmentTail;
+  let release;
+  runtimeHostEnvironmentTail = new Promise((resolve) => {
+    release = resolve;
+  });
+  await previous;
+  const priorValue = process.env.ZCODE_RUNTIME_HOST_PATH;
+  process.env.ZCODE_RUNTIME_HOST_PATH = runtimeHostPath;
+  try {
+    return await action();
+  } finally {
+    if (priorValue === void 0) delete process.env.ZCODE_RUNTIME_HOST_PATH;
+    else process.env.ZCODE_RUNTIME_HOST_PATH = priorValue;
+    release();
+  }
+}
+function failed(reason, startedAt, evidence = {}) {
+  return {
+    status: "FAIL",
+    duration_ms: Date.now() - startedAt,
+    reason,
+    evidence: {
+      protocol_initialized: false,
+      session_created: false,
+      model_requests: 0,
+      ...evidence
+    }
+  };
+}
+function safeErrorCode2(error2) {
+  const code = error2 && typeof error2 === "object" && "code" in error2 ? error2.code : error2 instanceof Error ? error2.message : String(error2);
+  return String(code).replace(/\b(authorization|api[_-]?key|access[_-]?token|project[_-]?token)\b\s*[:=]\s*(?:Bearer\s+)?[^\s,;]+/giu, "$1=<redacted>").replace(/\bBearer\s+[^\s,;]+/giu, "Bearer <redacted>").replace(/\b[A-Za-z]:[\\/][^\r\n\t"'<>|]*/gu, "<redacted-path>").replace(/\\\\[^\\/\s]+[\\/][^\r\n\t"'<>|]*/gu, "<redacted-path>").slice(0, 200);
+}
+function assertInside(root, candidate) {
+  const relative = path14.relative(path14.resolve(root), path14.resolve(candidate));
+  if (relative === "" || relative === ".." || relative.startsWith(`..${path14.sep}`) || path14.isAbsolute(relative)) {
+    throw new Error("protocol_smoke_path_outside_run_root");
+  }
+}
+
+// tools/cost-lab/startplan-reader.mjs
+import { lstat as lstat4 } from "node:fs/promises";
+import path15 from "node:path";
+import { pathToFileURL as pathToFileURL4 } from "node:url";
+
+// tools/cost-lab/startplan-billing.mjs
+import { createHash as createHash7 } from "node:crypto";
+var START_PLAN_PROVIDER_ID = "account:bigmodel-start-plan";
+var START_PLAN_BILLING_ORIGIN = "https://zcode.z.ai";
+var START_PLAN_BILLING_PATH = "/api/v1/zcode-plan/billing/balance";
+var STARTPLAN_HISTORY_SCHEMA_VERSION = 1;
+var FRESHNESS_WINDOW_MS = 5 * 60 * 1e3;
+var SENSITIVE_KEY = /(authorization|cookie|credential|device.?mid|jwt|password|refresh.?token|secret|api.?key|access.?token)/iu;
+var OPAQUE_KEY = /(account.?id|bucket.?id|customer.?id|entitlement.?id|request.?id|log.?id|user.?id|user.?plan.?id)/iu;
+function record2(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+}
+function boundedText(value, maximum = 256) {
+  return typeof value === "string" ? value.slice(0, maximum) : null;
+}
+function finiteInteger(value) {
+  if (typeof value === "string" && value.trim() !== "") value = Number(value);
+  return typeof value === "number" && Number.isFinite(value) ? Math.trunc(value) : null;
+}
+function timestampToIso(value) {
+  if (value === null || value === void 0 || value === "") return null;
+  let milliseconds;
+  if (typeof value === "number") {
+    milliseconds = value < 1e10 ? value * 1e3 : value;
+  } else if (typeof value === "string" && /^\d+(?:\.\d+)?$/u.test(value.trim())) {
+    const numeric = Number(value);
+    milliseconds = numeric < 1e10 ? numeric * 1e3 : numeric;
+  } else {
+    milliseconds = Date.parse(String(value));
+  }
+  if (!Number.isFinite(milliseconds)) return null;
+  const date2 = new Date(milliseconds);
+  return Number.isNaN(date2.getTime()) ? null : date2.toISOString();
+}
+function stableStringify(value) {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(",")}}`;
+}
+function shortHash(value) {
+  return createHash7("sha256").update(String(value)).digest("hex").slice(0, 16);
+}
+function hashStartPlanOpaque(prefix, value) {
+  if (value === null || value === void 0 || value === "") return null;
+  const normalized = String(value);
+  if (/^sha256:[a-f0-9]{16}$/u.test(normalized)) return normalized;
+  return `sha256:${shortHash(`${prefix}:${normalized}`)}`;
+}
+function looksSecret(value) {
+  return /^(?:bearer\s+|basic\s+)?[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}$/iu.test(value) || /\b(?:bearer|basic)\s+[A-Za-z0-9._~+/=-]{16,}\b/iu.test(value) || /\bsk-[A-Za-z0-9_-]{16,}\b/u.test(value);
+}
+function opaquePrefix(key) {
+  const normalized = key.replace(/([a-z])([A-Z])/gu, "$1_$2").toLowerCase();
+  if (normalized.includes("user_plan")) return "startplan-user-plan";
+  if (normalized.includes("bucket")) return "startplan-bucket";
+  if (normalized.includes("entitlement")) return "startplan-entitlement";
+  if (normalized.includes("request") || normalized.includes("logid") || normalized.includes("log_id")) {
+    return "official-request";
+  }
+  if (normalized.includes("account") || normalized.includes("customer") || normalized.includes("user")) {
+    return "official-account";
+  }
+  return "official-opaque";
+}
+function sanitizeValue(value, depth = 0) {
+  if (depth > 20 || value === void 0) return "[UNKNOWN]";
+  if (value === null || typeof value === "number" || typeof value === "boolean") return value;
+  if (typeof value === "string") return looksSecret(value) ? "[REDACTED]" : value.slice(0, 2048);
+  if (Array.isArray(value)) return value.slice(0, 2e3).map((item) => sanitizeValue(item, depth + 1));
+  const input = record2(value);
+  if (!input) return "[UNKNOWN]";
+  const output = {};
+  for (const [key, item] of Object.entries(input).slice(0, 1e3)) {
+    if (SENSITIVE_KEY.test(key)) {
+      output[key] = "[REDACTED]";
+    } else if (OPAQUE_KEY.test(key) && (typeof item === "string" || typeof item === "number")) {
+      output[key] = hashStartPlanOpaque(opaquePrefix(key), item);
+    } else {
+      output[key] = sanitizeValue(item, depth + 1);
+    }
+  }
+  return output;
+}
+function sanitizeOfficialStartPlanPayload(raw) {
+  return sanitizeValue(raw);
+}
+function extractBillingData(raw) {
+  const root = record2(raw);
+  if (!root) return null;
+  if (record2(root.data) && (Array.isArray(root.data.plans) || Array.isArray(root.data.balances))) {
+    return root.data;
+  }
+  const payload = record2(root.payload);
+  if (record2(payload?.data) && (Array.isArray(payload.data.plans) || Array.isArray(payload.data.balances))) {
+    return payload.data;
+  }
+  if (Array.isArray(root.plans) || Array.isArray(root.balances)) return root;
+  return null;
+}
+function safeCapabilities(value) {
+  return Array.isArray(value) ? value.filter((item) => typeof item === "string").map((item) => boundedText(item, 128)).filter(Boolean).sort() : [];
+}
+function modelIdsFromCapabilities(capabilities, showName) {
+  const models = capabilities.map((capability2) => capability2.toLowerCase().startsWith("model:") ? capability2.slice("model:".length).trim() : "").filter(Boolean);
+  return [...new Set(models.length > 0 ? models : showName ? [showName.toLowerCase()] : [])].sort();
+}
+function uniqueNullable(values) {
+  if (values.length === 0 || values.some((value) => value === null || value === void 0)) return null;
+  return new Set(values.map(stableStringify)).size === 1 ? values[0] : null;
+}
+function summedInteger(buckets, key) {
+  const values = buckets.map((bucket) => bucket[key]);
+  if (values.length === 0 || values.some((value) => !Number.isSafeInteger(value) || value < 0)) return null;
+  const total = values.reduce((sum, value) => sum + value, 0);
+  return Number.isSafeInteger(total) ? total : null;
+}
+function buildSummary(snapshot) {
+  const { buckets, plans } = snapshot;
+  const units = [...new Set(buckets.map((bucket) => bucket.unit_type).filter(Boolean))];
+  const planIds = [...new Set(buckets.map((bucket) => bucket.plan_id).filter(Boolean))];
+  const planNames = [...new Set(plans.map((plan) => plan.name).filter(Boolean))];
+  const planStatuses = [...new Set(plans.map((plan) => plan.status).filter(Boolean))];
+  const periods = uniqueNullable(buckets.map((bucket) => bucket.period_start && bucket.period_end ? { start: bucket.period_start, end: bucket.period_end } : null));
+  const expiry = uniqueNullable(buckets.map((bucket) => bucket.expires_at));
+  const aggregateUnits = units.length === 1 ? units[0] : null;
+  const summary = {
+    plan_id: planIds.length === 1 ? planIds[0] : null,
+    plan_type: planNames.length === 1 ? planNames[0] : null,
+    plan_status: planStatuses.length === 1 ? planStatuses[0] : null,
+    unit_type: aggregateUnits,
+    total_balance: aggregateUnits ? summedInteger(buckets, "total_units") : null,
+    used_balance: aggregateUnits ? summedInteger(buckets, "used_units") : null,
+    remaining_balance: aggregateUnits ? summedInteger(buckets, "remaining_units") : null,
+    billing_period: aggregateUnits ? periods : null,
+    expiry: aggregateUnits ? expiry : null
+  };
+  const missing = Object.entries(summary).filter(([, value]) => value === null).map(([key]) => key);
+  if (buckets.length > 1) missing.push("single_bucket");
+  if (units.length > 1) missing.push("unambiguous_unit_type");
+  return { ...summary, missing_fields: [...new Set(missing)] };
+}
+function normalizedIntegrity(raw, first, second) {
+  const rawData = extractBillingData(raw);
+  const rawBuckets = Array.isArray(rawData?.balances) ? rawData.balances : [];
+  const rawPlans = Array.isArray(rawData?.plans) ? rawData.plans : [];
+  const mismatches = [];
+  if (rawBuckets.length !== first.buckets.length || first.buckets.length !== second.buckets.length) {
+    mismatches.push("bucket_count");
+  }
+  if (rawPlans.length !== first.plans.length || first.plans.length !== second.plans.length) {
+    mismatches.push("plan_count");
+  }
+  for (let index = 0; index < Math.min(rawBuckets.length, first.buckets.length, second.buckets.length); index += 1) {
+    for (const key of [
+      "bucket_key",
+      "user_plan_key",
+      "entitlement_key",
+      "total_units",
+      "used_units",
+      "remaining_units",
+      "available_units"
+    ]) {
+      if (first.buckets[index][key] !== second.buckets[index][key]) {
+        mismatches.push(`bucket_${index}_${key}`);
+      }
+    }
+  }
+  return {
+    status: mismatches.length === 0 ? "PASS" : "FAIL",
+    checks: {
+      response_shape_recognized: Boolean(rawData),
+      raw_bucket_count: rawBuckets.length,
+      normalized_bucket_count: first.buckets.length,
+      reparsed_bucket_count: second.buckets.length,
+      raw_plan_count: rawPlans.length,
+      normalized_plan_count: first.plans.length,
+      reparsed_plan_count: second.plans.length,
+      numeric_fields_match_reparse: mismatches.length === 0
+    },
+    mismatches
+  };
+}
+function normalizeEntitlement(value) {
+  const input = record2(value);
+  if (!input) return null;
+  return {
+    status: boundedText(input.status, 64),
+    reason: boundedText(input.reason, 200),
+    provider_code: boundedText(input.providerCode, 64),
+    observed_at: timestampToIso(input.observedAt),
+    request_id_hash: typeof input.requestId === "string" && input.requestId ? hashStartPlanOpaque("official-request", input.requestId) : null,
+    failure_facts: record2(input.failureFacts) ?? null
+  };
+}
+function parseStartPlanSnapshot(raw, options = {}) {
+  const data = extractBillingData(raw);
+  if (!data) throw new Error("start_plan_balance_data_required");
+  const serverTime = timestampToIso(data.server_time ?? data.serverTime);
+  const capturedAt = timestampToIso(options.capturedAt ?? raw?.captured_at ?? raw?.capturedAt) ?? serverTime;
+  const plans = (Array.isArray(data.plans) ? data.plans : []).map((value) => {
+    const plan = record2(value);
+    if (!plan) return null;
+    return {
+      plan_id: boundedText(plan.plan_id ?? plan.planId, 128),
+      user_plan_key: hashStartPlanOpaque(
+        "startplan-user-plan",
+        plan.user_plan_id ?? plan.userPlanId
+      ),
+      name: boundedText(plan.name, 128),
+      status: boundedText(plan.status, 64),
+      starts_at: timestampToIso(plan.starts_at ?? plan.startsAt),
+      ends_at: timestampToIso(plan.ends_at ?? plan.endsAt),
+      entitlements: (Array.isArray(plan.entitlements) ? plan.entitlements : []).map((entryValue) => {
+        const entry = record2(entryValue);
+        if (!entry) return null;
+        return {
+          entitlement_key: hashStartPlanOpaque(
+            "startplan-entitlement",
+            entry.entitlement_id ?? entry.entitlementId
+          ),
+          show_name: boundedText(entry.show_name ?? entry.showName, 128),
+          meter: boundedText(entry.meter, 64),
+          unit_type: boundedText(entry.unit_type ?? entry.unitType, 64),
+          period: boundedText(entry.period, 64),
+          grant_units: finiteInteger(entry.grant_units ?? entry.grantUnits),
+          effective_at: timestampToIso(entry.effective_at ?? entry.effectiveAt)
+        };
+      }).filter(Boolean)
+    };
+  }).filter(Boolean);
+  const buckets = (Array.isArray(data.balances) ? data.balances : []).map((value) => {
+    const bucket = record2(value);
+    if (!bucket) return null;
+    const capabilities = safeCapabilities(bucket.capabilities);
+    const showName = boundedText(bucket.show_name ?? bucket.showName, 128);
+    return {
+      bucket_key: hashStartPlanOpaque("startplan-bucket", bucket.bucket_id ?? bucket.bucketId),
+      user_plan_key: hashStartPlanOpaque(
+        "startplan-user-plan",
+        bucket.user_plan_id ?? bucket.userPlanId
+      ),
+      plan_id: boundedText(bucket.plan_id ?? bucket.planId, 128),
+      entitlement_key: hashStartPlanOpaque(
+        "startplan-entitlement",
+        bucket.entitlement_id ?? bucket.entitlementId
+      ),
+      show_name: showName,
+      model_ids: modelIdsFromCapabilities(capabilities, showName),
+      meter: boundedText(bucket.meter, 64),
+      unit_type: boundedText(bucket.unit_type ?? bucket.unitType, 64),
+      capabilities,
+      total_units: finiteInteger(bucket.total_units ?? bucket.totalUnits),
+      used_units: finiteInteger(bucket.used_units ?? bucket.usedUnits),
+      reserved_units: finiteInteger(bucket.reserved_units ?? bucket.reservedUnits),
+      remaining_units: finiteInteger(bucket.remaining_units ?? bucket.remainingUnits),
+      available_units: finiteInteger(bucket.available_units ?? bucket.availableUnits),
+      period_start: timestampToIso(bucket.period_start ?? bucket.periodStart),
+      period_end: timestampToIso(bucket.period_end ?? bucket.periodEnd),
+      expires_at: timestampToIso(bucket.expires_at ?? bucket.expiresAt),
+      plan_priority: finiteInteger(bucket.plan_priority ?? bucket.planPriority),
+      entitlement_priority: finiteInteger(
+        bucket.entitlement_priority ?? bucket.entitlementPriority
+      )
+    };
+  }).filter(Boolean);
+  return {
+    schema_version: 1,
+    kind: "start_plan_billing_snapshot",
+    source: boundedText(options.source, 128) ?? "official_billing_balance",
+    captured_at: capturedAt,
+    server_time: serverTime,
+    provider_scope: START_PLAN_PROVIDER_ID,
+    plans,
+    buckets,
+    available_models: [...new Set(buckets.flatMap((bucket) => bucket.model_ids))].sort(),
+    precision: {
+      unit: "token_units",
+      request_level_deductions: false,
+      note: "Start Plan balance is token units and is not a Coding Plan credit ledger."
+    }
+  };
+}
+function normalizeStartPlanSnapshot(raw, options = {}) {
+  const first = parseStartPlanSnapshot(raw, options);
+  const sanitized = sanitizeOfficialStartPlanPayload(raw);
+  const second = parseStartPlanSnapshot(sanitized, {
+    capturedAt: first.captured_at,
+    source: "sanitized_reparse"
+  });
+  const summary = buildSummary(first);
+  const integrity = normalizedIntegrity(raw, first, second);
+  return {
+    ...first,
+    account: {
+      key: options.accountIdentity ? hashStartPlanOpaque("official-account", options.accountIdentity) : null,
+      provider_scope: START_PLAN_PROVIDER_ID,
+      scope: "personal"
+    },
+    ...summary,
+    official_entitlement: normalizeEntitlement(options.officialEntitlement),
+    integrity: {
+      ...integrity,
+      raw_sanitized_reparse_match: integrity.status === "PASS",
+      http_status: finiteInteger(options.requestMetadata?.http_status),
+      response_bytes: finiteInteger(options.requestMetadata?.response_bytes)
+    },
+    request: options.requestMetadata ?? null,
+    process: {
+      model_requests_triggered: 0
+    }
+  };
+}
+function annotateStartPlanFreshness(snapshot, now = Date.now()) {
+  if (!record2(snapshot)) {
+    return {
+      status: "UNKNOWN",
+      reason: "snapshot_unavailable",
+      evaluated_at_ms: now
+    };
+  }
+  const capturedMs = Date.parse(snapshot.captured_at ?? "");
+  const serverMs = Date.parse(snapshot.server_time ?? "");
+  const referenceMs = Number.isFinite(serverMs) ? serverMs : capturedMs;
+  const expiryMs = Math.min(
+    ...[snapshot.expiry, snapshot.billing_period?.end, snapshot.period_end].map((value) => Date.parse(value ?? "")).filter(Number.isFinite)
+  );
+  const ageMs = Number.isFinite(referenceMs) ? now - referenceMs : null;
+  let status = "UNKNOWN";
+  let reason = "capture_time_unavailable";
+  if (Number.isFinite(expiryMs) && expiryMs <= now) {
+    status = "EXPIRED";
+    reason = "official_period_ended";
+  } else if (ageMs !== null && ageMs < -FRESHNESS_WINDOW_MS) {
+    status = "UNKNOWN";
+    reason = "server_time_in_future";
+  } else if (ageMs !== null) {
+    status = Math.abs(ageMs) <= FRESHNESS_WINDOW_MS ? "FRESH" : "STALE";
+    reason = status === "FRESH" ? "recent_official_capture" : "capture_older_than_window";
+  }
+  return {
+    status,
+    reason,
+    evaluated_at: new Date(now).toISOString(),
+    captured_at: snapshot.captured_at ?? null,
+    server_time: snapshot.server_time ?? null,
+    age_ms: ageMs,
+    expiry: Number.isFinite(expiryMs) ? new Date(expiryMs).toISOString() : null,
+    maximum_fresh_age_ms: FRESHNESS_WINDOW_MS
+  };
+}
+function bucketIdentity(bucket) {
+  return [
+    bucket.bucket_key,
+    bucket.entitlement_key,
+    bucket.plan_id,
+    bucket.unit_type
+  ].map((value) => value ?? "null").join("|");
+}
+function delta(current, previous) {
+  return Number.isSafeInteger(current) && Number.isSafeInteger(previous) ? current - previous : null;
+}
+function compareStartPlanSnapshots(previous, current) {
+  if (!previous || !current) {
+    return {
+      status: previous === current ? "NO_BASELINE" : "PARTIAL",
+      reason: "two_snapshots_required",
+      buckets: [],
+      aggregate: null
+    };
+  }
+  if (previous.account?.key !== current.account?.key) {
+    return {
+      status: "NOT_COMPARABLE",
+      reason: "account_changed",
+      buckets: [],
+      aggregate: null
+    };
+  }
+  const previousBuckets = Array.isArray(previous.buckets) ? previous.buckets : [];
+  const currentBuckets = Array.isArray(current.buckets) ? current.buckets : [];
+  const comparisons = currentBuckets.map((bucket) => {
+    const sameLogicalBucket = previousBuckets.filter((candidate) => candidate.bucket_key === bucket.bucket_key && candidate.entitlement_key === bucket.entitlement_key && candidate.plan_id === bucket.plan_id);
+    const exact = sameLogicalBucket.find((candidate) => candidate.unit_type === bucket.unit_type && candidate.period_start === bucket.period_start && candidate.period_end === bucket.period_end);
+    if (exact) {
+      return {
+        bucket_key: bucket.bucket_key,
+        entitlement_key: bucket.entitlement_key,
+        unit_type: bucket.unit_type,
+        period_start: bucket.period_start,
+        period_end: bucket.period_end,
+        status: "COMPARABLE",
+        used_delta: delta(bucket.used_units, exact.used_units),
+        remaining_delta: delta(bucket.remaining_units, exact.remaining_units),
+        total_delta: delta(bucket.total_units, exact.total_units)
+      };
+    }
+    if (sameLogicalBucket.some((candidate) => candidate.unit_type !== bucket.unit_type)) {
+      return {
+        bucket_key: bucket.bucket_key,
+        entitlement_key: bucket.entitlement_key,
+        unit_type: bucket.unit_type,
+        status: "UNIT_CHANGED",
+        used_delta: null,
+        remaining_delta: null,
+        total_delta: null
+      };
+    }
+    if (sameLogicalBucket.length > 0) {
+      return {
+        bucket_key: bucket.bucket_key,
+        entitlement_key: bucket.entitlement_key,
+        unit_type: bucket.unit_type,
+        period_start: bucket.period_start,
+        period_end: bucket.period_end,
+        status: bucket.period_start && bucket.period_start === current.period_start ? "NEW_BUCKET" : "ROLLED_OVER",
+        used_delta: null,
+        remaining_delta: null,
+        total_delta: null
+      };
+    }
+    return {
+      bucket_key: bucket.bucket_key,
+      entitlement_key: bucket.entitlement_key,
+      unit_type: bucket.unit_type,
+      period_start: bucket.period_start,
+      period_end: bucket.period_end,
+      status: "NEW_BUCKET",
+      used_delta: null,
+      remaining_delta: null,
+      total_delta: null
+    };
+  });
+  const currentIdentities = new Set(currentBuckets.map(bucketIdentity));
+  const removed = previousBuckets.filter((bucket) => !currentIdentities.has(bucketIdentity(bucket))).map((bucket) => ({
+    bucket_key: bucket.bucket_key,
+    entitlement_key: bucket.entitlement_key,
+    unit_type: bucket.unit_type,
+    status: "REMOVED_BUCKET",
+    used_delta: null,
+    remaining_delta: null,
+    total_delta: null
+  }));
+  const units = [...new Set(currentBuckets.map((bucket) => bucket.unit_type).filter(Boolean))];
+  const allComparable = comparisons.length > 0 && removed.length === 0 && comparisons.every((item) => item.status === "COMPARABLE") && units.length === 1;
+  const aggregate = allComparable ? {
+    unit_type: units[0],
+    used_delta: comparisons.every((item) => item.used_delta !== null) ? comparisons.reduce((sum, item) => sum + item.used_delta, 0) : null,
+    remaining_delta: comparisons.every((item) => item.remaining_delta !== null) ? comparisons.reduce((sum, item) => sum + item.remaining_delta, 0) : null,
+    total_delta: comparisons.every((item) => item.total_delta !== null) ? comparisons.reduce((sum, item) => sum + item.total_delta, 0) : null
+  } : null;
+  const status = allComparable ? "COMPARABLE" : comparisons.some((item) => ["ROLLED_OVER", "NEW_PERIOD"].includes(item.status)) ? "NEW_PERIOD" : "PARTIAL";
+  return {
+    status,
+    reason: allComparable ? "matching_account_bucket_entitlement_unit_and_period" : "non_comparable_bucket_scope",
+    previous_captured_at: previous.captured_at ?? null,
+    current_captured_at: current.captured_at ?? null,
+    buckets: [...comparisons, ...removed],
+    aggregate
+  };
+}
+
+// tools/cost-lab/startplan-reader.mjs
+var MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
+function readerError(code, message, options = {}) {
+  const error2 = new Error(message);
+  error2.code = code;
+  if (options.cause) error2.cause = options.cause;
+  return error2;
+}
+function isRecord4(value) {
+  return value && typeof value === "object" && !Array.isArray(value);
+}
+async function fileMetadata(filePath) {
+  try {
+    const info = await lstat4(filePath);
+    return {
+      exists: true,
+      type: info.isFile() ? "file" : info.isDirectory() ? "directory" : "other",
+      symbolic_link: info.isSymbolicLink(),
+      size: info.size,
+      mtime_ms: info.mtimeMs,
+      birthtime_ms: info.birthtimeMs,
+      mode: info.mode
+    };
+  } catch (error2) {
+    if (error2?.code === "ENOENT") return { exists: false };
+    throw error2;
+  }
+}
+function sameMetadata(left, right) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+function assertOfficialRequest(input, expectedAppVersion) {
+  const isRequestObject = isRecord4(input) && Object.hasOwn(input, "url");
+  const rawUrl = isRequestObject ? input.url : input;
+  const rawMethod = isRequestObject ? input.init?.method : null;
+  let url;
+  try {
+    url = new URL(String(rawUrl));
+  } catch (error2) {
+    throw readerError("startplan_billing_url_invalid", "Official billing URL is invalid.", {
+      cause: error2
+    });
+  }
+  if (url.origin !== START_PLAN_BILLING_ORIGIN) {
+    throw readerError("startplan_billing_origin_invalid", "Official billing origin is invalid.");
+  }
+  if (url.pathname !== START_PLAN_BILLING_PATH) {
+    throw readerError("startplan_billing_path_invalid", "Official billing path is invalid.");
+  }
+  if (String(rawMethod ?? "GET").toUpperCase() !== "GET") {
+    throw readerError("startplan_billing_method_invalid", "Official billing method is invalid.");
+  }
+  const queryKeys = [...new Set(url.searchParams.keys())].sort();
+  if (queryKeys.length !== 1 || queryKeys[0] !== "app_version") {
+    throw readerError("startplan_billing_query_invalid", "Official billing query is invalid.");
+  }
+  if (url.searchParams.get("app_version") !== expectedAppVersion) {
+    throw readerError("startplan_billing_version_mismatch", "Official billing version is invalid.");
+  }
+  return {
+    method: "GET",
+    origin: url.origin,
+    path: url.pathname,
+    query_keys: queryKeys,
+    app_version: expectedAppVersion
+  };
+}
+async function defaultOfficialDependencies(projectRoot) {
+  const authFile = path15.join(projectRoot, "dist", "src", "runtime", "start-plan-production-auth.js");
+  const adapterFile = path15.join(projectRoot, "dist", "src", "adapters", "official-host-adapter.js");
+  let authModule;
+  let adapterModule;
+  try {
+    authModule = await import(pathToFileURL4(authFile).href);
+    adapterModule = await import(pathToFileURL4(adapterFile).href);
+  } catch (error2) {
+    if (error2?.code === "ERR_MODULE_NOT_FOUND" || error2?.code === "ENOENT") {
+      throw readerError(
+        "startplan_official_reader_build_missing",
+        "Build the official Bridge sources before refreshing Start Plan billing.",
+        { cause: error2 }
+      );
+    }
+    throw error2;
+  }
+  if (typeof authModule.StartPlanBillingEntitlement !== "function") {
+    throw readerError(
+      "startplan_entitlement_missing",
+      "The compiled official Start Plan entitlement reader is missing."
+    );
+  }
+  if (typeof adapterModule.loadOfficialHostProductVersion !== "function" || typeof adapterModule.loadOfficialStartPlanAuthenticationResolverFactory !== "function") {
+    throw readerError(
+      "startplan_authentication_reader_missing",
+      "The compiled official Start Plan authentication reader is missing."
+    );
+  }
+  return {
+    StartPlanBillingEntitlement: authModule.StartPlanBillingEntitlement,
+    loadOfficialHostProductVersion: adapterModule.loadOfficialHostProductVersion,
+    loadOfficialStartPlanAuthenticationResolverFactory: adapterModule.loadOfficialStartPlanAuthenticationResolverFactory
+  };
+}
+async function readOfficialStartPlanBilling(options = {}) {
+  if (!options.dataBaseDir) {
+    throw readerError("startplan_data_base_dir_required", "The official ZCode data directory is required.");
+  }
+  if (!options.officialHostWorker) {
+    throw readerError("startplan_official_host_worker_required", "The official Host Worker is required.");
+  }
+  const projectRoot = path15.resolve(options.projectRoot ?? process.cwd());
+  const dataBaseDir = path15.resolve(options.dataBaseDir);
+  const officialHostWorker = path15.resolve(options.officialHostWorker);
+  const workerUrl = pathToFileURL4(officialHostWorker);
+  const now = typeof options.now === "function" ? options.now : () => Date.now();
+  const timeoutMs = options.timeoutMs ?? 2e4;
+  const dependencies = options.officialDependencies ?? await defaultOfficialDependencies(projectRoot);
+  const transportFetch = options.transportFetch ?? globalThis.fetch;
+  const credentialFile = path15.join(dataBaseDir, ".zcode", "v2", "credentials.json");
+  const keyringLockFile = `${credentialFile}.keyring.lock`;
+  const operationController = new AbortController();
+  const abortFromParent = () => operationController.abort(options.signal?.reason);
+  if (options.signal?.aborted) abortFromParent();
+  else options.signal?.addEventListener("abort", abortFromParent, { once: true });
+  const timeout = setTimeout(() => {
+    operationController.abort(readerError("startplan_billing_timeout", "Official billing refresh timed out."));
+  }, timeoutMs);
+  const credentialBefore = await fileMetadata(credentialFile);
+  const lockBefore = await fileMetadata(keyringLockFile);
+  if (lockBefore.exists) {
+    clearTimeout(timeout);
+    options.signal?.removeEventListener("abort", abortFromParent);
+    throw readerError(
+      "startplan_keyring_lock_present_before_capture",
+      "The official keyring lock was already present before the read."
+    );
+  }
+  let requestCount = 0;
+  let captured = null;
+  try {
+    const productVersion = await dependencies.loadOfficialHostProductVersion(workerUrl);
+    const resolverFactory = await dependencies.loadOfficialStartPlanAuthenticationResolverFactory(workerUrl);
+    const resolver = resolverFactory({ dataBaseDir });
+    const auth = await resolver.resolveStartPlanAuthentication({
+      family: "bigmodel",
+      signal: operationController.signal
+    });
+    operationController.signal.throwIfAborted();
+    if (!auth?.requestCredential || !auth?.deviceMid || !auth?.accountIdentity) {
+      throw readerError(
+        "startplan_authentication_unavailable",
+        "Official Start Plan authentication is unavailable."
+      );
+    }
+    const fetchImpl = async (input, init) => {
+      requestCount += 1;
+      if (requestCount !== 1) {
+        throw readerError(
+          "startplan_multiple_billing_requests_forbidden",
+          "More than one official billing request was attempted."
+        );
+      }
+      const requestMetadata2 = assertOfficialRequest(input, productVersion);
+      const headerNames = Object.keys(Object.fromEntries(new Headers(init?.headers))).sort();
+      const started = performance.now();
+      let response;
+      try {
+        response = await transportFetch(input, {
+          ...init,
+          signal: AbortSignal.any([
+            init?.signal ?? operationController.signal,
+            operationController.signal
+          ])
+        });
+      } catch (error2) {
+        if (operationController.signal.aborted) throw operationController.signal.reason;
+        throw readerError("startplan_billing_transport_failed", "Official billing transport failed.", {
+          cause: error2
+        });
+      }
+      const responseText = await response.clone().text();
+      if (Buffer.byteLength(responseText, "utf8") > MAX_RESPONSE_BYTES) {
+        throw readerError("startplan_billing_response_too_large", "Official billing response is too large.");
+      }
+      let raw = null;
+      try {
+        raw = JSON.parse(responseText);
+      } catch {
+      }
+      captured = {
+        ...requestMetadata2,
+        header_names: headerNames,
+        http_status: response.status,
+        response_bytes: Buffer.byteLength(responseText, "utf8"),
+        content_type: response.headers.get("content-type"),
+        request_id_hash: response.headers.get("x-request-id") ? sanitizeOfficialStartPlanPayload({ request_id: response.headers.get("x-request-id") }).request_id : null,
+        duration_ms: Math.round(performance.now() - started),
+        raw
+      };
+      return response;
+    };
+    const entitlement = new dependencies.StartPlanBillingEntitlement({
+      getAppVersion: async () => productVersion,
+      fetchImpl,
+      now
+    });
+    const officialEntitlement = await entitlement.check({
+      account: START_PLAN_PROVIDER_ID,
+      provider: START_PLAN_PROVIDER_ID,
+      model: "GLM-5.3-Flash",
+      deviceMid: auth.deviceMid,
+      jwt: auth.requestCredential,
+      signal: operationController.signal
+    });
+    operationController.signal.throwIfAborted();
+    if (requestCount !== 1 || !captured) {
+      throw readerError(
+        "startplan_billing_request_not_observed",
+        "The official billing response was not observed."
+      );
+    }
+    if (captured.http_status !== 200 || !isRecord4(captured.raw)) {
+      const code = captured.http_status === 401 ? "startplan_billing_unauthorized" : captured.http_status === 403 ? "startplan_billing_forbidden" : captured.http_status === 429 ? "startplan_billing_rate_limited" : "startplan_billing_response_invalid";
+      throw readerError(code, `Official billing returned HTTP ${captured.http_status ?? "transport"}.`);
+    }
+    const capturedAt = new Date(now()).toISOString();
+    const requestMetadata = {
+      method: captured.method,
+      origin: captured.origin,
+      path: captured.path,
+      query_keys: captured.query_keys,
+      app_version: captured.app_version,
+      header_names: captured.header_names,
+      http_status: captured.http_status,
+      response_bytes: captured.response_bytes,
+      content_type: captured.content_type,
+      request_id_hash: captured.request_id_hash,
+      duration_ms: captured.duration_ms,
+      attempts: requestCount
+    };
+    const snapshot = normalizeStartPlanSnapshot(captured.raw, {
+      capturedAt,
+      source: "official_billing_balance",
+      accountIdentity: auth.accountIdentity,
+      officialEntitlement,
+      requestMetadata
+    });
+    const credentialAfter = await fileMetadata(credentialFile);
+    const lockAfter = await fileMetadata(keyringLockFile);
+    const state = {
+      credentials_unchanged: sameMetadata(credentialBefore, credentialAfter),
+      keyring_lock_released: !lockAfter.exists,
+      credential_metadata: {
+        before: credentialBefore,
+        after: credentialAfter
+      },
+      keyring_lock: {
+        before: lockBefore,
+        after: lockAfter
+      }
+    };
+    return {
+      captured_at: capturedAt,
+      sanitized_raw: {
+        schema_version: 1,
+        source: "official_billing_balance",
+        request: requestMetadata,
+        payload: sanitizeOfficialStartPlanPayload(captured.raw)
+      },
+      snapshot,
+      metadata: {
+        schema_version: 1,
+        official_runtime: {
+          product_version: productVersion,
+          worker_module: path15.relative(projectRoot, officialHostWorker).replaceAll("\\", "/")
+        },
+        authentication: {
+          resolver: "createOfficialStartPlanAuthenticationResolver",
+          credential_read: "read_only",
+          account_hash: snapshot.account.key
+        },
+        request: requestMetadata,
+        state,
+        process: {
+          model_requests_triggered: 0,
+          official_billing_get_attempts: requestCount
+        }
+      }
+    };
+  } finally {
+    clearTimeout(timeout);
+    options.signal?.removeEventListener("abort", abortFromParent);
+  }
+}
+
+// tools/cost-lab/web-server.mjs
+import { randomBytes, randomUUID as randomUUID6 } from "node:crypto";
+import { createReadStream as createReadStream3 } from "node:fs";
+import { mkdir as mkdir3, readFile as readFile6 } from "node:fs/promises";
 import http from "node:http";
+import path18 from "node:path";
+import { fileURLToPath as fileURLToPath7, pathToFileURL as pathToFileURL6 } from "node:url";
+
+// tools/cost-lab/coding-plan-billing.mjs
+import { access as access4, mkdir as mkdir2, readFile as readFile4, rename, rm as rm2, writeFile } from "node:fs/promises";
+import { randomUUID as randomUUID4 } from "node:crypto";
+import path16 from "node:path";
+import { fileURLToPath as fileURLToPath6, pathToFileURL as pathToFileURL5 } from "node:url";
+var SNAPSHOT_SCHEMA_VERSION = 1;
+var RECONCILIATION_SCHEMA_VERSION = 3;
+var DEFAULT_PROVIDER_ID = "account:bigmodel-individual-coding-plan";
+var DEFAULT_TIME_ZONE = "Asia/Shanghai";
+var DEFAULT_TIMEOUT_MS2 = 45e3;
+var SCRIPT_ROOT3 = path16.dirname(fileURLToPath6(import.meta.url));
+var PROJECT_ROOT3 = path16.resolve(SCRIPT_ROOT3, "..", "..");
+var RUN_ROOT = path16.join(PROJECT_ROOT3, ".run");
+var DEFAULT_OUTPUT_ROOT = path16.join(PROJECT_ROOT3, ".run", "cost-lab-billing");
+var DEFAULT_RUNTIME_PATH = OFFICIAL_RUNTIME_PATH;
+var MODEL_ARRAY_FIELDS = Object.freeze([
+  "cachedInputTokensUsage",
+  "uncachedInputTokensUsage",
+  "outputTokensUsage",
+  "cachedInputCreditsUsage",
+  "uncachedInputCreditsUsage",
+  "outputCreditsUsage"
+]);
+var PROVIDERS = Object.freeze({
+  "account:bigmodel-individual-coding-plan": Object.freeze({
+    family: "bigmodel",
+    plan_scope: "personal"
+  }),
+  "account:zai-individual-coding-plan": Object.freeze({
+    family: "zai",
+    plan_scope: "personal"
+  })
+});
+function requiredValue(argv, index, name) {
+  const value = argv[index + 1];
+  if (!value || value.startsWith("--")) throw new Error(`${name}_requires_value`);
+  return value;
+}
+function parseArgs(argv) {
+  const [command, ...rest] = argv;
+  if (command !== "snapshot" && command !== "reconcile") {
+    throw new Error("command_must_be_snapshot_or_reconcile");
+  }
+  const options = {
+    command,
+    json: false,
+    provider: DEFAULT_PROVIDER_ID,
+    model: null,
+    range: "today",
+    start: null,
+    end: null,
+    timeZone: DEFAULT_TIME_ZONE,
+    dataRoot: null,
+    out: null,
+    timeoutMs: DEFAULT_TIMEOUT_MS2,
+    before: null,
+    after: null,
+    usage: null,
+    hour: null
+  };
+  for (let index = 0; index < rest.length; index += 1) {
+    const arg = rest[index];
+    if (arg === "--json") {
+      options.json = true;
+    } else if (arg === "--provider") {
+      options.provider = requiredValue(rest, index, arg);
+      index += 1;
+    } else if (arg === "--model") {
+      options.model = requiredValue(rest, index, arg);
+      index += 1;
+    } else if (arg === "--range") {
+      options.range = requiredValue(rest, index, arg);
+      index += 1;
+    } else if (arg === "--start") {
+      options.start = requiredValue(rest, index, arg);
+      index += 1;
+    } else if (arg === "--end") {
+      options.end = requiredValue(rest, index, arg);
+      index += 1;
+    } else if (arg === "--timezone") {
+      options.timeZone = requiredValue(rest, index, arg);
+      index += 1;
+    } else if (arg === "--data-root") {
+      options.dataRoot = requiredValue(rest, index, arg);
+      index += 1;
+    } else if (arg === "--out") {
+      options.out = path16.resolve(requiredValue(rest, index, arg));
+      index += 1;
+    } else if (arg === "--timeout-ms") {
+      const value = Number(requiredValue(rest, index, arg));
+      if (!Number.isSafeInteger(value) || value < 1e3 || value > 3e5) {
+        throw new Error("timeout_ms_must_be_between_1000_and_300000");
+      }
+      options.timeoutMs = value;
+      index += 1;
+    } else if (arg === "--before") {
+      options.before = path16.resolve(requiredValue(rest, index, arg));
+      index += 1;
+    } else if (arg === "--after") {
+      options.after = path16.resolve(requiredValue(rest, index, arg));
+      index += 1;
+    } else if (arg === "--usage") {
+      options.usage = path16.resolve(requiredValue(rest, index, arg));
+      index += 1;
+    } else if (arg === "--hour") {
+      const value = Number(requiredValue(rest, index, arg));
+      if (!Number.isInteger(value) || value < 0 || value > 23) {
+        throw new Error("hour_must_be_between_0_and_23");
+      }
+      options.hour = value;
+      index += 1;
+    } else {
+      throw new Error(`unknown_option:${arg}`);
+    }
+  }
+  if (command === "snapshot") {
+    if (!["today", "7d", "30d", "custom"].includes(options.range)) {
+      throw new Error("range_must_be_today_7d_30d_or_custom");
+    }
+    if (options.range === "custom" && (!options.start || !options.end)) {
+      throw new Error("custom_range_requires_start_and_end");
+    }
+    if (options.timeZone !== DEFAULT_TIME_ZONE) {
+      throw new Error("only_asia_shanghai_is_supported_for_billing_windows");
+    }
+    assertSupportedProvider(options.provider);
+  } else {
+    if (!options.before || !options.after || !options.usage) {
+      throw new Error("reconcile_requires_before_after_and_usage");
+    }
+  }
+  return Object.freeze(options);
+}
+function assertSupportedProvider(providerId) {
+  const provider = PROVIDERS[providerId];
+  if (!provider) throw new Error(`unsupported_individual_coding_plan_provider:${providerId}`);
+  return provider;
+}
+function finiteNumber(value, fallback = 0) {
+  const number3 = typeof value === "string" && value.trim() ? Number(value) : value;
+  return Number.isFinite(number3) ? number3 : fallback;
+}
+function ledgerNumber(value, tokens = false) {
+  const number3 = finiteNumber(value, null);
+  return number3 !== null && number3 >= 0 && (!tokens || Number.isSafeInteger(number3)) ? number3 : null;
+}
+function knownSum(...values) {
+  return values.includes(null) ? null : values.reduce((sum, value) => sum + value, 0);
+}
+function normalizeHourAxis(xTime, granularity, expectedDate = null) {
+  if (!Array.isArray(xTime)) return [];
+  return xTime.map((entry) => {
+    const raw = String(entry);
+    if (granularity !== "hour") return raw;
+    const match = /^(?:(\d{4}-\d{2}-\d{2})[ T])?(\d{2}):(\d{2})(?::(\d{2}))?$/u.exec(raw);
+    if (!match || expectedDate && match[1] && match[1] !== expectedDate) return raw;
+    return `${match[2]}:${match[3]}:${match[4] ?? "00"}`;
+  });
+}
+function normalizeBucket(row, index) {
+  const value = (field) => {
+    const sequence = row?.[field];
+    return Array.isArray(sequence) ? ledgerNumber(sequence[index], field.includes("Tokens")) : null;
+  };
+  const cachedInputTokens = value("cachedInputTokensUsage");
+  const uncachedInputTokens = value("uncachedInputTokensUsage");
+  const outputTokens = value("outputTokensUsage");
+  const cachedInputCredits = value("cachedInputCreditsUsage");
+  const uncachedInputCredits = value("uncachedInputCreditsUsage");
+  const outputCredits = value("outputCreditsUsage");
+  return {
+    cached_input_tokens: cachedInputTokens,
+    uncached_input_tokens: uncachedInputTokens,
+    output_tokens: outputTokens,
+    total_tokens: knownSum(cachedInputTokens, uncachedInputTokens, outputTokens),
+    cached_input_credits: cachedInputCredits,
+    uncached_input_credits: uncachedInputCredits,
+    output_credits: outputCredits,
+    total_credits: knownSum(cachedInputCredits, uncachedInputCredits, outputCredits)
+  };
+}
+function missingModelFields(row, model) {
+  const missing = [];
+  for (const field of MODEL_ARRAY_FIELDS) {
+    if (!Array.isArray(row?.[field]) || row[field].length !== model.hours.length || row[field].some((value) => ledgerNumber(value, field.includes("Tokens")) === null)) {
+      missing.push(field);
+    }
+  }
+  if (model.total_tokens === null) missing.push("totalTokens");
+  if (model.total_credits === null) missing.push("totalCredits");
+  return missing;
+}
+function buildSnapshotEnvelope({
+  result,
+  providerId,
+  modelFilter = null,
+  query,
+  capturedAt,
+  dataBaseDirSource = null
+}) {
+  if (!result?.snapshot || !result?.identity) throw new Error("official_billing_result_invalid");
+  const provider = assertSupportedProvider(providerId);
+  const snapshot = result.snapshot;
+  const billingSource = sourceModelUsage(snapshot.modelUsage);
+  const xTime = normalizeHourAxis(billingSource?.xTime, snapshot.modelUsage?.granularity);
+  const allRows = Array.isArray(billingSource?.modelDataList) ? billingSource.modelDataList : [];
+  const selectedRows = modelFilter ? allRows.filter((row) => billingModelName(row) === modelFilter) : allRows;
+  if (modelFilter && selectedRows.length === 0) throw new Error(`model_not_found:${modelFilter}`);
+  const models = selectedRows.map((row) => {
+    const hours = xTime.map((axis, index) => ({
+      bucket: axis,
+      ...normalizeBucket(row, index)
+    }));
+    const total = (raw, field) => raw === void 0 && hours.length > 0 ? ledgerNumber(knownSum(...hours.map((hour) => hour[field])), field === "total_tokens") : ledgerNumber(raw, field === "total_tokens");
+    return {
+      model: billingModelName(row),
+      total_tokens: total(row.totalTokens, "total_tokens"),
+      total_credits: total(row.totalCredits, "total_credits"),
+      hours
+    };
+  });
+  const missingFields = selectedRows.flatMap(
+    (row, index) => missingModelFields(row, models[index]).map((field) => `${billingModelName(row)}.${field}`)
+  );
+  if (!Array.isArray(billingSource?.xTime) || xTime.length === 0 || new Set(xTime).size !== xTime.length || snapshot.modelUsage?.granularity === "hour" && xTime.some((label) => !/^(?:[01]\d|2[0-3]):00:00$/u.test(label))) {
+    missingFields.push("modelUsage.xTime");
+  }
+  if (snapshot.quota == null) missingFields.push("quota");
+  const integrityStatus = models.length === 0 || missingFields.length > 0 ? "PARTIAL" : "COMPLETE";
+  const retainedSnapshot = sanitizeOfficialSnapshot(snapshot);
+  return {
+    schema_version: SNAPSHOT_SCHEMA_VERSION,
+    kind: "coding_plan_billing_snapshot",
+    source: "official:usageStatsService.getCodingPlanUsageSnapshot",
+    captured_at: capturedAt,
+    provider: {
+      id: String(snapshot.sourceProvider?.id ?? providerId),
+      name: String(snapshot.sourceProvider?.name ?? "Coding Plan")
+    },
+    identity: {
+      api_key_id: result.identity.apiKeyId ?? null,
+      official_account_scope: result.identity.accountScope ?? null,
+      plan_scope: provider.plan_scope,
+      organization_id: result.identity.organizationId ?? null,
+      project_id: result.identity.projectId ?? null
+    },
+    query: {
+      range: query.range,
+      custom_start_date: query.customStartDate ?? null,
+      custom_end_date: query.customEndDate ?? null,
+      time_zone: query.timeZone,
+      model_filter: modelFilter
+    },
+    range: {
+      start_date: snapshot.rangeStartDate ?? null,
+      end_date: snapshot.rangeEndDate ?? null,
+      granularity: snapshot.modelUsage?.granularity ?? null,
+      generated_at: finiteNumber(snapshot.generatedAt, null)
+    },
+    quota: snapshot.quota ?? null,
+    models,
+    integrity: {
+      status: integrityStatus,
+      missing_fields: missingFields,
+      settlement_status: "UNKNOWN",
+      source_snapshot_retained: retainedSnapshot.redactedPaths.length === 0,
+      redacted_secret_fields: retainedSnapshot.redactedPaths
+    },
+    data_discovery: {
+      data_base_dir_source: dataBaseDirSource
+    },
+    official_snapshot: retainedSnapshot.value
+  };
+}
+function sourceModelUsage(modelUsage) {
+  return modelUsage && Object.hasOwn(modelUsage, "costLabBillingSource") ? modelUsage.costLabBillingSource : modelUsage;
+}
+function billingModelName(row) {
+  return row?.modelName?.trim() || row?.modelCode?.trim() || null;
+}
+var SECRET_FIELD_PATTERN = /^(?:authorization|cookie|password|secret|credentials?|access[_-]?token|refresh[_-]?token|project[_-]?token|jwt|bearer|private[_-]?key|api[_-]?key)$/iu;
+function sanitizeOfficialSnapshot(value) {
+  const redactedPaths = [];
+  const visit = (entry, location) => {
+    if (Array.isArray(entry)) {
+      return entry.map((item, index) => visit(item, `${location}[${index}]`));
+    }
+    if (!entry || typeof entry !== "object") return entry;
+    const result = {};
+    for (const [key, child] of Object.entries(entry)) {
+      const childLocation = location ? `${location}.${key}` : key;
+      if (SECRET_FIELD_PATTERN.test(key)) {
+        result[key] = "<redacted>";
+        redactedPaths.push(childLocation);
+      } else {
+        result[key] = visit(child, childLocation);
+      }
+    }
+    return result;
+  };
+  return { value: visit(value, ""), redactedPaths };
+}
+function shanghaiHourForTimestamp(timestamp) {
+  const date2 = timestamp instanceof Date ? timestamp : new Date(timestamp);
+  if (Number.isNaN(date2.getTime())) throw new Error("usage_timestamp_invalid");
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: DEFAULT_TIME_ZONE,
+    hour: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(date2);
+  return Number(parts.find((part) => part.type === "hour")?.value);
+}
+function isOffPeakShanghai(date2) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: DEFAULT_TIME_ZONE,
+    weekday: "short",
+    hour: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(date2);
+  const weekday = parts.find((part) => part.type === "weekday")?.value ?? "";
+  const hour = Number(parts.find((part) => part.type === "hour")?.value);
+  const weekdayPeak = ["Mon", "Tue", "Wed", "Thu", "Fri"].includes(weekday) && hour >= 14 && hour < 18;
+  return !weekdayPeak;
+}
+function usageRecord(raw) {
+  return raw?.request_usage ?? raw?.usage ?? raw?.tokens ?? raw;
+}
+function extractRequestUsage(raw) {
+  const usage = usageRecord(raw);
+  if (!usage || typeof usage !== "object") throw new Error("usage_record_missing");
+  const pick2 = (...names) => {
+    for (const name of names) {
+      if (usage[name] !== void 0 && usage[name] !== null) return usage[name];
+    }
+    return void 0;
+  };
+  const cachedInputTokens = finiteNumber(
+    pick2("cached_input_tokens", "cachedInputTokens", "cached_input", "cachedInput"),
+    null
+  );
+  const explicitUncached = pick2(
+    "uncached_input_tokens",
+    "uncachedInputTokens",
+    "uncached_input",
+    "uncachedInput"
+  );
+  const inputTokens = pick2("input_tokens", "inputTokens");
+  const outputTokensRaw = pick2("output_tokens", "outputTokens", "output");
+  const explicitTotal = pick2("total_tokens", "totalTokens", "total");
+  if (![
+    pick2("cached_input_tokens", "cachedInputTokens", "cached_input", "cachedInput"),
+    explicitUncached,
+    inputTokens,
+    outputTokensRaw,
+    explicitTotal
+  ].some((value) => value !== void 0)) {
+    throw new Error("usage_token_fields_missing");
+  }
+  const inclusiveInput = ledgerNumber(inputTokens, true);
+  const uncachedInputTokens = explicitUncached !== void 0 ? ledgerNumber(explicitUncached, true) : inclusiveInput !== null && cachedInputTokens !== null ? inclusiveInput - cachedInputTokens : null;
+  const outputTokens = ledgerNumber(outputTokensRaw, true);
+  const totalTokens = explicitTotal !== void 0 ? ledgerNumber(explicitTotal, true) : knownSum(cachedInputTokens, uncachedInputTokens, outputTokens);
+  for (const [name, value] of Object.entries({
+    cached_input_tokens: cachedInputTokens,
+    uncached_input_tokens: uncachedInputTokens,
+    output_tokens: outputTokens,
+    total_tokens: totalTokens
+  })) {
+    if (!Number.isSafeInteger(value) || value < 0) throw new Error(`usage_${name}_invalid`);
+  }
+  if (knownSum(cachedInputTokens, uncachedInputTokens, outputTokens) !== totalTokens) {
+    throw new Error("usage_total_tokens_inconsistent");
+  }
+  return {
+    model: pick2("model", "modelName", "model_id", "modelId")?.toString() ?? raw?.model ?? raw?.model_id ?? null,
+    timestamp: pick2("observed_at", "captured_at", "timestamp", "ended_at", "started_at", "time") ?? raw?.captured_at ?? raw?.timestamp ?? null,
+    cached_input_tokens: cachedInputTokens,
+    uncached_input_tokens: uncachedInputTokens,
+    output_tokens: outputTokens,
+    total_tokens: totalTokens
+  };
+}
+function bucketAt(snapshot, model, hour) {
+  const label = `${String(hour).padStart(2, "0")}:00:00`;
+  const official = snapshot.official_snapshot?.modelUsage?.costLabBillingSource;
+  if (!Array.isArray(official?.modelDataList) || !Array.isArray(official?.xTime)) return null;
+  const rows = official.modelDataList.filter((row) => billingModelName(row) === model);
+  const axis = normalizeHourAxis(official.xTime, "hour", snapshot.range.end_date);
+  const index = axis.indexOf(label);
+  if (rows.length !== 1 || index < 0 || axis.lastIndexOf(label) !== index) return null;
+  return normalizeBucket(rows[0], index);
+}
+function subtractBucket(after, before) {
+  const result = {};
+  for (const field of [
+    "cached_input_tokens",
+    "uncached_input_tokens",
+    "output_tokens",
+    "total_tokens",
+    "cached_input_credits",
+    "uncached_input_credits",
+    "output_credits",
+    "total_credits"
+  ]) {
+    const isToken = field.endsWith("_tokens");
+    const first = ledgerNumber(before?.[field], isToken);
+    const last = ledgerNumber(after?.[field], isToken);
+    result[field] = first === null || last === null ? null : last - first;
+  }
+  return result;
+}
+function changedHours(before, after, model) {
+  return Array.from({ length: 24 }, (_, hour) => {
+    const diff = subtractBucket(bucketAt(after, model, hour), bucketAt(before, model, hour));
+    return Object.values(diff).some((value) => value !== null && Math.abs(value) > 1e-12) ? hour : null;
+  }).filter((hour) => hour !== null);
+}
+function calculateCreditBreakdown({
+  uncachedInputTokens,
+  cachedInputTokens,
+  outputTokens,
+  offPeak,
+  actualCredits
+}) {
+  for (const [name, value] of Object.entries({
+    uncachedInputTokens,
+    cachedInputTokens,
+    outputTokens
+  })) {
+    if (!Number.isFinite(value) || value < 0) throw new Error(`credit_${name}_invalid`);
+  }
+  if (actualCredits !== null && (!Number.isFinite(actualCredits) || actualCredits < 0)) {
+    throw new Error("credit_actualCredits_invalid");
+  }
+  const baseCredits = (uncachedInputTokens * 2.3 + cachedInputTokens * 0.56 + outputTokens * 8) / 1e4;
+  const timeMultiplier = offPeak ? 0.5 : 1;
+  const expectedNormal = baseCredits * timeMultiplier;
+  const expectedWithZeroPointSixSeven = expectedNormal * 0.67;
+  return {
+    base_credits: baseCredits,
+    time_multiplier: timeMultiplier,
+    expected_normal: expectedNormal,
+    expected_with_0_67: expectedWithZeroPointSixSeven,
+    actual_credits: actualCredits,
+    effective_extra_ratio: expectedNormal > 0 && actualCredits !== null ? actualCredits / expectedNormal : null
+  };
+}
+function classifyCredit(actual, normal, withDiscount, tolerance) {
+  if (actual === null) return "INCONCLUSIVE";
+  if (actual === 0) return "ZERO_CHARGE";
+  const normalMatch = Math.abs(actual - normal) <= tolerance;
+  const discountMatch = Math.abs(actual - withDiscount) <= tolerance;
+  if (normalMatch && discountMatch) return "INCONCLUSIVE";
+  if (normalMatch) return "NORMAL";
+  if (discountMatch) return "EXTRA_0_67";
+  return "OTHER";
+}
+function reconcileBillingSnapshots(before, after, rawUsage, options = {}) {
+  if (before?.kind !== "coding_plan_billing_snapshot" || after?.kind !== "coding_plan_billing_snapshot") {
+    throw new Error("billing_snapshot_schema_invalid");
+  }
+  if (!before.provider?.id || before.provider.id !== after.provider?.id) throw new Error("billing_provider_changed");
+  if (!before.query?.time_zone || before.query.time_zone !== after.query?.time_zone) {
+    throw new Error("billing_timezone_changed");
+  }
+  for (const key of ["api_key_id", "organization_id", "project_id", "official_account_scope", "plan_scope"]) {
+    if ((before.identity?.[key] ?? null) !== (after.identity?.[key] ?? null)) {
+      throw new Error("billing_identity_changed");
+    }
+  }
+  if (typeof before.identity?.api_key_id !== "string" || !before.identity.api_key_id.trim()) {
+    throw new Error("billing_identity_missing");
+  }
+  const beforeStartDate = before.range?.start_date;
+  const beforeEndDate = before.range?.end_date;
+  const afterStartDate = after.range?.start_date;
+  const afterEndDate = after.range?.end_date;
+  if (!beforeStartDate || !beforeEndDate || !afterStartDate || !afterEndDate) {
+    throw new Error("billing_range_date_missing");
+  }
+  if (beforeStartDate !== afterStartDate || beforeEndDate !== afterEndDate) {
+    throw new Error("billing_range_changed");
+  }
+  if (beforeStartDate !== beforeEndDate || before.range.granularity !== "hour" || after.range.granularity !== "hour") throw new Error("billing_single_day_hourly_range_required");
+  const usage = extractRequestUsage(rawUsage);
+  const model = options.model ?? usage.model;
+  if (!model) throw new Error("model_required_for_reconciliation");
+  if (usage.model && usage.model !== model) throw new Error("billing_usage_model_changed");
+  let hour = options.hour;
+  if (hour === void 0 || hour === null) {
+    const changed = changedHours(before, after, model);
+    if (changed.length !== 1) throw new Error("hour_required_for_reconciliation");
+    hour = changed[0];
+  }
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23) throw new Error("billing_hour_invalid");
+  const beforeCaptured = Date.parse(before.captured_at);
+  const afterCaptured = Date.parse(after.captured_at);
+  if (!Number.isFinite(beforeCaptured) || !Number.isFinite(afterCaptured) || afterCaptured < beforeCaptured) {
+    throw new Error("billing_capture_order_invalid");
+  }
+  if (usage.timestamp !== null) {
+    const observed = new Date(usage.timestamp);
+    const observedAt = observed.getTime();
+    if (!Number.isFinite(observedAt)) {
+      throw new Error("billing_usage_outside_capture_window");
+    }
+    const localDate = new Intl.DateTimeFormat("en-CA", {
+      timeZone: DEFAULT_TIME_ZONE,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    }).format(observed);
+    if (localDate !== afterEndDate || shanghaiHourForTimestamp(observed) !== hour) {
+      throw new Error("billing_usage_window_changed");
+    }
+    if (observedAt < beforeCaptured || observedAt > afterCaptured) {
+      throw new Error("billing_usage_outside_capture_window");
+    }
+  }
+  const diff = subtractBucket(bucketAt(after, model, hour), bucketAt(before, model, hour));
+  const complete = Object.values(diff).every((value) => value !== null && value >= -1e-12);
+  const creditsObserved = complete && diff.total_credits > 1e-12;
+  const settledZero = complete && diff.total_credits === 0 && after.integrity?.settlement_status === "SETTLED";
+  const tokenDeltaObserved = complete && diff.total_tokens > 0;
+  const tokenMatch = complete && (tokenDeltaObserved || settledZero) && diff.cached_input_tokens === usage.cached_input_tokens && diff.uncached_input_tokens === usage.uncached_input_tokens && diff.output_tokens === usage.output_tokens && diff.total_tokens === usage.total_tokens;
+  const bucketDateKey = after.range.end_date ?? after.range.start_date;
+  if (!bucketDateKey) throw new Error("billing_range_date_missing");
+  const bucketInstant = /* @__PURE__ */ new Date(
+    `${bucketDateKey}T${String(hour).padStart(2, "0")}:00:00+08:00`
+  );
+  if (Number.isNaN(bucketInstant.getTime())) throw new Error("billing_hour_date_invalid");
+  const calculation = calculateCreditBreakdown({
+    uncachedInputTokens: usage.uncached_input_tokens,
+    cachedInputTokens: usage.cached_input_tokens,
+    outputTokens: usage.output_tokens,
+    offPeak: isOffPeakShanghai(bucketInstant),
+    actualCredits: tokenMatch && (creditsObserved || settledZero) ? diff.total_credits : null
+  });
+  const tolerance = options.creditTolerance ?? 5e-4;
+  const creditClass = classifyCredit(
+    calculation.actual_credits,
+    calculation.expected_normal,
+    calculation.expected_with_0_67,
+    tolerance
+  );
+  const reconciliationStatus = tokenMatch && ["NORMAL", "EXTRA_0_67", "ZERO_CHARGE"].includes(creditClass) ? "PASS" : "INCONCLUSIVE";
+  let settlementStatus = "NO_OBSERVED_CREDIT_DELTA";
+  if (!complete) settlementStatus = "INVALID_BILLING_DATA";
+  else if (settledZero) settlementStatus = "ZERO_CHARGE_OBSERVED";
+  else if (creditsObserved) settlementStatus = "DELTA_OBSERVED";
+  else if (tokenDeltaObserved) settlementStatus = "CREDITS_PENDING";
+  if ((creditsObserved || settledZero) && !tokenMatch) settlementStatus = "UNATTRIBUTED_DELTA";
+  return {
+    schema_version: RECONCILIATION_SCHEMA_VERSION,
+    kind: "coding_plan_billing_reconciliation",
+    provider: after.provider,
+    model,
+    time_zone: after.query.time_zone,
+    hour: `${String(hour).padStart(2, "0")}:00:00`,
+    captured_at: (/* @__PURE__ */ new Date()).toISOString(),
+    before_captured_at: before.captured_at,
+    after_captured_at: after.captured_at,
+    official_delta: Object.fromEntries(Object.entries(diff).map(([key, value]) => [
+      key,
+      key.endsWith("_credits") && !creditsObserved && !settledZero ? null : value
+    ])),
+    request_usage: usage,
+    token_match: tokenMatch,
+    calculation,
+    credit_class: creditClass,
+    credit_tolerance: tolerance,
+    billing_reconciliation: reconciliationStatus,
+    settlement_status: settlementStatus,
+    limitations: [
+      "official_api_is_hour_aggregated",
+      "unique_attribution_requires_token_match_and_no_parallel_activity",
+      "entitlement_is_not_inferred_from_a_single_credit_ratio"
+    ]
+  };
+}
+async function atomicWriteJson(filePath, value) {
+  const directory = path16.dirname(filePath);
+  await mkdir2(directory, { recursive: true });
+  const temporary = path16.join(
+    directory,
+    `.${path16.basename(filePath)}.${process.pid}.${randomUUID4()}.tmp`
+  );
+  try {
+    await writeFile(temporary, `${JSON.stringify(value, null, 2)}
+`, {
+      encoding: "utf8",
+      flag: "wx"
+    });
+    await rename(temporary, filePath);
+  } catch (error2) {
+    await rm2(temporary, { force: true }).catch(() => void 0);
+    throw error2;
+  }
+}
+function assertProjectRunOutput(filePath) {
+  const relative = path16.relative(RUN_ROOT, path16.resolve(filePath));
+  if (relative === "" || relative.startsWith(`..${path16.sep}`) || relative === ".." || path16.isAbsolute(relative)) {
+    throw new Error("output_must_be_inside_project_run_root");
+  }
+}
+function timestampSlug(date2) {
+  return date2.toISOString().replaceAll(":", "").replaceAll(".", "").replace("T", "-").replace("Z", "Z");
+}
+function defaultOutputPath(prefix, now) {
+  return path16.join(DEFAULT_OUTPUT_ROOT, `${prefix}-${timestampSlug(now)}.json`);
+}
+function sanitizeErrorMessage(error2) {
+  const raw = error2 instanceof Error ? error2.message : String(error2);
+  return raw.replace(
+    /\b(authorization|api[_-]?key|access[_-]?token|project[_-]?token)\b\s*[:=]\s*(?:Bearer\s+)?[^\s,;]+/giu,
+    "$1=<redacted>"
+  ).replace(/\bBearer\s+[^\s,;]+/giu, "Bearer <redacted>").slice(0, 500);
+}
+function safeError(error2) {
+  return {
+    ok: false,
+    error: {
+      code: "cost_lab_billing_error",
+      message: sanitizeErrorMessage(error2)
+    }
+  };
+}
+async function withTimeout(promise, timeoutMs, timeoutCode, onTimeout) {
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error(timeoutCode));
+          queueMicrotask(() => onTimeout?.());
+        }, timeoutMs);
+      })
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function loadOfficialRuntime(runtimePath = DEFAULT_RUNTIME_PATH) {
+  const module = await import(pathToFileURL5(runtimePath).href);
+  if (typeof module.createCostLabBillingRuntime !== "function") {
+    throw new Error("official_billing_runtime_export_missing");
+  }
+  return module;
+}
+async function captureSnapshot(options, dependencies = {}) {
+  const provider = assertSupportedProvider(options.provider);
+  const now = dependencies.now?.() ?? /* @__PURE__ */ new Date();
+  const resolvedData = resolveBillingDataBaseDir(options.dataRoot, {
+    env: dependencies.env ?? process.env,
+    platform: dependencies.platform ?? process.platform,
+    fallbackHomeDir: dependencies.fallbackHomeDir,
+    fileExists: dependencies.fileExists,
+    readFile: dependencies.readFile
+  });
+  const dataDirectoryExists = dependencies.dataDirectoryExists ? await dependencies.dataDirectoryExists(resolvedData.dataBaseDir) : await access4(resolvedData.dataBaseDir).then(
+    () => true,
+    () => false
+  );
+  if (!dataDirectoryExists) throw new Error("billing_data_base_dir_not_found");
+  if (!dependencies.runtimeModule) {
+    await prepareOfficialBillingVendor({
+      platform: dependencies.platform ?? process.platform,
+      arch: dependencies.arch ?? process.arch
+    });
+  }
+  const runtimeModule = dependencies.runtimeModule ?? await loadOfficialRuntime(dependencies.runtimePath);
+  const controller = new AbortController();
+  const runtime = runtimeModule.createCostLabBillingRuntime({
+    dataBaseDir: resolvedData.dataBaseDir,
+    signal: controller.signal
+  });
+  const request = {
+    range: options.range,
+    preferredProviderId: options.provider,
+    accountAccess: {
+      type: "zhipu-account",
+      family: provider.family,
+      planKind: "individual-coding-plan"
+    },
+    timeZone: options.timeZone,
+    ...options.range === "custom" ? {
+      customStartDate: options.start,
+      customEndDate: options.end
+    } : {}
+  };
+  const result = await withTimeout(
+    runtime.getCodingPlanUsageSnapshot(request),
+    options.timeoutMs,
+    "official_billing_read_timeout",
+    () => controller.abort(new Error("official_billing_read_timeout"))
+  ).finally(() => controller.abort(new Error("official_billing_read_complete")));
+  return buildSnapshotEnvelope({
+    result,
+    providerId: options.provider,
+    modelFilter: options.model,
+    query: request,
+    capturedAt: now.toISOString(),
+    dataBaseDirSource: resolvedData.dataBaseDirSource
+  });
+}
+async function readJson(filePath) {
+  try {
+    return JSON.parse(await readFile4(filePath, "utf8"));
+  } catch (error2) {
+    if (error2 instanceof SyntaxError) throw new Error(`json_invalid:${path16.basename(filePath)}`);
+    throw error2;
+  }
+}
+async function run(argv, dependencies = {}) {
+  const options = parseArgs(argv);
+  const stdout = dependencies.stdout ?? ((text2) => process.stdout.write(text2));
+  const now = dependencies.now?.() ?? /* @__PURE__ */ new Date();
+  let result;
+  let prefix;
+  if (options.command === "snapshot") {
+    result = await captureSnapshot(options, { ...dependencies, now: () => now });
+    prefix = "snapshot";
+  } else {
+    const [before, after, usage] = await Promise.all([
+      readJson(options.before),
+      readJson(options.after),
+      readJson(options.usage)
+    ]);
+    result = reconcileBillingSnapshots(before, after, usage, {
+      model: options.model,
+      hour: options.hour
+    });
+    prefix = "reconciliation";
+  }
+  const outputPath = options.out ?? defaultOutputPath(prefix, now);
+  assertProjectRunOutput(outputPath);
+  await atomicWriteJson(outputPath, result);
+  const commandResult = {
+    ok: true,
+    output_path: path16.relative(PROJECT_ROOT3, outputPath).replaceAll(path16.sep, "/"),
+    data: result
+  };
+  if (options.json) {
+    stdout(`${JSON.stringify(commandResult, null, 2)}
+`);
+  } else {
+    stdout(`${prefix} written: ${commandResult.output_path}
+`);
+  }
+  return commandResult;
+}
+async function main() {
+  try {
+    await run(process.argv.slice(2));
+  } catch (error2) {
+    process.stderr.write(`${JSON.stringify(safeError(error2), null, 2)}
+`);
+    process.exitCode = 1;
+  }
+}
+if (process.argv[1] && import.meta.url === pathToFileURL5(path16.resolve(process.argv[1])).href) {
+  await main();
+}
+
+// tools/cost-lab/startplan-web.mjs
+import { createHash as createHash8, randomUUID as randomUUID5 } from "node:crypto";
+import { readFile as readFile5 } from "node:fs/promises";
+import path17 from "node:path";
+var DEFAULT_COOLDOWN_MS = 5e3;
+var DEFAULT_HISTORY_LIMIT = 25;
+var MAX_HISTORY_ITEMS = 100;
+function serviceError(statusCode, code, message, details = {}) {
+  const error2 = new Error(message);
+  error2.statusCode = statusCode;
+  error2.code = code;
+  Object.assign(error2, details);
+  return error2;
+}
+function asDate(now) {
+  const value = now();
+  const date2 = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date2.getTime())) throw new Error("startplan_clock_invalid");
+  return date2;
+}
+function validStoredItem(value) {
+  return value && typeof value === "object" && typeof value.id === "string" && /^[0-9a-f-]{36}$/u.test(value.id) && value.snapshot && typeof value.snapshot === "object" && typeof value.captured_at === "string";
+}
+function snapshotDigest(snapshot) {
+  const canonical = {
+    account: snapshot.account?.key ?? null,
+    server_time: snapshot.server_time ?? null,
+    plans: snapshot.plans ?? [],
+    buckets: snapshot.buckets ?? []
+  };
+  return createHash8("sha256").update(JSON.stringify(canonical)).digest("hex");
+}
+function normalizeQueryDate(value, field) {
+  if (value === null || value === void 0 || value === "") return null;
+  const milliseconds = Date.parse(value);
+  if (!Number.isFinite(milliseconds)) {
+    throw serviceError(400, "STARTPLAN_HISTORY_RANGE_INVALID", `${field} must be an ISO timestamp.`);
+  }
+  return milliseconds;
+}
+function summarize(item, nowMs) {
+  const snapshot = item.snapshot;
+  return {
+    id: item.id,
+    captured_at: item.captured_at,
+    server_time: snapshot.server_time ?? null,
+    plan_id: snapshot.plan_id ?? null,
+    plan_type: snapshot.plan_type ?? null,
+    plan_status: snapshot.plan_status ?? null,
+    entitlement_status: snapshot.official_entitlement?.status ?? null,
+    unit_type: snapshot.unit_type ?? null,
+    total_balance: snapshot.total_balance ?? null,
+    used_balance: snapshot.used_balance ?? null,
+    remaining_balance: snapshot.remaining_balance ?? null,
+    billing_period: snapshot.billing_period ?? null,
+    expiry: snapshot.expiry ?? null,
+    missing_fields: Array.isArray(snapshot.missing_fields) ? snapshot.missing_fields : [],
+    buckets: Array.isArray(snapshot.buckets) ? snapshot.buckets : [],
+    freshness: annotateStartPlanFreshness(snapshot, nowMs),
+    integrity: snapshot.integrity?.status ?? "UNKNOWN",
+    bucket_count: Array.isArray(snapshot.buckets) ? snapshot.buckets.length : null
+  };
+}
+function publicItem(item, nowMs) {
+  return {
+    ...summarize(item, nowMs),
+    snapshot: {
+      ...item.snapshot,
+      freshness: annotateStartPlanFreshness(item.snapshot, nowMs)
+    },
+    integrity: item.integrity ?? item.snapshot.integrity ?? null,
+    sanitized_raw: item.sanitized_raw ?? null,
+    capture_metadata: item.capture_metadata ?? null
+  };
+}
+function createStartPlanBillingService(options = {}) {
+  if (!options.historyPath) throw new Error("startplan_history_path_required");
+  if (typeof options.readBilling !== "function") throw new Error("startplan_reader_required");
+  const historyPath = path17.resolve(options.historyPath);
+  const now = options.now ?? (() => /* @__PURE__ */ new Date());
+  const createId = options.createId ?? randomUUID5;
+  const cooldownMs = options.cooldownMs ?? DEFAULT_COOLDOWN_MS;
+  const maximumItems = options.maximumItems ?? MAX_HISTORY_ITEMS;
+  const state = {
+    loaded: false,
+    items: [],
+    inFlight: null,
+    lastAttemptMs: null,
+    activeAbortController: null,
+    closed: false
+  };
+  async function ensureLoaded() {
+    if (state.loaded) return;
+    try {
+      const parsed = JSON.parse(await readFile5(historyPath, "utf8"));
+      if (parsed?.schema_version !== STARTPLAN_HISTORY_SCHEMA_VERSION || !Array.isArray(parsed.items)) {
+        throw new Error("startplan_history_schema_invalid");
+      }
+      state.items = parsed.items.filter(validStoredItem).slice(-maximumItems);
+    } catch (error2) {
+      if (error2?.code !== "ENOENT") throw error2;
+      state.items = [];
+    }
+    state.loaded = true;
+  }
+  async function persist() {
+    const updated = asDate(now).toISOString();
+    await atomicWriteJson(historyPath, {
+      schema_version: STARTPLAN_HISTORY_SCHEMA_VERSION,
+      updated_at: updated,
+      items: state.items.slice(-maximumItems)
+    });
+  }
+  function latestInternal() {
+    return state.items.at(-1) ?? null;
+  }
+  async function latest2() {
+    await ensureLoaded();
+    const currentMs = asDate(now).getTime();
+    const latestItem = latestInternal();
+    const previousItem = state.items.at(-2) ?? null;
+    return {
+      available: Boolean(latestItem),
+      state: latestItem ? "AVAILABLE" : "NO_SNAPSHOT",
+      official_request_performed: false,
+      snapshot: latestItem ? publicItem(latestItem, currentMs) : null,
+      comparison: latestItem && previousItem ? compareStartPlanSnapshots(previousItem.snapshot, latestItem.snapshot) : null
+    };
+  }
+  async function history(query = {}) {
+    await ensureLoaded();
+    const fromMs = normalizeQueryDate(query.from, "from");
+    const toMs = normalizeQueryDate(query.to, "to");
+    if (fromMs !== null && toMs !== null && fromMs > toMs) {
+      throw serviceError(400, "STARTPLAN_HISTORY_RANGE_INVALID", "from must not be after to.");
+    }
+    const requestedLimit = query.limit === void 0 || query.limit === null || query.limit === "" ? DEFAULT_HISTORY_LIMIT : Number(query.limit);
+    if (!Number.isInteger(requestedLimit) || requestedLimit < 1 || requestedLimit > DEFAULT_HISTORY_LIMIT) {
+      throw serviceError(
+        400,
+        "STARTPLAN_HISTORY_LIMIT_INVALID",
+        `limit must be an integer from 1 to ${DEFAULT_HISTORY_LIMIT}.`
+      );
+    }
+    const currentMs = asDate(now).getTime();
+    const filtered = state.items.filter((item) => {
+      const capturedMs = Date.parse(item.captured_at);
+      return Number.isFinite(capturedMs) && (fromMs === null || capturedMs >= fromMs) && (toMs === null || capturedMs <= toMs);
+    });
+    const selected = filtered.slice(-requestedLimit);
+    return {
+      items: selected.map((item) => publicItem(item, currentMs)),
+      total: filtered.length,
+      limit: requestedLimit,
+      official_request_performed: false
+    };
+  }
+  async function findById(id) {
+    await ensureLoaded();
+    return state.items.find((item) => item.id === id) ?? null;
+  }
+  async function exportSnapshot(id) {
+    const item = await findById(id);
+    if (!item) {
+      throw serviceError(404, "STARTPLAN_SNAPSHOT_NOT_FOUND", "Start Plan snapshot not found.");
+    }
+    return {
+      schema_version: 1,
+      exported_at: asDate(now).toISOString(),
+      redaction: "credential_fields_absolute_paths_and_raw_opaque_ids_omitted",
+      model_requests: 0,
+      snapshot: publicItem(item, asDate(now).getTime())
+    };
+  }
+  async function doRefresh(signal) {
+    const startedAt = asDate(now);
+    const read = await options.readBilling({ signal });
+    if (!read?.snapshot || !read?.sanitized_raw) {
+      throw serviceError(
+        502,
+        "STARTPLAN_READER_RESPONSE_INVALID",
+        "The official Start Plan reader returned an invalid response."
+      );
+    }
+    const id = createId();
+    const digest = snapshotDigest(read.snapshot);
+    const duplicate = state.items.find((item2) => item2.dedupe_digest === digest);
+    if (duplicate) {
+      return {
+        snapshot: publicItem(duplicate, startedAt.getTime()),
+        deduplicated: true,
+        official_request_performed: true,
+        official_billing_get_attempts: 1
+      };
+    }
+    const capturedAt = read.snapshot.captured_at ?? startedAt.toISOString();
+    const item = {
+      id,
+      captured_at: capturedAt,
+      stored_at: startedAt.toISOString(),
+      dedupe_digest: digest,
+      snapshot: read.snapshot,
+      sanitized_raw: read.sanitized_raw,
+      capture_metadata: read.metadata ?? null,
+      integrity: read.snapshot.integrity ?? null
+    };
+    state.items.push(item);
+    if (state.items.length > maximumItems) state.items.splice(0, state.items.length - maximumItems);
+    try {
+      await persist();
+    } catch (error2) {
+      state.items = state.items.filter((candidate) => candidate !== item);
+      throw error2;
+    }
+    return {
+      snapshot: publicItem(item, startedAt.getTime()),
+      deduplicated: false,
+      official_request_performed: true,
+      official_billing_get_attempts: 1
+    };
+  }
+  async function refresh() {
+    await ensureLoaded();
+    if (state.closed) {
+      throw serviceError(503, "STARTPLAN_SERVICE_CLOSING", "The Cost Lab service is closing.");
+    }
+    if (state.inFlight) {
+      const completed = await state.inFlight;
+      return { ...completed, deduplicated: true };
+    }
+    const currentMs = asDate(now).getTime();
+    if (state.lastAttemptMs !== null && currentMs - state.lastAttemptMs < cooldownMs) {
+      const retryAfterMs = cooldownMs - (currentMs - state.lastAttemptMs);
+      throw serviceError(
+        429,
+        "STARTPLAN_REFRESH_COOLDOWN",
+        "Start Plan billing was refreshed recently.",
+        { retryAfterMs }
+      );
+    }
+    state.lastAttemptMs = currentMs;
+    const abortController = new AbortController();
+    state.activeAbortController = abortController;
+    const operation = doRefresh(abortController.signal).finally(() => {
+      if (state.inFlight === operation) state.inFlight = null;
+      if (state.activeAbortController === abortController) state.activeAbortController = null;
+    });
+    state.inFlight = operation;
+    return operation;
+  }
+  async function close({ abort = true } = {}) {
+    state.closed = true;
+    if (abort) state.activeAbortController?.abort(new Error("cost_lab_startplan_shutdown"));
+    if (!state.inFlight) return;
+    await state.inFlight.catch(() => void 0);
+  }
+  return {
+    latest: latest2,
+    history,
+    refresh,
+    exportSnapshot,
+    close,
+    historyPath
+  };
+}
+
+// tools/cost-lab/web-server.mjs
+var SCRIPT_ROOT4 = path18.dirname(fileURLToPath7(import.meta.url));
+var PROJECT_ROOT4 = path18.resolve(SCRIPT_ROOT4, "..", "..");
+var DEFAULT_HISTORY_PATH = path18.join(PROJECT_ROOT4, ".run", "cost-lab-web", "history.json");
+var DEFAULT_STARTPLAN_HISTORY_PATH = path18.join(PROJECT_ROOT4, ".run", "cost-lab-web", "startplan-history.json");
+var LOOPBACK_HOST = "127.0.0.1";
+var CONFIRMATION_PHRASE = "START REAL CODING PLAN VERIFICATION";
+var MAX_JSON_BYTES = 64 * 1024;
+var MAX_HISTORY_ITEMS2 = 50;
+var STATIC_FILES = Object.freeze({
+  "/": Object.freeze({ file: "index.html", type: "text/html; charset=utf-8" }),
+  "/index.html": Object.freeze({ file: "index.html", type: "text/html; charset=utf-8" }),
+  "/app.js": Object.freeze({ file: "app.js", type: "text/javascript; charset=utf-8" }),
+  "/startplan-view.mjs": Object.freeze({
+    file: "startplan-view.mjs",
+    type: "text/javascript; charset=utf-8"
+  }),
+  "/styles.css": Object.freeze({ file: "styles.css", type: "text/css; charset=utf-8" }),
+  "/favicon.svg": Object.freeze({ file: "favicon.svg", type: "image/svg+xml" })
+});
+function createCostLabWebServer(options = {}) {
+  const projectRoot = path18.resolve(options.projectRoot ?? PROJECT_ROOT4);
+  const uiRoot = path18.join(SCRIPT_ROOT4, "web");
+  const apiMountPath = options.apiMountPath ? normalizeApiMountPath(options.apiMountPath) : null;
+  const evidenceRoot = path18.resolve(options.evidenceRoot ?? path18.join(projectRoot, ".run"));
+  const historyPath = path18.resolve(options.historyPath ?? path18.join(projectRoot, ".run", "cost-lab-web", "history.json"));
+  const startPlanHistoryPath = path18.resolve(
+    options.startPlanHistoryPath ?? path18.join(projectRoot, ".run", "cost-lab-web", "startplan-history.json")
+  );
+  assertInside2(evidenceRoot, historyPath);
+  assertInside2(evidenceRoot, startPlanHistoryPath);
+  const dependencies = {
+    captureSnapshot: options.captureSnapshot ?? captureSnapshot,
+    inspectEnvironment: options.inspectEnvironment ?? inspectCostLabEnvironment,
+    verificationRunner: options.verificationRunner ?? loadOptionalVerificationRunner(),
+    protocolSmoke: options.protocolSmoke ?? runOfficialAppServerProtocolSmoke,
+    now: options.now ?? (() => /* @__PURE__ */ new Date()),
+    createId: options.createId ?? randomUUID6,
+    afterRetryDelaysMs: options.afterRetryDelaysMs ?? [
+      0,
+      5e3,
+      15e3,
+      3e4,
+      45e3,
+      6e4
+    ]
+  };
+  const officialHostWorker = path18.resolve(
+    options.officialHostWorker ?? path18.join(
+      projectRoot,
+      "plugins",
+      "codex-zcode-bridge",
+      "worker",
+      "worker-main.mjs"
+    )
+  );
+  const startPlanReadBilling = options.readStartPlanBilling ?? (async ({ signal }) => {
+    const data = resolveBillingDataBaseDir(options.startPlanDataBaseDir ?? null, {
+      env: options.env ?? process.env,
+      platform: options.platform ?? process.platform
+    });
+    return readOfficialStartPlanBilling({
+      projectRoot,
+      dataBaseDir: data.dataBaseDir,
+      officialHostWorker,
+      signal,
+      now: () => dependencies.now().getTime()
+    });
+  });
+  const startPlanBilling = options.startPlanBillingService ?? createStartPlanBillingService({
+    historyPath: startPlanHistoryPath,
+    readBilling: startPlanReadBilling,
+    now: dependencies.now,
+    createId: dependencies.createId,
+    cooldownMs: options.startPlanCooldownMs
+  });
+  const state = {
+    csrfToken: options.csrfToken ?? randomBytes(32).toString("base64url"),
+    server: null,
+    origin: null,
+    port: null,
+    closed: false,
+    activeVerificationId: null,
+    activeAbortController: null,
+    activeVerificationPromise: null,
+    historyLoaded: false,
+    history: []
+  };
+  const server = http.createServer((request, response) => {
+    void handleRequest(request, response).catch((error2) => {
+      if (response.headersSent) {
+        response.destroy();
+        return;
+      }
+      const status = Number.isInteger(error2?.statusCode) ? error2.statusCode : 500;
+      sendJson(response, status, {
+        ok: false,
+        error: {
+          code: typeof error2?.code === "string" ? error2.code : "COST_LAB_INTERNAL_ERROR",
+          message: redactValue(sanitizeErrorMessage(error2))
+        }
+      });
+    });
+  });
+  server.on("clientError", (_error, socket) => {
+    socket.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
+  });
+  state.server = server;
+  async function start() {
+    if (state.server.listening) return publicAddress();
+    await mkdir3(path18.dirname(historyPath), { recursive: true });
+    await ensureHistoryLoaded();
+    await new Promise((resolve, reject) => {
+      const onError = (error2) => {
+        state.server.off("listening", onListening);
+        reject(error2);
+      };
+      const onListening = () => {
+        state.server.off("error", onError);
+        resolve();
+      };
+      state.server.once("error", onError);
+      state.server.once("listening", onListening);
+      state.server.listen(options.port ?? 0, LOOPBACK_HOST);
+    });
+    const address = state.server.address();
+    if (!address || typeof address === "string") throw new Error("cost_lab_server_address_unavailable");
+    state.port = address.port;
+    state.origin = `http://${LOOPBACK_HOST}:${state.port}`;
+    return publicAddress();
+  }
+  async function mountEndpoints({ origin, port }) {
+    if (!apiMountPath) throw new Error("cost_lab_api_mount_path_required");
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("cost_lab_mount_port_invalid");
+    const parsed = new URL(origin);
+    if (parsed.protocol !== "http:" || parsed.hostname !== LOOPBACK_HOST || parsed.port !== String(port)) {
+      throw new Error("cost_lab_mount_origin_invalid");
+    }
+    state.origin = parsed.origin;
+    state.port = port;
+    await ensureHistoryLoaded();
+  }
+  async function close({ abortActive = true, timeoutMs = 15e4 } = {}) {
+    state.closed = true;
+    const listenerClosed = new Promise((resolve) => {
+      if (!state.server.listening) {
+        resolve();
+        return;
+      }
+      const timer = setTimeout(() => state.server.closeAllConnections(), Math.min(timeoutMs, 1e4));
+      state.server.close(() => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+    if (abortActive && state.activeAbortController) {
+      state.activeAbortController.abort(new Error("cost_lab_server_shutdown"));
+    }
+    await Promise.all([
+      listenerClosed,
+      withTimeout2(
+        state.activeVerificationPromise?.catch(() => void 0) ?? Promise.resolve(),
+        timeoutMs,
+        "cost_lab_verification_shutdown_timeout"
+      ),
+      withTimeout2(
+        startPlanBilling.close({ abort: abortActive }),
+        Math.min(timeoutMs, 25e3),
+        "cost_lab_startplan_shutdown_timeout"
+      )
+    ]);
+  }
+  function publicAddress() {
+    return {
+      host: LOOPBACK_HOST,
+      port: state.port,
+      origin: state.origin,
+      url: state.origin ? `${state.origin}/` : null
+    };
+  }
+  async function handleRequest(request, response) {
+    applySecurityHeaders(response);
+    if (!isLoopbackAddress(request.socket.remoteAddress)) {
+      sendJson(response, 403, {
+        ok: false,
+        error: { code: "COST_LAB_LOCAL_ONLY", message: "Cost Lab accepts loopback connections only." }
+      });
+      return;
+    }
+    if (!validHostHeader(request, state.port)) {
+      sendJson(response, 403, {
+        ok: false,
+        error: { code: "COST_LAB_HOST_REJECTED", message: "The request Host header is not the local Cost Lab origin." }
+      });
+      return;
+    }
+    const url = new URL(request.url ?? "/", state.origin ?? `http://${LOOPBACK_HOST}`);
+    if (apiMountPath) {
+      const mountedPrefix = `${apiMountPath}/`;
+      if (!url.pathname.startsWith(mountedPrefix)) {
+        sendJson(response, 404, {
+          ok: false,
+          error: { code: "COST_LAB_NOT_FOUND", message: "Unknown mounted Cost Lab route." }
+        });
+        return;
+      }
+      url.pathname = `/api/${url.pathname.slice(mountedPrefix.length)}`;
+    }
+    if (request.method === "GET" || request.method === "HEAD") {
+      const staticFile = STATIC_FILES[url.pathname];
+      if (staticFile) {
+        await serveStatic(uiRoot, staticFile, request.method, response);
+        return;
+      }
+    }
+    if (!url.pathname.startsWith("/api/")) {
+      sendJson(response, 404, {
+        ok: false,
+        error: { code: "COST_LAB_NOT_FOUND", message: "Unknown Cost Lab route." }
+      });
+      return;
+    }
+    if (request.method === "OPTIONS") {
+      sendJson(response, 405, {
+        ok: false,
+        error: { code: "COST_LAB_PREFLIGHT_REJECTED", message: "Cross-origin requests are not supported." }
+      }, { Allow: "GET, HEAD, POST" });
+      return;
+    }
+    if (request.method === "POST" && !validStateChangingRequest(request, state.origin, state.csrfToken)) {
+      sendJson(response, 403, {
+        ok: false,
+        error: { code: "COST_LAB_CSRF_REJECTED", message: "Origin or CSRF validation failed." }
+      });
+      return;
+    }
+    const body = request.method === "POST" ? await readJsonBody(request) : null;
+    await routeApi(request.method, url, body, response);
+  }
+  async function routeApi(method, url, body, response) {
+    if (method === "GET" && url.pathname === "/api/session") {
+      await ensureHistoryLoaded();
+      sendJson(response, 200, {
+        ok: true,
+        data: {
+          schema_version: 1,
+          csrf_token: state.csrfToken,
+          confirmation_phrase: CONFIRMATION_PHRASE,
+          provider: DEFAULT_PROVIDER_ID,
+          model: "GLM-5.3-Flash",
+          time_zone: DEFAULT_TIME_ZONE,
+          model_requests_on_page_load: 0,
+          active_verification_id: state.activeVerificationId
+        }
+      });
+      return;
+    }
+    if (method === "GET" && url.pathname === "/api/health") {
+      sendJson(response, 200, { ok: true, data: { status: "READY", local_only: true } });
+      return;
+    }
+    if (method === "GET" && url.pathname === "/api/environment") {
+      const environment = await dependencies.inspectEnvironment({ deep: false });
+      sendJson(response, 200, { ok: true, data: redactValue(environment) });
+      return;
+    }
+    if (method === "POST" && url.pathname === "/api/environment/check") {
+      const deep = body?.deep === true;
+      const environment = await dependencies.inspectEnvironment({
+        deep,
+        protocolSmoke: dependencies.protocolSmoke
+      });
+      sendJson(response, 200, { ok: true, data: redactValue(environment) });
+      return;
+    }
+    if (method === "POST" && url.pathname === "/api/billing/snapshot") {
+      const snapshot = await dependencies.captureSnapshot(snapshotOptions(body));
+      sendJson(response, 200, {
+        ok: true,
+        data: redactValue(snapshot)
+      });
+      return;
+    }
+    if (method === "GET" && url.pathname === "/api/billing/startplan/latest") {
+      const result = await startPlanBilling.latest();
+      sendJson(response, 200, { ok: true, data: redactValue(result) });
+      return;
+    }
+    if (method === "GET" && url.pathname === "/api/billing/startplan/history") {
+      const result = await startPlanBilling.history({
+        from: url.searchParams.get("from"),
+        to: url.searchParams.get("to"),
+        limit: url.searchParams.get("limit")
+      });
+      sendJson(response, 200, { ok: true, data: redactValue(result) });
+      return;
+    }
+    if (method === "POST" && url.pathname === "/api/billing/startplan/refresh") {
+      if (body !== null && body !== void 0 && Object.keys(body).length !== 0) {
+        throw httpError(
+          400,
+          "STARTPLAN_REFRESH_INPUT_REJECTED",
+          "Start Plan refresh uses the discovered official account context only."
+        );
+      }
+      try {
+        const result = await startPlanBilling.refresh();
+        sendJson(response, 200, { ok: true, data: redactValue(result) });
+      } catch (error2) {
+        throw mapStartPlanError(error2);
+      }
+      return;
+    }
+    const startPlanExport = /^\/api\/billing\/startplan\/history\/([0-9a-f-]{36})\/export$/u.exec(url.pathname);
+    if (method === "GET" && startPlanExport) {
+      const exported = await startPlanBilling.exportSnapshot(startPlanExport[1]);
+      const bodyText = `${JSON.stringify(redactValue(exported), null, 2)}
+`;
+      response.writeHead(200, {
+        "Content-Type": "application/json; charset=utf-8",
+        "Content-Disposition": `attachment; filename="cost-lab-startplan-${startPlanExport[1]}.json"`,
+        "Cache-Control": "no-store"
+      });
+      response.end(bodyText);
+      return;
+    }
+    if (method === "POST" && url.pathname === "/api/verifications") {
+      const started = await startVerification(body);
+      sendJson(response, 202, { ok: true, data: redactValue(started) });
+      return;
+    }
+    const verification = /^\/api\/verifications\/([0-9a-f-]{36})$/u.exec(url.pathname);
+    if (method === "GET" && verification) {
+      const record3 = findRecord(verification[1]);
+      if (!record3) {
+        sendJson(response, 404, { ok: false, error: { code: "VERIFICATION_NOT_FOUND", message: "Verification not found." } });
+        return;
+      }
+      sendJson(response, 200, { ok: true, data: redactValue(record3) });
+      return;
+    }
+    if (method === "GET" && url.pathname === "/api/history") {
+      await ensureHistoryLoaded();
+      sendJson(response, 200, {
+        ok: true,
+        data: {
+          items: state.history.map(historySummary).reverse(),
+          limit: MAX_HISTORY_ITEMS2
+        }
+      });
+      return;
+    }
+    const exportMatch = /^\/api\/history\/([0-9a-f-]{36})\/export$/u.exec(url.pathname);
+    if (method === "GET" && exportMatch) {
+      const record3 = findRecord(exportMatch[1]);
+      if (!record3) {
+        sendJson(response, 404, { ok: false, error: { code: "VERIFICATION_NOT_FOUND", message: "Verification not found." } });
+        return;
+      }
+      const bodyText = `${JSON.stringify({
+        schema_version: 1,
+        exported_at: dependencies.now().toISOString(),
+        redaction: "credential_fields_and_absolute_user_paths_omitted",
+        verification: redactValue(record3)
+      }, null, 2)}
+`;
+      response.writeHead(200, {
+        "Content-Type": "application/json; charset=utf-8",
+        "Content-Disposition": `attachment; filename="cost-lab-${record3.id}.json"`,
+        "Cache-Control": "no-store"
+      });
+      response.end(bodyText);
+      return;
+    }
+    if (method === "GET" && url.pathname === "/api/start-plan") {
+      sendJson(response, 200, {
+        ok: true,
+        data: {
+          status: "START_PLAN_READ_ONLY_BILLING",
+          live_test: "AVAILABLE_ON_EXPLICIT_REFRESH",
+          billing_api: "/api/billing/startplan/refresh",
+          discount: "NOT_VERIFIED",
+          execution_button: false,
+          reason: "Start Plan exposes read-only official balance access. It does not expose model execution."
+        }
+      });
+      return;
+    }
+    sendJson(response, 404, {
+      ok: false,
+      error: { code: "COST_LAB_API_NOT_FOUND", message: "Unknown Cost Lab API route." }
+    });
+  }
+  async function startVerification(body) {
+    if (typeof dependencies.verificationRunner !== "function") {
+      throw httpError(503, "REAL_VERIFICATION_NOT_CONFIGURED", "The production verification runner is not configured.");
+    }
+    if (!body || body.confirmation !== CONFIRMATION_PHRASE) {
+      throw httpError(400, "REAL_VERIFICATION_CONFIRMATION_REQUIRED", "Explicit verification confirmation is required.");
+    }
+    if (body.provider !== DEFAULT_PROVIDER_ID || body.model !== "GLM-5.3-Flash" || body.reasoning !== "low") {
+      throw httpError(400, "REAL_VERIFICATION_INPUT_REJECTED", "Only the verified Coding Plan provider/model/reasoning tuple is allowed.");
+    }
+    const taskMode = body.task_mode ?? "marker";
+    if (taskMode !== "marker" && taskMode !== "code_edit") {
+      throw httpError(400, "REAL_VERIFICATION_TASK_MODE_REJECTED", "task_mode must be marker or code_edit.");
+    }
+    if (state.closed || state.activeVerificationId) {
+      throw httpError(409, "REAL_VERIFICATION_ALREADY_RUNNING", "A real verification is already running or the service is closing.");
+    }
+    const id = dependencies.createId();
+    state.activeVerificationId = id;
+    const startedAt = dependencies.now().toISOString();
+    const record3 = {
+      schema_version: 1,
+      id,
+      status: "QUEUED",
+      started_at: startedAt,
+      updated_at: startedAt,
+      finished_at: null,
+      provider: DEFAULT_PROVIDER_ID,
+      model: "GLM-5.3-Flash",
+      reasoning: "low",
+      task_mode: taskMode,
+      billing_window: {
+        time_zone: DEFAULT_TIME_ZONE,
+        before: null,
+        after: null
+      },
+      model_requests: 0,
+      request_usage: null,
+      runtime_evidence: null,
+      reconciliation: null,
+      error: null,
+      warnings: [
+        "Auxiliary official requests may consume credits.",
+        "A clean billing observation window is required."
+      ]
+    };
+    const abortController = new AbortController();
+    state.activeAbortController = abortController;
+    const enqueue = (async () => {
+      await ensureHistoryLoaded();
+      assertNotAborted(abortController.signal);
+      state.history.push(record3);
+      try {
+        await persistHistory();
+      } catch (error2) {
+        state.history = state.history.filter((item) => item !== record3);
+        throw error2;
+      }
+    })();
+    const verificationPromise = enqueue.then(() => executeVerification(record3, abortController.signal)).finally(() => {
+      if (state.activeVerificationId === id) state.activeVerificationId = null;
+      if (state.activeAbortController === abortController) state.activeAbortController = null;
+      if (state.activeVerificationPromise === verificationPromise) state.activeVerificationPromise = null;
+    });
+    state.activeVerificationPromise = verificationPromise;
+    void verificationPromise.catch(() => void 0);
+    await enqueue;
+    return {
+      id,
+      status: "QUEUED",
+      poll_url: `/api/verifications/${id}`,
+      confirmation: "REAL_MODEL_REQUEST_AUTHORIZED"
+    };
+  }
+  async function executeVerification(record3, signal) {
+    try {
+      updateRecord(record3, { status: "RUNNING" });
+      await persistHistory();
+      const before = await dependencies.captureSnapshot({
+        provider: DEFAULT_PROVIDER_ID,
+        model: "GLM-5.3-Flash",
+        range: "today",
+        start: null,
+        end: null,
+        timeZone: DEFAULT_TIME_ZONE,
+        dataRoot: null,
+        timeoutMs: 6e4
+      });
+      assertNotAborted(signal);
+      record3.billing_window.before = redactValue(before);
+      updateRecord(record3, { status: "MODEL_REQUESTED", model_requests: null });
+      await persistHistory();
+      const verification = await dependencies.verificationRunner({
+        signal,
+        provider: DEFAULT_PROVIDER_ID,
+        model: "GLM-5.3-Flash",
+        reasoning: "low",
+        taskMode: record3.task_mode,
+        beforeSnapshot: record3.billing_window.before
+      });
+      assertNotAborted(signal);
+      record3.model_requests = Number.isSafeInteger(verification?.model_requests) ? verification.model_requests : null;
+      record3.request_usage = redactValue(verification?.usage ?? null);
+      record3.runtime_evidence = redactValue(verification?.runtime_evidence ?? null);
+      updateRecord(record3, { status: "AWAITING_SETTLEMENT" });
+      await persistHistory();
+      const { after, reconciliation } = await captureAfterWithRetry(signal, {
+        before,
+        usage: verification?.usage ?? null,
+        hour: Number.isInteger(verification?.hour) ? verification.hour : null
+      });
+      record3.billing_window.after = redactValue(after);
+      record3.reconciliation = redactValue(reconciliation);
+      await persistHistoryWithRecordPatch(record3, {
+        status: "SUCCEEDED",
+        finished_at: dependencies.now().toISOString()
+      });
+    } catch (error2) {
+      const interrupted = signal.aborted;
+      const evidence = error2 && typeof error2 === "object" && error2.evidence && typeof error2.evidence === "object" && !Array.isArray(error2.evidence) ? error2.evidence : null;
+      if (evidence) {
+        record3.model_requests = Number.isSafeInteger(evidence.model_requests) ? evidence.model_requests : null;
+        record3.request_usage = redactValue(evidence.usage ?? null);
+        record3.runtime_evidence = redactValue(evidence);
+        if (evidence.usage && !interrupted) {
+          try {
+            const { after, reconciliation } = await captureAfterWithRetry(signal, {
+              before: record3.billing_window.before,
+              usage: evidence.usage,
+              hour: Number.isInteger(evidence.hour) ? evidence.hour : null
+            });
+            record3.billing_window.after = redactValue(after);
+            record3.reconciliation = redactValue(reconciliation);
+          } catch (billingError) {
+            record3.warnings.push(`Post-failure billing capture failed: ${safeErrorCode3(billingError)}`);
+          }
+        }
+      }
+      updateRecord(record3, {
+        status: interrupted ? "INTERRUPTED" : "FAILED",
+        finished_at: dependencies.now().toISOString(),
+        error: {
+          code: interrupted ? "VERIFICATION_INTERRUPTED" : "VERIFICATION_FAILED",
+          message: safeErrorCode3(error2)
+        }
+      });
+    } finally {
+      await persistHistory().catch(() => void 0);
+    }
+  }
+  async function captureAfterWithRetry(signal, { before, usage, hour }) {
+    let lastError;
+    let observation = null;
+    for (const delay of dependencies.afterRetryDelaysMs) {
+      if (delay > 0) await delayWithSignal(delay, signal);
+      assertNotAborted(signal);
+      try {
+        const snapshot = await dependencies.captureSnapshot({
+          provider: DEFAULT_PROVIDER_ID,
+          model: "GLM-5.3-Flash",
+          range: "today",
+          start: null,
+          end: null,
+          timeZone: DEFAULT_TIME_ZONE,
+          dataRoot: null,
+          timeoutMs: 6e4
+        });
+        assertNotAborted(signal);
+        if (!usage) {
+          return { after: snapshot, reconciliation: inconclusiveBilling("USAGE_MISSING") };
+        }
+        let reconciliation;
+        try {
+          reconciliation = reconcileBillingSnapshots(before, snapshot, usage, {
+            model: "GLM-5.3-Flash",
+            hour
+          });
+        } catch (error2) {
+          return {
+            after: snapshot,
+            reconciliation: inconclusiveBilling("BILLING_NOT_COMPARABLE", safeErrorCode3(error2))
+          };
+        }
+        observation = { after: snapshot, reconciliation };
+        if (reconciliation.calculation.actual_credits !== null) return observation;
+      } catch (error2) {
+        assertNotAborted(signal);
+        lastError = error2;
+      }
+    }
+    return observation ?? {
+      after: null,
+      reconciliation: inconclusiveBilling("BILLING_UNAVAILABLE", safeErrorCode3(lastError))
+    };
+  }
+  function snapshotOptions(body) {
+    if (body !== null && body !== void 0) {
+      const keys = Object.keys(body).sort();
+      if (keys.length !== 0) throw httpError(400, "BILLING_INPUT_REJECTED", "Billing snapshots use the discovered account context only.");
+    }
+    return {
+      provider: DEFAULT_PROVIDER_ID,
+      model: "GLM-5.3-Flash",
+      range: "today",
+      start: null,
+      end: null,
+      timeZone: DEFAULT_TIME_ZONE,
+      dataRoot: null,
+      timeoutMs: 6e4
+    };
+  }
+  function findRecord(id) {
+    return state.history.find((record3) => record3.id === id) ?? null;
+  }
+  function updateRecord(record3, patch) {
+    Object.assign(record3, patch, { updated_at: dependencies.now().toISOString() });
+  }
+  async function ensureHistoryLoaded() {
+    if (state.historyLoaded) return;
+    try {
+      const parsed = JSON.parse(await readFile6(historyPath, "utf8"));
+      if (!parsed || parsed.schema_version !== 1 || !Array.isArray(parsed.items)) {
+        throw new Error("cost_lab_history_schema_invalid");
+      }
+      state.history = parsed.items.filter(validHistoryRecord).slice(-MAX_HISTORY_ITEMS2).map(normalizeHistoricReconciliation);
+    } catch (error2) {
+      if (error2?.code !== "ENOENT") throw error2;
+      state.history = [];
+    }
+    state.historyLoaded = true;
+  }
+  async function persistHistory() {
+    if (state.historyLoaded) {
+      trimHistory();
+      await atomicWriteJson(historyPath, {
+        schema_version: 1,
+        updated_at: dependencies.now().toISOString(),
+        items: state.history
+      });
+    }
+  }
+  async function persistHistoryWithRecordPatch(record3, patch) {
+    if (!state.historyLoaded) throw new Error("cost_lab_history_not_loaded");
+    trimHistory();
+    const updatedAt = dependencies.now().toISOString();
+    const items = state.history.map((item) => item === record3 ? { ...item, ...patch, updated_at: updatedAt } : item);
+    await atomicWriteJson(historyPath, {
+      schema_version: 1,
+      updated_at: updatedAt,
+      items
+    });
+    Object.assign(record3, patch, { updated_at: updatedAt });
+  }
+  function trimHistory() {
+    if (state.history.length > MAX_HISTORY_ITEMS2) {
+      state.history.splice(0, state.history.length - MAX_HISTORY_ITEMS2);
+    }
+  }
+  return {
+    start,
+    close,
+    address: publicAddress,
+    server,
+    mountEndpoints,
+    handleRequest,
+    async inspectEnvironment() {
+      return redactValue(await dependencies.inspectEnvironment({ deep: false }));
+    },
+    async runProtocolProbe() {
+      return redactValue(await dependencies.inspectEnvironment({
+        deep: true,
+        protocolSmoke: dependencies.protocolSmoke
+      }));
+    }
+  };
+}
+function normalizeApiMountPath(value) {
+  if (typeof value !== "string" || !/^\/api\/[a-z0-9][a-z0-9-]*$/u.test(value)) {
+    throw new Error("cost_lab_api_mount_path_invalid");
+  }
+  return value;
+}
+async function serveStatic(root, definition, method, response) {
+  const filePath = path18.join(root, definition.file);
+  assertInside2(root, filePath);
+  response.writeHead(200, {
+    "Content-Type": definition.type,
+    "Cache-Control": "no-store"
+  });
+  if (method === "HEAD") {
+    response.end();
+    return;
+  }
+  await new Promise((resolve, reject) => {
+    const stream = createReadStream3(filePath);
+    stream.once("error", reject);
+    stream.once("end", resolve);
+    stream.pipe(response);
+  });
+}
+function applySecurityHeaders(response) {
+  response.setHeader("Content-Security-Policy", [
+    "default-src 'self'",
+    "base-uri 'none'",
+    "connect-src 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+    "img-src 'self' data:",
+    "object-src 'none'",
+    "script-src 'self'",
+    "style-src 'self'"
+  ].join("; "));
+  response.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+  response.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+  response.setHeader("Referrer-Policy", "no-referrer");
+  response.setHeader("X-Content-Type-Options", "nosniff");
+  response.setHeader("X-Frame-Options", "DENY");
+}
+function sendJson(response, status, payload, extraHeaders = {}) {
+  const text2 = `${JSON.stringify(payload)}
+`;
+  response.writeHead(status, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "no-store",
+    ...extraHeaders
+  });
+  response.end(text2);
+}
+async function readJsonBody(request) {
+  if (!/^application\/json(?:;|$)/iu.test(request.headers["content-type"] ?? "")) {
+    throw httpError(415, "COST_LAB_JSON_REQUIRED", "Content-Type must be application/json.");
+  }
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of request) {
+    size += chunk.length;
+    if (size > MAX_JSON_BYTES) throw httpError(413, "COST_LAB_BODY_TOO_LARGE", "JSON body exceeds 64 KiB.");
+    chunks.push(chunk);
+  }
+  if (size === 0) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  } catch {
+    throw httpError(400, "COST_LAB_JSON_INVALID", "JSON body is invalid.");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw httpError(400, "COST_LAB_JSON_OBJECT_REQUIRED", "JSON body must be an object.");
+  }
+  return parsed;
+}
+function validStateChangingRequest(request, origin, csrfToken) {
+  if (request.headers.origin !== origin) return false;
+  if (request.headers["x-cost-lab-csrf"] !== csrfToken) return false;
+  return request.headers["sec-fetch-site"] === void 0 || request.headers["sec-fetch-site"] === "same-origin";
+}
+function validHostHeader(request, port) {
+  if (!port) return true;
+  const host = request.headers.host;
+  return host === `${LOOPBACK_HOST}:${port}` || host === `localhost:${port}`;
+}
+function isLoopbackAddress(address) {
+  if (typeof address !== "string") return false;
+  return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
+}
+function historySummary(record3) {
+  const settlementStatus = record3.reconciliation?.settlement_status ?? null;
+  return redactValue({
+    id: record3.id,
+    status: record3.status,
+    started_at: record3.started_at,
+    finished_at: record3.finished_at,
+    provider: record3.provider,
+    model: record3.model,
+    model_requests: record3.model_requests,
+    billing_reconciliation: record3.reconciliation?.billing_reconciliation ?? null,
+    credit_class: record3.reconciliation?.credit_class ?? null,
+    settlement_status: settlementStatus,
+    actual_credits: record3.reconciliation?.calculation?.actual_credits ?? null,
+    effective_extra_ratio: record3.reconciliation?.billing_reconciliation === "PASS" ? record3.reconciliation.calculation?.effective_extra_ratio ?? null : null
+  });
+}
+function inconclusiveBilling(settlementStatus, limitation = null) {
+  return {
+    billing_reconciliation: "INCONCLUSIVE",
+    credit_class: "INCONCLUSIVE",
+    settlement_status: settlementStatus,
+    ...limitation ? { limitation } : {}
+  };
+}
+function normalizeHistoricReconciliation(record3) {
+  const reconciliation = record3.reconciliation;
+  const { before, after } = record3.billing_window ?? {};
+  if (!reconciliation?.calculation) return record3;
+  if (reconciliation.schema_version === RECONCILIATION_SCHEMA_VERSION && before?.official_snapshot?.modelUsage?.costLabBillingSource && after?.official_snapshot?.modelUsage?.costLabBillingSource) return record3;
+  let updated;
+  try {
+    updated = reconcileBillingSnapshots(before, after, record3.request_usage ?? reconciliation.request_usage, {
+      model: record3.model,
+      hour: Number.parseInt(reconciliation.hour, 10)
+    });
+  } catch (error2) {
+    updated = inconclusiveBilling("BILLING_NOT_COMPARABLE", safeErrorCode3(error2));
+  }
+  return {
+    ...record3,
+    reconciliation: {
+      ...updated,
+      ...updated.captured_at ? { captured_at: reconciliation.captured_at } : {}
+    }
+  };
+}
+function validHistoryRecord(value) {
+  return value && typeof value === "object" && typeof value.id === "string" && /^[0-9a-f-]{36}$/u.test(value.id) && typeof value.status === "string";
+}
+function assertInside2(root, candidate) {
+  const relative = path18.relative(path18.resolve(root), path18.resolve(candidate));
+  if (relative === "" || relative.startsWith(`..${path18.sep}`) || relative === ".." || path18.isAbsolute(relative)) {
+    throw new Error("cost_lab_path_outside_allowed_root");
+  }
+}
+function httpError(status, code, message) {
+  const error2 = new Error(message);
+  error2.statusCode = status;
+  error2.code = code;
+  return error2;
+}
+function safeErrorCode3(error2) {
+  if (error2 && typeof error2 === "object" && "code" in error2 && typeof error2.code === "string") {
+    return error2.code.slice(0, 120);
+  }
+  return sanitizeErrorMessage(error2);
+}
+function mapStartPlanError(error2) {
+  if (Number.isInteger(error2?.statusCode)) return error2;
+  const code = typeof error2?.code === "string" ? error2.code : "STARTPLAN_REFRESH_FAILED";
+  const message = {
+    startplan_billing_timeout: "Official Start Plan billing timed out.",
+    startplan_billing_unauthorized: "Official Start Plan authentication was rejected.",
+    startplan_billing_forbidden: "Official Start Plan billing access was forbidden.",
+    startplan_billing_rate_limited: "Official Start Plan billing rate-limited the request.",
+    startplan_authentication_unavailable: "Official Start Plan authentication is unavailable.",
+    startplan_official_reader_build_missing: "Build the official Bridge sources before refreshing Start Plan billing.",
+    startplan_keyring_lock_present_before_capture: "The official keyring lock was already present; the refresh was not attempted."
+  }[code] ?? "Official Start Plan billing refresh failed.";
+  const mapped = httpError(
+    code === "startplan_official_reader_build_missing" ? 503 : code === "startplan_billing_timeout" ? 504 : code === "startplan_billing_rate_limited" ? 502 : 502,
+    code.toUpperCase(),
+    message
+  );
+  mapped.cause = error2;
+  return mapped;
+}
+function assertNotAborted(signal) {
+  if (signal.aborted) throw signal.reason ?? new Error("verification_aborted");
+}
+function delayWithSignal(milliseconds, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(signal.reason ?? new Error("verification_aborted"));
+      return;
+    }
+    const timer = setTimeout(resolve, milliseconds);
+    signal.addEventListener("abort", () => {
+      clearTimeout(timer);
+      reject(signal.reason ?? new Error("verification_aborted"));
+    }, { once: true });
+  });
+}
+function withTimeout2(promise, milliseconds, code) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(code)), milliseconds);
+    })
+  ]).finally(() => clearTimeout(timer));
+}
+function loadOptionalVerificationRunner() {
+  const fixedModule = path18.join(SCRIPT_ROOT4, "production-verification-runner.mjs");
+  return async (input) => {
+    let module;
+    try {
+      module = await import(pathToFileURL6(fixedModule).href);
+    } catch (error2) {
+      if (error2?.code === "ERR_MODULE_NOT_FOUND") {
+        throw httpError(503, "REAL_VERIFICATION_NOT_CONFIGURED", "The production verification runner is not configured.");
+      }
+      throw error2;
+    }
+    if (typeof module.runProductionCodingPlanVerification !== "function") {
+      throw httpError(503, "REAL_VERIFICATION_NOT_CONFIGURED", "The production verification runner export is missing.");
+    }
+    return module.runProductionCodingPlanVerification(input);
+  };
+}
+async function main2() {
+  const port = Number(process.env.COST_LAB_PORT ?? 0);
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    throw new Error("COST_LAB_PORT must be an integer between 0 and 65535");
+  }
+  const app = createCostLabWebServer({ port });
+  const address = await app.start();
+  process.stdout.write(`Cost Lab Web: ${address.url}
+`);
+  process.stdout.write("Press Ctrl+C to stop. Bound to 127.0.0.1 only.\n");
+  const shutdown = async () => {
+    try {
+      await app.close();
+    } catch (error2) {
+      process.stderr.write(`Cost Lab shutdown: ${safeErrorCode3(error2)}; inspect persisted verification history.
+`);
+      process.exitCode = 1;
+    }
+  };
+  process.once("SIGINT", shutdown);
+  process.once("SIGTERM", shutdown);
+}
+if (process.argv[1] && import.meta.url === pathToFileURL6(path18.resolve(process.argv[1])).href) {
+  await main2();
+}
+
+// src/web/cost-lab-integration.ts
+function createUnifiedCostLabApplication(options) {
+  const layout = consoleLayout(options.moduleUrl);
+  const inspectRuntime = (input = {}) => inspectInstalledRuntime(input);
+  const protocolSmoke = (input = {}) => runOfficialAppServerProtocolSmoke({
+    ...input,
+    projectRoot: layout.costLabProjectRoot,
+    hostModulePath: layout.officialHostModule,
+    runRootParent: path19.join(options.dataRoot, ".run"),
+    inspectRuntime
+  });
+  const readStartPlanBilling = async ({ signal } = {}) => {
+    const data = resolveBillingDataBaseDir(null, {
+      env: process.env,
+      platform: process.platform
+    });
+    return readOfficialStartPlanBilling({
+      projectRoot: layout.costLabProjectRoot,
+      dataBaseDir: data.dataBaseDir,
+      officialHostWorker: layout.officialHostWorker,
+      signal,
+      officialDependencies: {
+        StartPlanBillingEntitlement,
+        loadOfficialHostProductVersion,
+        loadOfficialStartPlanAuthenticationResolverFactory
+      }
+    });
+  };
+  return createCostLabWebServer({
+    projectRoot: layout.costLabProjectRoot,
+    evidenceRoot: path19.join(options.dataRoot, ".run"),
+    historyPath: path19.join(options.dataRoot, ".run", "cost-lab-web", "history.json"),
+    startPlanHistoryPath: path19.join(options.dataRoot, ".run", "cost-lab-web", "startplan-history.json"),
+    apiMountPath: "/api/cost-lab",
+    officialHostWorker: layout.officialHostWorker,
+    inspectEnvironment: (input = {}) => inspectCostLabEnvironment({ ...input, inspectRuntime }),
+    protocolSmoke,
+    readStartPlanBilling
+  });
+}
+function resolveConsoleProjectRoot(moduleUrl) {
+  return consoleLayout(moduleUrl).costLabProjectRoot;
+}
+function consoleLayout(moduleUrl) {
+  const moduleDirectory = path19.dirname(fileURLToPath8(moduleUrl));
+  const bundleRoot = path19.basename(moduleDirectory) === "dist" && existsSync6(path19.join(path19.dirname(moduleDirectory), "worker", "worker-main.mjs")) ? path19.dirname(moduleDirectory) : null;
+  if (bundleRoot) {
+    return {
+      costLabProjectRoot: bundleRoot,
+      officialHostWorker: path19.join(bundleRoot, "worker", "worker-main.mjs"),
+      officialHostModule: path19.join(
+        bundleRoot,
+        "worker",
+        "vendor",
+        "official-host",
+        "win32-x64-node24.16.0-zcode3.18.2-fec97590",
+        "official-host-runtime.mjs"
+      )
+    };
+  }
+  const repositoryRoot = findRepositoryRoot(moduleDirectory);
+  const pluginRoot = path19.join(repositoryRoot, "plugins", "codex-zcode-bridge");
+  return {
+    costLabProjectRoot: repositoryRoot,
+    officialHostWorker: path19.join(pluginRoot, "worker", "worker-main.mjs"),
+    officialHostModule: path19.join(
+      pluginRoot,
+      "worker",
+      "vendor",
+      "official-host",
+      "win32-x64-node24.16.0-zcode3.18.2-fec97590",
+      "official-host-runtime.mjs"
+    )
+  };
+}
+function findRepositoryRoot(start) {
+  let current = path19.resolve(start);
+  for (; ; ) {
+    if (existsSync6(path19.join(current, "plugins", "codex-zcode-bridge", "worker", "worker-main.mjs"))) {
+      return current;
+    }
+    const parent = path19.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  throw new Error("cost_lab_repository_root_unavailable");
+}
+async function inspectInstalledRuntime(input = {}) {
+  const runtime = await new OfficialAppServerRuntimeResolver({
+    env: input.env,
+    platform: input.platform,
+    architecture: input.arch
+  }).inspect();
+  const root = runtime.install_dir;
+  const assets = {};
+  for (const name of ["bundle", "runtime_host", "builtin_provider_config"]) {
+    const file = runtime[`${name}_path`];
+    if (root && typeof file === "string") {
+      assets[name] = {
+        relative_path: path19.relative(root, file).split(path19.sep).join("/"),
+        bytes: runtime[`${name}_bytes`],
+        sha256: runtime[`${name}_sha256`]
+      };
+    }
+  }
+  return {
+    install_root: root,
+    install_source: runtime.install_source,
+    install_root_fingerprint: root ? createHash9("sha256").update(root).digest("hex") : null,
+    runtime_status: runtime.status,
+    installation_safety: runtime.installation_safety ?? "OFFICIAL_INSTALLATION_INCOMPLETE",
+    installation_fingerprint: runtime.installation_fingerprint ?? null,
+    experimental_authorization: runtime.experimental_authorization ?? null,
+    discount_status: runtime.discount_capability,
+    desktop_version: runtime.desktop_version,
+    desktop_app_version: runtime.desktop_app_version ?? null,
+    desktop_build_commit_id: runtime.desktop_build_commit_id ?? null,
+    node_executable: runtime.node_executable,
+    reason: runtime.reason,
+    manifest: runtime.manifest && { ...runtime.manifest, version: runtime.manifest.desktop_version },
+    desktop_executable: runtime.desktop_executable_path ? {
+      bytes: runtime.desktop_executable_bytes,
+      sha256: runtime.desktop_executable_sha256,
+      signer_subject: runtime.desktop_executable_signer_subject,
+      signer_thumbprint: runtime.desktop_executable_signer_thumbprint
+    } : null,
+    desktop_archive: runtime.desktop_archive_path ? {
+      bytes: runtime.desktop_archive_bytes,
+      sha256: runtime.desktop_archive_sha256
+    } : null,
+    runtime_host_signer: {
+      subject: runtime.runtime_host_signer_subject ?? null,
+      thumbprint: runtime.runtime_host_signer_thumbprint ?? null
+    },
+    assets
+  };
+}
+
+// src/web/runtime-compatibility.ts
+import { createHash as createHash10, randomUUID as randomUUID7 } from "node:crypto";
+import { existsSync as existsSync7, lstatSync as lstatSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync5, renameSync, writeFileSync } from "node:fs";
+import path20 from "node:path";
+var STORE_SCHEMA_VERSION = 1;
+var EVIDENCE_SCHEMA_VERSION = 1;
+var MAX_EVIDENCE_RECORDS = 200;
+var RuntimeCompatibilityError = class extends Error {
+  constructor(code, message, status = 409) {
+    super(message);
+    this.code = code;
+    this.name = "RuntimeCompatibilityError";
+    this.status = status;
+  }
+  code;
+  status;
+};
+var RuntimeCompatibilityService = class {
+  #historyPath;
+  #inspectEnvironment;
+  #runProtocolProbe;
+  #now;
+  #createId;
+  constructor(options) {
+    this.#historyPath = path20.resolve(
+      options.historyPath ?? path20.join(options.projectRoot, ".run", "bridge-console", "runtime-compatibility.json")
+    );
+    this.#inspectEnvironment = options.inspectEnvironment;
+    this.#runProtocolProbe = options.runProtocolProbe;
+    this.#now = options.now ?? (() => /* @__PURE__ */ new Date());
+    this.#createId = options.createId ?? randomUUID7;
+  }
+  async inspect() {
+    const environment = await this.#readEnvironment(this.#inspectEnvironment);
+    const installation = installationIdentity(environment);
+    const fingerprint = stringValue(recordValue(environment.zcode), "installation_fingerprint");
+    if (!fingerprint) {
+      throw new RuntimeCompatibilityError(
+        "RUNTIME_FINGERPRINT_UNAVAILABLE",
+        "The exact installed Runtime fingerprint is unavailable.",
+        503
+      );
+    }
+    const store = this.#readStore();
+    const previous = previousDistinctFingerprint(store.records, fingerprint);
+    const staticResult = installation.installation_safety === "OFFICIAL_INSTALLATION_SAFE" ? "PASS" : installation.installation_safety === "OFFICIAL_INSTALLATION_UNSAFE" ? "FAIL" : "INCOMPLETE";
+    const staticEvidence = this.#recordStatic({
+      fingerprint,
+      installation,
+      result: staticResult,
+      environment
+    });
+    const updated = this.#appendDeduplicated(store, staticEvidence);
+    return buildSnapshot({
+      capturedAt: this.#now().toISOString(),
+      fingerprint,
+      installation,
+      records: updated.records,
+      environment,
+      previous
+    });
+  }
+  async runAuthorizedProtocolProbe() {
+    const before = await this.#readEnvironment(this.#inspectEnvironment);
+    const installation = installationIdentity(before);
+    const fingerprint = stringValue(recordValue(before.zcode), "installation_fingerprint");
+    if (!fingerprint) {
+      throw new RuntimeCompatibilityError(
+        "RUNTIME_FINGERPRINT_UNAVAILABLE",
+        "The exact installed Runtime fingerprint is unavailable.",
+        503
+      );
+    }
+    if (installation.installation_safety !== "OFFICIAL_INSTALLATION_SAFE") {
+      throw new RuntimeCompatibilityError(
+        "RUNTIME_UNSAFE",
+        "Protocol probing is unavailable until the installation passes the safety gate.",
+        403
+      );
+    }
+    const runtimeStatus = installation.runtime_status;
+    const authorizationState = installation.experimental_authorization.state;
+    if (runtimeStatus !== "OFFICIAL_RUNTIME_VERIFIED" && !(runtimeStatus === "OFFICIAL_RUNTIME_EXPERIMENTAL" && authorizationState === "authorized")) {
+      throw new RuntimeCompatibilityError(
+        "RUNTIME_PROBE_AUTHORIZATION_REQUIRED",
+        "A verified manifest match or exact-fingerprint experimental authorization is required.",
+        403
+      );
+    }
+    const probed = await this.#readEnvironment(this.#runProtocolProbe, "RUNTIME_PROBE_UNAVAILABLE");
+    const protocol = recordValue(probed.appserver_protocol_smoke);
+    const status = stringValue(protocol, "status");
+    if (status !== "PASS" && status !== "FAIL") {
+      throw new RuntimeCompatibilityError(
+        "RUNTIME_PROBE_UNAVAILABLE",
+        "The zero-model protocol probe did not return a terminal verdict.",
+        502
+      );
+    }
+    const evidence = this.#recordProtocol({
+      fingerprint,
+      installation,
+      result: status,
+      protocol
+    });
+    const storeBefore = this.#readStore();
+    const previous = previousDistinctFingerprint(storeBefore.records, fingerprint);
+    const store = this.#appendDeduplicated(storeBefore, evidence);
+    return buildSnapshot({
+      capturedAt: this.#now().toISOString(),
+      fingerprint,
+      installation,
+      records: store.records,
+      environment: probed,
+      previous
+    });
+  }
+  async candidateReport() {
+    const snapshot = await this.inspect();
+    if (!snapshot.fingerprint || !snapshot.installation) {
+      throw new RuntimeCompatibilityError("RUNTIME_FINGERPRINT_UNAVAILABLE", "No Runtime identity is available.");
+    }
+    return {
+      schema_version: 1,
+      kind: "runtime_compatibility_candidate",
+      generated_at: this.#now().toISOString(),
+      fingerprint: snapshot.fingerprint,
+      installation: snapshot.installation,
+      detected_changes: snapshot.changed_assets,
+      capabilities: snapshot.capabilities,
+      evidence: snapshot.evidence,
+      manifest_candidate: {
+        desktop_version: snapshot.installation.desktop_version,
+        desktop_app_version: snapshot.installation.desktop_app_version,
+        desktop_build_commit_id: snapshot.installation.desktop_build_commit_id,
+        bundle_sha256: snapshot.installation.assets.bundle?.sha256 ?? null,
+        builtin_provider_config_sha256: snapshot.installation.assets.builtin_provider_config?.sha256 ?? null,
+        runtime_host_sha256: snapshot.installation.assets.runtime_host?.sha256 ?? null,
+        verification_stage: "CANDIDATE"
+      },
+      approval: {
+        production_manifest_modified: false,
+        experimental_promoted: false,
+        provider_authorization_granted: false,
+        owner_review_required: true
+      },
+      limitations: [
+        "This report is generated from the current fingerprint only.",
+        "Static or protocol evidence does not verify provider execution or billing.",
+        "No production compatibility manifest was modified."
+      ]
+    };
+  }
+  #recordStatic(input) {
+    return sealEvidence({
+      schema_version: EVIDENCE_SCHEMA_VERSION,
+      evidence_id: this.#createId(),
+      fingerprint: input.fingerprint,
+      captured_at: this.#now().toISOString(),
+      installation: input.installation,
+      probe_type: "static",
+      probe_scope: "installation/safety",
+      result: input.result,
+      classification: String(input.installation.installation_safety),
+      provider: null,
+      model: null,
+      evidence_source: "OfficialAppServerRuntimeResolver",
+      limitations: [
+        "Static inspection does not create a model session.",
+        "Static PASS does not prove Provider execution, billing, or discount compatibility."
+      ]
+    });
+  }
+  #recordProtocol(input) {
+    return sealEvidence({
+      schema_version: EVIDENCE_SCHEMA_VERSION,
+      evidence_id: this.#createId(),
+      fingerprint: input.fingerprint,
+      captured_at: this.#now().toISOString(),
+      installation: input.installation,
+      probe_type: "protocol",
+      probe_scope: "runtime/capabilities",
+      result: input.result,
+      classification: input.result === "PASS" ? "PROTOCOL_PASS" : "PROTOCOL_FAIL",
+      provider: null,
+      model: null,
+      evidence_source: "Official AppServer protocol smoke",
+      limitations: [
+        "The probe creates no session and sends no model request.",
+        "Protocol PASS does not elevate Coding Plan, Start Plan, or other Provider capabilities.",
+        input.result === "PASS" ? "The probe verified bounded process disposal after the capability response." : "Cleanup and Provider capabilities remain unverified after a failed probe."
+      ]
+    });
+  }
+  #appendDeduplicated(store, record3) {
+    const latest2 = store.records.at(-1);
+    const duplicate = store.records.find((item) => item.fingerprint === record3.fingerprint && (item.evidence_digest === record3.evidence_digest || evidenceSemanticDigest(item) === record3.evidence_digest));
+    if (latest2?.fingerprint === record3.fingerprint && duplicate) return store;
+    const retained = duplicate ? store.records.filter((item) => item.evidence_id !== duplicate.evidence_id) : store.records;
+    const next = {
+      schema_version: STORE_SCHEMA_VERSION,
+      updated_at: this.#now().toISOString(),
+      records: [...retained, record3].slice(-MAX_EVIDENCE_RECORDS)
+    };
+    this.#writeStore(next);
+    return next;
+  }
+  #readStore() {
+    if (!existsSync7(this.#historyPath)) {
+      return { schema_version: STORE_SCHEMA_VERSION, updated_at: this.#now().toISOString(), records: [] };
+    }
+    try {
+      const metadata = lstatSync2(this.#historyPath);
+      if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size > 4 * 1024 * 1024) {
+        throw new Error("unsafe_store");
+      }
+      const parsed = JSON.parse(readFileSync5(this.#historyPath, "utf8"));
+      if (parsed.schema_version !== STORE_SCHEMA_VERSION || !Array.isArray(parsed.records)) {
+        throw new Error("schema_invalid");
+      }
+      const records = parsed.records.filter(validEvidenceRecord).slice(-MAX_EVIDENCE_RECORDS);
+      if (records.length !== parsed.records.length) throw new Error("record_invalid");
+      return {
+        schema_version: STORE_SCHEMA_VERSION,
+        updated_at: typeof parsed.updated_at === "string" ? parsed.updated_at : this.#now().toISOString(),
+        records
+      };
+    } catch (error2) {
+      throw new RuntimeCompatibilityError(
+        "RUNTIME_EVIDENCE_STORE_INVALID",
+        `Runtime evidence store is invalid: ${error2 instanceof Error ? error2.message : String(error2)}`,
+        500
+      );
+    }
+  }
+  #writeStore(store) {
+    const parent = path20.dirname(this.#historyPath);
+    if (!existsSync7(parent)) mkdirSync2(parent, { recursive: true });
+    const temporary = `${this.#historyPath}.new-${this.#createId()}`;
+    writeFileSync(temporary, `${JSON.stringify(store, null, 2)}
+`, { encoding: "utf8", flag: "wx" });
+    renameSync(temporary, this.#historyPath);
+  }
+  async #readEnvironment(inspect, code = "RUNTIME_INSPECTION_FAILED") {
+    try {
+      const environment = await inspect();
+      if (!recordValue(environment.zcode)) throw new Error("zcode_identity_missing");
+      return environment;
+    } catch (error2) {
+      if (error2 instanceof RuntimeCompatibilityError) throw error2;
+      throw new RuntimeCompatibilityError(
+        code,
+        `Runtime ${code === "RUNTIME_PROBE_UNAVAILABLE" ? "probe" : "inspection"} failed: ` + (error2 instanceof Error ? error2.message : String(error2)),
+        code === "RUNTIME_PROBE_UNAVAILABLE" ? 502 : 503
+      );
+    }
+  }
+};
+function buildSnapshot(input) {
+  const currentEvidence = input.records.filter((record3) => record3.fingerprint === input.fingerprint);
+  const previousFingerprint = input.previous?.fingerprint ?? null;
+  const changedAssets = currentAssetChanges(input.installation, input.previous?.installation ?? null);
+  const capabilities = capabilityMatrix(input.installation, currentEvidence);
+  const zcode = recordValue(input.environment.zcode);
+  const warnings = Array.isArray(input.environment.warnings) ? input.environment.warnings.filter((item) => typeof item === "string") : [];
+  if (previousFingerprint !== null && previousFingerprint !== input.fingerprint) {
+    warnings.unshift("RUNTIME_CHANGED");
+  }
+  return {
+    schema_version: 1,
+    captured_at: input.capturedAt,
+    fingerprint: input.fingerprint,
+    installation: input.installation,
+    runtime_changed: previousFingerprint !== null && previousFingerprint !== input.fingerprint,
+    previous_fingerprint: previousFingerprint,
+    changed_assets: changedAssets,
+    warnings,
+    capabilities,
+    evidence: currentEvidence.slice().reverse(),
+    evidence_count: currentEvidence.length,
+    manifest_modified: false,
+    model_requests: 0,
+    ...stringValue(zcode, "reason") ? { reason: stringValue(zcode, "reason") } : {}
+  };
+}
+function installationIdentity(environment) {
+  const zcode = recordValue(environment.zcode);
+  const host = recordValue(environment.host);
+  const manifest = recordValue(zcode.manifest);
+  const authorization = recordValue(zcode.experimental_authorization);
+  const assets = recordValue(zcode.assets);
+  const desktopExecutable = recordValue(zcode.desktop_executable);
+  const desktopArchive = recordValue(zcode.desktop_archive);
+  const normalizedAssets = {};
+  for (const name of ["bundle", "runtime_host", "builtin_provider_config"]) {
+    const value = recordValue(assets[name]);
+    normalizedAssets[name] = {
+      bytes: safeInteger(value.bytes),
+      sha256: shaString(value.sha256)
+    };
+  }
+  normalizedAssets.desktop_executable = {
+    bytes: safeInteger(desktopExecutable.bytes),
+    sha256: shaString(desktopExecutable.sha256)
+  };
+  normalizedAssets.desktop_archive = {
+    bytes: safeInteger(desktopArchive.bytes),
+    sha256: shaString(desktopArchive.sha256)
+  };
+  const runtimeStatus = stringValue(zcode, "runtime_status") ?? "OFFICIAL_RUNTIME_UNVERIFIED";
+  return {
+    desktop_version: stringValue(zcode, "version") ?? stringValue(zcode, "desktop_version"),
+    desktop_app_version: stringValue(zcode, "desktop_app_version"),
+    desktop_build_commit_id: stringValue(zcode, "desktop_build_commit_id"),
+    node_version: stringValue(host, "node_version"),
+    installation_safety: stringValue(zcode, "installation_safety") ?? "OFFICIAL_INSTALLATION_INCOMPLETE",
+    runtime_status: runtimeStatus,
+    manifest_status: runtimeStatus === "OFFICIAL_RUNTIME_VERIFIED" ? "VERIFIED" : runtimeStatus === "OFFICIAL_RUNTIME_EXPERIMENTAL" ? "EXPERIMENTAL" : "UNVERIFIED",
+    experimental_authorization: {
+      state: stringValue(authorization, "state") ?? "not_configured",
+      scopes: Array.isArray(authorization.scopes) ? authorization.scopes.filter((item) => typeof item === "string") : []
+    },
+    assets: normalizedAssets
+  };
+}
+function capabilityMatrix(installation, evidence) {
+  const staticEvidence = latest(evidence, (item) => item.probe_type === "static");
+  const protocolEvidence = latest(evidence, (item) => item.probe_type === "protocol");
+  const codingPlanEvidence = latest(evidence, (item) => item.probe_type === "real_provider" && item.provider === "account:bigmodel-individual-coding-plan");
+  const startPlanEvidence = latest(evidence, (item) => item.probe_type === "real_provider" && item.provider === "account:bigmodel-start-plan");
+  const otherProviderEvidence = latest(evidence, (item) => item.probe_type === "real_provider" && item.provider !== null && !["account:bigmodel-individual-coding-plan", "account:bigmodel-start-plan"].includes(item.provider));
+  const billingEvidence = latest(evidence, (item) => item.probe_type === "billing" && item.provider === "account:bigmodel-individual-coding-plan");
+  return {
+    installation_safety: capability(
+      installation.installation_safety === "OFFICIAL_INSTALLATION_SAFE" ? "SAFE" : installation.installation_safety === "OFFICIAL_INSTALLATION_UNSAFE" ? "UNSAFE" : "INCOMPLETE",
+      staticEvidence,
+      "Official installation safety inspection"
+    ),
+    manifest_compatibility: capability(
+      installation.manifest_status,
+      staticEvidence,
+      "Exact Runtime compatibility manifest"
+    ),
+    protocol: evidenceCapability(protocolEvidence, "No authorized zero-model protocol evidence exists."),
+    coding_plan_execution: evidenceCapability(
+      codingPlanEvidence,
+      "No Coding Plan provider execution evidence exists."
+    ),
+    coding_plan_billing: billingCapability(billingEvidence),
+    start_plan_execution: evidenceCapability(
+      startPlanEvidence,
+      "No Start Plan execution evidence exists."
+    ),
+    other_providers: evidenceCapability(
+      otherProviderEvidence,
+      "No other Provider execution evidence exists."
+    ),
+    cleanup: protocolEvidence?.result === "PASS" ? capability("VERIFIED", protocolEvidence, "Authorized protocol probe disposed its bounded runtime processes") : evidenceCapability(null, "No runtime cleanup evidence exists.")
+  };
+}
+function evidenceCapability(record3, limitation) {
+  if (!record3) return capability("NOT_RUN", null, "No matching evidence", limitation);
+  return capability(
+    record3.result === "PASS" ? "PASS" : record3.result === "INCOMPLETE" ? "INCONCLUSIVE" : "FAIL",
+    record3,
+    record3.evidence_source,
+    record3.limitations[0] ?? null
+  );
+}
+function billingCapability(record3) {
+  if (!record3) {
+    return capability(
+      "NOT_RUN",
+      null,
+      "No matching evidence",
+      "No attributable Coding Plan billing evidence exists."
+    );
+  }
+  const verified = record3.result === "PASS" && /^(?:VERIFIED|BILLING_VERIFIED)$/iu.test(record3.classification);
+  return capability(
+    verified ? "VERIFIED" : record3.result === "FAIL" ? "FAIL" : "INCONCLUSIVE",
+    record3,
+    record3.evidence_source,
+    record3.limitations[0] ?? null
+  );
+}
+function capability(status, evidence, source, limitation = null) {
+  return {
+    status,
+    evidence_id: evidence?.evidence_id ?? null,
+    source,
+    limitation
+  };
+}
+function latest(records, predicate) {
+  return [...records].reverse().find(predicate) ?? null;
+}
+function previousDistinctFingerprint(records, fingerprint) {
+  const last = records.at(-1);
+  if (!last || last.fingerprint === fingerprint) return null;
+  return [...records].reverse().find((record3) => record3.fingerprint === last.fingerprint) ?? last;
+}
+function currentAssetChanges(current, previous) {
+  if (!previous) return [];
+  const changes = [];
+  for (const key of /* @__PURE__ */ new Set([...Object.keys(current.assets), ...Object.keys(previous.assets)])) {
+    if (current.assets[key]?.sha256 !== previous.assets[key]?.sha256 || current.assets[key]?.bytes !== previous.assets[key]?.bytes) {
+      changes.push(key);
+    }
+  }
+  if (current.desktop_version !== previous.desktop_version) changes.push("desktop_version");
+  if (current.desktop_app_version !== previous.desktop_app_version) changes.push("desktop_app_version");
+  if (current.desktop_build_commit_id !== previous.desktop_build_commit_id) changes.push("desktop_build_commit_id");
+  if (current.node_version !== previous.node_version) changes.push("node_version");
+  return changes.sort();
+}
+function sealEvidence(value) {
+  const digest = evidenceSemanticDigest(value);
+  return { ...value, evidence_digest: digest };
+}
+function evidenceSemanticDigest(value) {
+  return createHash10("sha256").update(canonicalJson({
+    schema_version: value.schema_version,
+    fingerprint: value.fingerprint,
+    installation: value.installation,
+    probe_type: value.probe_type,
+    probe_scope: value.probe_scope,
+    result: value.result,
+    classification: value.classification,
+    provider: value.provider,
+    model: value.model,
+    evidence_source: value.evidence_source,
+    limitations: value.limitations
+  }), "utf8").digest("hex");
+}
+function validEvidenceRecord(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record3 = value;
+  if (record3.schema_version !== EVIDENCE_SCHEMA_VERSION || typeof record3.evidence_id !== "string" || record3.evidence_id.length < 1 || typeof record3.fingerprint !== "string" || !/^[0-9a-f]{64}$/u.test(record3.fingerprint) || typeof record3.captured_at !== "string" || !["static", "protocol", "real_provider", "billing"].includes(record3.probe_type ?? "") || typeof record3.probe_scope !== "string" || !["PASS", "FAIL", "INCOMPLETE"].includes(record3.result ?? "") || typeof record3.classification !== "string" || typeof record3.evidence_source !== "string" || typeof record3.evidence_digest !== "string" || !/^[0-9a-f]{64}$/u.test(record3.evidence_digest) || !Array.isArray(record3.limitations)) {
+    return false;
+  }
+  const { evidence_digest: digest, ...body } = record3;
+  const legacyDigest = createHash10("sha256").update(canonicalJson(body), "utf8").digest("hex");
+  return evidenceSemanticDigest(body) === digest || legacyDigest === digest;
+}
+function canonicalJson(value) {
+  return JSON.stringify(sortObject(value)) ?? "null";
+}
+function sortObject(value) {
+  if (Array.isArray(value)) return value.map(sortObject);
+  if (value === null || typeof value !== "object" || value instanceof Date) return value;
+  if (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) return value;
+  return Object.fromEntries(Object.entries(value).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0).map(([key, item]) => [key, sortObject(item)]));
+}
+function recordValue(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+function stringValue(record3, key) {
+  const value = record3[key];
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+function safeInteger(value) {
+  return Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : null;
+}
+function shaString(value) {
+  return typeof value === "string" && /^[0-9a-f]{64}$/iu.test(value) ? value.toLowerCase() : null;
+}
+
+// src/web/server.ts
+import { randomBytes as randomBytes2 } from "node:crypto";
+import http2 from "node:http";
 
 // src/result-summary.ts
 var INLINE_RESULT_BYTES = 2048;
@@ -6948,8 +13107,277 @@ function summarizeTaskResult(result) {
   };
 }
 
+// src/web/console-ui.ts
+var OPERATIONS_CONSOLE_HTML = String.raw`<!doctype html>
+<html lang="en" data-theme="system">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Bridge Operations Console</title>
+<style>
+:root{--ink:#182421;--ink-soft:#33433d;--paper:#f0ecdf;--panel:#fffdf6;--panel-2:#e8e2d4;--line:#c8c0af;--accent:#d9572b;--accent-2:#0c7064;--ok:#1f7650;--warn:#a66212;--bad:#a8322c;--muted:#68736d;--code:#17201d;--code-ink:#f1efdf;--shadow:7px 7px 0 rgba(24,36,33,.12);--display:"Bahnschrift SemiCondensed","Aptos Display","Trebuchet MS",sans-serif;--body:"Aptos","Segoe UI Variable","Trebuchet MS",sans-serif;--serif:"Sitka Display",Georgia,serif;--mono:"Cascadia Code","Consolas",monospace}
+:root[data-theme="dark"]{--ink:#e9eddf;--ink-soft:#c5cdc2;--paper:#101714;--panel:#18221e;--panel-2:#202d28;--line:#3a4a43;--accent:#ff7a4c;--accent-2:#56c1ae;--ok:#65c795;--warn:#e1a35b;--bad:#ff8178;--muted:#9caaa2;--code:#090e0c;--code-ink:#e9eddf;--shadow:7px 7px 0 rgba(0,0,0,.3)}
+@media(prefers-color-scheme:dark){:root[data-theme="system"]{--ink:#e9eddf;--ink-soft:#c5cdc2;--paper:#101714;--panel:#18221e;--panel-2:#202d28;--line:#3a4a43;--accent:#ff7a4c;--accent-2:#56c1ae;--ok:#65c795;--warn:#e1a35b;--bad:#ff8178;--muted:#9caaa2;--code:#090e0c;--code-ink:#e9eddf;--shadow:7px 7px 0 rgba(0,0,0,.3)}}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:radial-gradient(circle at 93% 2%,color-mix(in srgb,var(--accent) 21%,transparent) 0,transparent 26rem),linear-gradient(135deg,var(--paper),color-mix(in srgb,var(--paper) 76%,var(--panel-2)));color:var(--ink);font-family:var(--body);min-height:100vh}body:before{content:"";position:fixed;inset:0;pointer-events:none;z-index:-1;opacity:.34;background-image:linear-gradient(color-mix(in srgb,var(--ink) 7%,transparent) 1px,transparent 1px),linear-gradient(90deg,color-mix(in srgb,var(--ink) 7%,transparent) 1px,transparent 1px);background-size:36px 36px}.mono,code,pre{font-family:var(--mono)}button,input,select,textarea{font:inherit;color:inherit}button{cursor:pointer}button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.shell{max-width:1500px;margin:0 auto;padding:22px clamp(16px,3vw,42px) 46px}.masthead{display:flex;align-items:center;justify-content:space-between;gap:22px;border-bottom:2px solid var(--ink);padding:0 0 16px}.brand{display:flex;align-items:center;gap:12px;color:inherit;text-decoration:none}.brand-mark{display:grid;place-items:center;width:46px;height:46px;border-radius:50%;background:var(--ink);color:var(--paper);font:800 17px var(--mono);letter-spacing:-.08em}.brand strong{display:block;font:700 18px var(--display);letter-spacing:.02em}.brand small{display:block;color:var(--muted);font:10px var(--mono);letter-spacing:.1em;text-transform:uppercase}.prefs{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.prefs label{display:flex;align-items:center;gap:6px;color:var(--muted);font:10px var(--mono);text-transform:uppercase;letter-spacing:.08em}.prefs select{border:1px solid var(--line);background:var(--panel);padding:7px 9px;min-width:104px}
+.tabs{display:flex;gap:3px;overflow:auto;padding:14px 0 0;border-bottom:1px solid var(--line)}.tab{border:0;border-bottom:3px solid transparent;background:transparent;color:var(--muted);padding:11px 14px;font:700 12px var(--mono);letter-spacing:.08em;text-transform:uppercase;white-space:nowrap}.tab:hover{color:var(--ink)}.tab.active{color:var(--ink);border-color:var(--accent)}
+.page{display:none;padding-top:24px}.page.active{display:block;animation:rise .36s ease both}.page-head{display:flex;justify-content:space-between;align-items:end;gap:24px;margin-bottom:20px}.eyebrow{margin:0 0 7px;color:var(--accent);font:700 10px var(--mono);letter-spacing:.13em;text-transform:uppercase}.page h1{margin:0;font:500 clamp(34px,6vw,72px)/.9 var(--serif);letter-spacing:-.045em}.page h1 em{font-style:normal;color:var(--accent-2)}.lede{max-width:780px;margin:10px 0 0;color:var(--muted);line-height:1.55;font-size:14px}.connection{min-width:180px;text-align:right;font:11px var(--mono);color:var(--muted)}.connection strong{display:block;color:var(--ink);font-size:15px}.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--warn);margin-right:7px}.dot.online{background:var(--ok)}.dot.offline{background:var(--bad)}
+.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.card{background:color-mix(in srgb,var(--panel) 92%,transparent);border:1px solid var(--line);padding:16px;min-width:0}.card.accent{border-color:var(--accent);box-shadow:var(--shadow)}.card small{display:block;color:var(--muted);font:10px var(--mono);letter-spacing:.08em;text-transform:uppercase}.card strong.big{display:block;margin-top:7px;font:700 24px var(--mono);letter-spacing:-.05em;overflow-wrap:anywhere}.card p{margin:7px 0 0;color:var(--muted);font-size:12px;line-height:1.45}.section{margin-top:18px}.section-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin:0 0 10px;border-bottom:1px solid var(--line);padding-bottom:8px}.section-head h2{margin:0;font:700 13px var(--mono);letter-spacing:.1em;text-transform:uppercase}.split{display:grid;grid-template-columns:minmax(0,1.08fr) minmax(360px,.92fr);gap:18px;align-items:start}.panel{border:1px solid var(--ink);background:var(--panel);box-shadow:var(--shadow);min-width:0}.panel-head{display:flex;justify-content:space-between;align-items:center;gap:12px;border-bottom:1px solid var(--line);padding:12px 14px}.panel-head h2,.panel-head h3{margin:0;font:700 12px var(--mono);letter-spacing:.1em;text-transform:uppercase}.panel-body{padding:14px}.toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:10px 14px;border-bottom:1px solid var(--line);background:var(--panel-2)}input,select,textarea{border:1px solid var(--line);background:var(--panel);padding:8px 10px;border-radius:0}.toolbar input{min-width:180px;flex:1}.button{border:1px solid var(--ink);background:var(--ink);color:var(--paper);padding:8px 11px;font:700 12px var(--body)}.button:hover{background:var(--accent);border-color:var(--accent)}.button.secondary{background:transparent;color:var(--ink)}.button.secondary:hover{background:var(--panel-2);border-color:var(--accent);color:var(--ink)}.button.danger{background:var(--bad);border-color:var(--bad);color:white}.button:disabled{opacity:.45;cursor:not-allowed}
+.task-list{max-height:570px;overflow:auto}.task-row{width:100%;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;background:transparent;color:var(--ink);border:0;border-bottom:1px solid var(--line);padding:12px;text-align:left}.task-row:hover,.task-row.selected{background:var(--panel-2)}.task-id{display:block;font:700 11px var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.task-objective{display:block;margin-top:4px;color:var(--muted);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.badges{display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end}.chip,.tag{display:inline-flex;align-items:center;border:1px solid var(--line);background:var(--panel-2);color:var(--ink-soft);padding:3px 6px;font:700 9px var(--mono);letter-spacing:.05em;text-transform:uppercase;white-space:nowrap}.chip.completed,.chip.turn_started,.tag.pass,.tag.verified,.tag.safe{background:color-mix(in srgb,var(--ok) 20%,var(--panel));border-color:color-mix(in srgb,var(--ok) 45%,var(--line));color:var(--ok)}.chip.failed,.chip.cancelled,.chip.submission_unknown,.tag.fail,.tag.unsafe{background:color-mix(in srgb,var(--bad) 17%,var(--panel));border-color:color-mix(in srgb,var(--bad) 40%,var(--line));color:var(--bad)}.chip.running,.chip.waiting_for_master,.tag.experimental,.tag.warn{background:color-mix(in srgb,var(--warn) 18%,var(--panel));border-color:color-mix(in srgb,var(--warn) 40%,var(--line));color:var(--warn)}.chip.queued,.chip.intent{background:color-mix(in srgb,var(--accent-2) 16%,var(--panel));color:var(--accent-2)}.banner{border-left:4px solid var(--accent);background:color-mix(in srgb,var(--accent) 12%,var(--panel));padding:10px 12px;margin:10px 14px;font:11px/1.5 var(--mono)}.empty{padding:28px;text-align:center;color:var(--muted);font-family:var(--serif);font-size:16px}.detail-head{display:flex;justify-content:space-between;align-items:start;gap:12px}.detail-head h3{margin:0;font:700 14px var(--mono);overflow-wrap:anywhere}.detail-head p{margin:5px 0 0;color:var(--muted);font-size:12px}.facts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;margin:12px 0;background:var(--line);border:1px solid var(--line)}.fact{background:var(--panel);padding:9px;min-width:0}.fact label{display:block;color:var(--muted);font:9px var(--mono);letter-spacing:.07em;text-transform:uppercase}.fact strong{display:block;margin-top:4px;font:11px var(--mono);overflow-wrap:anywhere}.pre{background:var(--code);color:var(--code-ink);border-left:3px solid var(--accent);padding:11px;max-height:300px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font:10px/1.6 var(--mono);margin:7px 0 0}.action-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.error{display:none;margin:12px 0;border-left:4px solid var(--bad);background:color-mix(in srgb,var(--bad) 12%,var(--panel));padding:10px 12px;color:var(--bad);font-size:12px}.error.visible{display:block}.notice{border-left:4px solid var(--warn);background:color-mix(in srgb,var(--warn) 12%,var(--panel));padding:12px;margin:12px 0;font-size:12px;line-height:1.55}.ok-note{border-left:4px solid var(--ok)}.warning-danger{border-left-color:var(--bad);background:color-mix(in srgb,var(--bad) 12%,var(--panel))}
+.form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.form-grid label{display:grid;gap:5px;color:var(--muted);font:10px var(--mono);letter-spacing:.06em;text-transform:uppercase}.form-grid input,.form-grid select{width:100%}.form-wide{grid-column:1/-1}.consent{display:flex;gap:8px;align-items:flex-start;margin:12px 0;font-size:12px;line-height:1.5}.table-wrap{overflow:auto;border:1px solid var(--line)}table{width:100%;border-collapse:collapse;background:var(--panel);font-size:11px}th,td{padding:9px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{color:var(--muted);font:9px var(--mono);letter-spacing:.08em;text-transform:uppercase;background:var(--panel-2)}td.mono{font-family:var(--mono);overflow-wrap:anywhere}.cost-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}.history{display:grid;gap:7px}.history-row{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;border:1px solid var(--line);padding:9px;background:var(--panel);font-size:10px}.history-row small{display:block;color:var(--muted);font:9px var(--mono);text-transform:uppercase}.history-row strong{display:block;margin-top:3px;font:10px var(--mono);overflow-wrap:anywhere}.status-line{min-height:18px;margin-top:9px;color:var(--accent);font:10px var(--mono)}.footer{display:flex;justify-content:space-between;gap:12px;margin-top:30px;border-top:1px solid var(--line);padding-top:12px;color:var(--muted);font:9px var(--mono);letter-spacing:.06em;text-transform:uppercase}.toast{position:fixed;right:18px;bottom:18px;max-width:420px;background:var(--ink);color:var(--paper);padding:11px 14px;font:11px var(--mono);opacity:0;transform:translateY(10px);transition:.2s;pointer-events:none;z-index:30}.toast.show{opacity:1;transform:none}.toast.error{background:var(--bad);color:white}
+@keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}@media(max-width:1050px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.split,.cost-grid{grid-template-columns:1fr}}@media(max-width:650px){.masthead{display:block}.prefs{margin-top:12px}.page-head{display:block}.connection{text-align:left;margin-top:14px}.grid,.form-grid{grid-template-columns:1fr}.facts{grid-template-columns:1fr}.history-row{grid-template-columns:1fr 1fr}.footer{display:block}.footer span{display:block;margin-top:5px}.brand strong{font-size:16px}}
+</style>
+</head>
+<body>
+<div class="shell">
+  <header class="masthead">
+    <a class="brand" href="#dashboard" aria-label="Bridge Operations Console">
+      <span class="brand-mark">B/</span>
+      <span><strong>Bridge Operations Console</strong><small data-i18n="brandSubtitle">Executor truth, runtime evidence, cost lab</small></span>
+    </a>
+    <div class="prefs">
+      <label><span data-i18n="language">Language</span><select id="language"><option value="zh-CN">简体中文</option><option value="en">English</option></select></label>
+      <label><span data-i18n="theme">Theme</span><select id="theme"><option value="system" data-i18n="themeSystem">System</option><option value="light" data-i18n="themeLight">Light</option><option value="dark" data-i18n="themeDark">Dark</option></select></label>
+    </div>
+  </header>
+
+  <nav class="tabs" aria-label="Primary">
+    <button class="tab" data-page="dashboard" data-i18n="navDashboard">Dashboard</button>
+    <button class="tab" data-page="tasks" data-i18n="navTasks">Tasks</button>
+    <button class="tab" data-page="cost-lab" data-i18n="navCostLab">Cost Lab</button>
+    <button class="tab" data-page="runtime" data-i18n="navRuntime">Runtime</button>
+    <button class="tab" data-page="settings" data-i18n="navSettings">Settings</button>
+  </nav>
+
+  <div id="global-error" class="error" role="alert"></div>
+
+  <main>
+    <section class="page" id="page-dashboard">
+      <div class="page-head">
+        <div><p class="eyebrow" data-i18n="dashboardEyebrow">Local control plane</p><h1 data-i18n-html="dashboardTitle">One console.<br><em>Durable execution.</em></h1><p class="lede" data-i18n="dashboardLede">Inspect the independent Executor, durable task evidence, local compatibility facts, and Cost Lab without starting model work.</p></div>
+        <div class="connection"><span class="dot" id="executor-dot"></span><strong id="executor-state">CONNECTING</strong><span id="lease-id">lease: --</span></div>
+      </div>
+      <div class="grid">
+        <article class="card accent"><small data-i18n="visibleTasks">Visible tasks</small><strong class="big" id="count-total">--</strong><p data-i18n="currentTaskPage">Current bounded task view</p></article>
+        <article class="card"><small data-i18n="runningNow">Running now</small><strong class="big" id="count-running">--</strong><p data-i18n="executorOwned">Owned by the independent Executor</p></article>
+        <article class="card"><small data-i18n="needsMaster">Needs Master</small><strong class="big" id="count-waiting">--</strong><p data-i18n="durableInteraction">Durable interaction or completion evidence</p></article>
+        <article class="card"><small data-i18n="wakeSignals">Wake signals</small><strong class="big" id="count-wake">--</strong><p data-i18n="wakeReadOnly">Read-only projection; no Queue request</p></article>
+      </div>
+      <div id="dashboard-wake" class="banner" hidden></div>
+      <div class="section-head"><h2 data-i18n="quickRoutes">Quick routes</h2></div>
+      <div class="grid">
+        <article class="card"><small data-i18n="taskEvidence">Task evidence</small><strong class="big" id="dash-latest-task">--</strong><p data-i18n="openTaskCode">Open a Task deep link or inspect the durable ledger.</p><button class="button secondary" data-go="tasks" data-i18n="openTasks">Open Tasks</button></article>
+        <article class="card"><small data-i18n="costLab">Cost Lab</small><strong class="big" id="dash-cost">LOCAL</strong><p data-i18n="costLabZeroLoad">Page load never calls the official billing API.</p><button class="button secondary" data-go="cost-lab" data-i18n="openCostLab">Open Cost Lab</button></article>
+        <article class="card"><small data-i18n="runtimeCompatibility">Runtime compatibility</small><strong class="big" id="dash-runtime">UNKNOWN</strong><p id="dash-runtime-note" data-i18n="runtimeStaticOnly">Static inspection and evidence only.</p><button class="button secondary" data-go="runtime" data-i18n="openRuntime">Open Runtime</button></article>
+        <article class="card"><small data-i18n="executorModel">Executor model</small><strong class="big">MCP → IPC</strong><p data-i18n="singleAuthority">Thin clients share one Executor Authority.</p><button class="button secondary" data-go="settings" data-i18n="openSettings">Open Settings</button></article>
+      </div>
+    </section>
+
+    <section class="page" id="page-tasks">
+      <div class="page-head">
+        <div><p class="eyebrow" data-i18n="tasksEyebrow">Durable task ledger</p><h1 data-i18n-html="tasksTitle">Follow the original Attempt.<br><em>Not a UI cache.</em></h1><p class="lede" data-i18n="tasksLede">Status, events, result, attention, wake, cleanup and release facts are read through the Executor Control Client.</p></div>
+        <div class="connection"><span class="dot" id="tasks-dot"></span><strong id="tasks-executor">UNKNOWN</strong><span id="last-refresh">--:--</span></div>
+      </div>
+      <div class="split">
+        <section class="panel">
+          <div class="panel-head"><h2 data-i18n="taskLedger">Task ledger</h2><button class="button secondary" id="refresh-tasks" data-i18n="refresh">Refresh</button></div>
+          <div class="toolbar"><input id="task-filter" placeholder="Filter task or objective" data-i18n-placeholder="filterTasks"><select id="task-status"><option value="" data-i18n="allStatuses">All statuses</option><option>queued</option><option>running</option><option>completed</option><option>failed</option><option>cancelled</option><option>waiting_for_master</option></select></div>
+          <div id="task-wake" class="banner" hidden></div>
+          <div id="task-list" class="task-list"><div class="empty" data-i18n="loadingLedger">Loading the durable ledger...</div></div>
+        </section>
+        <section class="panel">
+          <div class="panel-head"><h2 data-i18n="inspection">Inspection</h2><span class="tag" id="detail-mode">READ ONLY + ACTIONS</span></div>
+          <div class="panel-body" id="task-detail"><div class="empty" data-i18n="chooseTask">Choose a task to inspect its durable evidence.</div></div>
+        </section>
+      </div>
+    </section>
+
+    <section class="page" id="page-cost-lab">
+      <div class="page-head">
+        <div><p class="eyebrow" data-i18n="costEyebrow">Official runtime accounting</p><h1 data-i18n-html="costTitle">Two plans.<br><em>One local evidence surface.</em></h1><p class="lede" data-i18n="costLede">Coding Plan credits and Start Plan tokens remain independent. Opening this page performs no billing or model request.</p></div>
+      </div>
+      <div class="grid">
+        <article class="card"><small data-i18n="runtime">Runtime</small><strong class="big" id="cost-runtime">UNKNOWN</strong><p id="cost-runtime-detail">--</p></article>
+        <article class="card"><small data-i18n="discount">Discount</small><strong class="big" id="cost-discount">UNKNOWN</strong><p data-i18n="discountNotZero">An absent observed charge is INCONCLUSIVE, never zero.</p></article>
+        <article class="card"><small data-i18n="billingReader">Billing reader</small><strong class="big" id="cost-billing">UNKNOWN</strong><p data-i18n="officialReadOnly">Official reads require explicit user action.</p></article>
+        <article class="card"><small data-i18n="lastRatio">Last extra ratio</small><strong class="big" id="cost-ratio">NO EXPERIMENT</strong><p data-i18n="ratioSeparate">Time multiplier and campaign multiplier stay separate.</p></article>
+      </div>
+      <div class="cost-grid section">
+        <section class="panel">
+          <div class="panel-head"><h2 data-i18n="codingPlan">Coding Plan</h2><span class="tag">GLM-5.3-FLASH</span></div>
+          <div class="panel-body">
+            <div class="action-row"><button class="button" id="capture-billing" data-i18n="readOfficialSnapshot">Read official snapshot</button><span class="status-line" id="billing-state"></span></div>
+            <div id="billing-view"><div class="empty" data-i18n="noBillingSnapshot">No fresh Coding Plan snapshot requested.</div></div>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-head"><h2 data-i18n="startPlan">Start Plan</h2><span class="tag" id="startplan-freshness">NO SNAPSHOT</span></div>
+          <div class="panel-body">
+            <div class="grid" style="grid-template-columns:repeat(2,minmax(0,1fr))">
+              <article class="card"><small data-i18n="totalTokens">Total tokens</small><strong class="big" id="startplan-total">--</strong></article>
+              <article class="card"><small data-i18n="remainingTokens">Remaining tokens</small><strong class="big" id="startplan-remaining">--</strong></article>
+            </div>
+            <div class="facts">
+              <div class="fact"><label data-i18n="entitlement">Entitlement</label><strong id="startplan-entitlement">UNKNOWN</strong></div>
+              <div class="fact"><label data-i18n="unit">Unit</label><strong id="startplan-unit">UNKNOWN</strong></div>
+              <div class="fact"><label data-i18n="billingPeriod">Billing period</label><strong id="startplan-period">UNKNOWN</strong></div>
+              <div class="fact"><label data-i18n="expiry">Expiry</label><strong id="startplan-expiry">UNKNOWN</strong></div>
+            </div>
+            <div class="action-row"><button class="button" id="refresh-startplan" data-i18n="refreshBalance">Refresh balance</button><button class="button secondary" id="compare-startplan" data-i18n="compareSnapshots">Compare snapshots</button><span class="status-line" id="startplan-state"></span></div>
+            <div id="startplan-history" class="history section"></div>
+          </div>
+        </section>
+      </div>
+      <section class="panel section">
+        <div class="panel-head"><h2 data-i18n="executorUsage">Executor usage</h2><span class="tag">LOCAL / PERSISTED</span></div>
+        <div class="panel-body">
+          <div class="toolbar" style="border:0;padding:0 0 10px"><input id="usage-task-id" placeholder="Task ID" class="mono"><button class="button secondary" id="load-usage" data-i18n="loadUsage">Load persisted usage</button></div>
+          <div id="usage-view"><div class="empty" data-i18n="usageUnknown">Enter a Task ID. Running or missing usage remains UNKNOWN.</div></div>
+        </div>
+      </section>
+      <section class="panel section">
+        <div class="panel-head"><h2 data-i18n="realVerification">Real Coding Plan verification</h2><span class="tag warn" data-i18n="spendsCredits">SPENDS CREDITS</span></div>
+        <div class="panel-body">
+          <div class="notice warning-danger"><strong data-i18n="explicitAuthorization">Explicit authorization required.</strong> <span data-i18n="realVerificationWarning">A real model request may consume credits. This console does not retry failed submissions, and missing billing attribution stays INCONCLUSIVE.</span></div>
+          <div class="form-grid">
+            <label>Provider<input value="account:bigmodel-individual-coding-plan" disabled></label>
+            <label>Model<input value="GLM-5.3-Flash" disabled></label>
+            <label>Reasoning<input value="low" disabled></label>
+            <label data-i18n="taskMode">Task mode<select id="verification-task-mode"><option value="marker">marker</option><option value="code_edit">code_edit</option></select></label>
+          </div>
+          <label class="consent"><input type="checkbox" id="verification-consent"><span data-i18n="verificationConsent">I understand this sends one real model request and may consume credits.</span></label>
+          <button class="button danger" id="start-verification" disabled data-i18n="authorizeRealVerification">Authorize real verification</button>
+          <div class="status-line" id="verification-state"></div>
+          <div id="verification-view"></div>
+        </div>
+      </section>
+      <section class="panel section">
+        <div class="panel-head"><h2 data-i18n="experimentHistory">Experiment history</h2><button class="button secondary" id="refresh-cost-history" data-i18n="refreshHistory">Refresh history</button></div>
+        <div class="panel-body"><div id="cost-history" class="history"><div class="empty" data-i18n="noExperiments">No redacted experiments have been recorded.</div></div></div>
+      </section>
+    </section>
+
+    <section class="page" id="page-runtime">
+      <div class="page-head">
+        <div><p class="eyebrow" data-i18n="runtimeEyebrow">Fingerprint-bound compatibility evidence</p><h1 data-i18n-html="runtimeTitle">Know what changed.<br><em>Verify only what is proven.</em></h1><p class="lede" data-i18n="runtimeLede">Static inspection is automatic on this page. The zero-model protocol probe requires a safe installation and exact verification or authorization. No paid Provider test is available here.</p></div>
+      </div>
+      <div id="runtime-change" class="banner" hidden></div>
+      <div class="grid">
+        <article class="card"><small data-i18n="installationSafety">Installation safety</small><strong class="big" id="runtime-safety">UNKNOWN</strong><p id="runtime-version">--</p></article>
+        <article class="card"><small data-i18n="manifestCompatibility">Manifest compatibility</small><strong class="big" id="runtime-manifest">UNKNOWN</strong><p id="runtime-authorization">--</p></article>
+        <article class="card"><small data-i18n="protocol">Protocol</small><strong class="big" id="runtime-protocol">NOT_RUN</strong><p data-i18n="protocolNoModel">runtime/capabilities only; zero model requests.</p></article>
+        <article class="card accent"><small data-i18n="fingerprint">Fingerprint</small><strong class="big" id="runtime-fingerprint">UNAVAILABLE</strong><p data-i18n="fingerprintBound">Evidence and authorization never cross fingerprints.</p></article>
+      </div>
+      <div class="action-row"><button class="button secondary" id="run-static-check" data-i18n="runStaticCheck">Run static check</button><button class="button" id="run-protocol-probe" data-i18n="runProtocolProbe">Run authorized zero-model probe</button><a class="button secondary" id="export-runtime-report" href="/api/runtime/candidate" download data-i18n="exportReport">Export compatibility report</a><span class="status-line" id="runtime-state"></span></div>
+      <div class="section-head"><h2 data-i18n="installationIdentity">Installation identity</h2></div>
+      <div class="table-wrap"><table><thead><tr><th data-i18n="fact">Fact</th><th data-i18n="value">Value</th></tr></thead><tbody id="runtime-facts"></tbody></table></div>
+      <div class="section-head"><h2 data-i18n="capabilityMatrix">Capability matrix</h2></div>
+      <div class="table-wrap"><table><thead><tr><th data-i18n="capability">Capability</th><th data-i18n="status">Status</th><th data-i18n="evidenceSource">Evidence source</th><th data-i18n="limitation">Limitation</th></tr></thead><tbody id="runtime-capabilities"></tbody></table></div>
+      <div class="section-head"><h2 data-i18n="evidenceHistory">Evidence history</h2></div>
+      <div id="runtime-evidence" class="history"></div>
+    </section>
+
+    <section class="page" id="page-settings">
+      <div class="page-head">
+        <div><p class="eyebrow" data-i18n="settingsEyebrow">Local preferences and boundaries</p><h1 data-i18n-html="settingsTitle">Preferences stay local.<br><em>Authority stays singular.</em></h1><p class="lede" data-i18n="settingsLede">Language and theme are browser preferences. They never write Executor state, SQLite facts, credentials, billing authorization, or model configuration.</p></div>
+      </div>
+      <div class="grid">
+        <article class="card"><small data-i18n="language">Language</small><strong class="big" id="settings-language">--</strong><p data-i18n="languageBoundary">Stored as a local UI preference only.</p></article>
+        <article class="card"><small data-i18n="theme">Theme</small><strong class="big" id="settings-theme">--</strong><p data-i18n="themeBoundary">Light, Dark, or browser System.</p></article>
+        <article class="card"><small data-i18n="serverOrigin">Server origin</small><strong class="big" id="settings-origin">LOOPBACK</strong><p data-i18n="loopbackOnly">IPv4 loopback only; exact Host and CSRF checks remain active.</p></article>
+        <article class="card"><small data-i18n="dataBoundary">Data boundary</small><strong class="big">SQLite v14</strong><p data-i18n="dataBoundaryText">Cost Lab and compatibility evidence never become a second task authority.</p></article>
+      </div>
+      <div class="notice section ok-note"><strong data-i18n="systemBoundary">System boundary.</strong> <span data-i18n="systemBoundaryText">Opening pages, switching language/theme, loading Tasks, or reading local history performs no model request and no official billing refresh. Real Provider execution, Queue Wake, Desktop shutdown, and compatibility promotion require separate authorization.</span></div>
+    </section>
+  </main>
+
+  <footer class="footer"><span data-i18n="footerLoopback">Loopback only / local account session</span><span data-i18n="footerDurability">Closing this page never cancels an Executor-owned task.</span></footer>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script>
+const I18N={
+  en:{
+    brandSubtitle:"Executor truth, runtime evidence, cost lab",language:"Language",theme:"Theme",themeSystem:"System",themeLight:"Light",themeDark:"Dark",navDashboard:"Dashboard",navTasks:"Tasks",navCostLab:"Cost Lab",navRuntime:"Runtime",navSettings:"Settings",
+    dashboardEyebrow:"Local control plane",dashboardTitle:"One console.<br><em>Durable execution.</em>",dashboardLede:"Inspect the independent Executor, durable task evidence, local compatibility facts, and Cost Lab without starting model work.",visibleTasks:"Visible tasks",currentTaskPage:"Current bounded task view",runningNow:"Running now",executorOwned:"Owned by the independent Executor",needsMaster:"Needs Master",durableInteraction:"Durable interaction or completion evidence",wakeSignals:"Wake signals",wakeReadOnly:"Read-only projection; no Queue request",quickRoutes:"Quick routes",taskEvidence:"Task evidence",openTaskCode:"Open a Task deep link or inspect the durable ledger.",openTasks:"Open Tasks",costLab:"Cost Lab",costLabZeroLoad:"Page load never calls the official billing API.",openCostLab:"Open Cost Lab",runtimeCompatibility:"Runtime compatibility",runtimeStaticOnly:"Static inspection and evidence only.",openRuntime:"Open Runtime",executorModel:"Executor model",singleAuthority:"Thin clients share one Executor Authority.",openSettings:"Open Settings",
+    tasksEyebrow:"Durable task ledger",tasksTitle:"Follow the original Attempt.<br><em>Not a UI cache.</em>",tasksLede:"Status, events, result, attention, wake, cleanup and release facts are read through the Executor Control Client.",taskLedger:"Task ledger",refresh:"Refresh",filterTasks:"Filter task or objective",allStatuses:"All statuses",loadingLedger:"Loading the durable ledger...",inspection:"Inspection",chooseTask:"Choose a task to inspect its durable evidence.",refreshTasks:"Refresh",executor:"Executor",task:"Task",attempt:"Attempt",wake:"Wake",hold:"Hold",queue:"Queue",workerPid:"Worker PID",session:"Session",created:"Created",updated:"Updated",pendingInteraction:"Pending Interaction",noneObserved:"none observed",latestEvents:"Latest events",resultSummary:"Result summary",resultPending:"Result pending — task is still running.",notAvailable:"Not yet available.",requestCancel:"Request cancel",sendReply:"Send reply",unavailable:"Unavailable",statusUnavailable:"Status unavailable",invalidTask:"Invalid task_id in URL",loadingEvidence:"Loading evidence...",noMatch:"No tasks match this view.",wakeBanner:"task(s) have a durable Executor Wake signal. Verify persisted evidence before acceptance.",
+    costEyebrow:"Official runtime accounting",costTitle:"Two plans.<br><em>One local evidence surface.</em>",costLede:"Coding Plan credits and Start Plan tokens remain independent. Opening this page performs no billing or model request.",runtime:"Runtime",discount:"Discount",discountNotZero:"An absent observed charge is INCONCLUSIVE, never zero.",billingReader:"Billing reader",officialReadOnly:"Official reads require explicit user action.",lastRatio:"Last extra ratio",ratioSeparate:"Time multiplier and campaign multiplier stay separate.",codingPlan:"Coding Plan",readOfficialSnapshot:"Read official snapshot",noBillingSnapshot:"No fresh Coding Plan snapshot requested.",startPlan:"Start Plan",totalTokens:"Total tokens",remainingTokens:"Remaining tokens",entitlement:"Entitlement",unit:"Unit",billingPeriod:"Billing period",expiry:"Expiry",refreshBalance:"Refresh balance",compareSnapshots:"Compare snapshots",executorUsage:"Executor usage",loadUsage:"Load persisted usage",usageUnknown:"Enter a Task ID. Running or missing usage remains UNKNOWN.",realVerification:"Real Coding Plan verification",spendsCredits:"SPENDS CREDITS",explicitAuthorization:"Explicit authorization required.",realVerificationWarning:"A real model request may consume credits. This console does not retry failed submissions, and missing billing attribution stays INCONCLUSIVE.",taskMode:"Task mode",verificationConsent:"I understand this sends one real model request and may consume credits.",authorizeRealVerification:"Authorize real verification",experimentHistory:"Experiment history",refreshHistory:"Refresh history",noExperiments:"No redacted experiments have been recorded.",notFinished:"Task not finished; Result remains pending.",unknown:"UNKNOWN",inconclusive:"INCONCLUSIVE",noSnapshot:"No snapshot",snapshotCaptured:"Snapshot captured",snapshotFailed:"Snapshot failed.",startPlanRefreshFailed:"Start Plan refresh failed.",comparisonUnavailable:"At least two comparable snapshots are required.",usageLoaded:"Persisted usage loaded.",usagePending:"No persisted terminal usage is available yet.",billingConfirmed:"Billing confirmed by official snapshot.",billingInconclusive:"Official billing attribution is inconclusive.",verificationStarted:"Real verification explicitly authorized.",verificationFailed:"Verification failed.",
+    runtimeEyebrow:"Fingerprint-bound compatibility evidence",runtimeTitle:"Know what changed.<br><em>Verify only what is proven.</em>",runtimeLede:"Static inspection is automatic on this page. The zero-model protocol probe requires a safe installation and exact verification or authorization. No paid Provider test is available here.",installationSafety:"Installation safety",manifestCompatibility:"Manifest compatibility",protocol:"Protocol",protocolNoModel:"runtime/capabilities only; zero model requests.",fingerprint:"Fingerprint",fingerprintBound:"Evidence and authorization never cross fingerprints.",runStaticCheck:"Run static check",runProtocolProbe:"Run authorized zero-model probe",exportReport:"Export compatibility report",installationIdentity:"Installation identity",fact:"Fact",value:"Value",capabilityMatrix:"Capability matrix",capability:"Capability",status:"Status",evidenceSource:"Evidence source",limitation:"Limitation",evidenceHistory:"Evidence history",runtimeChanged:"RUNTIME_CHANGED: the installed identity differs from the previous recorded fingerprint. Previous evidence is retained and the new identity starts unverified.",noEvidence:"No compatibility evidence has been recorded.",staticCompleted:"Static check completed. No model or billing request was sent.",probeCompleted:"Zero-model protocol probe completed.",probeBlocked:"Protocol probe is blocked until the exact identity is safe and verified or authorized.",manifestModified:"Production manifest modified: no",
+    settingsEyebrow:"Local preferences and boundaries",settingsTitle:"Preferences stay local.<br><em>Authority stays singular.</em>",settingsLede:"Language and theme are browser preferences. They never write Executor state, SQLite facts, credentials, billing authorization, or model configuration.",languageBoundary:"Stored as a local UI preference only.",themeBoundary:"Light, Dark, or browser System.",serverOrigin:"Server origin",loopbackOnly:"IPv4 loopback only; exact Host and CSRF checks remain active.",dataBoundary:"Data boundary",dataBoundaryText:"Cost Lab and compatibility evidence never become a second task authority.",systemBoundary:"System boundary.",systemBoundaryText:"Opening pages, switching language/theme, loading Tasks, or reading local history performs no model request and no official billing refresh. Real Provider execution, Queue Wake, Desktop shutdown, and compatibility promotion require separate authorization.",
+    footerLoopback:"Loopback only / local account session",footerDurability:"Closing this page never cancels an Executor-owned task.",requestFailed:"Request failed",yes:"YES",no:"NO",running:"RUNNING",pending:"PENDING"
+  },
+  "zh-CN":{
+    brandSubtitle:"Executor 真实状态、Runtime 证据与成本实验",language:"语言",theme:"主题",themeSystem:"跟随系统",themeLight:"浅色",themeDark:"深色",navDashboard:"概览",navTasks:"任务",navCostLab:"成本实验",navRuntime:"Runtime",navSettings:"设置",
+    dashboardEyebrow:"本地控制平面",dashboardTitle:"一个控制台。<br><em>持久执行。</em>",dashboardLede:"检查独立 Executor、持久 Task 证据、本地兼容事实与成本实验，不会自动启动模型工作。",visibleTasks:"当前任务",currentTaskPage:"当前有界任务视图",runningNow:"正在运行",executorOwned:"由独立 Executor 持有",needsMaster:"等待 Master",durableInteraction:"持久交互或完成证据",wakeSignals:"Wake 信号",wakeReadOnly:"只读投影，不发送 Queue 请求",quickRoutes:"快捷入口",taskEvidence:"任务证据",openTaskCode:"打开 Task Deep Link 或检查持久账本。",openTasks:"打开任务",costLab:"成本实验",costLabZeroLoad:"页面加载不会调用官方 Billing API。",openCostLab:"打开成本实验",runtimeCompatibility:"Runtime 兼容性",runtimeStaticOnly:"仅静态检查与证据。",openRuntime:"打开 Runtime",executorModel:"Executor 模型",singleAuthority:"Thin Client 共享同一个 Executor Authority。",openSettings:"打开设置",
+    tasksEyebrow:"持久任务账本",tasksTitle:"跟踪原 Attempt。<br><em>不是 UI 缓存。</em>",tasksLede:"Status、Events、Result、Attention、Wake、Cleanup 与 Release 均通过 Executor Control Client 读取。",taskLedger:"任务账本",refresh:"刷新",filterTasks:"筛选任务或目标",allStatuses:"全部状态",loadingLedger:"正在加载持久任务账本...",inspection:"检查",chooseTask:"选择一个任务以检查它的持久证据。",refreshTasks:"刷新",executor:"Executor",task:"Task",attempt:"Attempt",wake:"Wake",hold:"Hold",queue:"队列",workerPid:"Worker PID",session:"会话",created:"创建时间",updated:"更新时间",pendingInteraction:"待交互",noneObserved:"未观察到",latestEvents:"最新事件",resultSummary:"Result 摘要",resultPending:"Result 待生成 — 任务仍在运行。",notAvailable:"尚未生成。",requestCancel:"请求取消",sendReply:"发送回复",unavailable:"不可用",statusUnavailable:"状态不可用",invalidTask:"URL 中的 task_id 无效",loadingEvidence:"正在加载证据...",noMatch:"当前视图没有匹配任务。",wakeBanner:"个任务存在持久 Executor Wake 信号。验收前必须核对持久证据。",
+    costEyebrow:"官方 Runtime 账务",costTitle:"两套计划。<br><em>一个本地证据面。</em>",costLede:"Coding Plan Credits 与 Start Plan Tokens 保持独立。打开此页面不会发 Billing 或模型请求。",runtime:"Runtime",discount:"优惠",discountNotZero:"未观察到扣费保持 INCONCLUSIVE，绝不视为零费用。",billingReader:"Billing Reader",officialReadOnly:"官方读取必须由用户显式触发。",lastRatio:"最近额外倍率",ratioSeparate:"时段倍率与活动倍率分开呈现。",codingPlan:"Coding Plan",readOfficialSnapshot:"读取官方快照",noBillingSnapshot:"尚未请求新的 Coding Plan 快照。",startPlan:"Start Plan",totalTokens:"总 Tokens",remainingTokens:"剩余 Tokens",entitlement:"权益",unit:"单位",billingPeriod:"账期",expiry:"到期时间",refreshBalance:"刷新余额",compareSnapshots:"比较快照",executorUsage:"Executor 用量",loadUsage:"加载持久 Usage",usageUnknown:"输入 Task ID。运行中或缺失 Usage 时保持 UNKNOWN。",realVerification:"真实 Coding Plan 验证",spendsCredits:"消耗额度",explicitAuthorization:"需要显式授权。",realVerificationWarning:"真实模型请求可能消耗额度。控制台不会自动重试提交；无法归属的账单保持 INCONCLUSIVE。",taskMode:"任务模式",verificationConsent:"我理解这会发送一次真实模型请求，并可能消耗额度。",authorizeRealVerification:"授权真实验证",experimentHistory:"实验历史",refreshHistory:"刷新历史",noExperiments:"尚未记录脱敏实验。",notFinished:"任务尚未结束，Result 仍为 pending。",unknown:"未知",inconclusive:"不确定",noSnapshot:"无快照",snapshotCaptured:"快照已捕获",snapshotFailed:"快照失败。",startPlanRefreshFailed:"Start Plan 刷新失败。",comparisonUnavailable:"至少需要两个可比较快照。",usageLoaded:"持久 Usage 已加载。",usagePending:"尚无可用的终态 Usage。",billingConfirmed:"官方快照已确认账单归因。",billingInconclusive:"官方账单归因不确定。",verificationStarted:"真实验证已显式授权。",verificationFailed:"验证失败。",
+    runtimeEyebrow:"Fingerprint 绑定兼容证据",runtimeTitle:"识别变化。<br><em>只验证已被证明的部分。</em>",runtimeLede:"打开页面会执行静态检查。零模型协议探针要求安装安全，并具备精确验证或授权。本页不提供付费 Provider 一键测试。",installationSafety:"安装安全",manifestCompatibility:"Manifest 兼容",protocol:"协议",protocolNoModel:"仅 runtime/capabilities；零模型请求。",fingerprint:"Fingerprint",fingerprintBound:"证据与授权绝不跨 Fingerprint 继承。",runStaticCheck:"运行静态检查",runProtocolProbe:"运行已授权的零模型探针",exportReport:"导出兼容报告",installationIdentity:"安装身份",fact:"事实",value:"值",capabilityMatrix:"能力矩阵",capability:"能力",status:"状态",evidenceSource:"证据来源",limitation:"限制",evidenceHistory:"证据历史",runtimeChanged:"RUNTIME_CHANGED：当前安装身份与上一次记录不同。旧证据保留，新身份从未验证开始。",noEvidence:"尚未记录兼容证据。",staticCompleted:"静态检查完成，未发送模型或 Billing 请求。",probeCompleted:"零模型协议探针完成。",probeBlocked:"协议探针被阻断：精确实例必须安全，并已通过验证或授权。",manifestModified:"生产 Manifest 是否修改：否",
+    settingsEyebrow:"本地偏好与边界",settingsTitle:"偏好留在本地。<br><em>Authority 保持唯一。</em>",settingsLede:"语言和主题仅是浏览器偏好，不写入 Executor 状态、SQLite 事实、凭据、Billing 授权或模型配置。",languageBoundary:"仅作为本地 UI 偏好保存。",themeBoundary:"浅色、深色或跟随系统。",serverOrigin:"服务 Origin",loopbackOnly:"仅 IPv4 Loopback；精确 Host 与 CSRF 校验继续有效。",dataBoundary:"数据边界",dataBoundaryText:"成本实验与兼容证据不会成为第二套 Task Authority。",systemBoundary:"系统边界。",systemBoundaryText:"打开页面、切换语言/主题、读取任务或本地历史，都不会发送模型请求或刷新官方账单。真实 Provider 执行、Queue Wake、Desktop 关闭与兼容提升必须单独授权。",
+    footerLoopback:"仅本机 Loopback / 当前账户会话",footerDurability:"关闭页面不会取消 Executor 持有的任务。",requestFailed:"请求失败",yes:"是",no:"否",running:"运行中",pending:"待生成"
+  }
+};
+const state={session:null,costSession:null,costSessionPromise:null,tasks:[],selected:null,status:null,summary:null,events:null,result:null,attention:null,resultPending:false,errors:{},executor:null,detailGeneration:0,refreshInFlight:false,costLoaded:false,runtime:null,runtimeLoaded:false,startPlan:null,costHistory:[],verificationId:null,verificationTimer:null};
+const $=selector=>document.querySelector(selector), $$=selector=>[...document.querySelectorAll(selector)];
+function prefLanguage(){const stored=localStorage.getItem("bridge.ui.language");if(stored==="zh-CN"||stored==="en")return stored;return navigator.language&&navigator.language.toLowerCase().startsWith("zh")?"zh-CN":"en"}
+function prefTheme(){const stored=localStorage.getItem("bridge.ui.theme");return ["light","dark","system"].includes(stored)?stored:"system"}
+let language=prefLanguage();let theme=prefTheme();
+function t(key,fallback){return I18N[language]&&I18N[language][key]||I18N.en[key]||fallback||key}
+function applyLanguage(){document.documentElement.lang=language;document.querySelector("#language").value=language;for(const node of $$("[data-i18n]"))node.textContent=I18N[language]&&I18N[language][node.dataset.i18n]||I18N.en[node.dataset.i18n]||node.textContent;for(const node of $$("[data-i18n-html]"))node.innerHTML=I18N[language]&&I18N[language][node.dataset.i18nHtml]||I18N.en[node.dataset.i18nHtml]||node.innerHTML;for(const node of $$("[data-i18n-placeholder]"))node.placeholder=I18N[language]&&I18N[language][node.dataset.i18nPlaceholder]||I18N.en[node.dataset.i18nPlaceholder]||node.placeholder;renderAll()}
+function applyTheme(){document.documentElement.dataset.theme=theme;document.querySelector("#theme").value=theme;const lang=$("#settings-language"),themeNode=$("#settings-theme");if(lang)lang.textContent=language==="zh-CN"?"简体中文":"English";if(themeNode)themeNode.textContent=theme.toUpperCase()}
+function setError(message){const node=$("#global-error");node.textContent=message||"";node.classList.toggle("visible",Boolean(message))}
+function toast(message,error){const node=$("#toast");node.textContent=message;node.className="toast show"+(error?" error":"");clearTimeout(toast.timer);toast.timer=setTimeout(()=>node.className="toast",4200)}
+function errorMessage(error){return error&&error.message?error.message:String(error)}function errorCode(error){return error&&error.code?String(error.code):""}
+async function taskApi(path,options={}){const headers={Accept:"application/json",...(options.body!==undefined?{"Content-Type":"application/json"}:{})};if(options.csrf)headers["X-ZCode-Bridge-CSRF"]=state.session.csrf_token;if(options.origin)headers.Origin=location.origin;const response=await fetch(path,{...options,headers:{...headers,...(options.headers||{})}});const body=await response.json().catch(()=>({ok:false,error:{code:"WEB_BAD_RESPONSE",message:"invalid server response"}}));if(!response.ok||!body.ok){const error=new Error((body.error&&body.error.message)||("HTTP "+response.status));error.code=body.error&&body.error.code||"WEB_REQUEST_FAILED";throw error}return body.result===undefined?body:body.result}
+async function costApi(path,options={}){if(path!=="session"&&!state.costSession)await loadCostSession();const headers={Accept:"application/json",...(options.body!==undefined?{"Content-Type":"application/json"}:{})};if(options.csrf){headers["X-Cost-Lab-CSRF"]=state.costSession.csrf_token;headers.Origin=location.origin}const response=await fetch("/api/cost-lab/"+path,{...options,headers:{...headers,...(options.headers||{})}});const body=await response.json().catch(()=>({ok:false,error:{code:"COST_LAB_BAD_RESPONSE",message:"invalid server response"}}));if(!response.ok||!body.ok){const error=new Error((body.error&&body.error.message)||("HTTP "+response.status));error.code=body.error&&body.error.code||"COST_LAB_REQUEST_FAILED";throw error}return body.data===undefined?body:body.data}
+async function loadCostSession(){if(state.costSession)return state.costSession;if(state.costSessionPromise)return state.costSessionPromise;state.costSessionPromise=(async()=>{const response=await fetch("/api/cost-lab/session",{headers:{Accept:"application/json"}});const body=await response.json().catch(()=>({ok:false,error:{code:"COST_LAB_BAD_RESPONSE",message:"invalid server response"}}));if(!response.ok||!body.ok){const error=new Error((body.error&&body.error.message)||("HTTP "+response.status));error.code=body.error&&body.error.code||"COST_LAB_REQUEST_FAILED";throw error}state.costSession=body.data;return state.costSession})();try{return await state.costSessionPromise}finally{state.costSessionPromise=null}}
+function validTaskId(value){return /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/u.test(String(value||""))}
+function taskIdFromLocation(){const value=new URL(location.href).searchParams.get("task_id");return validTaskId(value)?value:null}
+function setTaskInLocation(id){const url=new URL(location.href);if(id)url.searchParams.set("task_id",id);else url.searchParams.delete("task_id");const next=url.pathname+url.search+(location.hash||"#tasks");const current=location.pathname+location.search+location.hash;if(next!==current)history.replaceState(null,"",next)}
+function navigate(page){const valid=$$(".page").some(node=>node.id==="page-"+page);if(!valid)return;for(const node of $$(".page"))node.classList.toggle("active",node.id==="page-"+page);for(const node of $$(".tab"))node.classList.toggle("active",node.dataset.page===page);history.replaceState(null,"",location.pathname+location.search+"#"+page);window.scrollTo({top:0,behavior:"smooth"});if(page==="cost-lab")void ensureCostLab();if(page==="runtime")void ensureRuntime()}
+function currentPage(){const hash=location.hash.slice(1);return ["dashboard","tasks","cost-lab","runtime","settings"].includes(hash)?hash:"dashboard"}
+function statusClass(status){return String(status||"unknown").toLowerCase().replace(/[^a-z_]/g,"")}
+function tag(status){const node=document.createElement("span");node.className="tag "+statusClass(status);node.textContent=String(status||"UNKNOWN");return node}
+function element(tagName,className,text){const node=document.createElement(tagName);if(className)node.className=className;if(text!==undefined&&text!==null)node.textContent=String(text);return node}
+function fact(label,value){const node=element("div","fact");node.append(element("label","",label),element("strong","",value===undefined||value===null?"--":value));return node}
+function section(title,value){const head=element("div","section-head");head.append(element("h2","",title));const pre=element("pre","pre",typeof value==="string"?value:JSON.stringify(value,null,2));const wrapper=document.createElement("div");wrapper.append(head,pre);return wrapper}
+function empty(text){return element("div","empty","",text)}
+function renderAll(){renderTasks();if(state.runtime)renderRuntime(state.runtime);if(state.startPlan)renderStartPlan(state.startPlan);applyStaticFacts()}
+function applyStaticFacts(){const origin=$("#settings-origin");if(origin)origin.textContent=new URL(location.href).origin;const lang=$("#settings-language"),themeNode=$("#settings-theme");if(lang)lang.textContent=language==="zh-CN"?"简体中文":"English";if(themeNode)themeNode.textContent=theme.toUpperCase()}
+async function bootstrap(){dialogs();theme=prefTheme();language=prefLanguage();applyTheme();applyLanguage();try{await refreshTasks();const target=taskIdFromLocation();if(target){navigate("tasks");await selectTask(target)}else navigate(currentPage());setInterval(()=>{if(document.hidden||state.refreshInFlight)return;void refreshTasks().catch(error=>{markOffline();setError(errorMessage(error))})},5000)}catch(error){setError(errorMessage(error));markOffline()}}
+function dialogs(){for(const node of $$(".tab"))node.addEventListener("click",()=>navigate(node.dataset.page));for(const node of $$("[data-go]"))node.addEventListener("click",()=>navigate(node.dataset.go));$("#language").addEventListener("change",event=>{language=event.target.value;localStorage.setItem("bridge.ui.language",language);applyLanguage()});$("#theme").addEventListener("change",event=>{theme=event.target.value;localStorage.setItem("bridge.ui.theme",theme);applyTheme()});$("#refresh-tasks").addEventListener("click",()=>void refreshTasks());$("#task-filter").addEventListener("input",renderTasks);$("#task-status").addEventListener("change",()=>void refreshTasks());$("#capture-billing").addEventListener("click",()=>void captureBilling());$("#refresh-startplan").addEventListener("click",()=>void refreshStartPlan());$("#compare-startplan").addEventListener("click",()=>void compareStartPlan());$("#refresh-cost-history").addEventListener("click",()=>void loadCostHistory());$("#load-usage").addEventListener("click",()=>void loadTaskUsage());$("#verification-consent").addEventListener("change",event=>{$("#start-verification").disabled=!event.target.checked});$("#start-verification").addEventListener("click",()=>void startVerification());$("#run-static-check").addEventListener("click",()=>void runRuntimeCheck(false));$("#run-protocol-probe").addEventListener("click",()=>void runRuntimeCheck(true));window.addEventListener("hashchange",()=>{const page=currentPage();navigate(page)})}
+function markOffline(){const stateNode=$("#executor-state"),dot=$("#executor-dot");if(stateNode)stateNode.textContent="UNAVAILABLE";if(dot)dot.className="dot offline";for(const id of ["tasks-executor","tasks-dot"]){const node=document.getElementById(id);if(node)node.textContent=id.endsWith("dot")?"":'UNAVAILABLE'}}
+async function refreshTasks(){if(state.refreshInFlight)return;state.refreshInFlight=true;try{state.session=await taskApi("/api/session");state.executor=state.session.executor||{};const statusFilter=$("#task-status").value;const page=await taskApi("/api/tasks?limit=100"+(statusFilter?"&status="+encodeURIComponent(statusFilter):""));state.tasks=Array.isArray(page.tasks)?page.tasks:[];const stateText=String(state.executor.state||"unknown").toUpperCase();$("#executor-state").textContent=stateText;$("#tasks-executor").textContent=stateText;$("#executor-dot").className="dot "+(stateText==="ACTIVE"?"online":"offline");$("#tasks-dot").className="dot "+(stateText==="ACTIVE"?"online":"offline");$("#lease-id").textContent="lease: "+(state.executor.lease_id||"--");$("#last-refresh").textContent=new Date().toLocaleTimeString();renderTasks();const target=state.selected||taskIdFromLocation();if(target&&validTaskId(target)){state.selected=target;await loadDetail(target)}}catch(error){markOffline();throw error}finally{state.refreshInFlight=false}}
+function renderTasks(){const list=$("#task-list");if(!list)return;const filter=$("#task-filter").value.trim().toLowerCase();const status=$("#task-status").value;const rows=state.tasks.filter(task=>(!status||task.status===status)&&(!filter||(task.task_id+" "+(task.objective||"")).toLowerCase().includes(filter)));$("#count-total").textContent=String(rows.length);$("#count-running").textContent=String(rows.filter(task=>task.status==="running").length);$("#count-waiting").textContent=String(rows.filter(task=>task.status==="waiting_for_master").length);$("#count-wake").textContent=String(rows.filter(task=>task.wake).length);$("#dash-latest-task").textContent=rows[0]?rows[0].task_id:"--";const banner=$("#dashboard-wake"),taskBanner=$("#task-wake"),wakeRows=rows.filter(task=>task.wake);if(banner){banner.hidden=wakeRows.length===0;banner.textContent=wakeRows.length?wakeRows.length+" "+t("wakeBanner"):""}if(taskBanner){taskBanner.hidden=wakeRows.length===0;taskBanner.textContent=wakeRows.length?wakeRows.length+" "+t("wakeBanner"):""}list.replaceChildren();if(!rows.length){list.append(empty(t("noMatch")));return}for(const task of rows){const button=element("button","task-row"+(state.selected===task.task_id?" selected":""));button.type="button";button.addEventListener("click",()=>void selectTask(task.task_id));const left=element("span");left.append(element("span","task-id",task.task_id),element("span","task-objective",task.objective||""));const badges=element("span","badges");badges.append(tag(task.status));if(task.wake)badges.append(tag("wake: "+task.wake.state));button.append(left,badges);list.append(button)}}
+async function selectTask(id){if(!validTaskId(id)){setError(t("invalidTask"));return}state.selected=id;setTaskInLocation(id);renderTasks();await loadDetail(id)}
+async function loadDetail(id){if(state.selected!==id)state.errors={};const changed=state.selected!==id;state.selected=id;setTaskInLocation(id);if(changed){$("#task-detail").textContent=t("loadingEvidence")}const generation=++state.detailGeneration;const base="/api/tasks/"+encodeURIComponent(id);const [status,summary,events,result,attention]=await Promise.allSettled([taskApi(base+"/status"),taskApi(base+"/summary"),taskApi(base+"/events?limit=40&include_attempt=true"),taskApi(base+"/result?view=summary"),taskApi(base+"/attention")]);if(generation!==state.detailGeneration||state.selected!==id)return;state.status=status.status==="fulfilled"?status.value:null;state.summary=summary.status==="fulfilled"?summary.value:null;state.events=events.status==="fulfilled"?events.value:null;state.attention=attention.status==="fulfilled"?attention.value:null;state.resultPending=errorCode(result.reason)==="TASK_NOT_FINISHED";state.result=result.status==="fulfilled"?result.value:null;state.errors={};if(status.status==="rejected")state.errors.status=errorMessage(status.reason);if(events.status==="rejected")state.errors.events=errorMessage(events.reason);if(result.status==="rejected"&&!state.resultPending)state.errors.result=errorMessage(result.reason);setError(Object.values(state.errors).filter(Boolean).join(" | "));renderDetail()}
+function renderDetail(){const target=$("#task-detail"),status=state.status;if(!status){target.replaceChildren(empty(state.errors.status?t("statusUnavailable")+": "+state.errors.status:t("chooseTask")));return}target.replaceChildren();const head=element("div","detail-head");const block=document.createElement("div");block.append(element("h3","",status.task_id),element("p","","Attempt "+status.attempt+" / "+status.status));head.append(block,tag(status.status));target.append(head);const facts=element("div","facts");facts.append(fact(t("executor"),state.executor&&state.executor.state),fact(t("task"),status.task_id),fact(t("attempt"),status.attempt),fact(t("wake"),state.summary&&state.summary.wake&&state.summary.wake.state||t("noneObserved")),fact(t("hold"),(status.observation&&status.observation.cleanup)||(status.execution_observation&&status.execution_observation.state)||t("noneObserved")),fact(t("queue"),(status.dispatch_blocker&&status.dispatch_blocker.reason)||"ready"),fact(t("workerPid"),status.worker_pid),fact(t("session"),status.zcode_session_id),fact(t("created"),status.created_at),fact(t("updated"),status.updated_at));target.append(facts);const pending=state.attention&&Array.isArray(state.attention.pending_requests)?state.attention.pending_requests:[];target.append(section(t("pendingInteraction"),pending.length?pending:t("noneObserved")));const actions=element("div","action-row");const cancel=element("button","button secondary",t("requestCancel"));cancel.disabled=["completed","failed","cancelled"].includes(status.status);cancel.addEventListener("click",()=>void mutateTask("cancel",{}));actions.append(cancel);target.append(actions);target.append(section(t("latestEvents"),state.errors.events?t("unavailable")+": "+state.errors.events:(state.events&&state.events.events||[])));target.append(section(t("resultSummary"),state.resultPending?t("resultPending"):state.errors.result?t("unavailable")+": "+state.errors.result:state.result||t("notAvailable")));if(status.status==="waiting_for_master"){const form=element("form","section");const head2=element("div","section-head");head2.append(element("h2","",t("pendingInteraction")));const grid=element("div","form-grid");const request=element("input");request.name="request_id";request.placeholder="request_id";request.required=true;if(pending[0])request.value=pending[0];const decision=element("select");decision.name="decision";for(const value of ["allow","deny","accept","decline"]){const option=element("option","",value);option.value=value;decision.append(option)}const reason=element("textarea");reason.name="reason";reason.placeholder="reason";reason.className="form-wide";const row=element("div","action-row");const submit=element("button","button",t("sendReply"));submit.type="submit";row.append(submit);grid.append(request,decision,reason);form.append(head2,grid,row);form.addEventListener("submit",event=>{event.preventDefault();const data=new FormData(form);void mutateTask("reply",{request_id:String(data.get("request_id")||""),decision:String(data.get("decision")||"allow"),...(String(data.get("reason")||"")?{reason:String(data.get("reason"))}:{})})});target.append(form)}const line=element("div","status-line");line.id="detail-status";target.append(line)}
+async function mutateTask(action,body){const target=state.selected;if(!target)return;try{await taskApi("/api/tasks/"+encodeURIComponent(target)+"/"+action,{method:"POST",body:JSON.stringify(body),csrf:true,origin:true});await refreshTasks();toast(action+" accepted")}catch(error){setError(errorMessage(error));toast(errorMessage(error),true)}}
+async function ensureCostLab(){if(!state.costLoaded){state.costLoaded=true;void loadCostLab()}if(!state.runtimeLoaded)void ensureRuntime()}
+async function loadCostLab(){try{const [session,environment,history]=await Promise.all([loadCostSession(),costApi("environment"),costApi("history").catch(()=>({items:[]}))]);state.costSession=session;state.costHistory=history.items||[];renderCostEnvironment(environment);await Promise.all([loadStartPlan(),loadCostHistory()]);const latest=state.costHistory[0];if(latest)$("#cost-ratio").textContent=formatRatio(latest)}catch(error){toast(errorMessage(error),true)}}
+function renderCostEnvironment(environment){const zcode=environment.zcode||{};$("#cost-runtime").textContent=zcode.runtime_status||"UNKNOWN";$("#cost-runtime-detail").textContent=(zcode.version||"unknown")+" / "+(zcode.installation_safety||"UNKNOWN");$("#cost-discount").textContent=zcode.discount_status||"UNKNOWN";$("#cost-billing").textContent=(environment.billing_reader&&environment.billing_reader.status)||"UNKNOWN"}
+async function ensureRuntime(){if(state.runtimeLoaded)return;state.runtimeLoaded=true;$("#runtime-state").textContent="";try{const runtime=await taskApi("/api/runtime");state.runtime=runtime;renderRuntime(runtime);$("#dash-runtime").textContent=runtime.installation&&runtime.installation.manifest_status||"UNKNOWN";$("#dash-runtime-note").textContent=runtime.fingerprint?String(runtime.fingerprint).slice(0,16)+"…":"UNAVAILABLE"}catch(error){state.runtimeLoaded=false;$("#runtime-state").textContent=errorMessage(error);toast(errorMessage(error),true)}}
+function renderRuntime(runtime){const installation=runtime.installation||{},assets=installation.assets||{},caps=runtime.capabilities||{};$("#runtime-safety").textContent=installation.installation_safety||"UNKNOWN";$("#runtime-manifest").textContent=installation.manifest_status||"UNKNOWN";$("#runtime-protocol").textContent=(caps.protocol&&caps.protocol.status)||"NOT_RUN";$("#runtime-fingerprint").textContent=runtime.fingerprint?shortHash(runtime.fingerprint):"UNAVAILABLE";$("#runtime-version").textContent=(installation.desktop_version||"unknown")+" / Node "+(installation.node_version||"unknown");$("#runtime-authorization").textContent=(installation.experimental_authorization&&installation.experimental_authorization.state||"not_configured")+" / "+((installation.experimental_authorization&&installation.experimental_authorization.scopes)||[]).join(", ");const change=$("#runtime-change");change.hidden=!runtime.runtime_changed;change.textContent=runtime.runtime_changed?t("runtimeChanged")+" "+runtime.changed_assets.join(", "):"";const facts=$("#runtime-facts");facts.replaceChildren();const rows=[["Desktop version",installation.desktop_version],["App version",installation.desktop_app_version],["Build commit",installation.desktop_build_commit_id],["Node",installation.node_version],["Fingerprint",runtime.fingerprint],["Bundle SHA-256",assets.bundle&&assets.bundle.sha256],["Runtime host SHA-256",assets.runtime_host&&assets.runtime_host.sha256],["Builtin config SHA-256",assets.builtin_provider_config&&assets.builtin_provider_config.sha256],["Desktop executable SHA-256",assets.desktop_executable&&assets.desktop_executable.sha256],["Desktop archive SHA-256",assets.desktop_archive&&assets.desktop_archive.sha256],["Model requests on inspection","0"],["Production manifest modified",t("no")]];for(const row of rows){const tr=document.createElement("tr");tr.append(element("td","",row[0]),element("td","mono",row[1]||"UNKNOWN"));facts.append(tr)}const capBody=$("#runtime-capabilities");capBody.replaceChildren();for(const [name,value] of Object.entries(caps)){const tr=document.createElement("tr");const statusCell=document.createElement("td");statusCell.append(tag(value.status));tr.append(element("td","mono",name),statusCell,element("td","",value.source||""),element("td","",value.limitation||""));capBody.append(tr)}const evidence=$("#runtime-evidence");evidence.replaceChildren();if(!runtime.evidence||!runtime.evidence.length){evidence.append(empty(t("noEvidence")))}else{for(const record of runtime.evidence.slice(0,12)){const row=element("div","history-row");for(const pair of [["Type",record.probe_type],["Result",record.result],["Scope",record.probe_scope],["Captured",record.captured_at],["Digest",shortHash(record.evidence_digest)]]){const cell=document.createElement("div");cell.append(element("small","",pair[0]),element("strong","",pair[1]));row.append(cell)}evidence.append(row)}}const authorization=installation.experimental_authorization||{};const allowed=installation.installation_safety==="OFFICIAL_INSTALLATION_SAFE"&&(installation.runtime_status==="OFFICIAL_RUNTIME_VERIFIED"||(installation.runtime_status==="OFFICIAL_RUNTIME_EXPERIMENTAL"&&authorization.state==="authorized"));$("#run-protocol-probe").disabled=!allowed}
+async function runRuntimeCheck(probe){const button=probe?$("#run-protocol-probe"):$("#run-static-check");button.disabled=true;$("#runtime-state").textContent=probe?t("runProtocolProbe")+"...":t("runStaticCheck")+"...";try{const runtime=await taskApi(probe?"/api/runtime/protocol-probe":"/api/runtime/check",{method:"POST",body:"{}",csrf:true,origin:true});state.runtime=runtime;renderRuntime(runtime);$("#runtime-state").textContent=probe?t("probeCompleted"):t("staticCompleted");toast(probe?t("probeCompleted"):t("staticCompleted"))}catch(error){$("#runtime-state").textContent=errorCode(error)==="RUNTIME_PROBE_AUTHORIZATION_REQUIRED"||errorCode(error)==="RUNTIME_UNSAFE"?t("probeBlocked"):errorMessage(error);toast($("#runtime-state").textContent,true)}finally{if(!probe)button.disabled=false;else renderRuntime(state.runtime||{})}}
+async function captureBilling(){const button=$("#capture-billing");button.disabled=true;$("#billing-state").textContent="Reading official snapshot...";try{const snapshot=await costApi("billing/snapshot",{method:"POST",body:"{}",csrf:true});renderBilling(snapshot);$("#billing-state").textContent=t("snapshotCaptured")+" "+new Date().toLocaleString();toast(t("snapshotCaptured"))}catch(error){$("#billing-state").textContent=t("snapshotFailed");toast(errorMessage(error),true)}finally{button.disabled=false}}
+function renderBilling(snapshot){const target=$("#billing-view");target.replaceChildren();const rows=[];if(Array.isArray(snapshot.models)){for(const model of snapshot.models){for(const hour of model.hours||[]){if(hour.total_tokens||hour.total_credits)rows.push([hour.bucket,hour.total_tokens,hour.total_credits,hour.cached_input_tokens,hour.output_tokens])}}}if(!rows.length){target.append(empty("No attributed Coding Plan ledger rows were returned."));return}const wrap=element("div","table-wrap"),table=document.createElement("table"),head=document.createElement("thead"),body=document.createElement("tbody");const hr=document.createElement("tr");for(const label of ["Hour","Tokens","Credits","Cached input","Output"])hr.append(element("th","",label));head.append(hr);for(const row of rows){const tr=document.createElement("tr");for(const value of row)tr.append(element("td","mono",value));body.append(tr)}table.append(head,body);wrap.append(table);target.append(wrap)}
+async function loadStartPlan(){try{const [latest,history]=await Promise.all([costApi("billing/startplan/latest"),costApi("billing/startplan/history?limit=25")]);state.startPlan={...latest,history:history.items||[]};renderStartPlan(state.startPlan)}catch(error){$("#startplan-state").textContent=t("startPlanRefreshFailed")+" "+errorMessage(error)}}
+function snapshotOf(value){return value&&value.snapshot&&value.snapshot.snapshot?value.snapshot.snapshot:value&&value.snapshot?value.snapshot:value}
+function renderStartPlan(data){const snapshot=snapshotOf(data&&data.snapshot),history=Array.isArray(data&&data.history)?data.history:[];$("#startplan-freshness").textContent=snapshot?"FRESH":"NO SNAPSHOT";$("#startplan-total").textContent=displayInteger(snapshot&&snapshot.total_balance);$("#startplan-remaining").textContent=displayInteger(snapshot&&snapshot.remaining_balance);$("#startplan-entitlement").textContent=snapshot&&snapshot.official_entitlement&&snapshot.official_entitlement.status||"UNKNOWN";$("#startplan-unit").textContent=snapshot&&snapshot.unit_type||"UNKNOWN";$("#startplan-period").textContent=snapshot&&snapshot.billing_period?(dateValue(snapshot.billing_period.start)+" – "+dateValue(snapshot.billing_period.end)):"UNKNOWN";$("#startplan-expiry").textContent=dateValue(snapshot&&snapshot.expiry);const target=$("#startplan-history");target.replaceChildren();if(!history.length){target.append(empty(t("noSnapshot")));return}for(const item of history.slice().reverse().slice(0,8)){const snap=snapshotOf(item);const row=element("div","history-row");for(const pair of [["Captured",dateValue(item.captured_at)],["Plan",snap.plan_type||snap.plan_id||"UNKNOWN"],["Used",displayInteger(snap.used_balance)],["Remaining",displayInteger(snap.remaining_balance)],["Unit",snap.unit_type||"UNKNOWN"]]){const cell=document.createElement("div");cell.append(element("small","",pair[0]),element("strong","",pair[1]));row.append(cell)}target.append(row)}}
+async function refreshStartPlan(){const button=$("#refresh-startplan");button.disabled=true;$("#startplan-state").textContent="Reading official billing/balance...";try{const result=await costApi("billing/startplan/refresh",{method:"POST",body:"{}",csrf:true});await loadStartPlan();$("#startplan-state").textContent=result.deduplicated?"Official snapshot already stored.":"Official snapshot captured.";toast("Start Plan official balance refreshed")}catch(error){$("#startplan-state").textContent=t("startPlanRefreshFailed")+" "+errorMessage(error);toast(errorMessage(error),true)}finally{button.disabled=false}}
+function compareStartPlan(){const items=state.startPlan&&state.startPlan.history||[];if(items.length<2){toast(t("comparisonUnavailable"),true);return}const current=snapshotOf(items[items.length-1]),previous=snapshotOf(items[items.length-2]);const comparable=current&&previous&&current.unit_type===previous.unit_type&&current.billing_period&&previous.billing_period&&current.billing_period.start===previous.billing_period.start;toast(comparable?"Used delta: "+signed(current.used_balance-previous.used_balance)+" / Remaining delta: "+signed(current.remaining_balance-previous.remaining_balance):t("comparisonUnavailable"),!comparable)}
+async function loadCostHistory(){try{const history=await costApi("history");state.costHistory=history.items||[];const latest=state.costHistory[0];$("#cost-ratio").textContent=latest?formatRatio(latest):"NO EXPERIMENT";const target=$("#cost-history");target.replaceChildren();if(!state.costHistory.length){target.append(empty(t("noExperiments")));return}for(const item of state.costHistory){const row=element("div","history-row");for(const pair of [["Model",item.model],["Status",item.status],["Credits",item.credit_class||"UNKNOWN"],["Ratio",formatRatio(item)],["Started",dateValue(item.started_at)]]){const cell=document.createElement("div");cell.append(element("small","",pair[0]),element("strong","",pair[1]));row.append(cell)}target.append(row)}}catch(error){toast(errorMessage(error),true)}}
+async function loadTaskUsage(){const taskId=$("#usage-task-id").value.trim();if(!validTaskId(taskId)){toast(t("invalidTask"),true);return}const target=$("#usage-view");try{const result=await taskApi("/api/tasks/"+encodeURIComponent(taskId)+"/result?view=full");const usage=result.usage||(Array.isArray(result.events)?result.events.find(event=>event.details&&event.details.usage)?.details.usage:null);if(!usage||typeof usage!=="object"){target.replaceChildren(empty(t("usagePending")));toast(t("usagePending"),true);return}const facts=element("div","facts");for(const key of ["provider_id","model_id","source","scope","input_tokens","cached_input_tokens","output_tokens","total_tokens","observed_at","finality"])facts.append(fact(key,usage[key]===undefined?(result.model&&result.model[key]):usage[key]));target.replaceChildren(facts);toast(t("usageLoaded"))}catch(error){target.replaceChildren(empty(errorCode(error)==="TASK_NOT_FINISHED"?t("notFinished"):errorMessage(error)))}}
+async function startVerification(){const button=$("#start-verification");button.disabled=true;try{const started=await costApi("verifications",{method:"POST",body:JSON.stringify({confirmation:state.costSession.confirmation_phrase,provider:state.costSession.provider,model:state.costSession.model,reasoning:"low",task_mode:$("#verification-task-mode").value}),csrf:true});state.verificationId=started.id;$("#verification-state").textContent=t("verificationStarted");$("#verification-view").replaceChildren(section("Verification","Status "+started.status+"\nPoll URL "+started.poll_url));pollVerification()}catch(error){$("#verification-state").textContent=t("verificationFailed")+" "+errorMessage(error);toast(errorMessage(error),true);button.disabled=!$("#verification-consent").checked}}
+async function pollVerification(){clearTimeout(state.verificationTimer);if(!state.verificationId)return;try{const record=await costApi("verifications/"+encodeURIComponent(state.verificationId));$("#verification-state").textContent=record.status;$("#verification-view").replaceChildren(section("Verification",record));if(["QUEUED","RUNNING","MODEL_REQUESTED","AWAITING_SETTLEMENT"].includes(record.status)){state.verificationTimer=setTimeout(pollVerification,2000);return}if(record.reconciliation&&record.reconciliation.billing_reconciliation==="PASS")toast(t("billingConfirmed"));else toast(t("billingInconclusive"),true);await loadCostHistory()}catch(error){$("#verification-state").textContent=errorMessage(error);state.verificationTimer=setTimeout(pollVerification,4000)}}
+function formatRatio(item){return item&&item.billing_reconciliation==="PASS"&&Number.isFinite(item.effective_extra_ratio)?Number(item.effective_extra_ratio).toFixed(6):t("inconclusive")}
+function displayInteger(value){return Number.isSafeInteger(value)?value.toLocaleString(language):"--"}function signed(value){return Number.isSafeInteger(value)?(value>0?"+":"")+value.toLocaleString(language):"--"}function dateValue(value){if(!value)return"UNKNOWN";const date=new Date(value);return Number.isNaN(date.getTime())?"UNKNOWN":date.toLocaleString(language)}function shortHash(value){const text=String(value||"");return text.length>22?text.slice(0,12)+"…"+text.slice(-8):text}
+document.addEventListener("DOMContentLoaded",()=>void bootstrap());
+</script>
+</body>
+</html>`;
+
 // src/web/server.ts
-var LOOPBACK_HOST = "127.0.0.1";
+var LOOPBACK_HOST2 = "127.0.0.1";
 var MAX_BODY_BYTES = 64 * 1024;
 var MAX_FULL_RESULT_BYTES = 2 * 1024 * 1024;
 var TASK_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/u;
@@ -7001,7 +13429,7 @@ function validMutation(request, port, csrfToken) {
   const fetchSite = request.headers["sec-fetch-site"];
   return fetchSite === void 0 || fetchSite === "same-origin" || fetchSite === "none";
 }
-async function readJson(request) {
+async function readJson2(request) {
   const declared = request.headers["content-length"];
   if (declared !== void 0) {
     const length = Number(declared);
@@ -7073,7 +13501,7 @@ function taskErrorCode(error2) {
   if (error2 && typeof error2 === "object" && "code" in error2 && typeof error2.code === "string") return error2.code;
   return "WEB_INTERNAL_ERROR";
 }
-function errorMessage(error2) {
+function errorMessage2(error2) {
   return error2 instanceof Error ? error2.message : String(error2);
 }
 async function findTaskSummary(manager, taskId) {
@@ -7094,7 +13522,7 @@ function createTaskConsoleServer(options) {
   const state = {
     server: null,
     address: null,
-    csrfToken: options.csrfToken ?? randomBytes(32).toString("base64url"),
+    csrfToken: options.csrfToken ?? randomBytes2(32).toString("base64url"),
     sockets: /* @__PURE__ */ new Set(),
     closed: false
   };
@@ -7110,6 +13538,11 @@ function createTaskConsoleServer(options) {
       throw failure2(403, "WEB_HOST_REJECTED", "Host must be the local Task Console origin");
     }
     const url = new URL(request.url ?? "/", address.origin);
+    if (url.pathname.startsWith("/api/cost-lab/")) {
+      if (!options.costLab) throw failure2(503, "COST_LAB_UNAVAILABLE", "Cost Lab is not configured");
+      await options.costLab.handleRequest(request, response);
+      return;
+    }
     if (request.method === "GET" || request.method === "HEAD") {
       await handleRead(request, response, url);
       return;
@@ -7125,7 +13558,7 @@ function createTaskConsoleServer(options) {
   };
   const handleRead = async (request, response, url) => {
     if (url.pathname === "/" || url.pathname === "/index.html") {
-      const body = CONSOLE_HTML;
+      const body = OPERATIONS_CONSOLE_HTML;
       response.statusCode = 200;
       response.setHeader("Content-Type", "text/html; charset=utf-8");
       response.setHeader("Content-Length", String(Buffer.byteLength(body)));
@@ -7138,7 +13571,7 @@ function createTaskConsoleServer(options) {
         try {
           executor = await options.executorStatus();
         } catch (error2) {
-          executor = { state: "unavailable", reason: errorMessage(error2) };
+          executor = { state: "unavailable", reason: errorMessage2(error2) };
         }
       }
       json(response, 200, {
@@ -7153,6 +13586,20 @@ function createTaskConsoleServer(options) {
           }
         }
       });
+      return;
+    }
+    if (url.pathname === "/api/runtime") {
+      if (!options.runtimeCompatibility) {
+        throw failure2(503, "RUNTIME_COMPATIBILITY_UNAVAILABLE", "Runtime compatibility is not configured");
+      }
+      json(response, 200, { ok: true, result: await options.runtimeCompatibility.inspect() });
+      return;
+    }
+    if (url.pathname === "/api/runtime/candidate") {
+      if (!options.runtimeCompatibility) {
+        throw failure2(503, "RUNTIME_COMPATIBILITY_UNAVAILABLE", "Runtime compatibility is not configured");
+      }
+      json(response, 200, { ok: true, result: await options.runtimeCompatibility.candidateReport() });
       return;
     }
     if (url.pathname === "/api/tasks") {
@@ -7201,6 +13648,22 @@ function createTaskConsoleServer(options) {
     json(response, 200, { ok: true, result: value });
   };
   const handleMutation = async (request, response, url) => {
+    if (url.pathname === "/api/runtime/check") {
+      if (!options.runtimeCompatibility) {
+        throw failure2(503, "RUNTIME_COMPATIBILITY_UNAVAILABLE", "Runtime compatibility is not configured");
+      }
+      await readJson2(request);
+      json(response, 200, { ok: true, result: await options.runtimeCompatibility.inspect() });
+      return;
+    }
+    if (url.pathname === "/api/runtime/protocol-probe") {
+      if (!options.runtimeCompatibility) {
+        throw failure2(503, "RUNTIME_COMPATIBILITY_UNAVAILABLE", "Runtime compatibility is not configured");
+      }
+      await readJson2(request);
+      json(response, 200, { ok: true, result: await options.runtimeCompatibility.runAuthorizedProtocolProbe() });
+      return;
+    }
     if (request.headers["content-type"]?.split(";")[0]?.trim().toLowerCase() !== "application/json") {
       throw failure2(415, "WEB_CONTENT_TYPE_REQUIRED", "mutations require application/json");
     }
@@ -7208,7 +13671,7 @@ function createTaskConsoleServer(options) {
     if (!match) throw failure2(404, "WEB_NOT_FOUND", "route not found");
     const taskId = decodeTaskId(match[1]);
     const action = match[2];
-    const body = await readJson(request);
+    const body = await readJson2(request);
     if (action === "cancel") {
       json(response, 200, { ok: true, result: await options.manager.cancelTask(taskId) });
       return;
@@ -7217,11 +13680,11 @@ function createTaskConsoleServer(options) {
     try {
       input = zcodeInteractionReplyInputSchema.parse({ ...body, task_id: taskId });
     } catch (error2) {
-      throw failure2(400, "WEB_INVALID_INTERACTION_REPLY", errorMessage(error2));
+      throw failure2(400, "WEB_INVALID_INTERACTION_REPLY", errorMessage2(error2));
     }
     json(response, 200, { ok: true, result: await options.manager.replyToInteraction(input) });
   };
-  const server = http.createServer((request, response) => {
+  const server = http2.createServer((request, response) => {
     void requestHandler(request, response).catch((error2) => {
       if (response.headersSent) {
         response.destroy();
@@ -7229,7 +13692,7 @@ function createTaskConsoleServer(options) {
       }
       json(response, taskErrorStatus(error2), {
         ok: false,
-        error: { code: taskErrorCode(error2), message: errorMessage(error2) }
+        error: { code: taskErrorCode(error2), message: errorMessage2(error2) }
       });
     });
   });
@@ -7262,16 +13725,26 @@ function createTaskConsoleServer(options) {
         };
         server.once("error", onError);
         server.once("listening", onListening);
-        server.listen(options.port ?? 0, LOOPBACK_HOST);
+        server.listen(options.port ?? 0, LOOPBACK_HOST2);
       });
       const bound = server.address();
       if (!bound || typeof bound === "string") throw failure2(500, "WEB_ADDRESS_UNAVAILABLE", "server address unavailable");
       state.address = {
-        host: LOOPBACK_HOST,
+        host: LOOPBACK_HOST2,
         port: bound.port,
-        origin: `http://${LOOPBACK_HOST}:${bound.port}`,
-        url: `http://${LOOPBACK_HOST}:${bound.port}/`
+        origin: `http://${LOOPBACK_HOST2}:${bound.port}`,
+        url: `http://${LOOPBACK_HOST2}:${bound.port}/`
       };
+      try {
+        await options.costLab?.mountEndpoints({
+          origin: state.address.origin,
+          port: state.address.port
+        });
+      } catch (error2) {
+        state.address = null;
+        await new Promise((resolve) => server.close(() => resolve()));
+        throw error2;
+      }
       return state.address;
     },
     async close() {
@@ -7286,6 +13759,7 @@ function createTaskConsoleServer(options) {
         for (const socket of state.sockets) socket.end();
       });
       state.address = null;
+      await options.costLab?.close({ abortActive: true });
     }
   };
 }
@@ -7298,7 +13772,7 @@ function parseListQuery(query) {
   try {
     return listTasksInputSchema.parse(raw);
   } catch (error2) {
-    throw failure2(400, "WEB_INVALID_QUERY", errorMessage(error2));
+    throw failure2(400, "WEB_INVALID_QUERY", errorMessage2(error2));
   }
 }
 function parseEventsQuery(query, taskId) {
@@ -7315,250 +13789,22 @@ function parseEventsQuery(query, taskId) {
   try {
     return zcodeEventsInputSchema.parse(raw);
   } catch (error2) {
-    throw failure2(400, "WEB_INVALID_QUERY", errorMessage(error2));
+    throw failure2(400, "WEB_INVALID_QUERY", errorMessage2(error2));
   }
 }
-var CONSOLE_HTML = String.raw`<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="color-scheme" content="light">
-<title>Bridge Operations Desk</title>
-<style>
-:root{--ink:#1d211e;--paper:#f3f0e8;--panel:#fffdf7;--line:#c9c3b6;--orange:#f05a28;--sage:#78917c;--muted:#6b6d65;--mono:"Cascadia Code","Consolas",monospace;--display:"Bahnschrift SemiCondensed","Aptos Display",sans-serif;--serif:Georgia,"Times New Roman",serif}
-*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 100% 0%,#ffe4d8 0,transparent 30rem),linear-gradient(135deg,#f3f0e8,#e8e5dc);color:var(--ink);font-family:var(--display);min-height:100vh}
-body:before{content:"";position:fixed;inset:0;pointer-events:none;opacity:.3;background-image:linear-gradient(rgba(29,33,30,.05) 1px,transparent 1px),linear-gradient(90deg,rgba(29,33,30,.05) 1px,transparent 1px);background-size:28px 28px;z-index:-1}
-.shell{max-width:1440px;margin:0 auto;padding:28px 34px 44px}.topline{display:flex;justify-content:space-between;align-items:end;border-bottom:2px solid var(--ink);padding-bottom:14px;gap:20px}.eyebrow,.mono{font-family:var(--mono);font-size:11px;letter-spacing:.11em;text-transform:uppercase}.eyebrow{color:var(--orange);font-weight:700}.title{margin:4px 0 0;font-family:var(--serif);font-size:clamp(30px,5vw,58px);line-height:.92;letter-spacing:-.04em;font-weight:500}.topline-right{text-align:right;min-width:170px}.topline-right strong{display:block;font:700 14px var(--mono)}.topline-right span{color:var(--muted);font-size:12px}
-.summary{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin:18px 0}.stat{border:1px solid var(--line);background:rgba(255,253,247,.7);padding:12px 14px}.stat strong{display:block;font:700 24px var(--mono);letter-spacing:-.05em}.stat span{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.08em}.stat.hot strong{color:var(--orange)}
-.workspace{display:grid;grid-template-columns:minmax(0,1.18fr) minmax(350px,.82fr);gap:18px;align-items:start}.panel{border:1px solid var(--ink);background:var(--panel);box-shadow:6px 6px 0 rgba(29,33,30,.12)}
-.panel-head{display:flex;justify-content:space-between;align-items:center;padding:14px 16px;border-bottom:1px solid var(--line);gap:12px}.panel-head h2{margin:0;font:700 14px var(--mono);text-transform:uppercase;letter-spacing:.12em}.filters{display:flex;gap:8px;flex-wrap:wrap;padding:12px 14px;border-bottom:1px solid var(--line);background:#f8f5ed}
-input,select,textarea,button{font:13px var(--display)}input,select,textarea{border:1px solid var(--line);background:#fffdf7;color:var(--ink);padding:9px 10px;border-radius:0}input:focus,select:focus,textarea:focus,button:focus{outline:2px solid var(--orange);outline-offset:2px}
-button{cursor:pointer;border:1px solid var(--ink);background:var(--ink);color:var(--paper);padding:9px 12px;font-weight:700;letter-spacing:.03em}button:hover{background:var(--orange);border-color:var(--orange)}button.secondary{background:var(--paper);color:var(--ink)}button.secondary:hover{background:#ffe4d8}
-.task-list{padding:6px}.task-row{width:100%;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;text-align:left;background:transparent;color:var(--ink);border:0;border-bottom:1px solid #e4dfd4;padding:13px 10px;font-weight:400}.task-row:hover,.task-row.selected{background:#f1ece0;color:var(--ink)}.task-row:last-child{border-bottom:0}.task-id{font:700 12px var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.task-objective{margin-top:4px;color:var(--muted);font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.task-badges{display:flex;align-items:center;justify-content:flex-end;gap:5px;flex-wrap:wrap}.chip{display:inline-block;font:700 10px var(--mono);letter-spacing:.06em;text-transform:uppercase;padding:4px 6px;background:#e4dfd4;color:var(--ink);white-space:nowrap}.chip.running,.chip.waiting_for_master{background:#ffd8c7;color:#8a2d0d}.chip.completed,.chip.turn_started{background:#d8e6d8;color:#2d5636}.chip.failed,.chip.cancelled,.chip.submission_unknown{background:#f1c7c0;color:#7f1e21}.chip.queued,.chip.intent{background:#f8e3ad;color:#6d4d00}.wake-banner{margin:0 14px 10px;border-left:3px solid var(--orange);background:#fff0e8;padding:9px 10px;color:#71320f;font:700 11px var(--mono);letter-spacing:.02em}.wake-banner[hidden]{display:none}
-.empty{padding:34px 16px;color:var(--muted);font-family:var(--serif);font-size:17px}.detail-body{padding:16px}.detail-title{display:flex;justify-content:space-between;gap:12px;align-items:start;margin-bottom:12px}.detail-title h3{margin:0;font:700 15px var(--mono);overflow-wrap:anywhere}.detail-title p{margin:6px 0 0;color:var(--muted);font-size:13px}.meta{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:14px 0}.meta div{border-top:1px solid var(--line);padding-top:8px}.meta label{display:block;color:var(--muted);font:10px var(--mono);text-transform:uppercase;letter-spacing:.08em}.meta strong{display:block;margin-top:3px;font:13px var(--mono);overflow-wrap:anywhere}.actions{display:flex;gap:8px;flex-wrap:wrap;margin:16px 0}.pre{background:#20241f;color:#eae9dc;padding:12px;overflow:auto;max-height:270px;font:11px/1.6 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;border-left:3px solid var(--orange)}
-.section-label{font:700 11px var(--mono);text-transform:uppercase;letter-spacing:.1em;margin:18px 0 8px;color:var(--orange)}.reply{border-top:1px solid var(--line);margin-top:18px;padding-top:14px}.reply-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}.reply textarea{grid-column:1/-1;min-height:64px;resize:vertical}.status-line{min-height:20px;color:var(--orange);font:11px var(--mono);margin-top:10px}.error{border-left:3px solid var(--orange);background:#ffe4d8;padding:10px;color:#7f1e21;font-size:13px;margin:12px 16px;display:none}.footer{display:flex;justify-content:space-between;gap:12px;margin-top:22px;color:var(--muted);font:11px var(--mono);text-transform:uppercase;letter-spacing:.06em}
-@keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}.panel{animation:rise .45s ease both}.panel:nth-child(2){animation-delay:.08s}@media(max-width:900px){.shell{padding:20px 16px 32px}.workspace{grid-template-columns:1fr}.summary{grid-template-columns:repeat(2,1fr)}.topline{align-items:start}.title{font-size:42px}}@media(max-width:520px){.topline{display:block}.topline-right{text-align:left;margin-top:14px}.summary{grid-template-columns:1fr 1fr}.reply-grid{grid-template-columns:1fr}.meta{grid-template-columns:1fr 1fr}.footer{display:block}.footer span{display:block;margin-top:6px}}
-</style>
-</head>
-<body>
-<div class="shell">
-  <header class="topline">
-    <div><div class="eyebrow">Codex / ZCode Bridge</div><h1 class="title">Operations<br>Desk</h1></div>
-    <div class="topline-right"><span>Executor link</span><strong id="executor-state">CONNECTING</strong><span id="lease-id">lease: --</span></div>
-  </header>
-  <section class="summary" aria-label="Task summary">
-    <div class="stat"><strong id="count-total">--</strong><span>visible tasks</span></div>
-    <div class="stat hot"><strong id="count-running">--</strong><span>running now</span></div>
-    <div class="stat"><strong id="count-waiting">--</strong><span>needs master</span></div>
-    <div class="stat hot"><strong id="count-wake">--</strong><span>wake signals</span></div>
-    <div class="stat"><strong id="last-refresh">--:--</strong><span>last refresh</span></div>
-  </section>
-  <div class="error" id="error"></div>
-  <main class="workspace">
-    <section class="panel">
-      <div class="panel-head"><h2>Task ledger</h2><button class="secondary" id="refresh">Refresh</button></div>
-      <div class="filters"><input id="filter" placeholder="Filter task or objective" aria-label="Filter tasks"><select id="status-filter" aria-label="Status"><option value="">All statuses</option><option>queued</option><option>running</option><option>completed</option><option>failed</option><option>cancelled</option><option>waiting_for_master</option></select></div>
-      <div id="wake-banner" class="wake-banner" hidden></div>
-      <div id="task-list" class="task-list"><div class="empty">Loading the ledger...</div></div>
-    </section>
-    <section class="panel">
-      <div class="panel-head"><h2>Inspection</h2><span class="mono">read-only + actions</span></div>
-      <div class="detail-body" id="detail"><div class="empty">Choose a task to inspect its durable evidence.</div></div>
-    </section>
-  </main>
-  <footer class="footer"><span>Loopback only / local account session</span><span>Page close never cancels a task</span></footer>
-</div>
-<script>
-const state={csrf:"",tasks:[],selected:null,detail:null,summary:null,events:null,result:null,attention:null,errors:{},executor:null,resultPending:false};
-const byId=id=>document.getElementById(id);
-function setError(message){const e=byId("error");e.textContent=message||"";e.style.display=message?"block":"none";}
-function esc(value){return String(value??"")}
-function errorMessage(error){return error&&error.message?error.message:String(error)}
-function errorCode(error){return error&&error.code?String(error.code):""}
-function isNotFinished(error){return errorCode(error)==="TASK_NOT_FINISHED"||/TASK_NOT_FINISHED/u.test(errorMessage(error));}
-async function api(path,options={}){
-  const headers={"Accept":"application/json",...(options.body?{"Content-Type":"application/json"}:{})};
-  if(options.csrf)headers["X-ZCode-Bridge-CSRF"]=state.csrf;
-  if(options.origin)headers["Origin"]=options.origin;
-  const response=await fetch(path,{...options,headers:{...headers,...(options.headers||{})}});
-  const body=await response.json().catch(()=>({ok:false,error:{code:"WEB_BAD_RESPONSE",message:"invalid server response"}}));
-  if(!response.ok||!body.ok){
-    const code=body.error&&body.error.code?body.error.code:"WEB_REQUEST_FAILED";
-    const error=new Error((code?code+": ":"")+(body.error&&body.error.message||"request failed"));
-    error.code=code;
-    throw error;
-  }
-  return body.result??body;
-}
-function statusClass(status){return "chip "+String(status||"unknown").replace(/[^a-z_]/g,"")}
-function validTaskId(value){return /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/u.test(String(value||""))}
-function taskIdFromLocation(){const value=new URL(location.href).searchParams.get("task_id");return validTaskId(value)?value:null;}
-function setTaskInLocation(id){const url=new URL(location.href);if(id)url.searchParams.set("task_id",id);else url.searchParams.delete("task_id");const next=url.pathname+url.search+url.hash;const current=location.pathname+location.search+location.hash;if(next!==current)history.replaceState(null,"",next);}
-function findTask(id){return state.tasks.find(task=>task.task_id===id)||null;}
-function renderTasks(){
-  const list=byId("task-list");
-  const filter=byId("filter").value.trim().toLowerCase();
-  const status=byId("status-filter").value;
-  const rows=state.tasks.filter(t=>(!status||t.status===status)&&(!filter||(t.task_id+" "+t.objective).toLowerCase().includes(filter)));
-  const wakeRows=rows.filter(t=>t.wake);
-  byId("count-total").textContent=String(rows.length);
-  byId("count-running").textContent=String(rows.filter(t=>t.status==="running").length);
-  byId("count-waiting").textContent=String(rows.filter(t=>t.status==="waiting_for_master").length);
-  byId("count-wake").textContent=String(wakeRows.length);
-  const banner=byId("wake-banner");
-  banner.hidden=wakeRows.length===0;
-  banner.textContent=wakeRows.length===0?"":wakeRows.length+" task"+(wakeRows.length===1?" has":"s have")+" an Executor Wake signal. Open the task and verify its durable event before acceptance.";
-  list.replaceChildren();
-  if(!rows.length){const empty=document.createElement("div");empty.className="empty";empty.textContent="No tasks match this view.";list.append(empty);return;}
-  for(const task of rows){
-    const button=document.createElement("button");
-    button.className="task-row"+(state.selected===task.task_id?" selected":"");
-    button.type="button";
-    button.addEventListener("click",()=>{void selectTask(task.task_id);});
-    const left=document.createElement("span");left.style.minWidth="0";
-    const id=document.createElement("span");id.className="task-id";id.textContent=task.task_id;
-    const objective=document.createElement("span");objective.className="task-objective";objective.textContent=task.objective;
-    left.append(id,objective);
-    const badges=document.createElement("span");badges.className="task-badges";
-    const chip=document.createElement("span");chip.className=statusClass(task.status);chip.textContent=task.status;badges.append(chip);
-    if(task.wake){const wake=document.createElement("span");wake.className=statusClass(task.wake.state);wake.textContent="wake: "+task.wake.state;wake.title=task.wake.reason_code+" at "+task.wake.at;badges.append(wake);}
-    button.append(left,badges);list.append(button);
-  }
-}
-function meta(label,value){const div=document.createElement("div");const l=document.createElement("label");l.textContent=label;const v=document.createElement("strong");v.textContent=esc(value??"--");div.append(l,v);return div;}
-function section(detail,label,value,className="pre"){
-  const heading=document.createElement("div");heading.className="section-label";heading.textContent=label;detail.append(heading);
-  const pre=document.createElement("pre");pre.className=className;pre.textContent=value;detail.append(pre);
-}
-async function selectTask(id){
-  if(!validTaskId(id))return;
-  state.selected=id;setTaskInLocation(id);renderTasks();
-  await loadDetail(id);
-}
-let detailGeneration=0;
-async function loadDetail(id){
-  if(!validTaskId(id)){setError("Invalid task_id in URL");return;}
-  const changed=state.selected!==id;
-  state.selected=id;setTaskInLocation(id);
-  if(changed){state.detail=null;state.summary=null;state.events=null;state.result=null;state.attention=null;state.resultPending=false;state.errors={};byId("detail").textContent="Loading evidence...";}
-  const generation=++detailGeneration;
-  const base="/api/tasks/"+encodeURIComponent(id);
-  const [status,summary,events,result,attention]=await Promise.allSettled([
-    api(base+"/status"),
-    api(base+"/summary"),
-    api(base+"/events?limit=40&include_attempt=true"),
-    api(base+"/result?view=summary"),
-    api(base+"/attention")
-  ]);
-  if(generation!==detailGeneration||state.selected!==id)return;
-  state.detail=status.status==="fulfilled"?status.value:null;
-  state.summary=summary.status==="fulfilled"?summary.value:null;
-  state.events=events.status==="fulfilled"?events.value:null;
-  state.attention=attention.status==="fulfilled"?attention.value:null;
-  state.errors={};
-  if(status.status==="rejected")state.errors.status=errorMessage(status.reason);
-  if(summary.status==="rejected"&&errorCode(summary.reason)!=="TASK_NOT_FOUND")state.errors.summary=errorMessage(summary.reason);
-  if(events.status==="rejected")state.errors.events=errorMessage(events.reason);
-  if(attention.status==="rejected"&&errorCode(attention.reason)!=="WEB_ATTENTION_UNAVAILABLE")state.errors.attention=errorMessage(attention.reason);
-  if(result.status==="fulfilled"){
-    state.result=result.value;state.resultPending=false;state.errors.result=null;
-  }else if(isNotFinished(result.reason)){
-    state.result=null;state.resultPending=true;state.errors.result=null;
-  }else{
-    state.result=null;state.resultPending=false;state.errors.result=errorMessage(result.reason);
-  }
-  setError(Object.values(state.errors).filter(Boolean).join(" | "));
-  renderTasks();renderDetail();
-}
-function renderDetail(){
-  const detail=byId("detail");const s=state.detail;
-  if(!s){detail.textContent=state.errors.status?"Status unavailable: "+state.errors.status:"Choose a task to inspect its durable evidence.";return;}
-  detail.replaceChildren();
-  const top=document.createElement("div");top.className="detail-title";
-  const wrap=document.createElement("div");const h=document.createElement("h3");h.textContent=s.task_id;
-  const p=document.createElement("p");p.textContent="Attempt "+s.attempt+" / "+s.status;wrap.append(h,p);
-  const chip=document.createElement("span");chip.className=statusClass(s.status);chip.textContent=s.status;top.append(wrap,chip);detail.append(top);
-  const grid=document.createElement("div");grid.className="meta";
-  grid.append(
-    meta("Executor",state.executor?.state),
-    meta("Task",s.task_id),
-    meta("Attempt",s.attempt),
-    meta("Wake",state.summary?.wake?.state||"not observed"),
-    meta("Hold",s.observation?.cleanup||s.execution_observation?.state||"not observed"),
-    meta("Queue",s.dispatch_blocker?.reason||"ready"),
-    meta("Worker PID",s.worker_pid),
-    meta("Session",s.zcode_session_id),
-    meta("Created",s.created_at),
-    meta("Updated",s.updated_at)
-  );
-  detail.append(grid);
-  const pending=state.attention?.pending_requests||[];
-  if(pending.length){
-    section(detail,"Pending Interaction",JSON.stringify(pending));
-  }else if(state.errors.attention){
-    section(detail,"Pending Interaction","Unavailable: "+state.errors.attention);
-  }else{
-    section(detail,"Pending Interaction","none observed");
-  }
-  const actions=document.createElement("div");actions.className="actions";
-  const cancel=document.createElement("button");cancel.className="secondary";cancel.type="button";cancel.textContent="Request cancel";
-  cancel.disabled=["completed","failed","cancelled"].includes(s.status);
-  cancel.addEventListener("click",()=>{void mutate("cancel",{});});actions.append(cancel);detail.append(actions);
-  if(state.errors.events)section(detail,"Latest events","Unavailable: "+state.errors.events);
-  else section(detail,"Latest events",JSON.stringify(state.events?.events??[],null,2));
-  if(state.resultPending)section(detail,"Result summary","Result pending — task is still running.");
-  else if(state.errors.result)section(detail,"Result summary","Unavailable: "+state.errors.result);
-  else section(detail,"Result summary",state.result?JSON.stringify(state.result,null,2):"Not yet available.");
-  if(s.status==="waiting_for_master"){
-    const reply=document.createElement("form");reply.className="reply";
-    reply.innerHTML='<div class="section-label">Interaction reply</div><div class="reply-grid"><input name="request_id" placeholder="request_id" required><select name="decision"><option value="allow">allow</option><option value="deny">deny</option><option value="accept">accept</option><option value="decline">decline</option></select><textarea name="reason" placeholder="reason (optional)"></textarea></div><button type="submit">Send reply</button>';
-    if(pending.length)reply.querySelector('input[name="request_id"]').value=pending[0];
-    reply.addEventListener("submit",event=>{event.preventDefault();const form=new FormData(reply);void mutate("reply",{request_id:String(form.get("request_id")||""),decision:String(form.get("decision")||"allow"),...(String(form.get("reason")||"")?{reason:String(form.get("reason"))}:{})});});
-    detail.append(reply);
-  }
-  const statusLine=document.createElement("div");statusLine.className="status-line";statusLine.id="detail-status";detail.append(statusLine);
-}
-async function mutate(action,body){
-  const target=state.selected;if(!target)return;setError("");
-  try{await api("/api/tasks/"+encodeURIComponent(target)+"/"+action,{method:"POST",body:JSON.stringify(body),csrf:true,origin:location.origin});byId("detail-status").textContent=action+" accepted; refreshing evidence...";await loadDetail(target);}
-  catch(error){setError(errorMessage(error));}
-}
-let refreshInFlight=false;
-async function refresh(){
-  if(refreshInFlight)return;refreshInFlight=true;
-  try{
-    const session=await api("/api/session");state.csrf=session.csrf_token;state.executor=session.executor||{};
-    byId("executor-state").textContent=String(session.executor?.state||"unknown").toUpperCase();
-    byId("lease-id").textContent="lease: "+(session.executor?.lease_id||"--");
-    const status=byId("status-filter").value;
-    const page=await api("/api/tasks?limit=100"+(status?"&status="+encodeURIComponent(status):""));
-    state.tasks=page.tasks||[];renderTasks();
-    const target=state.selected||taskIdFromLocation();
-    if(target&&validTaskId(target)){state.selected=target;await loadDetail(target);}
-    byId("last-refresh").textContent=new Date().toLocaleTimeString();
-  }catch(error){setError(errorMessage(error));}
-  finally{refreshInFlight=false;}
-}
-byId("refresh").addEventListener("click",()=>{void refresh();});byId("filter").addEventListener("input",renderTasks);byId("status-filter").addEventListener("change",()=>{void refresh();});
-window.addEventListener("popstate",()=>{const id=taskIdFromLocation();if(id)void selectTask(id);else{state.selected=null;state.detail=null;state.resultPending=false;renderTasks();renderDetail();}});
-void refresh();setInterval(()=>{void refresh();},5000);
-</script>
-</body>
-</html>`;
 
 // src/web/discovery.ts
-import { createHash as createHash2 } from "node:crypto";
+import { createHash as createHash11 } from "node:crypto";
 import {
-  closeSync,
-  existsSync as existsSync3,
-  lstatSync as lstatSync2,
-  openSync,
-  readFileSync as readFileSync3,
+  closeSync as closeSync3,
+  existsSync as existsSync8,
+  lstatSync as lstatSync3,
+  openSync as openSync3,
+  readFileSync as readFileSync6,
   unlinkSync,
   writeSync
 } from "node:fs";
-import path5 from "node:path";
+import path21 from "node:path";
 var TASK_CONSOLE_DISCOVERY_FILE = "task-console.json";
 var TASK_CONSOLE_PROTOCOL_VERSION = 1;
 var DISCOVERY_LIMIT_BYTES = 16 * 1024;
@@ -7572,24 +13818,24 @@ var TaskConsoleDiscoveryError = class extends Error {
   }
   code;
 };
-function canonicalJson(value) {
-  return JSON.stringify(sortObject(value)) ?? "null";
+function canonicalJson2(value) {
+  return JSON.stringify(sortObject2(value)) ?? "null";
 }
-function sortObject(value) {
-  if (Array.isArray(value)) return value.map(sortObject);
+function sortObject2(value) {
+  if (Array.isArray(value)) return value.map(sortObject2);
   if (value === null || typeof value !== "object" || value instanceof Date) return value;
   if (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) return value;
-  return Object.fromEntries(Object.entries(value).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0).map(([key, item]) => [key, sortObject(item)]));
+  return Object.fromEntries(Object.entries(value).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0).map(([key, item]) => [key, sortObject2(item)]));
 }
-function recordDigest(record2) {
-  return createHash2("sha256").update(canonicalJson(record2), "utf8").digest("hex");
+function recordDigest(record3) {
+  return createHash11("sha256").update(canonicalJson2(record3), "utf8").digest("hex");
 }
 function discoveryRoot(dataRoot) {
   let root;
   try {
-    root = path5.resolve(dataRoot);
-    const stat = lstatSync2(root);
-    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("not_plain_directory");
+    root = path21.resolve(dataRoot);
+    const stat4 = lstatSync3(root);
+    if (!stat4.isDirectory() || stat4.isSymbolicLink()) throw new Error("not_plain_directory");
   } catch {
     throw new TaskConsoleDiscoveryError("WEB_CONSOLE_ROOT_UNSAFE");
   }
@@ -7609,9 +13855,9 @@ function validatedEndpoint(originValue, urlValue, port) {
   }
 }
 function taskConsoleDiscoveryPath(dataRoot) {
-  return path5.join(discoveryRoot(dataRoot), TASK_CONSOLE_DISCOVERY_FILE);
+  return path21.join(discoveryRoot(dataRoot), TASK_CONSOLE_DISCOVERY_FILE);
 }
-function parseRecord(value) {
+function parseRecord2(value) {
   let parsed;
   try {
     parsed = JSON.parse(value);
@@ -7621,22 +13867,22 @@ function parseRecord(value) {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_INVALID");
   }
-  const record2 = parsed;
-  if (record2.protocol_version !== TASK_CONSOLE_PROTOCOL_VERSION || typeof record2.console_id !== "string" || !TASK_CONSOLE_ID.test(record2.console_id) || typeof record2.authority_root_digest !== "string" || !SHA256.test(record2.authority_root_digest) || !Number.isSafeInteger(record2.pid) || record2.pid < 1 || record2.start_fingerprint !== null && typeof record2.start_fingerprint !== "string" || !["exact", "coarse", "unknown"].includes(record2.fingerprint_precision ?? "") || record2.identity_version !== PROCESS_IDENTITY_VERSION || typeof record2.platform !== "string" || typeof record2.captured_at !== "string" || typeof record2.origin !== "string" || typeof record2.url !== "string" || !Number.isSafeInteger(record2.port) || record2.port < 1 || record2.port > 65535 || typeof record2.started_at !== "string" || typeof record2.record_digest !== "string" || !SHA256.test(record2.record_digest)) {
+  const record3 = parsed;
+  if (record3.protocol_version !== TASK_CONSOLE_PROTOCOL_VERSION || typeof record3.console_id !== "string" || !TASK_CONSOLE_ID.test(record3.console_id) || typeof record3.authority_root_digest !== "string" || !SHA256.test(record3.authority_root_digest) || !Number.isSafeInteger(record3.pid) || record3.pid < 1 || record3.start_fingerprint !== null && typeof record3.start_fingerprint !== "string" || !["exact", "coarse", "unknown"].includes(record3.fingerprint_precision ?? "") || record3.identity_version !== PROCESS_IDENTITY_VERSION || typeof record3.platform !== "string" || typeof record3.captured_at !== "string" || typeof record3.origin !== "string" || typeof record3.url !== "string" || !Number.isSafeInteger(record3.port) || record3.port < 1 || record3.port > 65535 || typeof record3.started_at !== "string" || typeof record3.record_digest !== "string" || !SHA256.test(record3.record_digest)) {
     throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_INVALID");
   }
   let origin;
   let url;
   try {
-    origin = new URL(record2.origin);
-    url = new URL(record2.url);
+    origin = new URL(record3.origin);
+    url = new URL(record3.url);
   } catch {
     throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_INVALID");
   }
-  if (origin.origin !== record2.origin || origin.protocol !== "http:" || origin.hostname !== "127.0.0.1" || origin.port !== String(record2.port) || url.origin !== record2.origin || url.pathname !== "/" || url.search !== "" || url.hash !== "") {
+  if (origin.origin !== record3.origin || origin.protocol !== "http:" || origin.hostname !== "127.0.0.1" || origin.port !== String(record3.port) || url.origin !== record3.origin || url.pathname !== "/" || url.search !== "" || url.hash !== "") {
     throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_INVALID");
   }
-  const { record_digest: recordedDigest, ...body } = record2;
+  const { record_digest: recordedDigest, ...body } = record3;
   if (recordDigest(body) !== recordedDigest) {
     throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_INVALID");
   }
@@ -7644,17 +13890,17 @@ function parseRecord(value) {
 }
 function readTaskConsoleDiscovery(dataRoot) {
   const file = taskConsoleDiscoveryPath(dataRoot);
-  if (!existsSync3(file)) return null;
+  if (!existsSync8(file)) return null;
   try {
-    const stat = lstatSync2(file);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > DISCOVERY_LIMIT_BYTES) {
+    const stat4 = lstatSync3(file);
+    if (!stat4.isFile() || stat4.isSymbolicLink() || stat4.size > DISCOVERY_LIMIT_BYTES) {
       throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_INVALID");
     }
-    const record2 = parseRecord(readFileSync3(file, "utf8"));
-    if (record2.authority_root_digest !== authorityRootDigest(dataRoot)) {
+    const record3 = parseRecord2(readFileSync6(file, "utf8"));
+    if (record3.authority_root_digest !== authorityRootDigest(dataRoot)) {
       throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_INVALID");
     }
-    return record2;
+    return record3;
   } catch (error2) {
     if (error2 instanceof TaskConsoleDiscoveryError) throw error2;
     throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_INVALID");
@@ -7680,23 +13926,23 @@ async function publishTaskConsoleDiscovery(input) {
     port: input.port,
     started_at: input.startedAt ?? (/* @__PURE__ */ new Date()).toISOString()
   };
-  const record2 = { ...body, record_digest: recordDigest(body) };
-  const file = path5.join(root, TASK_CONSOLE_DISCOVERY_FILE);
+  const record3 = { ...body, record_digest: recordDigest(body) };
+  const file = path21.join(root, TASK_CONSOLE_DISCOVERY_FILE);
   let fd;
   let created = false;
   try {
-    fd = openSync(file, "wx", 384);
+    fd = openSync3(file, "wx", 384);
     created = true;
-    writeSync(fd, canonicalJson(record2), void 0, "utf8");
-    closeSync(fd);
+    writeSync(fd, canonicalJson2(record3), void 0, "utf8");
+    closeSync3(fd);
     fd = void 0;
-    if (readTaskConsoleDiscovery(root)?.record_digest !== record2.record_digest) {
+    if (readTaskConsoleDiscovery(root)?.record_digest !== record3.record_digest) {
       throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_INVALID");
     }
   } catch (error2) {
     if (fd !== void 0) {
       try {
-        closeSync(fd);
+        closeSync3(fd);
       } catch {
       }
       fd = void 0;
@@ -7714,41 +13960,41 @@ async function publishTaskConsoleDiscovery(input) {
   } finally {
     if (fd !== void 0) {
       try {
-        closeSync(fd);
+        closeSync3(fd);
       } catch {
       }
     }
   }
-  return record2;
+  return record3;
 }
-function identityFromRecord(record2) {
+function identityFromRecord(record3) {
   return {
-    pid: record2.pid,
-    fingerprint: record2.start_fingerprint,
-    fingerprint_precision: record2.fingerprint_precision,
+    pid: record3.pid,
+    fingerprint: record3.start_fingerprint,
+    fingerprint_precision: record3.fingerprint_precision,
     identity_version: PROCESS_IDENTITY_VERSION,
-    platform: record2.platform,
-    captured_at: record2.captured_at
+    platform: record3.platform,
+    captured_at: record3.captured_at
   };
 }
 async function inspectTaskConsoleDiscovery(dataRoot, processProbe = createPlatformProbe()) {
-  let record2;
+  let record3;
   try {
-    record2 = readTaskConsoleDiscovery(dataRoot);
+    record3 = readTaskConsoleDiscovery(dataRoot);
   } catch (error2) {
     if (error2 instanceof TaskConsoleDiscoveryError && error2.code === "WEB_CONSOLE_DISCOVERY_INVALID") {
       throw error2;
     }
     throw error2;
   }
-  if (record2 === null) return { state: "absent" };
+  if (record3 === null) return { state: "absent" };
   const [verdict2] = await processProbe.probe([{
-    pid: record2.pid,
-    identity: identityFromRecord(record2)
+    pid: record3.pid,
+    identity: identityFromRecord(record3)
   }]);
-  if (!verdict2 || verdict2.state === "unknown") return { state: "owner_unknown", record: record2 };
-  if (verdict2.state === "exited") return { state: "stale_owner", record: record2 };
-  return { state: "active_owner", record: record2 };
+  if (!verdict2 || verdict2.state === "unknown") return { state: "owner_unknown", record: record3 };
+  if (verdict2.state === "exited") return { state: "stale_owner", record: record3 };
+  return { state: "active_owner", record: record3 };
 }
 function removeTaskConsoleDiscovery(dataRoot, expected) {
   const current = readTaskConsoleDiscovery(dataRoot);
@@ -7762,17 +14008,17 @@ function removeTaskConsoleDiscovery(dataRoot, expected) {
     if (error2.code !== "ENOENT") throw error2;
   }
 }
-async function fetchTaskConsoleSession(record2, timeoutMs = 2e3) {
+async function fetchTaskConsoleSession(record3, timeoutMs = 2e3) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(new URL("/api/session", record2.url), {
+    const response = await fetch(new URL("/api/session", record3.url), {
       method: "GET",
       headers: { Accept: "application/json" },
       signal: controller.signal
     });
     const body = await response.json().catch(() => null);
-    if (!response.ok || body?.ok !== true || !body.result || body.result.console?.console_id !== record2.console_id || body.result.console?.authority_root_digest !== record2.authority_root_digest || body.result.console?.url !== record2.url) {
+    if (!response.ok || body?.ok !== true || !body.result || body.result.console?.console_id !== record3.console_id || body.result.console?.authority_root_digest !== record3.authority_root_digest || body.result.console?.url !== record3.url) {
       throw new TaskConsoleDiscoveryError("WEB_CONSOLE_SESSION_INVALID");
     }
     return body.result;
@@ -7801,12 +14047,12 @@ function parseArguments(argv, host) {
     const argument = argv[index];
     const value = argv[index + 1];
     if (argument === "--data-root") {
-      if (!value || !path6.isAbsolute(value)) fail("data_root_absolute_required");
-      dataRoot = path6.normalize(value);
+      if (!value || !path22.isAbsolute(value)) fail("data_root_absolute_required");
+      dataRoot = path22.normalize(value);
       index += 1;
     } else if (argument === "--settings-directory") {
-      if (!value || !path6.isAbsolute(value)) fail("settings_directory_absolute_required");
-      settingsDirectory = path6.normalize(value);
+      if (!value || !path22.isAbsolute(value)) fail("settings_directory_absolute_required");
+      settingsDirectory = path22.normalize(value);
       index += 1;
     } else if (argument === "--port") {
       if (!value || !/^\d+$/u.test(value)) fail("port_invalid");
@@ -7841,10 +14087,28 @@ async function runTaskConsoleMain(argv = process2.argv.slice(2)) {
         code: "EXECUTOR_UNAVAILABLE"
       });
     }
-    const consoleId = randomUUID3();
+    const consoleId = randomUUID8();
     const manager = new RemoteTaskManager(client);
+    const costLab = createUnifiedCostLabApplication({
+      moduleUrl: import.meta.url,
+      dataRoot: options.dataRoot
+    });
+    const projectRoot = resolveConsoleProjectRoot(import.meta.url);
+    const runtimeCompatibility = new RuntimeCompatibilityService({
+      projectRoot,
+      historyPath: path22.join(
+        options.dataRoot,
+        ".run",
+        "bridge-console",
+        "runtime-compatibility.json"
+      ),
+      inspectEnvironment: () => costLab.inspectEnvironment(),
+      runProtocolProbe: () => costLab.runProtocolProbe()
+    });
     consoleServer = createTaskConsoleServer({
       manager,
+      costLab,
+      runtimeCompatibility,
       executorStatus: async () => {
         const response = await client.request("executorStatus", {});
         if (!response.ok) throw Object.assign(new Error(response.error?.message ?? "EXECUTOR_STATUS_FAILED"), {
@@ -7935,7 +14199,7 @@ async function runTaskConsoleMain(argv = process2.argv.slice(2)) {
     }
   }
 }
-if (process2.argv[1] && path6.resolve(process2.argv[1]) === path6.resolve(fileURLToPath3(import.meta.url))) {
+if (process2.argv[1] && path22.resolve(process2.argv[1]) === path22.resolve(fileURLToPath9(import.meta.url))) {
   void runTaskConsoleMain().catch((error2) => {
     fail(error2 instanceof Error ? error2.message : String(error2));
   });

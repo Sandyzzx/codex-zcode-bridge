@@ -75,8 +75,9 @@ export async function runOfficialAppServerProtocolSmoke(options = {}) {
     return failed("personal_provider_config_unavailable", startedAt);
   }
 
-  const runRoot = path.join(projectRoot, ".run", "cost-lab-web", `protocol-smoke-${createId()}`);
-  assertInside(path.join(projectRoot, ".run"), runRoot);
+  const runRootParent = path.resolve(options.runRootParent ?? path.join(projectRoot, ".run"));
+  const runRoot = path.join(runRootParent, "cost-lab-web", `protocol-smoke-${createId()}`);
+  assertInside(runRootParent, runRoot);
   const layout = {
     root: runRoot,
     home: path.join(runRoot, "home"),

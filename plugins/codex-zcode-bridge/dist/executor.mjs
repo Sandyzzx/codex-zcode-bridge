@@ -9064,7 +9064,7 @@ function windowsPowerShellExecutable() {
 }
 function windowsBatchQuery(pids, timeoutMs, onFailure) {
   return new Promise((resolve) => {
-    const script = `$ErrorActionPreference = 'Stop'; foreach ($id in @(${pids.join(",")})) { try { $target = [System.Diagnostics.Process]::GetProcessById($id); try { [Console]::Out.WriteLine(("{0}|{1}" -f $id, $target.StartTime.Ticks)) } finally { $target.Dispose() } } catch [System.ArgumentException] { } }; [Console]::Out.WriteLine('bridge_probe_complete_v1')`;
+    const script = `$ErrorActionPreference = 'Stop'; foreach ($id in @(${pids.join(",")})) { $target = $null; try { try { $target = [System.Diagnostics.Process]::GetProcessById($id) } catch [System.ArgumentException] { continue }; try { [Console]::Out.WriteLine(("{0}|{1}" -f $id, $target.StartTime.Ticks)) } catch [System.InvalidOperationException] { continue } } finally { if ($null -ne $target) { $target.Dispose() } } }; [Console]::Out.WriteLine('bridge_probe_complete_v1')`;
     const child = spawn2(windowsPowerShellExecutable(), ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script], {
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
@@ -25592,6 +25592,122 @@ async function startExecutorService(options) {
   return service;
 }
 
+// src/executor/control-client.ts
+import net2 from "node:net";
+import { randomUUID as randomUUID7 } from "node:crypto";
+function executorError(code) {
+  return Object.assign(new Error(code), { code });
+}
+function submissionUnknownCode(method) {
+  if (method === "createTask" || method === "continueTask" || method === "replyToInteraction" || method === "setDefaultModel" || method === "clearDefaultModel" || method === "shutdown") {
+    return "SUBMISSION_UNKNOWN";
+  }
+  if (method === "cancelTask") return "TASK_CANCEL_REQUESTED";
+  return "EXECUTOR_UNAVAILABLE";
+}
+var ExecutorControlClient = class {
+  #pipeName;
+  #connectTimeoutMs;
+  #socket = null;
+  #pending = /* @__PURE__ */ new Map();
+  constructor(options) {
+    this.#pipeName = options.pipeName;
+    this.#connectTimeoutMs = options.connectTimeoutMs ?? 5e3;
+  }
+  async connect() {
+    if (this.#socket && !this.#socket.destroyed) return;
+    await new Promise((resolve, reject) => {
+      const socket = net2.connect(this.#pipeName);
+      const timer = setTimeout(() => {
+        socket.destroy();
+        reject(executorError("EXECUTOR_UNAVAILABLE"));
+      }, this.#connectTimeoutMs);
+      socket.once("connect", () => {
+        clearTimeout(timer);
+        this.#socket = socket;
+        const decoder = createExecutorFrameDecoder();
+        socket.pipe(decoder);
+        socket.resume();
+        decoder.on("data", (chunk) => {
+          try {
+            const response2 = JSON.parse(chunk.toString("utf8"));
+            const pending = this.#pending.get(response2.request_id);
+            if (pending) {
+              this.#pending.delete(response2.request_id);
+              pending.resolve(response2);
+            }
+          } catch {
+            this.#failPending("EXECUTOR_CONTROL_RESPONSE_MALFORMED");
+            socket.destroy();
+          }
+        });
+        decoder.on("error", (error2) => {
+          this.#failPending(void 0, socket);
+          socket.destroy(error2);
+        });
+        socket.on("error", (error2) => {
+          this.#failPending("EXECUTOR_UNAVAILABLE");
+          reject(error2);
+        });
+        socket.on("close", () => {
+          if (this.#socket === socket) this.#socket = null;
+          this.#failPending(void 0, socket);
+        });
+        resolve();
+      });
+      socket.once("error", (error2) => {
+        clearTimeout(timer);
+        reject(Object.assign(executorError("EXECUTOR_UNAVAILABLE"), { cause: error2 }));
+      });
+    });
+  }
+  request(method, params, signal, idempotencyKey) {
+    if (!this.#socket || this.#socket.destroyed) {
+      return Promise.reject(executorError("EXECUTOR_UNAVAILABLE"));
+    }
+    const request = {
+      protocol_version: EXECUTOR_CONTROL_PROTOCOL_VERSION,
+      request_id: randomUUID7(),
+      method,
+      params,
+      // The transport records the key for diagnostics, while durable submission
+      // idempotency remains owned by task_id/operation_id in SQLite.
+      ...idempotencyKey ? { idempotency_key: idempotencyKey } : {}
+    };
+    const attempt = new Promise((resolve, reject) => {
+      this.#pending.set(request.request_id, { method, resolve, reject });
+      this.#socket.write(encodeExecutorFrame(request), (error2) => {
+        if (error2) {
+          this.#pending.delete(request.request_id);
+          reject(executorError(submissionUnknownCode(method)));
+        }
+      });
+    });
+    if (!signal) return attempt;
+    signal.addEventListener("abort", () => {
+      const pending = this.#pending.get(request.request_id);
+      if (pending) {
+        this.#pending.delete(request.request_id);
+        pending.reject(executorError("REQUEST_CANCELLED"));
+      }
+    }, { once: true });
+    return attempt;
+  }
+  #failPending(code, socket) {
+    for (const [requestId, pending] of this.#pending) {
+      if (socket && this.#socket !== null && this.#socket !== socket) continue;
+      this.#pending.delete(requestId);
+      pending.reject(executorError(code ?? submissionUnknownCode(pending.method)));
+    }
+  }
+  close() {
+    const socket = this.#socket;
+    this.#socket = null;
+    this.#failPending(void 0);
+    socket?.destroy();
+  }
+};
+
 // src/executor/main.ts
 var EXECUTOR_USAGE = [
   "EXECUTOR_USAGE: node dist/src/executor/main.js --data-root <absolute-path>",
@@ -25705,5 +25821,6 @@ if (process2.argv[1] && path21.resolve(process2.argv[1]) === path21.resolve(file
 }
 export {
   EXECUTOR_USAGE,
+  ExecutorControlClient,
   runExecutorMain
 };

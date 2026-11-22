@@ -374,6 +374,15 @@
       ]
     },
     {
+      "file": "test/runtime-compatibility.test.ts",
+      "type": "Integration",
+      "gate": "T2",
+      "domains": [
+        "manager-lifecycle",
+        "zcode-path-discovery"
+      ]
+    },
+    {
       "file": "test/executor-ipc.test.ts",
       "type": "Integration",
       "gate": "T2",

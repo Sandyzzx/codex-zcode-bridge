@@ -13,6 +13,11 @@ import { authorityRootDigest } from "../executor/lease.js";
 import { executorPipeName } from "../executor/pipe.js";
 import { ExecutorControlClient } from "../executor/control-client.js";
 import { RemoteTaskManager } from "../executor/remote-task-manager.js";
+import {
+  createUnifiedCostLabApplication,
+  resolveConsoleProjectRoot,
+} from "./cost-lab-integration.js";
+import { RuntimeCompatibilityService } from "./runtime-compatibility.js";
 import { createTaskConsoleServer } from "./server.js";
 import {
   fetchTaskConsoleSession,
@@ -90,8 +95,26 @@ export async function runTaskConsoleMain(argv: readonly string[] = process.argv.
     }
     const consoleId = randomUUID();
     const manager = new RemoteTaskManager(client);
+    const costLab = createUnifiedCostLabApplication({
+      moduleUrl: import.meta.url,
+      dataRoot: options.dataRoot,
+    });
+    const projectRoot = resolveConsoleProjectRoot(import.meta.url);
+    const runtimeCompatibility = new RuntimeCompatibilityService({
+      projectRoot,
+      historyPath: path.join(
+        options.dataRoot,
+        ".run",
+        "bridge-console",
+        "runtime-compatibility.json",
+      ),
+      inspectEnvironment: () => costLab.inspectEnvironment(),
+      runProtocolProbe: () => costLab.runProtocolProbe(),
+    });
     consoleServer = createTaskConsoleServer({
       manager,
+      costLab,
+      runtimeCompatibility,
       executorStatus: async () => {
         const response = await client.request("executorStatus", {});
         if (!response.ok) throw Object.assign(new Error(response.error?.message ?? "EXECUTOR_STATUS_FAILED"), {

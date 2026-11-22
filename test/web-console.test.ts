@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import http from "node:http";
+import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -167,6 +167,15 @@ function request(
   });
 }
 
+function replyJson(response: ServerResponse, status: number, value: unknown): void {
+  const body = `${JSON.stringify(value)}\n`;
+  response.writeHead(status, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Content-Length": String(Buffer.byteLength(body)),
+  });
+  response.end(body);
+}
+
 test("Web Console serves a loopback task inspection surface without mutations", async () => {
   const fixture = manager();
   const server = createTaskConsoleServer({ manager: fixture, executorStatus: async () => ({ state: "active", lease_id: "lease-a" }) });
@@ -183,9 +192,13 @@ test("Web Console serves a loopback task inspection surface without mutations", 
 
     const page = await request(address, "/");
     assert.equal(page.status, 200);
-    assert.match(String(page.json), /Operations Desk/u);
+    assert.match(String(page.json), /Bridge Operations Console/u);
+    assert.match(String(page.json), /id="language"/u);
+    assert.match(String(page.json), /id="theme"/u);
+    assert.match(String(page.json), /id="page-cost-lab"/u);
+    assert.match(String(page.json), /id="page-runtime"/u);
     assert.match(String(page.json), /id="count-wake"/u);
-    assert.match(String(page.json), /id="wake-banner"/u);
+    assert.match(String(page.json), /id="dashboard-wake"/u);
     const inlineScript = /<script>([\s\S]+)<\/script>/u.exec(String(page.json))?.[1];
     assert.ok(inlineScript);
     assert.doesNotThrow(() => new Function(inlineScript));
@@ -247,6 +260,113 @@ test("Web Console mutations require same-origin CSRF and preserve task actions",
     });
     assert.equal(replied.status, 200);
     assert.equal(fixture.calls.reply, 1);
+  } finally {
+    await server.close();
+  }
+});
+
+test("Web Console mounts Cost Lab behind the same loopback origin and CSRF boundary", async () => {
+  const fixture = manager();
+  const mounted: Array<{ origin: string; port: number }> = [];
+  const handled: string[] = [];
+  let closed = false;
+  const costLab = {
+    async mountEndpoints(input: { readonly origin: string; readonly port: number }): Promise<void> {
+      mounted.push(input);
+    },
+    async handleRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
+      handled.push(`${request.method} ${request.url}`);
+      if (request.method === "POST"
+        && (request.headers.origin !== mounted[0]?.origin
+          || request.headers["x-cost-lab-csrf"] !== "cost-token")) {
+        replyJson(response, 403, {
+          ok: false,
+          error: { code: "COST_LAB_CSRF_REJECTED", message: "rejected" },
+        });
+        return;
+      }
+      replyJson(response, 200, {
+        ok: true,
+        data: request.url === "/api/cost-lab/session"
+          ? { csrf_token: "cost-token", provider: "test" }
+          : { accepted: true },
+      });
+    },
+    async close(): Promise<void> {
+      closed = true;
+    },
+  };
+  const server = createTaskConsoleServer({ manager: fixture, costLab });
+  try {
+    const address = await server.start();
+    assert.deepEqual(mounted, [{ origin: address.origin, port: address.port }]);
+    const session = await request(address, "/api/cost-lab/session");
+    assert.equal(session.status, 200);
+    assert.equal((session.json as { data: { csrf_token: string } }).data.csrf_token, "cost-token");
+
+    const rejected = await request(address, "/api/cost-lab/billing/snapshot", {
+      method: "POST",
+      body: {},
+      headers: { Origin: address.origin, "X-Cost-Lab-CSRF": "wrong" },
+    });
+    assert.equal(rejected.status, 403);
+    const accepted = await request(address, "/api/cost-lab/billing/snapshot", {
+      method: "POST",
+      body: {},
+      headers: { Origin: address.origin, "X-Cost-Lab-CSRF": "cost-token" },
+    });
+    assert.equal(accepted.status, 200);
+    assert.deepEqual(handled, [
+      "GET /api/cost-lab/session",
+      "POST /api/cost-lab/billing/snapshot",
+      "POST /api/cost-lab/billing/snapshot",
+    ]);
+  } finally {
+    await server.close();
+  }
+  assert.equal(closed, true);
+});
+
+test("Web Console exposes Runtime inspection and authorized zero-model probe routes", async () => {
+  const fixture = manager();
+  const calls: string[] = [];
+  const runtimeCompatibility = {
+    async inspect() {
+      calls.push("inspect");
+      return { fingerprint: "a".repeat(64), model_requests: 0 };
+    },
+    async runAuthorizedProtocolProbe() {
+      calls.push("probe");
+      return { fingerprint: "a".repeat(64), protocol: "PASS", model_requests: 0 };
+    },
+    async candidateReport() {
+      calls.push("candidate");
+      return { kind: "runtime_compatibility_candidate" };
+    },
+  };
+  const server = createTaskConsoleServer({ manager: fixture, runtimeCompatibility });
+  try {
+    const address = await server.start();
+    const runtime = await request(address, "/api/runtime");
+    const candidate = await request(address, "/api/runtime/candidate");
+    assert.equal(runtime.status, 200);
+    assert.equal(candidate.status, 200);
+
+    const missingCsrf = await request(address, "/api/runtime/protocol-probe", {
+      method: "POST",
+      body: {},
+      headers: { Origin: address.origin },
+    });
+    assert.equal(missingCsrf.status, 403);
+    const session = await request(address, "/api/session");
+    const token = (session.json as { result: { csrf_token: string } }).result.csrf_token;
+    const probe = await request(address, "/api/runtime/protocol-probe", {
+      method: "POST",
+      body: {},
+      headers: { Origin: address.origin, "X-ZCode-Bridge-CSRF": token },
+    });
+    assert.equal(probe.status, 200);
+    assert.deepEqual(calls, ["inspect", "candidate", "probe"]);
   } finally {
     await server.close();
   }

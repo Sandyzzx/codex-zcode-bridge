@@ -50,6 +50,11 @@ await Promise.all([
   }),
   build({ ...shared, format: "esm", entryPoints: [path.join(repoRoot, "src", "worker", "worker-main.ts")], outfile: path.join(workerDir, "worker-main.mjs") }),
 ]);
+await mkdir(path.join(distDir, "vendor"), { recursive: true });
+await copyFile(
+  path.join(repoRoot, "tools", "cost-lab", "vendor", "official-billing-runtime.mjs"),
+  path.join(distDir, "vendor", "official-billing-runtime.mjs"),
+);
 
 // The managed CDP browser backend ships as a CommonJS bundle next to the ESM
 // worker: playwright-core (pinned in package.json) keeps its CommonJS runtime

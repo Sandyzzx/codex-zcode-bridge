@@ -7,6 +7,7 @@ import process from "node:process";
 import { codexHostProfile } from "../runtime/host-profile.js";
 import { startExecutorService } from "./service.js";
 import { EXECUTOR_UNLEASED_TRANSITION_ENV } from "./lease.js";
+export { ExecutorControlClient } from "./control-client.js";
 
 export const EXECUTOR_USAGE = [
   "EXECUTOR_USAGE: node dist/src/executor/main.js --data-root <absolute-path>",

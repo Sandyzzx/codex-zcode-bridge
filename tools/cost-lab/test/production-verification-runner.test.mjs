@@ -121,6 +121,8 @@ test("production runner drives the built MCP task and returns runtime/usage evid
   let closed = 0;
   let statusCalls = 0;
   let reportInstalledRuntime = true;
+  let executorStarted = 0;
+  let executorStopped = 0;
   try {
     const runner = createProductionCodingPlanVerificationRunner({
       projectRoot: root,
@@ -136,7 +138,23 @@ test("production runner drives the built MCP task and returns runtime/usage evid
         ProgramFiles: "C:\\Program Files",
       },
       inspectRuntime: async () => verifiedRuntime(synthetic.install),
+      manageExecutor: true,
+      startExecutorProcess: async (options) => {
+        executorStarted += 1;
+        assert.equal(options.dataRoot.endsWith("bridge-data"), true);
+        assert.equal(options.executorEntryPath.endsWith("executor.mjs"), true);
+        assert.equal(options.bridgeEntryPath, synthetic.bridgeEntryPath);
+        return {
+          pid: 4242,
+          ready: { lease_id: "lease-cost-lab", pipe_name: "\\\\.\\pipe\\synthetic" },
+          stop: async () => {
+            executorStopped += 1;
+            return { status: "closed", blockers: [] };
+          },
+        };
+      },
       connectClient: async (options) => {
+        assert.equal(executorStarted, executorStopped + 1);
         const runtimeConfig = JSON.parse(await readFile(
           path.join(root, ".run", "cost-lab-web", "verifications", FIXED_ID, "home", ".codex", "codex-zcode-bridge", "runtime-config.json"),
           "utf8",
@@ -250,6 +268,8 @@ test("production runner drives the built MCP task and returns runtime/usage evid
     assert.equal(result.hour, 10);
     assert.equal(result.runtime_evidence.runtime.bundle_sha256, "a".repeat(64));
     assert.equal(result.runtime_evidence.status, "PASS");
+    assert.equal(result.runtime_evidence.executor.lease_id, "lease-cost-lab");
+    assert.equal(result.runtime_evidence.executor.shutdown, "closed");
     assert.equal(result.runtime_evidence.request_security.installed_bundle_verified, true);
     assert.equal(result.runtime_evidence.provider, PRODUCTION_VERIFICATION_CONTRACT.provider);
     assert.equal(result.runtime_evidence.request_security.expected, "OfficialRequestSecurity");
@@ -265,10 +285,13 @@ test("production runner drives the built MCP task and returns runtime/usage evid
       "zcode_events",
     ]);
     assert.equal(closed, 1);
+    assert.equal(executorStopped, 1);
     await assert.rejects(lstat(stateRoot), { code: "ENOENT" });
     reportInstalledRuntime = false;
     const mismatch = await runner(input);
     assert.equal(mismatch.runtime_evidence.status, "UNVERIFIED");
+    assert.equal(executorStarted, 2);
+    assert.equal(executorStopped, 2);
     assert.equal(mismatch.runtime_evidence.request_security.installed_bundle_verified, null);
   } finally {
     await Promise.all([

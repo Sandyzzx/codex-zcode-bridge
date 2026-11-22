@@ -1,11 +1,16 @@
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { registerHooks } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const SCRIPT_ROOT = path.dirname(fileURLToPath(import.meta.url));
-export const PROJECT_ROOT = path.resolve(SCRIPT_ROOT, "..", "..");
+const BUNDLED_VENDOR_ROOT = path.basename(SCRIPT_ROOT) === "dist"
+  && existsSync(path.join(SCRIPT_ROOT, "vendor", "official-billing-runtime.mjs"));
+export const PROJECT_ROOT = BUNDLED_VENDOR_ROOT
+  ? path.resolve(SCRIPT_ROOT, "..")
+  : path.resolve(SCRIPT_ROOT, "..", "..");
 export const OFFICIAL_RUNTIME_PATH = path.join(
   SCRIPT_ROOT,
   "vendor",
@@ -15,17 +20,27 @@ export const OFFICIAL_RUNTIME_SHA256 =
   "dcb3fc7cb7a62e7a6dbe7ce8a9e1427075309458453641f6a4c7e8e1971a63e6";
 export const OFFICIAL_KEYRING_NATIVE_SHA256 =
   "52b16658275b7848f8081a6542fee3448f1b1c5d3a36487107ae0e7cec95ac6f";
-const OFFICIAL_HOST_MODULES = path.join(
-  PROJECT_ROOT,
-  "plugins",
-  "codex-zcode-bridge",
-  "worker",
-  "vendor",
-  "official-host",
-  "win32-x64-node24.16.0-zcode3.18.2-fec97590",
-  "node_modules",
-  "@napi-rs",
-);
+const OFFICIAL_HOST_MODULES = BUNDLED_VENDOR_ROOT
+  ? path.join(
+      PROJECT_ROOT,
+      "worker",
+      "vendor",
+      "official-host",
+      "win32-x64-node24.16.0-zcode3.18.2-fec97590",
+      "node_modules",
+      "@napi-rs",
+    )
+  : path.join(
+      PROJECT_ROOT,
+      "plugins",
+      "codex-zcode-bridge",
+      "worker",
+      "vendor",
+      "official-host",
+      "win32-x64-node24.16.0-zcode3.18.2-fec97590",
+      "node_modules",
+      "@napi-rs",
+    );
 export const OFFICIAL_KEYRING_JS_PATH = path.join(OFFICIAL_HOST_MODULES, "keyring", "index.js");
 export const OFFICIAL_KEYRING_NATIVE_PATH = path.join(
   OFFICIAL_HOST_MODULES,

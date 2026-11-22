@@ -120,6 +120,7 @@ for (const relativePath of [
   "dist/task-cli.mjs",
   "dist/executor.mjs",
   "dist/web-console.mjs",
+  "dist/vendor/official-billing-runtime.mjs",
   "dist/wait-task.mjs",
   "dist/schema.sql",
   "dist/runtime-events.sql",
