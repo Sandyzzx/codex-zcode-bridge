@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
-import { lstatSync, readFileSync } from "node:fs";
+import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { access, lstat, mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -477,13 +477,26 @@ function verificationRoots(projectRoot, id, configuredStateRootParent) {
   const runRoot = path.join(projectRoot, ".run", "cost-lab-web", "verifications", id);
   assertInside(path.join(projectRoot, ".run"), runRoot);
   const stateRootParent = configuredStateRootParent
-    ? path.resolve(configuredStateRootParent)
+    ? canonicalExistingPath(configuredStateRootParent)
     : defaultVerificationStateRootParent(projectRoot);
   const stateRoot = path.join(stateRootParent, "cost-lab-web", "verification-state", id);
   if (isWithin(projectRoot, stateRoot)) {
     throw new Error("cost_lab_verification_state_inside_package_root");
   }
   return Object.freeze({ runRoot, stateRoot });
+}
+
+function canonicalExistingPath(candidate) {
+  const resolved = path.resolve(candidate);
+  try {
+    // Windows temporary roots can expose an 8.3 alias (RUNNER~1). The
+    // Authority compares this path with realpath(native), so seal the parent
+    // identity before appending the isolated state directory.
+    return realpathSync.native(resolved);
+  } catch (error) {
+    if (error?.code === "ENOENT") return resolved;
+    throw error;
+  }
 }
 
 function defaultVerificationStateRootParent(projectRoot) {
