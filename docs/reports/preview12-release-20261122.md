@@ -3,7 +3,8 @@
 > Status: RESEARCH
 > Date: 2026-11-22
 > Preview base: `f51e965ebe38e85b3b8d3dea1396384aa634d2d4`
-> Integration PR: #121
+> Source PR: #121
+> Release PR: #125
 
 ## Release Scope
 
@@ -29,6 +30,16 @@ Preview.12 在 Preview.11 的 Result、Event、用户授权释放和 SQLite v14 
 
 ## Verification
 
+- Release PR #125 final required CI attempt 2：`44997987353`。Windows 两 shard、
+  Ubuntu Verify、Cost Lab、两平台 SQLite resource matrix 和聚合 Windows Verify
+  PASS。首轮 Windows shard 1 在 `ADR-031 Gate E1` 的 75 秒清理等待边界超时；
+  失败 job 重跑通过。首轮失败日志保留在本地 `.run`，根因未独立证明，
+  不据此宣称修复。
+- 合并后 Preview push CI attempt 2：`44999535808`。Cost Lab、Ubuntu Verify、
+  Windows 两 shard、两平台 SQLite resource matrix 和聚合 Windows Verify PASS。
+  首轮 Windows shard 2 在 `ADR-024 six lifecycle crash boundaries` 的测试
+  fixture 清理阶段报 Windows `EPERM`；失败 job 重跑通过。该现象未在本地完整
+  回归复现，根因未独立证明。
 - Integration PR #121 CI：`44978344205`。Fast PR gate、Integration gate
   (Windows)、Ubuntu/Windows Verify、Windows 两 shard 和两平台 SQLite resource
   matrix PASS；Cost Lab 按 impact selector skipped。
@@ -48,6 +59,19 @@ Preview.12 在 Preview.11 的 Result、Event、用户授权释放和 SQLite v14 
   事实返回 durable duplicate，Revision 保持 16。
 - 生产 SQLite、WAL、SHM 在证据运行前后 SHA-256 一致；生产 Task89 未取消、
   未写数据库、未执行 Recovery 或行政释放。
+- 本地 `npm run test:full`：990 tests，988 PASS，0 FAIL，2 SKIP；typecheck、
+  build、plugin validation PASS。
+- 本地 `npm run test:stress`：4/4 PASS；`npm run cost-lab:test`：86/86 PASS；
+  `npm run check:generated`：10 个 tracked artifact fresh；`git diff --check` PASS。
+- Release ZIP 从 Tag 的插件子树构建。首次直接 archive 插件 subtree 时遗漏
+  仓库根 `.gitattributes`，导出的 `schema.sql` 为 CRLF，导致隔离 bootstrap
+  报 Recovery compatibility marker 缺失；改为从仓库根 `git archive` 后重新
+  验证并通过。
+- 重新下载的 Release ZIP SHA-256 为
+  `a8e27e90946a0d8eb15b5e868b4839295fe39d445b87a9f0dac5d7c93554949c`；
+  manifest 与 MCP server version 均为 `2.0.0-preview.12`，13 个工具，
+  隔离 SQLite `user_version=14`、`integrity_check=ok`，未知 task 返回
+  `TASK_NOT_FOUND`。
 
 ## Known Limits
 
@@ -66,11 +90,11 @@ Preview.12 在 Preview.11 的 Result、Event、用户授权释放和 SQLite v14 
 ```text
 PREVIEW_VERSION: 2.0.0-preview.12
 PREVIEW_CODE_HEAD: f51e965ebe38e85b3b8d3dea1396384aa634d2d4
-RELEASE_COMMIT: PENDING
-RELEASE_TREE: PENDING
+RELEASE_COMMIT: 224b8e1c45040776ccd8eae01a5191fa8a830fb2
+RELEASE_TREE: 8452b0651e7adf461848c20ac8f54c22d3e4fd90
 TAG: codex-zcode-bridge-preview-v2.0.0-preview.12
-RELEASE_URL: PENDING
-ZIP_SHA256: PENDING
+RELEASE_URL: https://github.com/Sandyzzx/codex-zcode-bridge/releases/tag/codex-zcode-bridge-preview-v2.0.0-preview.12
+ZIP_SHA256: a8e27e90946a0d8eb15b5e868b4839295fe39d445b87a9f0dac5d7c93554949c
 ```
 
 ## Repository Boundary
