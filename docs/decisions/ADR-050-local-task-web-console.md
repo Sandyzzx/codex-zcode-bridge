@@ -28,6 +28,8 @@ POST /api/tasks/:task_id/reply
 页面加载只读取 Executor 状态和 Task 投影，不产生模型请求。浏览器刷新、
 HTTP 连接断开或 Console 进程结束只影响本地观察 Adapter，不取消已受理 Task。
 取消与 Interaction Reply 是调用方显式动作，发送到原 Executor 合同。
+Task list 同时展示同一 SQLite v14 `executor_wake` Event 的最新只读摘要
+（计数、banner 和行内 badge）；它不是新的通知权威，也不轮询 Queue。
 
 ## 安全边界
 

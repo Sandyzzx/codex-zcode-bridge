@@ -1,10 +1,11 @@
 # ADR-045：独立 Async Executor 所有权
 
 > Status: ACCEPTED（Owner 条件批准；架构方向已接受）
-> Implementation status: PARTIAL / BLOCKED — PR 2–6 unified local RC passed; real Host gates pending; not merged or released
+> Implementation status: PARTIAL / BLOCKED — historical PR 2–6 local RC passed; current acceptance head has targeted Host-process evidence; real Desktop gates pending; not merged or released
 > Date: 2026-11-22
 > Baseline: `origin/preview` `ac1e8396f25a1a1d3ff373def84726d28c1f4193`
-> Candidate: `c75c34330287266702cab5949662bf897b74ed5a`
+> Historical full-matrix candidate: `c75c34330287266702cab5949662bf897b74ed5a`
+> PR #131 baseline / acceptance implementation: `a1bc911ec1b03cd22bbf13e717fc2233284e6183` / `7f54531acba0844937bc134609dae840090294ec`
 > Related architecture: [BRIDGE_ASYNC_EXECUTION_V1.md](../architecture/BRIDGE_ASYNC_EXECUTION_V1.md)
 
 ## Context
@@ -54,10 +55,12 @@ PASS。统一 RC 已在冻结候选上执行 Windows 本地完整回归与注册
 Ubuntu、Windows shards 与 GitHub Required Checks 仍必须由同提交的 Release
 Gate 完成。
 
+后续验收已证明 shipped MCP Host 被真实终止后，隔离 Executor 仍以 synthetic
+Worker 完成原 Attempt Result/Cleanup/Release，且新 Host 可读取同一 Result。
 真实 Codex Desktop 关闭后的 E2E 仍未运行，原因是不得关闭 Owner 当前正在使用的
 Desktop；真实 Official Runtime 也没有新的付费模型授权。因此 ADR-045 的
-`Validation Gate` 尚未满足，PR 2 只能以 `PARTIAL / BLOCKED` 提交评审，不得
-合入 Preview、发布或迁移 CLI/Web/Wake。
+`Validation Gate` 尚未满足，当前验收只能以 `PARTIAL / BLOCKED` 提交评审，
+不得据此合入 Preview、发布或宣称 CLI/Web/Wake 已获真实 Host 全量验收。
 
 ## PR 2.5 Implementation Record
 
@@ -149,3 +152,23 @@ recorded-tree clean proof 同时成立；其他 termination error 继续 fail cl
 真实 Desktop 关闭、真实 Official Runtime、严格 Wake C/D 和真实模型 Skill
 遵循率均未完成前，不得合入 Preview 或发布。没有新增 Supervisor、第二任务
 数据库、第二状态机、第二 Worker 路径或额外持久化权威；SQLite 仍为 v14。
+
+## Post-RC Acceptance Record
+
+PR #131 基线 `a1bc911ec1b03cd22bbf13e717fc2233284e6183` 的后续验收实现
+`7f54531acba0844937bc134609dae840090294ec` 增加了最小可操作性：
+
+- `task wake-authorize` 从同一 Executor Control 面核对当前 Task/Attempt 与
+  workspace，并由 Owner 显式绑定的 Thread、model、provider、安全 effort 和
+  最长 24 小时一次性授权排他创建 `wake-policy.json`；
+- Task CLI 与 Web Console 从现有 SQLite v14 `executor_wake` Event 附加只读
+  `wake` 摘要，不新增通知数据库或轮询服务；
+- shipped MCP Host 在 Task 受理后被真实终止，Executor 继续完成 synthetic
+  Worker 的原 Attempt Result、Cleanup 与 Release，单次 Spawn，新 Host 重连
+  读取同一 Result。
+
+当前提交只完成定向测试、构建、插件校验与生成物检查。历史 `c75c3433` 的
+1060 项完整回归和 GitHub Release Gate 不自动适用于 `7f54531a`。真实
+Desktop 全退、严格 Wake C/D、真实 Queue ACK/Turn/Master、Desktop visible、
+真实 Official Runtime 和真实模型 Skill 遵循率仍为 `NOT_RUN / BLOCKED`；
+PR #131 保持 open，不合入 Preview、不发布。

@@ -4,6 +4,7 @@
 > Date: 2026-11-22
 > Decision: Accepted for the Async Executor Preview candidate
 > Implementation status: IMPLEMENTED — PARTIAL / BLOCKED
+> Acceptance implementation: `7f54531acba0844937bc134609dae840090294ec`
 > Related: [ADR-015](ADR-015-master-skill-authorization-and-progressive-loading.md)、[ADR-045](ADR-045-async-executor-ownership.md)、[ADR-051](ADR-051-executor-wake-delivery.md)
 
 ## Context
@@ -68,6 +69,9 @@ Wake candidate。原 Master Skill 仍以当前 Turn 内的长等待为主要跟�
 
 - 已受理 Task 不再要求 Master 在当前 Turn 持续等待；Host Turn 可结束而 Executor
   继续持有 Worker 生命周期。
+- shipped MCP Host 进程退出后原 Attempt Result/Cleanup/Release 已由 synthetic
+  Worker E2E 证明；这不证明真实 Master 模型会按 Skill 结束 Turn，也不证明
+  Wake 后会自动恢复并独立验收。
 - Async Wake 仍是 experimental candidate。真实 App Server/Queue、严格 C/D、
   Desktop 全关和真实模型 Skill 遵循率保持 `NOT_RUN / BLOCKED`。
 - Pending Interaction 不会自动唤醒 Thread；需要审批的任务应使用 foreground，

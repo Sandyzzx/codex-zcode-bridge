@@ -5,6 +5,8 @@
 > Decision: Accepted for the Async Executor Preview candidate
 > Implementation status: IMPLEMENTED — PARTIAL / BLOCKED
 > Baseline: `origin/preview` `1bf039fda2ccfd17a992458a871bddd7b48b38c1`
+> PR #131 baseline: `a1bc911ec1b03cd22bbf13e717fc2233284e6183`
+> Acceptance implementation: `7f54531acba0844937bc134609dae840090294ec`
 > Related architecture: [BRIDGE_ASYNC_EXECUTION_V1.md](../architecture/BRIDGE_ASYNC_EXECUTION_V1.md)
 
 ## 决定
@@ -37,6 +39,23 @@ Queue Wake 只读取 Authority Root 下的精确
 
 授权窗口最长 24 小时；只接受 `minimal`、`low`、`medium`。文件必须 exact-key、
 有界、普通文件且非 symlink。配置缺失、过期或无效都只允许 Web Notify。
+
+受支持的 Owner 写入入口是：
+
+```text
+zcode-bridge task wake-authorize <task_id> \
+  --attempt <current-attempt> \
+  --thread <thread-id> \
+  --model <exact-model> \
+  --model-provider <exact-provider> \
+  --reasoning-effort minimal|low|medium \
+  --expires-in-minutes 1..1440 \
+  --confirm-owner
+```
+
+CLI 先从同一 Executor Control 面确认 Task 存在且 `--attempt` 等于当前 Attempt，
+再从持久 TaskPackage 取得 workspace。`wake-policy.json` 使用排他创建；已有策略
+不会被静默覆盖。该命令不直接写 SQLite，不新增管理服务，也不发送 Queue。
 
 ## 派发前检查
 
@@ -105,17 +124,30 @@ capacity 或 Recovery projection。
 Web 通知只在 `web_notify` 事实首次持久化后触发；展示失败不改变 SQLite
 Authority，也不重试 Queue。
 
+Task CLI 和 Web Console 的现有列表读取同一 SQLite 投影，并附加只读的
+`wake: {state, reason_code, at}` 摘要。该摘要来自当前 Attempt 最新的
+`executor_wake` Event，不新增表、通知数据库或后台轮询服务。Web Console 显示
+Wake 计数、提示条和行内 badge；用户不再需要先逐条打开 Event 才能发现回退。
+
 ## 独立验收
 
 - 已加载 idle 模式通过合成 App Server/Queue 客户端与跨进程 fake Worker
   Result -> Cleanup -> Release -> Wake -> Web fallback E2E。
+- shipped MCP Host 进程被终止后，隔离 Executor 仍完成原 Attempt Result、
+  Cleanup、Release；单次 Spawn，新 Host 可重连读取同一 Result。证据边界是
+  `REAL MCP HOST PROCESS EXIT + SYNTHETIC WORKER`，不是真实 Desktop。
 - 真实 Desktop loaded/idle Queue 证据来自 2026-11-21 B/C 实验；本候选没有
   在 Owner 当前 Desktop 上重放。
 - notLoaded 的严格 C 与 Desktop 全退的严格 D 仍未运行，作为独立发布门禁，
   不阻塞已加载模式实验版。
 - 真实 App Server control socket、真实 Queue 和真实付费模型未在候选测试中
-  调用；费用/额度不可观测。
-- 未合入 Preview、未发布、未迁移 Master Skill。
+  调用；当前 socket 不存在时真实 probe 固定记录
+  `web_notify / app_server_unavailable`，Queue 调用为 0，费用/额度不可观测。
+- 未合入 Preview、未发布；Async Master Skill 只有确定性合同测试，未完成真实
+  模型遵循率验收。
+
+完整实机验收记录见
+[async-executor-real-host-acceptance-20261122.md](../reports/async-executor-real-host-acceptance-20261122.md)。
 
 ## 拒绝
 

@@ -17,12 +17,15 @@ Authority。所有 Task 写入、Task 读取、Executor 状态、模型设置和
 ```text
 executor start|status|stop
 executor lease status|clear
-task list|status|events|result|cancel|reply
+task list|status|events|result|cancel|reply|wake-authorize
 ```
 
 `task list` 使用 SQLite v14 现有投影和 `after_task_id` cursor，limit 范围为
-1..100；CLI 不直接打开 SQLite。`task result` 默认返回 ADR-047 摘要；完整
-Result 超过 1 MiB stdout 预算时必须显式写入绝对路径，并以独占创建避免覆盖。
+1..100；CLI 不直接打开 SQLite。列表可从同一 `executor_wake` Event 附加只读
+Wake 摘要。`task wake-authorize` 也先经同一 Control 面核对 Task/Attempt 与
+workspace，再由 Owner 显式写入一次性的 Authority-local policy，不发送 Queue。
+`task result` 默认返回 ADR-047 摘要；完整 Result 超过 1 MiB stdout 预算时必须
+显式写入绝对路径，并以独占创建避免覆盖。
 
 ## 启动与退出
 
