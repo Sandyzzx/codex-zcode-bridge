@@ -315,7 +315,7 @@ Wake 不新增第二套持久化权威。PR 5 前必须先完成一次 schema �
 
 ### Preview integration
 
-- `test:affected` 按变更范围通过；发布门禁保持 Windows/Ubuntu CI。
+- Executor 开发期使用 T0、受影响测试和关键 E2E；`FULL_SUITE` 在开发门禁明确延期，不得当作通过。完整 Ubuntu/Windows/Stress 只在 Preview Release Candidate、Owner 明确要求或重大跨模块不确定性时运行。
 - 真实模型测试须单独授权，使用隔离 Thread 和低成本模型；费用不可观察时报告不可观察。
 - Token Efficiency 试点与 Async 架构实验分开记账。
 

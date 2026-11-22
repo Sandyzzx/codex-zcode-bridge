@@ -21,11 +21,13 @@ function run(command, args, { shell = command === "npm" && isWindows } = {}) {
 }
 
 function commandLine(argv) {
-  const options = { base: undefined, dryRun: false, t0Only: false, testsOnly: false, forceFull: false };
+  const options = { base: undefined, development: false, dryRun: false, t0Only: false, testsOnly: false, forceFull: false };
   for (let index = 0; index < argv.length; index += 1) {
     if (argv[index] === "--base") {
       options.base = argv[++index];
       if (!options.base) throw new Error("--base requires a Git revision");
+    } else if (argv[index] === "--development") {
+      options.development = true;
     } else if (argv[index] === "--dry-run") {
       options.dryRun = true;
     } else if (argv[index] === "--t0-only") {
@@ -43,6 +45,7 @@ function commandLine(argv) {
 
 const options = commandLine(process.argv.slice(2));
 if (options.t0Only && options.testsOnly) throw new Error("--t0-only and --tests-only are mutually exclusive");
+if (options.development && options.testsOnly) throw new Error("--development and --tests-only are mutually exclusive");
 if (options.testsOnly) {
   if (!options.base) throw new Error("--tests-only requires an explicit --base");
   if (process.env.CODEX_BRIDGE_CI_T0_COMPLETED !== "1") {
@@ -64,6 +67,7 @@ const targetedTests = selection.selected_tests.filter((entry) => !entry.stress);
 console.log(JSON.stringify({
   command: "npm run test:affected",
   baseline: options.base ?? "merge-base-with-upstream-plus-worktree",
+  development: options.development,
   t0_only: options.t0Only,
   tests_only: options.testsOnly,
   force_full: options.forceFull,
@@ -94,6 +98,10 @@ if (selection.mode === "NO_TESTS_APPLICABLE") {
 }
 
 if (selection.mode === "FULL_SUITE") {
+  if (options.development) {
+    console.log("FULL_SUITE_DEFERRED_TO_RELEASE_GATE");
+    process.exit(0);
+  }
   run("npm", ["test"]);
   console.log("FULL_REGRESSION_PASS");
   process.exit(0);

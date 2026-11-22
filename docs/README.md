@@ -1,8 +1,8 @@
 # 文档路由 / Documentation
 
 > Status: AUTHORITATIVE（仅指本索引）
-> Last updated: 2026-11-22（Async Executor PR 2 candidate evidence）
-> Last verified: 2026-11-22，核对 PR #116 已合入 Preview、默认完整 Result/显式 Summary、Event Attempt 归属与 ADR-048 默认 Event 页预算；Async Executor PR 2 仅验证合成路径，真实 Desktop 关闭为 `NOT_RUN / BLOCKED`。
+> Last updated: 2026-11-22（Async Executor PR 2 candidate evidence + development/release CI split）
+> Last verified: 2026-11-22，核对 PR #116 已合入 Preview、默认完整 Result/显式 Summary、Event Attempt 归属与 ADR-048 默认 Event 页预算；同时核对 Executor 开发门禁延期 `FULL_SUITE`、Release Candidate 完整 CI 触发与 Required Check 占位。真实 Desktop 关闭为 `NOT_RUN / BLOCKED`。
 > Verified against: `1bf039fda2ccfd17a992458a871bddd7b48b38c1` + `codex/async-executor-pr2` candidate
 
 English users start at [README.md](../README.md). 技术文档为中文。先读当前事实，按问题加载合同；研究或历史材料不作为当前实现或发布证明。

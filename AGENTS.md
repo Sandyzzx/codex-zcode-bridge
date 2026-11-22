@@ -38,8 +38,9 @@
 
 ## 提交与验证
 
-- 日常开发先跑 `npm run test:affected`；它始终包含 typecheck、build、plugin validation 和 `git diff --check`，并按影响映射选择测试。只有结果实际命中压力测试边界才运行该压力测试；报告中必须显式区分已运行压力测试与 `STRESS_TESTS_NOT_APPLICABLE`。
-- R4、发布候选冻结、SQLite/生产架构切换或测试执行器重大变更跑 `npm run test:full`。CI 保留完整 `npm test`。不得为缩短时间删除测试、增加 SKIP、修改断言或降低预算。
+- Executor 开发链采用“开发期本地定向验证，发布前完整 CI”。每个功能或修复先跑 typecheck、受影响单元测试、关键生命周期 E2E，并在相关时验证 build/生成物；不要在每个提交、Rebase 或 PR 更新后重复完整矩阵。统一入口可用 `npm run test:affected -- --development`，其 `FULL_SUITE_DEFERRED_TO_RELEASE_GATE` 只表示完整门禁尚未运行，不是测试 PASS。
+- 完整 CI 只在形成明确 Preview Release Candidate、Owner 明确要求，或无法用定向验证界定影响的重大跨模块问题时运行；候选提交变更后必须重新验证。发布候选由 `release-candidate` PR 标签或 `workflow_dispatch` 的 `release_gate=true` 显式请求，`preview`/`master` push 始终运行完整门禁。
+- 开发门禁仍必须完成各阶段核心 E2E。不得为节省时间删除测试、增加 SKIP、修改断言、降低预算或伪装定向范围；完整 `npm test`、Windows/Ubuntu 矩阵和登记压力矩阵的延期必须在报告中明确记录。
 - `npm test` 仍是完整隔离回归入口。文档-only 变更至少跑 `npm run test:affected` 的 T0 部分；其 `NO_TESTS_APPLICABLE` 不是测试 PASS。
 - `plugins/codex-zcode-bridge/dist/bridge.mjs` 与 `worker/worker-main.mjs` 是提交物，必须与源码同步；CI 会校验它们没有落后。
 - 不默认提交、推送或发布。

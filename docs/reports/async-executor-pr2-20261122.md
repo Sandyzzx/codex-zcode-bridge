@@ -4,7 +4,7 @@
 > Date: 2026-11-22
 > Branch: `codex/async-executor-pr2`
 > Integration baseline: `origin/preview@1bf039fda2ccfd17a992458a871bddd7b48b38c1`
-> Code evidence commit: `0c92e3dc6` plus this report's pending documentation revision
+> Code evidence commit: `6fa55d2f4` plus this report's pending governance revision
 > Conclusion: `PARTIAL / BLOCKED`
 
 ## 1. Scope and Conclusion
@@ -114,7 +114,11 @@ current evidence includes:
   Attempt Result/Cleanup/Release.
 - `test/mcp-stdio-entry.test.ts`: PASS for control transport and no local
   SQLite Manager construction.
-- `test/test-impact-selector.test.ts` and `test/test-shard-plan.test.ts`: PASS.
+- The combined Executor Lease/IPC/process/Thin MCP run is 32/32 PASS.
+- `test/test-impact-selector.test.ts` and `test/test-shard-plan.test.ts`:
+  24/24 PASS.
+- `npm run test:affected -- --force-full --development`: T0 PASS and ended
+  with `FULL_SUITE_DEFERRED_TO_RELEASE_GATE`; this is not a full-suite PASS.
 
 The final repository-wide local gate after the documentation revision is
 recorded in the PR/CI result; until it completes, this report does not claim a
@@ -140,6 +144,16 @@ test host. The result was not inferred from controlled stdin EOF, fake Worker
 completion, or `detached:true`.
 
 ## 7. Release Gates
+
+Executor development follows the approved lightweight development gate:
+typecheck, affected tests, targeted lifecycle E2E, then a single complete
+release gate at the Release Candidate boundary. Ordinary PR updates do not
+repeat the complete matrix. `FULL_SUITE` is explicitly deferred by the
+development gate instead of being reported as a pass.
+
+The complete gate runs on `preview`/`master` push, a non-draft PR labeled
+`release-candidate`, or manual dispatch with `release_gate=true`. Required
+check jobs remain present in development mode and announce the deferral.
 
 PR 2 may proceed to review only if:
 

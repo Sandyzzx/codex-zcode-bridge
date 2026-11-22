@@ -355,24 +355,35 @@ test("CI impact CLI fails safe for dispatch, initial-push and invalid base revis
   assert.match(invalid.stderr, /git diff .* failed/u);
 });
 
-test("CI gives FULL impacts one complete regression and no duplicate Fast T0", () => {
-  const workflow = readFileSync(path.resolve(".github/workflows/ci.yml"), "utf8");
+test("CI separates development checks from the complete release gate", () => {
+  const workflow = readFileSync(path.resolve(".github/workflows/ci.yml"), "utf8").replace(/\r\n/gu, "\n");
+  const runner = readFileSync(path.resolve("scripts/run-affected-tests.mjs"), "utf8");
   assert.match(
     workflow,
-    /pull_request:\s*\n\s*types:\s*\[opened, synchronize, reopened, ready_for_review\]/u,
-    "converting a draft PR to ready-for-review must trigger the formal PR gates",
+    /pull_request:\s*\n\s*types:\s*\[opened, synchronize, reopened, ready_for_review, labeled, unlabeled\]/u,
+    "release-candidate label changes must recompute the formal PR gate",
   );
   assert.match(
     workflow,
-    /fast:\s+name: Fast PR gate\s+needs: impact\s+if: github\.event_name == 'pull_request' && needs\.impact\.outputs\.full_required != 'true'/u,
-    "FULL impacts must skip the duplicate Fast T0 gate",
+    /workflow_dispatch:\s*\n\s*inputs:\s*\n\s*release_gate:[\s\S]*?type: boolean\s*\n\s*default: false/u,
+    "manual runs must opt in explicitly to the complete release gate",
   );
+  assert.match(workflow, /release_required: \$\{\{ steps\.release\.outputs\.release_required \}\}/u);
+  assert.match(
+    workflow,
+    /RELEASE_REQUESTED: \$\{\{ \(github\.event_name == 'workflow_dispatch' && inputs\.release_gate\) \|\| \(github\.event_name == 'pull_request' && github\.event\.pull_request\.draft == false && contains\(github\.event\.pull_request\.labels\.\*\.name, 'release-candidate'\)\) \}\}/u,
+    "only an explicit dispatch or non-draft release-candidate label may request the release gate",
+  );
+  assert.match(workflow, /fast:\s+name: Fast PR gate\s+needs: impact\s+if: always\(\) && \(github\.event_name == 'pull_request' \|\| github\.event_name == 'workflow_dispatch'\)/u);
+  assert.match(workflow, /npm run test:affected -- --base "\$BASE_SHA" --development/u);
+  assert.match(workflow, /npm run test:affected -- --force-full --development/u);
+  assert.match(runner, /FULL_SUITE_DEFERRED_TO_RELEASE_GATE/u);
   assert.match(workflow, /BASE_SHA: \$\{\{ github\.event\.pull_request\.base\.sha \|\| github\.event\.before \}\}/u);
   assert.match(workflow, /Fast impact selection requires a valid base SHA/u);
   assert.match(
     workflow,
-    /integration:[\s\S]*?needs: \[impact, fast\][\s\S]*?if: github\.event_name == 'pull_request' && github\.event\.pull_request\.draft == false && needs\.fast\.result == 'success' && needs\.impact\.outputs\.integration_required == 'true' && needs\.impact\.outputs\.full_required != 'true'/u,
-    "Windows integration must only run after Fast has completed the shared T0 checks",
+    /integration:[\s\S]*?needs: \[impact, fast\][\s\S]*?needs\.fast\.result == 'success' && needs\.impact\.outputs\.release_required != 'true' && needs\.impact\.outputs\.integration_required == 'true' && needs\.impact\.outputs\.full_required != 'true'/u,
+    "targeted Windows integration must not duplicate complete release gates or unsafe full selections",
   );
   assert.match(
     workflow,
@@ -381,13 +392,18 @@ test("CI gives FULL impacts one complete regression and no duplicate Fast T0", (
   );
   assert.match(
     workflow,
+    /release:[\s\S]*?github\.event_name == 'push' \|\| needs\.impact\.outputs\.release_required == 'true'/u,
+    "the Ubuntu complete regression must run on push or an explicit release request",
+  );
+  assert.match(
+    workflow,
     /release:[\s\S]*?github\.event\.pull_request\.draft == false/u,
     "draft PRs must not pay for the full release regression",
   );
   assert.match(
     workflow,
-    /sqlite-stress:[\s\S]*?github\.event\.pull_request\.draft == false/u,
-    "draft PRs must not pay for the stress matrix",
+    /sqlite-stress:[\s\S]*?github\.event_name == 'push' \|\| needs\.impact\.outputs\.release_required == 'true'/u,
+    "the stress matrix belongs to the complete release gate",
   );
   assert.match(
     workflow,
@@ -410,11 +426,11 @@ test("CI gives FULL impacts one complete regression and no duplicate Fast T0", (
   assert.equal(
     [...workflow.matchAll(/^\s*-\s+run:\s+npm test\s*$/gmu)].length,
     1,
-    "the complete npm test run belongs to the Release gate",
+    "the complete npm test run belongs once to the Release gate",
   );
 });
 
-test("required-check jobs stay present for docs-only PRs without running the full suite", () => {
+test("required-check jobs stay present while complete jobs defer in development", () => {
   const workflow = readFileSync(path.resolve(".github/workflows/ci.yml"), "utf8").replace(/\r\n/gu, "\n");
   const windowsStart = workflow.indexOf("  verify-windows:");
   const releaseStart = workflow.indexOf("  release:", windowsStart);
@@ -429,26 +445,26 @@ test("required-check jobs stay present for docs-only PRs without running the ful
   for (const job of [windows, release, result, stress]) {
     assert.match(
       job,
-      /if: always\(\) && \(github\.event_name == 'push' \|\| github\.event_name == 'workflow_dispatch' \|\| \(github\.event_name == 'pull_request' && github\.event\.pull_request\.draft == false && needs\.impact\.result == 'success'\)\)/u,
+      /if: always\(\) && \(github\.event_name == 'push' \|\| \(\(github\.event_name == 'workflow_dispatch' \|\| \(github\.event_name == 'pull_request' && github\.event\.pull_request\.draft == false\)\) && needs\.impact\.result == 'success'\)\)/u,
       "a required-check job must materialize a result for every non-draft PR",
     );
   }
 
   assert.match(
     windows,
-    /- name: Run Windows shard\s+if: github\.event_name != 'pull_request' \|\| needs\.impact\.outputs\.full_required == 'true'/u,
+    /- name: Run Windows shard\s+if: github\.event_name == 'push' \|\| needs\.impact\.outputs\.release_required == 'true'/u,
   );
   assert.match(
     release,
-    /- run: npm test\s+if: github\.event_name != 'pull_request' \|\| needs\.impact\.outputs\.full_required == 'true'/u,
+    /- run: npm test\s+if: github\.event_name == 'push' \|\| needs\.impact\.outputs\.release_required == 'true'/u,
   );
   assert.match(
     stress,
-    /- run: npm run test:stress\s+if: github\.event_name != 'pull_request' \|\| needs\.impact\.outputs\.force_full == 'true' \|\| needs\.impact\.outputs\.full_required == 'true' \|\| needs\.impact\.outputs\.stress_required == 'true'/u,
+    /- run: npm run test:stress\s+if: github\.event_name == 'push' \|\| needs\.impact\.outputs\.release_required == 'true'/u,
   );
-  assert.match(windows, /- name: Full Windows suite not required/u);
-  assert.match(release, /- name: Full Ubuntu suite not required/u);
-  assert.match(stress, /- name: SQLite stress matrix not required/u);
+  assert.match(windows, /- name: Full Windows suite deferred/u);
+  assert.match(release, /- name: Full Ubuntu suite deferred/u);
+  assert.match(stress, /- name: SQLite stress matrix deferred/u);
 });
 
 test("tests-only execution is fail-closed without CI preflight evidence", () => {
@@ -469,4 +485,12 @@ test("tests-only execution is fail-closed without CI preflight evidence", () => 
   );
   assert.notEqual(missingBase.status, 0);
   assert.match(missingBase.stderr, /--tests-only requires an explicit --base/u);
+
+  const developmentConflict = spawnSync(
+    process.execPath,
+    ["scripts/run-affected-tests.mjs", "--base", "HEAD", "--tests-only", "--development"],
+    { encoding: "utf8", env: { ...env, CODEX_BRIDGE_CI_T0_COMPLETED: "1" } },
+  );
+  assert.notEqual(developmentConflict.status, 0);
+  assert.match(developmentConflict.stderr, /--development and --tests-only are mutually exclusive/u);
 });

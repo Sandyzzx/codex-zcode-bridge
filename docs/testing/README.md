@@ -1,15 +1,16 @@
 # 测试入口与成本边界
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-21（CI 优化 + ADR-043 SQLite v14 ONLY）
-> Last verified: 2026-11-21，分别核对 Cost Lab 独立门禁、Draft/Ready 分流、Fast 完成平台无关 T0、real-adapter 分域、Stress 分离及三组托管 Windows 两路分片结果；同时核对 v13 升级测试/生成物退役、最小非破坏性拒绝测试、v14 生命周期保留和 Impact Map 更新。最终发布集成树验证以本次 Preview.10 报告为准。
-> Verified against: `origin/preview` `c1245a02f8f9d4b6e1102eabac230b657d85de9b` 上叠加 PR #106/#107 的发布集成分支
+> Last updated: 2026-11-22（Executor 开发期定向验证 / 发布候选完整 CI 分层）
+> Last verified: 2026-11-22，核对 `release-candidate` 标签与 `workflow_dispatch.release_gate` 分流、开发期 `FULL_SUITE_DEFERRED_TO_RELEASE_GATE`、Required Check 占位、Push 完整门禁及 Cost Lab/Stress 独立边界；执行证据见 Async Executor PR 2 报告。
+> Verified against: `origin/preview` `1bf039fda2ccfd17a992458a871bddd7b48b38c1` + `codex/async-executor-pr2` CI governance revision
 
 `test/test-impact-map.json` 为可执行清单唯一来源。共享资格规则禁止 MANUAL_E2E、Fixture 自动执行，显式误传同样拒绝；源 .test.ts/.test.mjs、map 与实际 --list 由回归对账。生成的 test-inventory.json 是静态声明/历史证据索引，不决定执行。
 
 | 入口 | 行为 |
 |---|---|
-| npm run test:affected | 本地默认必跑 T0（typecheck/build/plugin validation/generated freshness/diff check），按真实依赖选择功能/压力测试；未知源码、未知可执行脚本或基础设施变化回退完整功能回归 |
+| npm run test:affected | 本地统一入口，必跑 T0（typecheck/build/plugin validation/generated freshness/diff check），按真实依赖选择功能/压力测试；未知源码、未知可执行脚本或基础设施变化标记完整功能回归 |
+| npm run test:affected -- --development | CI 开发门禁入口：TARGETED 照常执行；`FULL_SUITE` 在 T0 后明确输出 `FULL_SUITE_DEFERRED_TO_RELEASE_GATE`，不得当作完整回归 PASS |
 | npm test | 编译并运行本平台全部功能测试；不隐式执行登记压力矩阵 |
 | npm run test:full | typecheck/build/npm test/plugin validation；冻结 Windows 门禁 |
 | npm run test:stress | 编译后显式运行登记资源矩阵；支持 --file=<registered file> |
@@ -17,22 +18,23 @@
 | npm run test:clean-entrypoints | 无 production dist 的 compiled stdio、shipped launcher、Worker 拒绝和 bundled Core |
 | node scripts/test-isolated.mjs --list | 本平台实际默认执行集合 |
 
-FULL_SUITE 表示完整功能回归，压力状态为 SEPARATE_STRESS_GATE。SQLite 边界的 targeted selection 标记 STRESS_TEST_REQUIRED；显式 test:stress 或受影响文件入口可执行压力项。文档-only 是 NO_TESTS_APPLICABLE，dry-run 是 DRY_RUN_ONLY，都不能称测试 PASS。
+FULL_SUITE 表示需要完整功能回归，压力状态为 SEPARATE_STRESS_GATE。开发门禁可显式延期该完整回归；延期标记、文档-only 的 NO_TESTS_APPLICABLE 和 dry-run 的 DRY_RUN_ONLY 都不能称测试 PASS。SQLite 边界的 targeted selection 标记 STRESS_TEST_REQUIRED；压力矩阵只在完整 Release Gate 执行，或由 Owner 明确单独运行。
 
 `npm run test:affected -- --tests-only --base <sha>` 只供同一 workflow run、同一代码 SHA 的 CI Integration Job 使用。Fast 已完成平台无关 T0；Windows Integration 另行构建 Windows 产物和进程身份探针后，只运行所选测试。该入口要求显式 Base、`CODEX_BRIDGE_CI_T0_COMPLETED=1` 和 TARGETED 选择；不会接受 FULL_SUITE 或 NO_TESTS_APPLICABLE 作为跳过完整门禁的捷径。注册压力测试仍只由独立 Stress Job 执行。
 
 ## CI 门禁分层
 
-`impact` 先用同一 impact map 做 Windows 全量选择与可执行清单的影子对照，再输出 Fast、Integration、Release、Stress 和 Cost Lab 需求。无效或零 Base SHA 强制 FULL，未知源码、未知 `scripts/**`、测试基础设施、执行器、CI 与核心合同变化也自动 FULL。PR 使用独立 concurrency group，只取消同一 PR 的过期运行；Preview/Master Push 与手动验收不被后续 PR 自动取消。
+`impact` 先用同一 impact map 做 Windows 全量选择与可执行清单的影子对照，再输出 Fast、Integration、Release、Stress、Cost Lab 和 Release Gate 需求。PR 的 `release-candidate` 标签只在非 Draft 状态生效；手动运行必须显式设置 `release_gate=true`。无效或零 Base SHA 强制 FULL，未知源码、未知 `scripts/**`、测试基础设施、执行器、CI 与核心合同变化也自动 FULL。PR 使用独立 concurrency group，只取消同一 PR 的过期运行；Preview/Master Push 与手动验收不被后续 PR 自动取消。
 
 | Gate | 运行内容 | 成本边界 |
 |---|---|---|
-| Fast | Ubuntu 上的 T0、受影响单元/合成测试；FULL 变更不运行 Fast | 不为 FULL PR 支付重复 T0 |
-| Integration | Windows 上构建 Windows 产物、执行进程身份探针，再以 tests-only 运行所选 Worker、Runtime、SQLite、Result、Cleanup/Release 集成测试 | 复用同一 Run/SHA 的 Fast T0；只在非 FULL 变更需要 Integration 时运行 |
-| Release | Ubuntu 的 typecheck/build、完整 `npm test`、Plugin Validation、生成物 Freshness 与 diff check；Windows 两路并行执行完整分片、身份探针，再由聚合 Job 提供 `Verify (windows-2022)` | FULL PR、push、`workflow_dispatch` 保留完整保护；分片计划必须完整、互斥且自动测试全覆盖 |
-| Cost Lab | Ubuntu 上运行独立的 `npm run cost-lab:test` | `tools/cost-lab/**` 不再强制 Bridge FULL_SUITE；选中 Cost Lab、forced-full、Push 和 Dispatch 时独立执行 |
+| Development Fast | Ubuntu 上的 T0 和可安全执行的受影响测试；FULL 变更明确延期完整回归 | 每次普通 PR、Draft/Ready 转换和手动开发运行保持轻量，不重复完整矩阵 |
+| Integration | Windows 上构建 Windows 产物、执行进程身份探针，再以 tests-only 运行所选 Worker、Runtime、SQLite、Result、Cleanup/Release 集成测试 | 复用同一 Run/SHA 的 Fast T0；只在 TARGETED、非 Release Gate 且需要 Integration 时运行 |
+| Release | Ubuntu 的 typecheck/build、完整 `npm test`、Plugin Validation、生成物 Freshness 与 diff check；Windows 两路并行执行完整分片、身份探针，再由聚合 Job 提供 `Verify (windows-2022)` | `preview`/`master` push、非 Draft `release-candidate` PR 或 `release_gate=true` 时执行；分片计划必须完整、互斥且自动测试全覆盖 |
+| SQLite Stress | Windows/Ubuntu 资源矩阵 | 只随完整 Release Gate 执行或由 Owner 明确单独运行 |
+| Cost Lab | Windows 上运行独立的 `npm run cost-lab:test` | `tools/cost-lab/**` 不再强制 Bridge FULL_SUITE；选中 Cost Lab、forced-full、Push 和 Dispatch 时独立执行 |
 
-SQLite Stress 是独立矩阵：FULL 或影响 SQLite 资源边界时在 Windows/Ubuntu 显式运行。Fast 和 Release 的职责不重叠；FULL PR 的 Fast/Integration 均跳过，由 Ubuntu Release 与 Windows 两路分片各执行一次完整功能集合。Draft PR 只保留 Impact 和 Fast；转为 Ready 时会显式触发 `ready_for_review`，正式 Integration、Release、Stress 与 Cost Lab 重新按完整门禁选择。Push 和 `workflow_dispatch` 没有可信的 PR changed-file 输入，Cost Lab 仍独立执行，确认发布树本身。
+普通 PR 始终保留 `Fast PR gate`、`Verify (ubuntu-latest)`、`Verify (windows-2022)` 与 SQLite Stress 的 Required Check 结果；未请求 Release Gate 时完整 Job 输出明确延期并成功占位。非 Draft Release Candidate 到来后，同一 workflow 运行完整 Ubuntu、Windows 两路分片与 Stress，Fast/Integration 不重复执行。Draft PR 只承担 Impact 和 Development Fast；转为 Ready 会重新选择。Push 直接运行完整保护；`workflow_dispatch` 默认只跑开发门禁，`release_gate=true` 才运行完整保护。Cost Lab 保持独立选择。
 
 Impact Map 的每个测试域必须覆盖其直接 `src/`、`plugins/`、`scripts/` 或 `tools/` 静态导入；这是对现有 map 的一致性回归，不创建第二套 selector。`scripts/copy-test-assets.mjs` 变化强制 FULL；`launch-node24.mjs` 变化至少选择 `node-runtime.test.ts`；`process-spawn.ts` 变化选择 composition、real-adapter 和进程清理消费者。
 
