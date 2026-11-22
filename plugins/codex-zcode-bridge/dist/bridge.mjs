@@ -5738,6 +5738,88 @@ function schemaObjects(db) {
     row.sql === null ? null : row.sql.trim().replace(/\r\n?/gu, "\n")
   ]);
 }
+function normalizedTriggerSql(sql) {
+  return String(sql).trim().replace(/\r\n?/gu, "\n").replace(/\s+/gu, " ");
+}
+function recoveryBindingTriggerSql() {
+  if (expectedRecoveryBindingTriggerSql === void 0) {
+    const db = new DatabaseSync(":memory:");
+    try {
+      db.exec(SCHEMA);
+      expectedRecoveryBindingTriggerSql = db.prepare(
+        "SELECT sql FROM sqlite_schema WHERE type='trigger' AND name='cleanup_reverified_binding_guard'"
+      ).get()?.sql;
+    } finally {
+      db.close();
+    }
+    if (typeof expectedRecoveryBindingTriggerSql !== "string") throw new Error("Recovery binding trigger schema is missing");
+  }
+  return expectedRecoveryBindingTriggerSql;
+}
+function legacyRecoveryBindingTriggerSql() {
+  const current = recoveryBindingTriggerSql();
+  const start = current.indexOf("    AND (\n      (\n        json_type(NEW.evidence_json,'$.resolved_recovery_event_digests')='array'");
+  const end = start < 0 ? -1 : current.indexOf("    AND NOT EXISTS (\n      SELECT 1 FROM manager_operation_events x", start);
+  if (start < 0 || end < 0) throw new Error("Recovery binding trigger compatibility marker is missing");
+  const legacyBlock = `    AND json_type(NEW.evidence_json,'$.resolved_recovery_event_digests')='array'
+    AND json_array_length(NEW.evidence_json,'$.resolved_recovery_event_digests')<=8
+    AND json_array_length(NEW.evidence_json,'$.resolved_recovery_event_digests')=(
+      SELECT COUNT(*) FROM manager_operation_events h
+      WHERE h.operation_id=NEW.operation_id AND h.event_type='observation_recorded'
+        AND h.sequence<NEW.sequence AND json_extract(h.evidence_json,'$.reason')='recovery_hold'
+        AND json_extract(h.evidence_json,'$.classification')='hold'
+        AND json_extract(h.evidence_json,'$.reason_code') IN ('cleanup_identity_unknown','cleanup_incomplete'))
+    AND NOT EXISTS (
+      SELECT 1 FROM manager_operation_events h
+      WHERE h.operation_id=NEW.operation_id AND h.event_type='observation_recorded'
+        AND h.sequence<NEW.sequence AND json_extract(h.evidence_json,'$.reason') IN ('recovery_hold','recovery_quarantine')
+        AND (json_extract(h.evidence_json,'$.reason')<>'recovery_hold'
+          OR json_extract(h.evidence_json,'$.classification')<>'hold'
+          OR json_extract(h.evidence_json,'$.reason_code') NOT IN ('cleanup_identity_unknown','cleanup_incomplete')))
+    AND NOT EXISTS (
+      SELECT 1 FROM json_each(NEW.evidence_json,'$.resolved_recovery_event_digests') j
+      WHERE NOT EXISTS (
+        SELECT 1 FROM manager_operation_events h
+        WHERE h.operation_id=NEW.operation_id AND h.event_type='observation_recorded'
+          AND h.evidence_digest=j.value AND h.sequence<NEW.sequence
+          AND json_extract(h.evidence_json,'$.reason')='recovery_hold'
+          AND json_extract(h.evidence_json,'$.classification')='hold'
+          AND json_extract(h.evidence_json,'$.reason_code') IN ('cleanup_identity_unknown','cleanup_incomplete')))
+`;
+  return current.slice(0, start) + legacyBlock + current.slice(end);
+}
+function upgradeRecoveryBindingTrigger(db) {
+  const current = recoveryBindingTriggerSql();
+  const legacy = legacyRecoveryBindingTriggerSql();
+  const read = () => db.prepare("SELECT sql FROM sqlite_schema WHERE type='trigger' AND name='cleanup_reverified_binding_guard'").get()?.sql;
+  const actual = read();
+  if (typeof actual !== "string") fail2("candidate_schema_mismatch");
+  if (normalizedTriggerSql(actual) === normalizedTriggerSql(current)) return false;
+  if (normalizedTriggerSql(actual) !== normalizedTriggerSql(legacy)) fail2("candidate_schema_mismatch");
+  let began = false;
+  try {
+    db.exec("BEGIN IMMEDIATE");
+    began = true;
+    const locked = read();
+    if (normalizedTriggerSql(locked) === normalizedTriggerSql(current)) {
+      db.exec("COMMIT");
+      began = false;
+      return false;
+    }
+    if (normalizedTriggerSql(locked) !== normalizedTriggerSql(legacy)) fail2("candidate_schema_mismatch");
+    db.exec("DROP TRIGGER cleanup_reverified_binding_guard");
+    db.exec(current + ";");
+    db.exec("COMMIT");
+    began = false;
+    return true;
+  } catch (error2) {
+    if (began) try {
+      db.exec("ROLLBACK");
+    } catch {
+    }
+    throw error2;
+  }
+}
 function adminAbandonmentTableStatement(schema) {
   const start = schema.indexOf("CREATE TABLE manager_admin_abandonments");
   const end = schema.indexOf(";", start);
@@ -5751,7 +5833,7 @@ function normalizeAdminAbandonmentTableSql(sql) {
 function adminAbandonmentRowsDigest(rows) {
   return createHash14("sha256").update(rows.map(upgradeRowJson).join("\n")).digest("hex");
 }
-function assertCandidateSchema(db, { allowRuntimeEventExtensionAbsent = false } = {}) {
+function assertCandidateSchema(db, { allowRuntimeEventExtensionAbsent = false, allowLegacyRecoveryBindingTrigger = false } = {}) {
   const key = allowRuntimeEventExtensionAbsent ? "recovery" : "strict";
   if (!expectedSchemas.has(key)) {
     const base = new DatabaseSync(":memory:"), admin = new DatabaseSync(":memory:"), legacyAdmin = new DatabaseSync(":memory:");
@@ -5775,7 +5857,14 @@ function assertCandidateSchema(db, { allowRuntimeEventExtensionAbsent = false } 
       legacyAdmin.close();
     }
   }
-  if (!expectedSchemas.get(key).includes(JSON.stringify(schemaObjects(db)))) fail2("candidate_schema_mismatch");
+  const objects = schemaObjects(db);
+  if (allowLegacyRecoveryBindingTrigger) {
+    const trigger = objects.find((row) => row[0] === "trigger" && row[1] === "cleanup_reverified_binding_guard");
+    if (trigger && normalizedTriggerSql(trigger[3]) === normalizedTriggerSql(legacyRecoveryBindingTriggerSql())) {
+      trigger[3] = recoveryBindingTriggerSql().trim().replace(/\r\n?/gu, "\n");
+    }
+  }
+  if (!expectedSchemas.get(key).includes(JSON.stringify(objects))) fail2("candidate_schema_mismatch");
 }
 function upgradeLegacyAdminAbandonmentSchema(db) {
   const table = db.prepare("SELECT sql FROM sqlite_schema WHERE type='table' AND name='manager_admin_abandonments'").get();
@@ -5896,6 +5985,50 @@ function ensureRuntimeEventsSchema(db) {
     throw error2;
   }
 }
+function resolvedRecoveryCommitment(digests) {
+  const ordered = sortedDigests(digests);
+  return {
+    resolved_recovery_event_count: ordered.length,
+    resolved_recovery_event_root: digest2({ contract: RESOLVED_RECOVERY_SET_CONTRACT, event_digests: ordered })
+  };
+}
+function validateResolvedRecoverySet(value, { minimum = 0, failureCode = "invalid_resolved_recovery_set" } = {}) {
+  const hasArray = Object.hasOwn(value, "resolved_recovery_event_digests");
+  const hasCount = Object.hasOwn(value, "resolved_recovery_event_count");
+  const hasRoot = Object.hasOwn(value, "resolved_recovery_event_root");
+  if (hasArray === (hasCount || hasRoot) || hasCount !== hasRoot) fail2(failureCode);
+  if (hasArray) {
+    const digests = value.resolved_recovery_event_digests;
+    if (!Array.isArray(digests) || digests.length < minimum || digests.some((item) => typeof item !== "string" || !/^[0-9a-f]{64}$/u.test(item)) || new Set(digests).size !== digests.length || digests.join("|") !== sortedDigests(digests).join("|")) fail2(failureCode);
+    return { kind: "digests", digests: [...digests] };
+  }
+  if (!Number.isSafeInteger(value.resolved_recovery_event_count) || value.resolved_recovery_event_count < minimum || typeof value.resolved_recovery_event_root !== "string" || !/^[0-9a-f]{64}$/u.test(value.resolved_recovery_event_root)) fail2(failureCode);
+  return { kind: "commitment", count: value.resolved_recovery_event_count, root: value.resolved_recovery_event_root };
+}
+function resolvedRecoverySetMatches(value, eligible, failureCode) {
+  const set = validateResolvedRecoverySet(value, { minimum: 0, failureCode });
+  const ordered = sortedDigests(eligible);
+  if (set.kind === "digests") {
+    if (set.digests.join("|") !== ordered.join("|")) fail2(failureCode);
+    return ordered;
+  }
+  const commitment = resolvedRecoveryCommitment(ordered);
+  if (set.count !== commitment.resolved_recovery_event_count || set.root !== commitment.resolved_recovery_event_root) fail2(failureCode);
+  return ordered;
+}
+function recoveryMaterialFacts(operationId, evidence, phase) {
+  if (!evidence || Object.getPrototypeOf(evidence) !== Object.prototype) return null;
+  const facts = { contract: RECOVERY_MATERIAL_CONTRACT, operation_id: operationId };
+  for (const key of RECOVERY_MATERIAL_BINDING_KEYS) if (evidence[key] !== void 0) facts[key] = evidence[key];
+  if (evidence.phase !== void 0) facts.phase = evidence.phase;
+  else if (phase !== void 0) facts.phase = phase;
+  for (const key of RECOVERY_MATERIAL_DETAIL_KEYS) if (evidence[key] !== void 0) facts[key] = evidence[key];
+  return facts;
+}
+function recoveryMaterialDigest(operationId, evidence, phase) {
+  const facts = recoveryMaterialFacts(operationId, evidence, phase);
+  return facts ? digest2(facts) : null;
+}
 function validateEvidence(eventType, value) {
   const keys = EVIDENCE_KEYS[eventType];
   if (!value || Object.getPrototypeOf(value) !== Object.prototype) fail2("invalid_evidence");
@@ -5909,7 +6042,11 @@ function validateEvidence(eventType, value) {
     const fields = Object.keys(value).sort().join("|");
     if (fields !== ["capacity_slot", "reservation_id"].join("|") && fields !== ["authorization_source", "capacity_slot", "execution_profile_id", "policy_digest", "policy_revision", "reservation_id"].join("|")) fail2("invalid_evidence");
   } else if (keys) {
-    const expectedKeys = ["cleanup_verified", "cleanup_reverified"].includes(eventType) && value.adapter_cleanup === void 0 ? keys.filter((key) => key !== "adapter_cleanup") : keys;
+    let expectedKeys = (["cleanup_verified", "cleanup_reverified"].includes(eventType) && value.adapter_cleanup === void 0 ? keys.filter((key) => key !== "adapter_cleanup") : [...keys]).sort();
+    if (eventType === "cleanup_reverified") {
+      const resolvedSet = validateResolvedRecoverySet(value, { minimum: 0, failureCode: "invalid_cleanup_reverification" });
+      expectedKeys = [...expectedKeys, ...resolvedSet.kind === "digests" ? ["resolved_recovery_event_digests"] : ["resolved_recovery_event_count", "resolved_recovery_event_root"]].sort();
+    }
     if (Object.keys(value).sort().join("|") !== expectedKeys.join("|")) fail2("invalid_evidence");
   }
   if (["cleanup_verified", "cleanup_reverified"].includes(eventType) && value.adapter_cleanup !== void 0 && !validAdapterCleanupEvidence(value.adapter_cleanup)) fail2("invalid_adapter_cleanup_evidence");
@@ -5926,6 +6063,8 @@ function validateEvidence(eventType, value) {
         if (!Number.isInteger(v) || v < 1) fail2("invalid_evidence");
       } else if (k === "root_process_id") {
         if (!Number.isSafeInteger(v) || v < 1) fail2("invalid_evidence");
+      } else if (k === "resolved_recovery_event_count") {
+        if (!Number.isSafeInteger(v) || v < 0) fail2("invalid_evidence");
       } else if (["operation_resources_complete", "worker_tree_complete", "workspace_touched"].includes(k)) {
         if (typeof v !== "boolean") fail2("invalid_evidence");
       } else if (typeof v !== "string" || !validText3(v, 256)) fail2("invalid_evidence");
@@ -5935,11 +6074,12 @@ function validateEvidence(eventType, value) {
   if (eventType === "reserved" && (!validText3(value.reservation_id, 128) || !Number.isInteger(value.capacity_slot) || value.capacity_slot < 1 || value.capacity_slot > 8)) fail2("invalid_evidence");
   if (eventType === "reserved" && "authorization_source" in value && (value.authorization_source !== "trusted_local_policy" || !validText3(value.policy_revision, 64) || !validText3(value.execution_profile_id, 64) || typeof value.policy_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.policy_digest))) fail2("invalid_evidence");
   if (eventType === "observation_recorded" && (!validText3(value.reason, 256) || typeof value.evidence_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.evidence_digest))) fail2("invalid_evidence");
-  if (eventType === "cleanup_reverified" && (!Array.isArray(value.resolved_recovery_event_digests) || value.resolved_recovery_event_digests.length > RECOVERY_LIMIT || value.resolved_recovery_event_digests.some((v) => typeof v !== "string" || !/^[0-9a-f]{64}$/u.test(v)) || new Set(value.resolved_recovery_event_digests).size !== value.resolved_recovery_event_digests.length || value.resolved_recovery_event_digests.join("|") !== [...value.resolved_recovery_event_digests].sort().join("|") || !/^([0-9a-f]{64})$/u.test(value.prior_cleanup_event_digest) || !validId3(value.operation_id) || !validId3(value.task_id) || !Number.isSafeInteger(value.attempt) || value.attempt < 1 || !Number.isSafeInteger(value.generation) || value.generation < 1)) fail2("invalid_cleanup_reverification");
+  if (eventType === "cleanup_reverified" && (!/^([0-9a-f]{64})$/u.test(value.prior_cleanup_event_digest) || !validId3(value.operation_id) || !validId3(value.task_id) || !Number.isSafeInteger(value.attempt) || value.attempt < 1 || !Number.isSafeInteger(value.generation) || value.generation < 1)) fail2("invalid_cleanup_reverification");
   for (const key of ["launch_id", "claim_id"]) if (key in value && !validText3(value[key], 128)) fail2("invalid_evidence");
   if ("launch_epoch" in value && (!Number.isInteger(value.launch_epoch) || value.launch_epoch < 1)) fail2("invalid_evidence");
+  const recoveryObservation = eventType === "observation_recorded" && (value.reason === "recovery_hold" || value.reason === "recovery_quarantine");
   const json = canonical4(value);
-  const maxBytes = ["cleanup_verified", "cleanup_reverified"].includes(eventType) ? 2048 : 1024;
+  const maxBytes = ["cleanup_verified", "cleanup_reverified"].includes(eventType) || recoveryObservation ? 2048 : 1024;
   if (Buffer.byteLength(json, "utf8") > maxBytes) fail2("invalid_evidence");
   return value;
 }
@@ -5959,9 +6099,15 @@ function validateObservationEventEvidence(value) {
     if (value.reason !== "cancelled_before_claim" || ![value.cancel_id, value.launch_id].every(validId3) || ![value.request_digest, value.token_digest].every((v) => typeof v === "string" && /^[0-9a-f]{64}$/u.test(v)) || evidence_digest !== digest2(unsigned)) fail2("invalid_queued_cancel");
     return;
   }
-  if (own2 === "cancel_id|cancellation_verification_digest|evidence_digest|proof_digest|reason|resolved_recovery_event_digests") {
+  const cancelResolutionBase = ["cancel_id", "cancellation_verification_digest", "evidence_digest", "proof_digest", "reason"];
+  const cancelResolutionVariants = [
+    [...cancelResolutionBase, "resolved_recovery_event_digests"].sort().join("|"),
+    [...cancelResolutionBase, "resolved_recovery_event_count", "resolved_recovery_event_root"].sort().join("|")
+  ];
+  if (cancelResolutionVariants.includes(own2)) {
     const { evidence_digest, ...unsigned } = value;
-    if (value.reason !== "cancel_recovery_resolved" || !validId3(value.cancel_id) || ![value.cancellation_verification_digest, value.proof_digest].every((v) => typeof v === "string" && /^[0-9a-f]{64}$/u.test(v)) || !Array.isArray(value.resolved_recovery_event_digests) || value.resolved_recovery_event_digests.length < 1 || value.resolved_recovery_event_digests.length > RECOVERY_LIMIT || value.resolved_recovery_event_digests.some((v) => typeof v !== "string" || !/^[0-9a-f]{64}$/u.test(v)) || [...new Set(value.resolved_recovery_event_digests)].sort().join("|") !== value.resolved_recovery_event_digests.join("|") || evidence_digest !== digest2(unsigned)) fail2("invalid_cancellation_resolution");
+    if (value.reason !== "cancel_recovery_resolved" || !validId3(value.cancel_id) || ![value.cancellation_verification_digest, value.proof_digest].every((v) => typeof v === "string" && /^[0-9a-f]{64}$/u.test(v)) || evidence_digest !== digest2(unsigned)) fail2("invalid_cancellation_resolution");
+    validateResolvedRecoverySet(value, { minimum: 1, failureCode: "invalid_cancellation_resolution" });
     return;
   }
   if (own2 === "evidence_digest|reason") return;
@@ -5980,14 +6126,29 @@ function validateObservationEventEvidence(value) {
       fail2("invalid_cancellation_verification");
     return;
   }
-  const recoveryBase = "|" + [...RECOVERY_EVIDENCE_KEYS].sort().join("|");
-  const recoveryRelease = "|" + [...RECOVERY_RELEASE_EVIDENCE_KEYS].sort().join("|");
-  if (![recoveryBase, recoveryRelease].includes("|" + own2)) fail2("invalid_evidence");
+  const recoveryRequired = new Set(RECOVERY_EVIDENCE_KEYS);
+  const recoveryReleaseKeys = ["process_tree_root_observed", "process_tree_scan_clean", "process_tree_scan_digest", "recovery_disposition"];
+  const recoveryAllowed = /* @__PURE__ */ new Set([...RECOVERY_EVIDENCE_KEYS, ...recoveryReleaseKeys, ...RECOVERY_MATERIAL_DETAIL_KEYS, "material_digest"]);
+  const recoveryOwnKeys = Object.keys(value);
+  if ([...recoveryRequired].some((key) => !Object.hasOwn(value, key)) || recoveryOwnKeys.some((key) => !recoveryAllowed.has(key))) fail2("invalid_evidence");
   if (!Number.isSafeInteger(value.attempt) || value.attempt < 1 || !Number.isSafeInteger(value.expected_revision) || value.expected_revision < 1 || !validId3(value.task_id) || !validId3(value.claim_id) || !["hold", "quarantine"].includes(value.classification) || !["recovery_hold", "recovery_quarantine"].includes(value.reason) || value.reason !== `recovery_${value.classification}` || !RECOVERY_REASON_CODES.has(value.reason_code) || !RECOVERY_SOURCES.has(value.evidence_source) || RECOVERY_QUARANTINE_CODES.has(value.reason_code) !== (value.classification === "quarantine") || ![value.envelope_digest, value.evidence_digest, value.worker_identity_digest].every((v) => typeof v === "string" && /^[0-9a-f]{64}$/u.test(v)) || [value.task_id, value.claim_id, value.reason_code].some((v) => v !== v.normalize("NFC"))) {
     fail2("invalid_recovery_observation");
   }
-  if (own2 === recoveryRelease.slice(1) && (value.classification !== "hold" || value.reason_code !== "cleanup_incomplete" || value.recovery_disposition !== "complete_cleanup_closure_unavailable" || value.process_tree_scan_clean !== true || value.process_tree_root_observed !== true || typeof value.process_tree_scan_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.process_tree_scan_digest)))
+  const releaseMarker = Object.hasOwn(value, "process_tree_root_observed") || Object.hasOwn(value, "process_tree_scan_digest");
+  const releaseFieldsPresent = recoveryReleaseKeys.filter((key) => Object.hasOwn(value, key));
+  if (releaseMarker && (releaseFieldsPresent.length !== recoveryReleaseKeys.length || value.classification !== "hold" || value.reason_code !== "cleanup_incomplete" || value.recovery_disposition !== "complete_cleanup_closure_unavailable" || value.process_tree_scan_clean !== true || value.process_tree_root_observed !== true || typeof value.process_tree_scan_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.process_tree_scan_digest)))
     fail2("invalid_recovery_release_evidence");
+  if (value.material_digest !== void 0 && (typeof value.material_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.material_digest)))
+    fail2("invalid_recovery_observation");
+  if (value.phase !== void 0 && !RECOVERY_PHASES.has(value.phase)) fail2("invalid_recovery_observation");
+  for (const key of ["identity_state", "probe_reason", "process_tree_scan_scope", "recovery_disposition"])
+    if (value[key] !== void 0 && !validText3(value[key], 128)) fail2("invalid_recovery_observation");
+  if (value.process_id !== void 0 && (!Number.isSafeInteger(value.process_id) || value.process_id < 1)) fail2("invalid_recovery_observation");
+  if (value.start_fingerprint !== void 0 && !validText3(value.start_fingerprint, 256)) fail2("invalid_recovery_observation");
+  for (const key of ["complete_cleanup_closure", "process_tree_root_observed", "process_tree_scan_clean"])
+    if (value[key] !== void 0 && typeof value[key] !== "boolean") fail2("invalid_recovery_observation");
+  if (value.process_tree_scan_digest !== void 0 && (typeof value.process_tree_scan_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.process_tree_scan_digest)))
+    fail2("invalid_recovery_observation");
 }
 function recoveryEnvelope(input) {
   const inputKeys = input && Object.getPrototypeOf(input) === Object.prototype ? Object.keys(input).sort().join("|") : "";
@@ -6018,8 +6179,13 @@ function recoveryEnvelope(input) {
     } : {}
   };
 }
-function recoveryEventEvidence(input, envelopeDigest) {
-  return {
+function recoveryEventEvidence(input, envelopeDigest, evidence, phase) {
+  const stable = {};
+  for (const key of RECOVERY_MATERIAL_DETAIL_KEYS) {
+    if (evidence[key] === void 0 || evidence[key] === null) continue;
+    stable[key] = evidence[key];
+  }
+  const event = {
     attempt: input.attempt,
     claim_id: input.claim_id,
     classification: input.classification,
@@ -6031,6 +6197,7 @@ function recoveryEventEvidence(input, envelopeDigest) {
     reason_code: input.reason_code,
     task_id: input.task_id,
     worker_identity_digest: input.worker_identity_digest,
+    ...stable,
     ...input.recovery_disposition !== void 0 ? {
       process_tree_root_observed: input.process_tree_root_observed,
       process_tree_scan_clean: input.process_tree_scan_clean,
@@ -6038,6 +6205,7 @@ function recoveryEventEvidence(input, envelopeDigest) {
       recovery_disposition: input.recovery_disposition
     } : {}
   };
+  return { ...event, material_digest: recoveryMaterialDigest(input.operation_id, event, phase) };
 }
 function recoveryEventsFor(events, operationId) {
   const operation = typeof operationId === "object" ? operationId : null;
@@ -6071,8 +6239,13 @@ function recoveryEventsFor(events, operationId) {
     if (!operation || event.from_phase !== "running" || event.to_phase !== "running" || event.generation !== operation.generation || !verification || verification.sequence >= event.sequence || verified.reason !== "cancel_tree_verified" || verified.cancel_id !== evidence.cancel_id || verified.claim_id !== operation.claim_id || verified.worker_identity_digest !== operation.claim_worker_identity_digest || verified.proof_digest !== evidence.proof_digest)
       fail2("cancellation_resolution_binding_mismatch");
     const eligible = recovery.filter((item) => item.event.sequence < event.sequence && !resolved.has(item.event.evidence_digest));
-    if (eligible.some((item) => item.evidence.classification !== "hold" || !["cleanup_identity_unknown", "cleanup_incomplete"].includes(item.evidence.reason_code) || item.event.sequence >= verification.sequence) || eligible.map((item) => item.event.evidence_digest).sort().join("|") !== evidence.resolved_recovery_event_digests.join("|")) fail2("cancellation_resolution_hold_mismatch");
-    for (const hash of evidence.resolved_recovery_event_digests) resolved.add(hash);
+    if (eligible.some((item) => item.evidence.classification !== "hold" || !["cleanup_identity_unknown", "cleanup_incomplete"].includes(item.evidence.reason_code) || item.event.sequence >= verification.sequence)) fail2("cancellation_resolution_hold_mismatch");
+    const committed = resolvedRecoverySetMatches(
+      evidence,
+      eligible.map((item) => item.event.evidence_digest),
+      "cancellation_resolution_hold_mismatch"
+    );
+    for (const hash of committed) resolved.add(hash);
   }
   for (const event of operationEvents) {
     if (event.event_type !== "cleanup_reverified") continue;
@@ -6089,13 +6262,15 @@ function recoveryEventsFor(events, operationId) {
       fail2("cleanup_reverification_history_mismatch");
     const between = operationEvents.filter((candidate) => candidate.sequence > prior.sequence && candidate.sequence < event.sequence);
     const betweenRecovery = recovery.filter((item) => item.event.sequence > prior.sequence && item.event.sequence < event.sequence);
+    const eligible = betweenRecovery.filter((item) => !resolved.has(item.event.evidence_digest));
     if (between.some((candidate) => candidate.event_type !== "observation_recorded") || betweenRecovery.length !== between.length || betweenRecovery.some((item) => item.evidence.classification !== "hold" || !["cleanup_identity_unknown", "cleanup_incomplete"].includes(item.evidence.reason_code)))
       fail2("cleanup_reverification_intervening_event_mismatch");
-    for (const eventDigest of evidence.resolved_recovery_event_digests) {
-      const held = recovery.find((item) => item.event.evidence_digest === eventDigest);
-      if (!held || held.event.sequence >= event.sequence || held.evidence.classification !== "hold" || !["cleanup_identity_unknown", "cleanup_incomplete"].includes(held.evidence.reason_code)) fail2("cleanup_reverification_hold_binding_mismatch");
-      resolved.add(eventDigest);
-    }
+    const committed = resolvedRecoverySetMatches(
+      evidence,
+      eligible.map((item) => item.event.evidence_digest),
+      "cleanup_reverification_hold_binding_mismatch"
+    );
+    for (const eventDigest of committed) resolved.add(eventDigest);
   }
   return recovery.map((item) => ({ ...item, active: !resolved.has(item.event.evidence_digest) }));
 }
@@ -6236,7 +6411,7 @@ function validateRecoveryEventBinding(operation, event, evidence, claimSequence)
     reason_code: evidence.reason_code,
     evidence_source: evidence.evidence_source,
     evidence_digest: evidence.evidence_digest,
-    ...evidence.recovery_disposition !== void 0 ? {
+    ...Object.hasOwn(evidence, "process_tree_root_observed") || Object.hasOwn(evidence, "process_tree_scan_digest") ? {
       process_tree_root_observed: evidence.process_tree_root_observed,
       process_tree_scan_clean: evidence.process_tree_scan_clean,
       process_tree_scan_digest: evidence.process_tree_scan_digest,
@@ -6244,6 +6419,8 @@ function validateRecoveryEventBinding(operation, event, evidence, claimSequence)
     } : {}
   };
   if (digest2(recoveryEnvelope(input)) !== evidence.envelope_digest) fail2("recovery_envelope_digest_mismatch");
+  if (evidence.material_digest !== void 0 && recoveryMaterialDigest(operation.operation_id, evidence, event.to_phase) !== evidence.material_digest)
+    fail2("recovery_material_digest_mismatch");
 }
 function parseHistoricalExceptionManifest(sourceManifestJson, sourceManifestDigest) {
   let manifest;
@@ -6610,7 +6787,7 @@ function callDecision(fn, workspace, input) {
     return { state: "unknown" };
   }
 }
-var HERE, SCHEMA, RUNTIME_EVENTS_SCHEMA, ADMIN_ABANDONMENT_SCHEMA, NORMALIZED_ADMIN_ABANDONMENT_SCHEMA, LEGACY_ADMIN_ABANDONMENT_SCHEMA, CONSTRUCT, SCHEMA_VERSION, SCHEMA_OBJECT_QUERY, RUNTIME_EVENT_SCHEMA_OBJECTS, expectedSchemas, ADMIN_ABANDONMENT_TABLE_SQL, LEGACY_ADMIN_ABANDONMENT_TABLE_SQL, NORMALIZED_ADMIN_ABANDONMENT_TABLE_SQL, NORMALIZED_LEGACY_ADMIN_ABANDONMENT_TABLE_SQL, SQLITE_V14_ONLY_MESSAGE, V13_UPGRADE_MARKER_MESSAGE, v13UpgradeMarker, RESULT_CONTRACT_VERSION, RESULT_STATUSES2, RECOVERY_PHASES, RECOVERY_SOURCES, RECOVERY_REASON_CODES, RECOVERY_QUARANTINE_CODES, RECOVERY_EVIDENCE_KEYS, RECOVERY_RELEASE_EVIDENCE_KEYS, RECOVERY_LIMIT, digest2, rawDigest, upgradeRowJson, EVIDENCE_KEYS, FUTURE_EVENT_TYPES, FUTURE_EVIDENCE_KEYS, EVENT_PHASE, RECOVERY_INPUT_KEYS, RECOVERY_RELEASE_INPUT_KEYS, ADMIN_ABANDONMENT_INPUT_KEYS, ADMIN_ABANDONMENT_EVIDENCE_KEYS, USER_AUTHORIZED_RELEASE_INPUT_KEYS, USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS, AdmissionError, fail2, IsolatedAdmissionStore;
+var HERE, SCHEMA, RUNTIME_EVENTS_SCHEMA, ADMIN_ABANDONMENT_SCHEMA, NORMALIZED_ADMIN_ABANDONMENT_SCHEMA, LEGACY_ADMIN_ABANDONMENT_SCHEMA, CONSTRUCT, SCHEMA_VERSION, SCHEMA_OBJECT_QUERY, RUNTIME_EVENT_SCHEMA_OBJECTS, expectedSchemas, expectedRecoveryBindingTriggerSql, ADMIN_ABANDONMENT_TABLE_SQL, LEGACY_ADMIN_ABANDONMENT_TABLE_SQL, NORMALIZED_ADMIN_ABANDONMENT_TABLE_SQL, NORMALIZED_LEGACY_ADMIN_ABANDONMENT_TABLE_SQL, SQLITE_V14_ONLY_MESSAGE, V13_UPGRADE_MARKER_MESSAGE, v13UpgradeMarker, RESULT_CONTRACT_VERSION, RESULT_STATUSES2, RECOVERY_PHASES, RECOVERY_SOURCES, RECOVERY_REASON_CODES, RECOVERY_QUARANTINE_CODES, RECOVERY_EVIDENCE_KEYS, RECOVERY_RELEASE_EVIDENCE_KEYS, RECOVERY_MATERIAL_BINDING_KEYS, RECOVERY_MATERIAL_DETAIL_KEYS, RESOLVED_RECOVERY_SET_CONTRACT, RECOVERY_MATERIAL_CONTRACT, digest2, rawDigest, sortedDigests, upgradeRowJson, EVIDENCE_KEYS, FUTURE_EVENT_TYPES, FUTURE_EVIDENCE_KEYS, EVENT_PHASE, RECOVERY_INPUT_KEYS, RECOVERY_RELEASE_INPUT_KEYS, ADMIN_ABANDONMENT_INPUT_KEYS, ADMIN_ABANDONMENT_EVIDENCE_KEYS, USER_AUTHORIZED_RELEASE_INPUT_KEYS, USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS, AdmissionError, fail2, IsolatedAdmissionStore;
 var init_store = __esm({
   "src/sqlite-candidate/wp6b2b1/store.mjs"() {
     "use strict";
@@ -6656,9 +6833,25 @@ var init_store = __esm({
     RECOVERY_QUARANTINE_CODES = /* @__PURE__ */ new Set(["claim_identity_conflict", "operation_projection_conflict"]);
     RECOVERY_EVIDENCE_KEYS = Object.freeze(["attempt", "claim_id", "classification", "envelope_digest", "evidence_digest", "evidence_source", "expected_revision", "reason", "reason_code", "task_id", "worker_identity_digest"]);
     RECOVERY_RELEASE_EVIDENCE_KEYS = Object.freeze([...RECOVERY_EVIDENCE_KEYS, "process_tree_root_observed", "process_tree_scan_clean", "process_tree_scan_digest", "recovery_disposition"]);
-    RECOVERY_LIMIT = 8;
+    RECOVERY_MATERIAL_BINDING_KEYS = Object.freeze(["attempt", "claim_id", "classification", "evidence_source", "reason_code", "task_id", "worker_identity_digest"]);
+    RECOVERY_MATERIAL_DETAIL_KEYS = Object.freeze([
+      "complete_cleanup_closure",
+      "identity_state",
+      "phase",
+      "probe_reason",
+      "process_id",
+      "process_tree_root_observed",
+      "process_tree_scan_clean",
+      "process_tree_scan_digest",
+      "process_tree_scan_scope",
+      "recovery_disposition",
+      "start_fingerprint"
+    ]);
+    RESOLVED_RECOVERY_SET_CONTRACT = "wp6c-resolved-recovery-set-v2";
+    RECOVERY_MATERIAL_CONTRACT = "wp6c-recovery-material-v1";
     digest2 = (value) => createHash14("sha256").update(typeof value === "string" ? value : canonical4(value)).digest("hex");
     rawDigest = (value) => createHash14("sha256").update(Buffer.from(value)).digest("hex");
+    sortedDigests = (values) => [...values].sort();
     upgradeRowJson = (row) => canonical4(Object.fromEntries(Object.entries(row).map(([key, value]) => [
       key,
       value instanceof Uint8Array ? { sqlite_type: "blob", bytes: value.byteLength, sha256: createHash14("sha256").update(value).digest("hex") } : value
@@ -6675,7 +6868,7 @@ var init_store = __esm({
       cleanup_pending: ["claim_id", "result_commit_ref", "worker_identity_digest"],
       cleanup_verified: ["adapter_cleanup", "claim_id", "cleanup_digest", "evidence_source", "launch_receipt_digest", "operation_resources_complete", "process_tree_digest", "resources_digest", "result_commit_ref", "root_process_id", "root_start_fingerprint", "worker_identity_digest", "worker_tree_complete", "workspace_touched"],
       cleanup_unverified: ["claim_id", "probe_state", "reason", "worker_identity_digest"],
-      cleanup_reverified: ["adapter_cleanup", "attempt", "claim_id", "cleanup_digest", "evidence_source", "generation", "launch_receipt_digest", "operation_id", "operation_resources_complete", "prior_cleanup_event_digest", "process_tree_digest", "resolved_recovery_event_digests", "resources_digest", "result_commit_ref", "root_process_id", "root_start_fingerprint", "task_id", "worker_identity_digest", "worker_tree_complete", "workspace_touched"],
+      cleanup_reverified: ["adapter_cleanup", "attempt", "claim_id", "cleanup_digest", "evidence_source", "generation", "launch_receipt_digest", "operation_id", "operation_resources_complete", "prior_cleanup_event_digest", "process_tree_digest", "resources_digest", "result_commit_ref", "root_process_id", "root_start_fingerprint", "task_id", "worker_identity_digest", "worker_tree_complete", "workspace_touched"],
       released: ["claim_id", "cleanup_digest", "result_commit_ref", "worker_identity_digest"],
       interaction_requested: ["claim_id", "request_digest", "request_id", "request_method", "worker_identity_digest"],
       interaction_reply_intent: ["answer_digest", "claim_id", "reply_id", "request_id", "worker_identity_digest"],
@@ -6684,7 +6877,7 @@ var init_store = __esm({
       interaction_reply_accepted: ["ack_digest", "answer_digest", "claim_id", "commit_digest", "reply_id", "request_id", "worker_identity_digest"]
     });
     FUTURE_EVENT_TYPES = /* @__PURE__ */ new Set(["launch_intent", "launch_receipt", "launch_unknown", "claim_committed", "result_committed", "cleanup_pending", "cleanup_verified", "cleanup_unverified", "quarantined", "released", "launch_failed"]);
-    FUTURE_EVIDENCE_KEYS = /* @__PURE__ */ new Set(["adapter_cleanup", "cancel_verification_digest", "claim_id", "cleanup_digest", "evidence_digest", "evidence_source", "launch_epoch", "launch_id", "launch_receipt_digest", "operation_resources_complete", "outcome", "probe_state", "process_tree_digest", "reason", "resources_digest", "result_commit_ref", "root_process_id", "root_start_fingerprint", "receipt_digest", "result_digest", "token_digest", "worker_identity_digest", "worker_tree_complete", "workspace_touched"]);
+    FUTURE_EVIDENCE_KEYS = /* @__PURE__ */ new Set(["adapter_cleanup", "cancel_verification_digest", "claim_id", "cleanup_digest", "evidence_digest", "evidence_source", "launch_epoch", "launch_id", "launch_receipt_digest", "operation_resources_complete", "outcome", "probe_state", "process_tree_digest", "reason", "resolved_recovery_event_count", "resolved_recovery_event_digests", "resolved_recovery_event_root", "resources_digest", "result_commit_ref", "root_process_id", "root_start_fingerprint", "receipt_digest", "result_digest", "token_digest", "worker_identity_digest", "worker_tree_complete", "workspace_touched"]);
     EVENT_PHASE = Object.freeze({
       capacity_policy_committed: "policy_change_committed",
       reserved: "reserved",
@@ -6783,6 +6976,7 @@ var init_store = __esm({
         const s = new _IsolatedAdmissionStore(CONSTRUCT, db, p, fault);
         try {
           assertSchemaVersion(db);
+          upgradeRecoveryBindingTrigger(db);
           assertCandidateSchema(db, { allowRuntimeEventExtensionAbsent: true });
           ensureRuntimeEventsSchema(db);
           assertCandidateSchema(db);
@@ -8224,14 +8418,17 @@ var init_store = __esm({
             }
             if (!cancelEvent || cancelEvent.event_type !== "observation_recorded" || cancelEvent.sequence >= resultEvent.sequence || !parsed || parsed.reason !== "cancel_tree_verified" || parsed.cancel_id !== input.cancel_id || parsed.claim_id !== o.claim_id || parsed.worker_identity_digest !== o.claim_worker_identity_digest)
               fail2("user_authorized_release_cancel_identity_mismatch");
-            const recoveryEvent = this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? AND json_extract(evidence_json,'$.evidence_digest')=?").get(input.operation_id, input.recovery_evidence_digest);
-            let recoveryEvidence;
-            try {
-              recoveryEvidence = recoveryEvent ? JSON.parse(recoveryEvent.evidence_json) : null;
-            } catch {
-              recoveryEvidence = null;
-            }
-            if (!recoveryEvent || recoveryEvent.event_type !== "observation_recorded" || recoveryEvent.sequence !== o.revision || recoveryEvent.generation !== o.generation || !recoveryEvidence || recoveryEvidence.reason !== "recovery_hold" || recoveryEvidence.task_id !== o.task_id || recoveryEvidence.attempt !== o.attempt || recoveryEvidence.expected_revision !== input.revision - 1 || recoveryEvidence.claim_id !== o.claim_id || recoveryEvidence.worker_identity_digest !== o.claim_worker_identity_digest || recoveryEvidence.reason_code !== "cleanup_incomplete" || recoveryEvidence.recovery_disposition !== "complete_cleanup_closure_unavailable" || recoveryEvidence.process_tree_scan_clean !== true || recoveryEvidence.process_tree_root_observed !== true || typeof recoveryEvidence.process_tree_scan_digest !== "string" || !/^[0-9a-f]{64}$/u.test(recoveryEvidence.process_tree_scan_digest))
+            const lifecycle = this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? ORDER BY sequence").all(input.operation_id).map((event) => {
+              try {
+                return { ...event, evidence: JSON.parse(event.evidence_json) };
+              } catch {
+                fail2("user_authorized_release_recovery_evidence_mismatch");
+              }
+            });
+            const latestActiveRecovery = recoveryEventsFor(lifecycle, o).filter((event) => event.active).at(-1);
+            const recoveryEvent = latestActiveRecovery?.event;
+            const recoveryEvidence = latestActiveRecovery?.evidence;
+            if (!recoveryEvent || recoveryEvent.sequence > o.revision || recoveryEvent.generation !== o.generation || ![recoveryEvent.evidence_digest, recoveryEvidence?.evidence_digest].includes(input.recovery_evidence_digest) || !recoveryEvidence || recoveryEvidence.reason !== "recovery_hold" || recoveryEvidence.task_id !== o.task_id || recoveryEvidence.attempt !== o.attempt || recoveryEvent.sequence !== recoveryEvidence.expected_revision + 1 || recoveryEvidence.claim_id !== o.claim_id || recoveryEvidence.worker_identity_digest !== o.claim_worker_identity_digest || recoveryEvidence.reason_code !== "cleanup_incomplete" || recoveryEvidence.recovery_disposition !== "complete_cleanup_closure_unavailable" || recoveryEvidence.process_tree_scan_clean !== true || recoveryEvidence.process_tree_root_observed !== true || typeof recoveryEvidence.process_tree_scan_digest !== "string" || !/^[0-9a-f]{64}$/u.test(recoveryEvidence.process_tree_scan_digest))
               fail2("user_authorized_release_recovery_evidence_mismatch");
           }
           if (o.revision !== input.revision) fail2("stale_user_authorized_release_cas");
@@ -8495,7 +8692,7 @@ var init_store = __esm({
               cancel_id: intent.evidence.cancel_id,
               cancellation_verification_digest: event.evidence_digest,
               proof_digest: verdict2.evidence_digest,
-              resolved_recovery_event_digests: holds.map((item) => item.event.evidence_digest).sort()
+              ...resolvedRecoveryCommitment(holds.map((item) => item.event.evidence_digest))
             };
             this.#event(
               input.operation_id,
@@ -8834,8 +9031,6 @@ var init_store = __esm({
           fail2("recovery_evidence_invalid");
         }
         if (Buffer.byteLength(evidenceJson, "utf8") > 4096 || !evidence || Object.getPrototypeOf(evidence) !== Object.prototype || containsNonNfcString(evidence) || digest2(evidenceJson) !== input.evidence_digest) fail2("recovery_evidence_invalid");
-        const eventEvidence = recoveryEventEvidence(input, envelopeDigest);
-        validateEvidence("observation_recorded", eventEvidence);
         return this.#transaction(() => {
           const o = this.#db.prepare("SELECT * FROM manager_operations WHERE operation_id=? AND operation_kind='attempt_lifecycle'").get(input.operation_id);
           if (!o) fail2("operation_not_found");
@@ -8859,31 +9054,35 @@ var init_store = __esm({
             verified = null;
           }
           if (!verified || Object.getPrototypeOf(verified) !== Object.prototype || Object.keys(verified).sort().join("|") !== "classification|evidence_digest|evidence_source|reason_code" || verified.classification !== input.classification || verified.evidence_digest !== input.evidence_digest || verified.evidence_source !== input.evidence_source || verified.reason_code !== input.reason_code) fail2("recovery_evidence_unverified");
+          const eventEvidence = recoveryEventEvidence(input, envelopeDigest, evidence, o.phase);
+          validateEvidence("observation_recorded", eventEvidence);
           const history = this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? ORDER BY sequence").all(input.operation_id).map((e) => ({ ...e, evidence: JSON.parse(e.evidence_json) }));
           const existing = history.filter((e) => e.event_type === "observation_recorded");
-          const same = existing.find((e) => e.evidence?.envelope_digest === envelopeDigest);
-          if (same) return {
+          const currentClass = foldedRecoveryClassification(o, history);
+          if (currentClass === "quarantine" && input.classification !== "quarantine") fail2("recovery_classification_downgrade");
+          const recoveryExisting = recoveryEventsFor(history, o).filter((e) => e.active);
+          const same = recoveryExisting.find((e) => e.evidence?.envelope_digest === envelopeDigest)?.event;
+          const sameMaterial = recoveryExisting.find((e) => e.evidence.material_digest !== void 0 ? e.evidence.material_digest === eventEvidence.material_digest : recoveryMaterialDigest(e.event.operation_id, e.evidence, e.event.to_phase) === recoveryMaterialDigest(o.operation_id, eventEvidence, o.phase));
+          const duplicate = same ?? sameMaterial?.event;
+          if (duplicate) return {
             duplicate: true,
             operation_id: o.operation_id,
             task_id: o.task_id,
             attempt: o.attempt,
             generation: o.generation,
-            revision: same.sequence,
-            event_sequence: same.sequence,
+            revision: o.revision,
+            event_sequence: duplicate.sequence,
             expected_revision: input.expected_revision,
             phase: o.phase,
+            evidence_digest: duplicate.evidence?.evidence_digest ?? duplicate.evidence_digest,
             classification: input.classification,
             claim_id: o.claim_id,
             worker_identity_digest: o.claim_worker_identity_digest
           };
-          const sameRevision = existing.find((e) => e.evidence?.reason?.startsWith("recovery_") && e.evidence.expected_revision === input.expected_revision);
+          const sameRevision = recoveryExisting.find((e) => e.evidence?.reason?.startsWith("recovery_") && e.evidence.expected_revision === input.expected_revision);
           if (sameRevision) fail2("recovery_observation_conflict");
           if (o.revision !== input.expected_revision) fail2("stale_recovery_cas");
           if (o.phase === "quarantined" && input.classification !== "quarantine") fail2("recovery_classification_downgrade");
-          const recoveryEvents = existing.filter((e) => e.evidence?.reason === "recovery_hold" || e.evidence?.reason === "recovery_quarantine");
-          if (recoveryEvents.length >= RECOVERY_LIMIT) fail2("recovery_observation_limit");
-          const currentClass = foldedRecoveryClassification(o, history);
-          if (currentClass === "quarantine" && input.classification !== "quarantine") fail2("recovery_classification_downgrade");
           const at = (/* @__PURE__ */ new Date()).toISOString();
           const changed = this.#db.prepare("UPDATE manager_operations SET revision=revision+1 WHERE operation_id=? AND task_id=? AND attempt=? AND generation=? AND phase=? AND revision=? AND claim_id=? AND claim_generation=? AND claim_worker_identity_digest=?").run(o.operation_id, o.task_id, o.attempt, o.generation, o.phase, input.expected_revision, input.claim_id, input.generation, input.worker_identity_digest);
           if (changed.changes !== 1) fail2("stale_recovery_cas");
@@ -8901,7 +9100,8 @@ var init_store = __esm({
             phase: o.phase,
             classification: input.classification,
             claim_id: o.claim_id,
-            worker_identity_digest: o.claim_worker_identity_digest
+            worker_identity_digest: o.claim_worker_identity_digest,
+            evidence_digest: eventEvidence.evidence_digest
           };
         });
       }
@@ -9376,6 +9576,7 @@ var init_store = __esm({
           const priorReverification = history.find((event) => event.event_type === "cleanup_reverified");
           if (priorReverification && (o.phase === "cleanup_verified" || o.phase === "released") && o.revision >= input.revision + 2 && priorReverification.from_phase === "cleanup_unverified" && priorReverification.to_phase === "cleanup_reverified" && priorReverification.evidence.prior_cleanup_event_digest === unverified2[0].evidence_digest && priorReverification.evidence.cleanup_digest === cleanupDigest && history.some((event) => event.event_type === "cleanup_verified" && event.evidence.cleanup_digest === cleanupDigest && event.sequence === priorReverification.sequence + 1)) {
             const verified = history.find((event) => event.event_type === "cleanup_verified" && event.evidence.cleanup_digest === cleanupDigest);
+            const resolved = recoveryEventsFor(history, o).filter((event) => event.event.sequence < priorReverification.sequence).map((event) => event.event.evidence_digest).sort();
             return {
               duplicate: true,
               operation_id: o.operation_id,
@@ -9383,12 +9584,12 @@ var init_store = __esm({
               attempt: o.attempt,
               generation: o.generation,
               claim_id: o.claim_id,
-              revision: verified.sequence,
+              revision: o.revision,
               event_sequence: verified.sequence,
               phase: o.phase,
               cleanup_verified: true,
               cleanup_digest: cleanupDigest,
-              resolved_recovery_event_digests: priorReverification.evidence.resolved_recovery_event_digests
+              resolved_recovery_event_digests: resolved
             };
           }
           if (o.phase !== "cleanup_unverified" || o.revision !== input.revision) fail2("stale_cleanup_reverification_cas");
@@ -9397,7 +9598,6 @@ var init_store = __esm({
           const active = recovery.filter((event) => event.active);
           if (active.some((event) => event.evidence.classification !== "hold" || !["cleanup_identity_unknown", "cleanup_incomplete"].includes(event.evidence.reason_code))) fail2("cleanup_reverification_blocked_by_unrelated_hold");
           const resolvedDigests = active.map((event) => event.event.evidence_digest).sort();
-          if (resolvedDigests.length > RECOVERY_LIMIT) fail2("cleanup_reverification_hold_limit");
           const changed = this.#db.prepare("UPDATE manager_operations SET phase='cleanup_reverified',revision=revision+1 WHERE operation_id=? AND task_id=? AND attempt=? AND generation=? AND phase='cleanup_unverified' AND revision=? AND claim_id=? AND claim_generation=? AND claim_worker_identity_digest=? AND result_commit_ref=?").run(o.operation_id, o.task_id, o.attempt, o.generation, input.revision, o.claim_id, o.generation, o.claim_worker_identity_digest, o.result_commit_ref);
           if (changed.changes !== 1) fail2("stale_cleanup_reverification_cas");
           const baseEvidence = {
@@ -9423,7 +9623,7 @@ var init_store = __esm({
             attempt: o.attempt,
             generation: o.generation,
             prior_cleanup_event_digest: unverified2[0].evidence_digest,
-            resolved_recovery_event_digests: resolvedDigests
+            ...resolvedRecoveryCommitment(resolvedDigests)
           };
           validateEvidence("cleanup_reverified", reverifiedEvidence);
           const at = (/* @__PURE__ */ new Date()).toISOString();
@@ -9709,7 +9909,10 @@ var init_store = __esm({
         try {
           if (this.#db.prepare("PRAGMA foreign_keys").get().foreign_keys !== 1) fail2("foreign_keys_disabled");
           if (this.#db.prepare("PRAGMA user_version").get().user_version !== SCHEMA_VERSION) fail2("schema_version_unknown");
-          assertCandidateSchema(this.#db, { allowRuntimeEventExtensionAbsent: this.#recoveryOnly });
+          assertCandidateSchema(this.#db, {
+            allowRuntimeEventExtensionAbsent: this.#recoveryOnly,
+            allowLegacyRecoveryBindingTrigger: this.#recoveryOnly
+          });
           if (this.#db.prepare("PRAGMA quick_check").get().quick_check !== "ok") fail2("database_corrupt");
           if (this.#db.prepare("PRAGMA foreign_key_check").all().length) fail2("database_inconsistent");
           const m = this.#db.prepare("SELECT * FROM authority_metadata").all();
@@ -9962,7 +10165,8 @@ var init_store = __esm({
             }
             if (o.operation_kind === "attempt_lifecycle") {
               const intents = launchEvents.launch_intent, receipts = launchEvents.launch_receipt, claims = launchEvents.claim_committed;
-              if (cancellationIntents.length > 1 || cancellationVerifications.length > RECOVERY_LIMIT + 1 || cancellationVerifications.length > 0 && cancellationIntents.length !== 1) fail2("cancellation_history_unbounded");
+              if (cancellationIntents.length > 1 || cancellationVerifications.length > 0 && cancellationIntents.length !== 1)
+                fail2("cancellation_history_mismatch");
               if (cancellationIntents.length || cancellationVerifications.length) {
                 if (claims.length !== 1 || !o.claim_id || o.claim_generation !== o.generation || !o.claim_worker_identity_json || !o.launch_identity_json) fail2("cancellation_claim_missing");
                 const worker = JSON.parse(o.claim_worker_identity_json), launchIdentity = JSON.parse(o.launch_identity_json);
@@ -10002,12 +10206,20 @@ var init_store = __esm({
                     if (event.sequence <= intent.event.sequence || event.from_phase !== "running" || event.to_phase !== "running" || evidence.cancel_id !== intent.evidence.cancel_id || evidence.claim_id !== o.claim_id || evidence.worker_identity_digest !== o.claim_worker_identity_digest || evidence.intent_event_digest !== intent.event.evidence_digest || evidence.evidence_digest !== digest2({ cancel_verification_contract_version: 1, ...unsigned }) || evidence.root_process_id !== worker.process_id || evidence.root_process_id !== launchIdentity.process_id || evidence.root_start_fingerprint !== worker.start_fingerprint || evidence.root_start_fingerprint !== launchIdentity.start_fingerprint)
                       fail2("cancellation_verification_history_mismatch");
                   }
-                  const linkedProofs = new Set(es.filter((event) => event.event_type === "observation_recorded").map((event) => JSON.parse(event.evidence_json)).filter((evidence) => evidence.reason === "cancel_recovery_resolved").map((evidence) => evidence.cancellation_verification_digest));
-                  if (cancellationVerifications.slice(1).some(({ event }) => !linkedProofs.has(event.evidence_digest)))
-                    fail2("cancellation_verification_history_mismatch");
+                  const linkedProofs = /* @__PURE__ */ new Map();
+                  for (const event of es) {
+                    if (event.event_type !== "observation_recorded") continue;
+                    const evidence = JSON.parse(event.evidence_json);
+                    if (evidence.reason !== "cancel_recovery_resolved") continue;
+                    const verificationDigest = evidence.cancellation_verification_digest;
+                    linkedProofs.set(verificationDigest, (linkedProofs.get(verificationDigest) ?? 0) + 1);
+                  }
+                  for (let index = 0; index < cancellationVerifications.length; index++) {
+                    const count = linkedProofs.get(cancellationVerifications[index].event.evidence_digest) ?? 0;
+                    if (count > 1 || index > 0 && count !== 1) fail2("cancellation_verification_history_mismatch");
+                  }
                 }
               }
-              if (recoveryEvents.length > RECOVERY_LIMIT) fail2("recovery_observation_limit");
               const seenRecoveryEnvelopes = /* @__PURE__ */ new Set(), seenRecoveryRevisions = /* @__PURE__ */ new Set();
               let recoveryLevel = o.phase === "quarantined" ? 2 : 0;
               for (const { event, evidence } of recoveryEvents) {
@@ -10067,15 +10279,17 @@ var init_store = __esm({
                 }
                 if (reverified.length) {
                   const rv = reverified[0], rve = rv.evidence;
-                  if (unverified2.length !== 1 || rv.event.sequence <= unverified2[0].event.sequence || !Array.isArray(rve.resolved_recovery_event_digests) || rve.prior_cleanup_event_digest !== unverified2[0].event.evidence_digest || rve.claim_id !== o.claim_id || rve.operation_id !== o.operation_id || rve.task_id !== o.task_id || rve.attempt !== o.attempt || rve.generation !== o.generation || rve.worker_identity_digest !== o.claim_worker_identity_digest) fail2("cleanup_reverification_history_mismatch");
+                  if (unverified2.length !== 1 || rv.event.sequence <= unverified2[0].event.sequence || rve.prior_cleanup_event_digest !== unverified2[0].event.evidence_digest || rve.claim_id !== o.claim_id || rve.operation_id !== o.operation_id || rve.task_id !== o.task_id || rve.attempt !== o.attempt || rve.generation !== o.generation || rve.worker_identity_digest !== o.claim_worker_identity_digest) fail2("cleanup_reverification_history_mismatch");
                   const between = es.filter((event) => event.sequence > unverified2[0].event.sequence && event.sequence < rv.event.sequence);
                   const betweenRecovery = recoveryEventsFor(es, o).filter((item) => item.event.sequence > unverified2[0].event.sequence && item.event.sequence < rv.event.sequence);
                   if (between.some((event) => event.event_type !== "observation_recorded") || betweenRecovery.length !== between.length)
                     fail2("cleanup_reverification_intervening_event_mismatch");
-                  const priorRecovery = recoveryEventsFor(es, o).filter((item) => item.event.sequence < rv.event.sequence);
-                  if (priorRecovery.some((item) => item.evidence.classification !== "hold" || !["cleanup_identity_unknown", "cleanup_incomplete"].includes(item.evidence.reason_code))) fail2("cleanup_reverification_unrelated_hold");
-                  const eligible = priorRecovery.map((item) => item.event.evidence_digest).sort();
-                  if (rve.resolved_recovery_event_digests.join("|") !== eligible.join("|")) fail2("cleanup_reverification_hold_set_mismatch");
+                  if (betweenRecovery.some((item) => item.evidence.classification !== "hold" || !["cleanup_identity_unknown", "cleanup_incomplete"].includes(item.evidence.reason_code))) fail2("cleanup_reverification_unrelated_hold");
+                  resolvedRecoverySetMatches(
+                    rve,
+                    betweenRecovery.map((item) => item.event.evidence_digest),
+                    "cleanup_reverification_hold_set_mismatch"
+                  );
                 } else if (unverified2.length && verified.length) fail2("cleanup_reverification_event_missing");
                 if (verified.length) {
                   const v = verified[0], ve = v.evidence;
@@ -10700,6 +10914,79 @@ function readAllLifecycleEventsForRecovery(port, operationId) {
     }
     afterSequence = lastSequence;
   }
+}
+function resolvedRecoveryEventSet(evidence, eligibleDigests, errorCode3) {
+  const ordered = [...eligibleDigests].sort();
+  const hasArray = Object.hasOwn(evidence, "resolved_recovery_event_digests");
+  const hasCount = Object.hasOwn(evidence, "resolved_recovery_event_count");
+  const hasRoot = Object.hasOwn(evidence, "resolved_recovery_event_root");
+  if (hasArray === (hasCount || hasRoot) || hasCount !== hasRoot) {
+    throw new LifecycleGateError(errorCode3);
+  }
+  if (hasArray) {
+    const digests = evidence.resolved_recovery_event_digests;
+    if (!Array.isArray(digests) || digests.some((value) => typeof value !== "string") || new Set(digests).size !== digests.length || digests.join("|") !== [...digests].sort().join("|") || digests.join("|") !== ordered.join("|")) {
+      throw new LifecycleGateError(errorCode3);
+    }
+    return ordered;
+  }
+  const count = evidence.resolved_recovery_event_count;
+  const root = evidence.resolved_recovery_event_root;
+  const expectedRoot = sha2563(canonicalJson2({
+    contract: RESOLVED_RECOVERY_SET_CONTRACT2,
+    event_digests: ordered
+  }));
+  if (!Number.isSafeInteger(count) || count !== ordered.length || typeof root !== "string" || root !== expectedRoot) {
+    throw new LifecycleGateError(errorCode3);
+  }
+  return ordered;
+}
+function resolvedRecoveryDigestsFromHistory(lifecycleEvents) {
+  const recoveries = lifecycleEvents.flatMap((event) => {
+    if (event.event_type !== "observation_recorded") return [];
+    const evidence = parseEvidence(event.evidence_json, "recovery_event_evidence_invalid");
+    if (evidence.reason !== "recovery_hold" && evidence.reason !== "recovery_quarantine") return [];
+    return [{
+      sequence: positive3(Number(event.sequence), "recovery_event_sequence_invalid"),
+      digest: text2(event.evidence_digest, "recovery_event_digest_missing")
+    }];
+  });
+  const byDigest = new Map(lifecycleEvents.map((event) => [String(event.evidence_digest), event]));
+  const resolved = /* @__PURE__ */ new Set();
+  for (const event of lifecycleEvents) {
+    const evidence = event.event_type === "observation_recorded" ? parseEvidence(event.evidence_json, "recovery_event_evidence_invalid") : null;
+    if (event.event_type === "cleanup_reverified") {
+      const cleanupEvidence = parseEvidence(event.evidence_json, "recovery_cleanup_resolution_invalid");
+      const prior = lifecycleEvents.find((candidate) => candidate.event_type === "cleanup_unverified");
+      if (!prior) throw new LifecycleGateError("recovery_cleanup_resolution_invalid");
+      const priorSequence = positive3(Number(prior.sequence), "recovery_cleanup_sequence_invalid");
+      const eligible2 = recoveries.filter((item) => item.sequence > priorSequence && item.sequence < Number(event.sequence) && !resolved.has(item.digest));
+      for (const digest3 of resolvedRecoveryEventSet(
+        cleanupEvidence,
+        eligible2.map((item) => item.digest),
+        "recovery_cleanup_resolution_invalid"
+      )) resolved.add(digest3);
+      continue;
+    }
+    if (event.event_type !== "observation_recorded" || evidence?.reason !== "cancel_recovery_resolved") continue;
+    const verificationDigest = text2(
+      evidence.cancellation_verification_digest,
+      "cancellation_resolution_binding_invalid"
+    );
+    const verification = byDigest.get(verificationDigest);
+    if (!verification) throw new LifecycleGateError("cancellation_resolution_binding_invalid");
+    const verificationSequence = positive3(
+      Number(verification.sequence),
+      "cancellation_resolution_binding_invalid"
+    );
+    const eligible = recoveries.filter((item) => item.sequence < verificationSequence && item.sequence < Number(event.sequence) && !resolved.has(item.digest));
+    for (const digest3 of resolvedRecoveryEventSet(
+      evidence,
+      eligible.map((item) => item.digest),
+      "cancellation_resolution_binding_invalid"
+    )) resolved.add(digest3);
+  }
+  return resolved;
 }
 function taskExecutionEvidenceObserved(port, operation, lifecycleEvents) {
   if (lifecycleEvents.some((event) => String(event.event_type).startsWith("interaction_"))) return true;
@@ -11508,27 +11795,7 @@ async function openClaimOnlyDriver(options) {
       }
       if (phase === "reserved") return { state: "reserved", operation_id: operationId, phase };
       const lifecycleEvents = readAllLifecycleEventsForRecovery(port, operationId);
-      const reverifiedCleanup = lifecycleEvents.find((event) => event.event_type === "cleanup_reverified");
-      let resolvedRecoveryDigests = /* @__PURE__ */ new Set();
-      if (reverifiedCleanup) {
-        try {
-          const evidence2 = JSON.parse(String(reverifiedCleanup.evidence_json));
-          if (!Array.isArray(evidence2.resolved_recovery_event_digests) || evidence2.resolved_recovery_event_digests.some((value) => typeof value !== "string")) {
-            throw new LifecycleGateError("recovery_cleanup_resolution_invalid");
-          }
-          resolvedRecoveryDigests = new Set(evidence2.resolved_recovery_event_digests);
-        } catch (error2) {
-          if (error2 instanceof LifecycleGateError) throw error2;
-          throw new LifecycleGateError("recovery_cleanup_resolution_invalid");
-        }
-      }
-      for (const event of lifecycleEvents) {
-        if (event.event_type !== "observation_recorded") continue;
-        const evidence2 = parseEvidence(event.evidence_json, "recovery_event_evidence_invalid");
-        if (evidence2.reason === "cancel_recovery_resolved") {
-          for (const hash of evidence2.resolved_recovery_event_digests) resolvedRecoveryDigests.add(hash);
-        }
-      }
+      const resolvedRecoveryDigests = resolvedRecoveryDigestsFromHistory(lifecycleEvents);
       const activeRecovery = lifecycleEvents.filter((event) => {
         if (event.event_type !== "observation_recorded") return false;
         try {
@@ -12152,6 +12419,7 @@ async function openClaimOnlyDriver(options) {
       recoveryEvidenceBindings.set(evidenceDigest, { ...input, evidence_json: canonicalJson2(evidence) });
       try {
         const recorded = asRecord6(port.recordRecoveryObservation(input, evidence));
+        const persistedEvidenceDigest = typeof recorded.evidence_digest === "string" ? recorded.evidence_digest : evidenceDigest;
         const reportedReason = adapterCleanupUnverified && operation.result_status !== "cancelled" ? "adapter_cleanup_unverified" : reasonCode;
         return {
           state: "held",
@@ -12161,7 +12429,7 @@ async function openClaimOnlyDriver(options) {
           revision: recorded.revision,
           identity_state: identityState,
           probe_reason: probeReason,
-          evidence_digest: evidenceDigest,
+          evidence_digest: persistedEvidenceDigest,
           recovery_disposition: disposition,
           process_tree_scan_clean: evidence.process_tree_scan_clean,
           process_tree_root_observed: releaseTreeProbe
@@ -12266,11 +12534,7 @@ async function openClaimOnlyDriver(options) {
           throw new LifecycleGateError("cancellation_verification_invalid");
         }
       });
-      const resolvedHolds = new Set(cancellationHistory.flatMap((event) => {
-        if (event.event_type !== "observation_recorded") return [];
-        const evidence = parseEvidence(event.evidence_json, "cancellation_recovery_invalid");
-        return evidence.reason === "cancel_recovery_resolved" ? evidence.resolved_recovery_event_digests : [];
-      }));
+      const resolvedHolds = resolvedRecoveryDigestsFromHistory(cancellationHistory);
       const hasRecoveryHold = cancellationHistory.some((event) => event.event_type === "observation_recorded" && !resolvedHolds.has(String(event.evidence_digest)) && ["recovery_hold", "recovery_quarantine"].includes(parseEvidence(event.evidence_json, "cancellation_recovery_invalid").reason));
       if (persistedVerification && !hasRecoveryHold) {
         if (identityVerdict.state !== "exited") throw new LifecycleGateError("cancellation_verification_conflict");
@@ -13817,7 +14081,7 @@ function digestProvenance(value) {
 function interactionKey(taskId, requestId) {
   return `${taskId}\0${requestId}`;
 }
-var DEFAULT_PROCESS_PROBE_TIMEOUT_MS, DEFAULT_PROCESS_TREE_PROBE_TIMEOUT_MS, verifiedRecoveryStops, LifecycleGateError, freshBootstrapPromises, DEFAULT_FRESH_BOOTSTRAP_LOCK_TIMEOUT_MS, FRESH_BOOTSTRAP_LOCK_RETRY_MS, FRESH_BOOTSTRAP_LOCK_HANDSHAKE_TIMEOUT_MS, FRESH_BOOTSTRAP_LOCK_RELEASE_TIMEOUT_MS, WINDOWS_BOOTSTRAP_LOCK_SCRIPT;
+var DEFAULT_PROCESS_PROBE_TIMEOUT_MS, DEFAULT_PROCESS_TREE_PROBE_TIMEOUT_MS, verifiedRecoveryStops, RESOLVED_RECOVERY_SET_CONTRACT2, LifecycleGateError, freshBootstrapPromises, DEFAULT_FRESH_BOOTSTRAP_LOCK_TIMEOUT_MS, FRESH_BOOTSTRAP_LOCK_RETRY_MS, FRESH_BOOTSTRAP_LOCK_HANDSHAKE_TIMEOUT_MS, FRESH_BOOTSTRAP_LOCK_RELEASE_TIMEOUT_MS, WINDOWS_BOOTSTRAP_LOCK_SCRIPT;
 var init_lifecycle_gate = __esm({
   "src/store/lifecycle-gate.ts"() {
     "use strict";
@@ -13841,6 +14105,7 @@ var init_lifecycle_gate = __esm({
     DEFAULT_PROCESS_PROBE_TIMEOUT_MS = 5e3;
     DEFAULT_PROCESS_TREE_PROBE_TIMEOUT_MS = 3e4;
     verifiedRecoveryStops = /* @__PURE__ */ new Map();
+    RESOLVED_RECOVERY_SET_CONTRACT2 = "wp6c-resolved-recovery-set-v2";
     LifecycleGateError = class extends Error {
       constructor(code, message = code) {
         super(message);

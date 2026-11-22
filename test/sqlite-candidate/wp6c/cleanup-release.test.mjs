@@ -2,10 +2,10 @@ import assert from 'node:assert/strict';
 import test, { after } from 'node:test';
 import { spawn } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { IsolatedAdmissionStore, AdmissionError, digest } from '../../../src/sqlite-candidate/wp6b2b1/store.mjs';
+import { IsolatedAdmissionStore, AdmissionError, canonical, digest } from '../../../src/sqlite-candidate/wp6b2b1/store.mjs';
 import { createSqliteLifecyclePort } from '../../../src/sqlite-candidate/wp6b2b1/lifecycle-port.mjs';
 
 const HERE=path.dirname(fileURLToPath(import.meta.url));
@@ -57,7 +57,8 @@ function verified(f,ref,evidence=verifiedEvidence(ref)){
 }
 function recoveryHold(f,ref,classification='hold',reasonCode=classification==='hold'?'cleanup_identity_unknown':'operation_projection_conflict'){
   const o=f.store.readOperation(ref.operation_id),evidence={source:'manager_cleanup_probe',operation_id:o.operation_id,task_id:o.task_id,attempt:o.attempt,
-    generation:o.generation,claim_id:o.claim_id,worker_identity_digest:o.claim_worker_identity_digest,probe:'unknown'};
+    generation:o.generation,claim_id:o.claim_id,worker_identity_digest:o.claim_worker_identity_digest,probe:'unknown',
+    identity_state:'unknown',probe_reason:`synthetic_hold_${o.revision}`};
   const input={operation_id:o.operation_id,task_id:o.task_id,attempt:o.attempt,generation:o.generation,expected_revision:o.revision,claim_id:o.claim_id,
     worker_identity_digest:o.claim_worker_identity_digest,classification,reason_code:reasonCode,
     evidence_source:'manager_cleanup_probe',evidence_digest:digest(evidence)};
@@ -72,6 +73,36 @@ function recoveryHold(f,ref,classification='hold',reasonCode=classification==='h
   const persisted=f.store.readLifecycleEvents(o.operation_id).find(event=>event.sequence===result.event_sequence);
   assert.ok(persisted,'Recovery CAS must return an Event sequence that resolves to its immutable Event');
   return {...result,evidence_digest:persisted.evidence_digest};
+}
+function legacyRecoveryBindingTriggerSql(current){
+  const start=current.indexOf("    AND (\n      (\n        json_type(NEW.evidence_json,'$.resolved_recovery_event_digests')='array'");
+  const end=start<0?-1:current.indexOf('    AND NOT EXISTS (\n      SELECT 1 FROM manager_operation_events x',start);
+  if(start<0||end<0)throw new Error('Recovery binding trigger compatibility marker is missing');
+  return current.slice(0,start)+`    AND json_type(NEW.evidence_json,'$.resolved_recovery_event_digests')='array'
+    AND json_array_length(NEW.evidence_json,'$.resolved_recovery_event_digests')<=8
+    AND json_array_length(NEW.evidence_json,'$.resolved_recovery_event_digests')=(
+      SELECT COUNT(*) FROM manager_operation_events h
+      WHERE h.operation_id=NEW.operation_id AND h.event_type='observation_recorded'
+        AND h.sequence<NEW.sequence AND json_extract(h.evidence_json,'$.reason')='recovery_hold'
+        AND json_extract(h.evidence_json,'$.classification')='hold'
+        AND json_extract(h.evidence_json,'$.reason_code') IN ('cleanup_identity_unknown','cleanup_incomplete'))
+    AND NOT EXISTS (
+      SELECT 1 FROM manager_operation_events h
+      WHERE h.operation_id=NEW.operation_id AND h.event_type='observation_recorded'
+        AND h.sequence<NEW.sequence AND json_extract(h.evidence_json,'$.reason') IN ('recovery_hold','recovery_quarantine')
+        AND (json_extract(h.evidence_json,'$.reason')<>'recovery_hold'
+          OR json_extract(h.evidence_json,'$.classification')<>'hold'
+          OR json_extract(h.evidence_json,'$.reason_code') NOT IN ('cleanup_identity_unknown','cleanup_incomplete')))
+    AND NOT EXISTS (
+      SELECT 1 FROM json_each(NEW.evidence_json,'$.resolved_recovery_event_digests') j
+      WHERE NOT EXISTS (
+        SELECT 1 FROM manager_operation_events h
+        WHERE h.operation_id=NEW.operation_id AND h.event_type='observation_recorded'
+          AND h.evidence_digest=j.value AND h.sequence<NEW.sequence
+          AND json_extract(h.evidence_json,'$.reason')='recovery_hold'
+          AND json_extract(h.evidence_json,'$.classification')='hold'
+          AND json_extract(h.evidence_json,'$.reason_code') IN ('cleanup_identity_unknown','cleanup_incomplete')))
+`+current.slice(end);
 }
 function rows(f,ref){
   const db=new DatabaseSync(path.join(f.root,'operations.sqlite3'),{readOnly:true});
@@ -151,12 +182,12 @@ test('unknown OS probe and incomplete cleanup preserve occupancy and permanent C
   }
 });
 
-test('complete new evidence resolves only the exact Cleanup Holds and preserves their immutable history',()=>{
-  const f=makeStore('cleanup-reverify-eight-holds',{capacity:1}),a=addResult(f,'reverify-eight-holds'),pending=begin(f,a);
+test('complete new evidence resolves more than eight exact Cleanup Holds and preserves their immutable history',()=>{
+  const f=makeStore('cleanup-reverify-many-holds',{capacity:1}),a=addResult(f,'reverify-many-holds'),pending=begin(f,a);
   const unverified=f.store.recordCleanupEvidence({...a,revision:pending.revision,outcome:'unverified',probe_state:'unknown',reason:'prior_probe_unknown'});
   assert.equal(unverified.phase,'cleanup_unverified');
   const holds=[];
-  for(let index=0;index<8;index++)recoveryHold(f,a,'hold');
+  for(let index=0;index<16;index++)recoveryHold(f,a,'hold');
   const recoveryEvents=rows(f,a).events.filter(event=>event.event_type==='observation_recorded')
     .filter(event=>JSON.parse(event.evidence_json).reason==='recovery_hold');
   holds.push(...recoveryEvents.map(event=>event.evidence_digest));
@@ -164,14 +195,17 @@ test('complete new evidence resolves only the exact Cleanup Holds and preserves 
   const request={...a,revision:before.revision,cleanup_evidence:verifiedEvidence(a)};
   const result=f.store.reverifyCleanup(request);
   assert.equal(result.phase,'cleanup_verified');assert.equal(result.cleanup_verified,true);
-  assert.equal(result.resolved_recovery_event_digests.length,8);
+  assert.equal(result.resolved_recovery_event_digests.length,16);
   const reverifyEvent=rows(f,a).events.find(event=>event.event_type==='cleanup_reverified');
-  assert.ok(Buffer.byteLength(reverifyEvent.evidence_json,'utf8')>1024);
+  const reverifyEvidence=JSON.parse(reverifyEvent.evidence_json);
+  assert.equal(reverifyEvidence.resolved_recovery_event_digests,undefined);
+  assert.equal(reverifyEvidence.resolved_recovery_event_count,16);
+  assert.match(reverifyEvidence.resolved_recovery_event_root,/^[0-9a-f]{64}$/u);
   assert.ok(Buffer.byteLength(reverifyEvent.evidence_json,'utf8')<=2048);
   assert.equal(JSON.parse(reverifyEvent.evidence_json).prior_cleanup_event_digest,
     rows(f,a).events.find(event=>event.event_type==='cleanup_unverified').evidence_digest);
   assert.deepEqual(result.resolved_recovery_event_digests,[...holds].sort());
-  assert.equal(holds.length,8);
+  assert.equal(holds.length,16);
   const release=f.store.releaseCapacity({...a,revision:result.revision,cleanup_digest:result.cleanup_digest});
   assert.equal(release.phase,'released');assert.equal(f.store.readOperation(a.operation_id).claim_status,'permanent_claim_recorded');
   const taskB={...f.store.readTask(a.task_id),task_id:'task-after-reverified-release',objective:'synthetic queued task after verified release'};
@@ -188,12 +222,108 @@ test('complete new evidence resolves only the exact Cleanup Holds and preserves 
   try {
     const snapshot=reopened.rebuildRecoveryState(),operation=snapshot.operations.find(item=>item.operation_id===a.operation_id);
     assert.equal(snapshot.root_status,'consistent_read_only');assert.equal(operation.phase,'released');
-    assert.equal(operation.recovery_classification,'normal');assert.equal(operation.recovery_observation_count,8);
+    assert.equal(operation.recovery_classification,'normal');assert.equal(operation.recovery_observation_count,16);
     assert.equal(operation.capacity_occupied,false);assert.equal(operation.claim_permanent,true);
     const events=reopened.readRecoverySnapshot().events.filter(event=>event.operation_id===a.operation_id);
-    assert.equal(events.filter(event=>event.event_type==='observation_recorded').length,8);
+    assert.equal(events.filter(event=>event.event_type==='observation_recorded').length,16);
     assert.deepEqual(events.filter(event=>event.event_type==='cleanup_reverified').map(event=>event.evidence_digest),[reverifyEvent.evidence_digest]);
   } finally { reopened.close();f.store.close(); }
+});
+
+test('eight material-free v14 Holds remain readable and resolvable after the limit removal',()=>{
+  const f=makeStore('cleanup-reverify-v14-eight-holds',{capacity:1}),a=addResult(f,'reverify-v14-eight-holds'),pending=begin(f,a);
+  f.store.recordCleanupEvidence({...a,revision:pending.revision,outcome:'unverified',probe_state:'unknown',reason:'prior_probe_unknown'});
+  for(let index=0;index<8;index++)recoveryHold(f,a,'hold');
+  f.store.close();
+  const db=new DatabaseSync(path.join(f.root,'operations.sqlite3'));
+  try{
+    const trigger=db.prepare("SELECT sql FROM sqlite_schema WHERE type='trigger' AND name='events_no_update'").get().sql;
+    db.exec('DROP TRIGGER events_no_update');
+    const events=db.prepare("SELECT sequence,evidence_json FROM manager_operation_events WHERE operation_id=? AND event_type='observation_recorded' ORDER BY sequence").all(a.operation_id);
+    for(const event of events){
+      const value=JSON.parse(event.evidence_json);
+      if(value.reason!=='recovery_hold')continue;
+      delete value.material_digest;
+      const evidenceJson=canonical(value);
+      db.prepare('UPDATE manager_operation_events SET evidence_json=?,evidence_digest=? WHERE operation_id=? AND sequence=?')
+        .run(evidenceJson,digest(evidenceJson),a.operation_id,event.sequence);
+    }
+    db.exec(trigger);
+  }finally{db.close();}
+  const recovery=IsolatedAdmissionStore.openForRecovery(f.root);
+  try{
+    assert.equal(recovery.readRecoverySnapshot().root_status,'consistent_read_only');
+  }finally{recovery.close();}
+  const reopened=IsolatedAdmissionStore.open(f.root);
+  try{
+    const operation=reopened.readOperation(a.operation_id);
+    assert.equal(operation.phase,'cleanup_unverified');
+    const result=reopened.reverifyCleanup({...a,revision:operation.revision,cleanup_evidence:verifiedEvidence(a)});
+    assert.equal(result.phase,'cleanup_verified');
+    assert.equal(result.resolved_recovery_event_digests.length,8);
+    const evidence=JSON.parse(rows({root:f.root},a).events.find(event=>event.event_type==='cleanup_reverified').evidence_json);
+    assert.equal(evidence.resolved_recovery_event_count,8);
+  }finally{reopened.close();}
+});
+
+test('read-only Recovery accepts the exact v14 guard before writable open upgrades it without a schema bump',()=>{
+  const f=makeStore('legacy-recovery-binding-trigger'),schema=readFileSync(new URL('../../../src/sqlite-candidate/wp6b2b1/schema.sql',import.meta.url),'utf8');
+  assert.match(schema,/cleanup_reverified_binding_guard/u);
+  f.store.close();
+  const db=new DatabaseSync(path.join(f.root,'operations.sqlite3'));
+  let current,legacy,beforeVersion;
+  try{
+    beforeVersion=db.prepare('PRAGMA user_version').get().user_version;
+    current=db.prepare("SELECT sql FROM sqlite_schema WHERE type='trigger' AND name='cleanup_reverified_binding_guard'").get().sql;
+    legacy=legacyRecoveryBindingTriggerSql(current);
+    db.exec('DROP TRIGGER cleanup_reverified_binding_guard');
+    db.exec(legacy+';');
+  }finally{db.close();}
+  const readOnly=IsolatedAdmissionStore.openForRecovery(f.root);
+  try{
+    const snapshot=readOnly.readRecoverySnapshot();
+    assert.equal(snapshot.root_status,'consistent_read_only');
+  }finally{readOnly.close();}
+  const unchanged=new DatabaseSync(path.join(f.root,'operations.sqlite3'),{readOnly:true});
+  try{
+    assert.equal(unchanged.prepare('PRAGMA user_version').get().user_version,beforeVersion);
+    assert.equal(unchanged.prepare("SELECT sql FROM sqlite_schema WHERE name='cleanup_reverified_binding_guard'").get().sql,legacy);
+  }finally{unchanged.close();}
+  const writable=IsolatedAdmissionStore.open(f.root);
+  try{
+    assert.equal(writable.readOperation('operation-absent'),null);
+  }finally{writable.close();}
+  const upgraded=new DatabaseSync(path.join(f.root,'operations.sqlite3'),{readOnly:true});
+  try{
+    assert.equal(upgraded.prepare('PRAGMA user_version').get().user_version,beforeVersion);
+    assert.notEqual(upgraded.prepare("SELECT sql FROM sqlite_schema WHERE name='cleanup_reverified_binding_guard'").get().sql,legacy);
+  }finally{upgraded.close();}
+});
+
+test('a legacy Hold without material_digest cannot hide changed material facts',()=>{
+  const f=makeStore('cleanup-legacy-material-change',{capacity:1}),a=addResult(f,'legacy-material-change'),pending=begin(f,a);
+  f.store.recordCleanupEvidence({...a,revision:pending.revision,outcome:'unverified',probe_state:'unknown',reason:'prior_probe_unknown'});
+  const first=recoveryHold(f,a,'hold');
+  f.store.close();
+  const db=new DatabaseSync(path.join(f.root,'operations.sqlite3'));
+  try{
+    const trigger=db.prepare("SELECT sql FROM sqlite_schema WHERE type='trigger' AND name='events_no_update'").get().sql;
+    db.exec('DROP TRIGGER events_no_update');
+    const event=db.prepare('SELECT evidence_json FROM manager_operation_events WHERE operation_id=? AND sequence=?')
+      .get(a.operation_id,first.event_sequence);
+    const value=JSON.parse(event.evidence_json);
+    delete value.material_digest;
+    const evidenceJson=canonical(value);
+    db.prepare('UPDATE manager_operation_events SET evidence_json=?,evidence_digest=? WHERE operation_id=? AND sequence=?')
+      .run(evidenceJson,digest(evidenceJson),a.operation_id,first.event_sequence);
+    db.exec(trigger);
+  }finally{db.close();}
+  const reopened=IsolatedAdmissionStore.open(f.root);
+  try{
+    const second=recoveryHold({store:reopened,root:f.root},a,'hold');
+    assert.equal(second.duplicate,false);
+    assert.equal(rows({root:f.root},a).events.filter(event=>JSON.parse(event.evidence_json).reason==='recovery_hold').length,2);
+  }finally{reopened.close();}
 });
 
 test('a non-Cleanup Hold blocks re-verification without changing the Operation or releasing Capacity',()=>{

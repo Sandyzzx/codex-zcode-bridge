@@ -349,14 +349,41 @@ WHEN NEW.event_type='cleanup_reverified' AND NOT EXISTS (
     AND json_extract(NEW.evidence_json,'$.operation_resources_complete')=1
     AND json_extract(NEW.evidence_json,'$.worker_tree_complete')=1
     AND json_extract(NEW.evidence_json,'$.workspace_touched')=0
-    AND json_type(NEW.evidence_json,'$.resolved_recovery_event_digests')='array'
-    AND json_array_length(NEW.evidence_json,'$.resolved_recovery_event_digests')<=8
-    AND json_array_length(NEW.evidence_json,'$.resolved_recovery_event_digests')=(
-      SELECT COUNT(*) FROM manager_operation_events h
-      WHERE h.operation_id=NEW.operation_id AND h.event_type='observation_recorded'
-        AND h.sequence<NEW.sequence AND json_extract(h.evidence_json,'$.reason')='recovery_hold'
-        AND json_extract(h.evidence_json,'$.classification')='hold'
-        AND json_extract(h.evidence_json,'$.reason_code') IN ('cleanup_identity_unknown','cleanup_incomplete'))
+    AND (
+      (
+        json_type(NEW.evidence_json,'$.resolved_recovery_event_digests')='array'
+        AND json_array_length(NEW.evidence_json,'$.resolved_recovery_event_digests')=(
+          SELECT COUNT(*) FROM manager_operation_events h
+          WHERE h.operation_id=NEW.operation_id AND h.event_type='observation_recorded'
+            AND h.sequence>u.sequence AND h.sequence<NEW.sequence
+            AND json_extract(h.evidence_json,'$.reason')='recovery_hold'
+            AND json_extract(h.evidence_json,'$.classification')='hold'
+            AND json_extract(h.evidence_json,'$.reason_code') IN ('cleanup_identity_unknown','cleanup_incomplete'))
+        AND NOT EXISTS (
+          SELECT 1 FROM json_each(NEW.evidence_json,'$.resolved_recovery_event_digests') j
+          WHERE NOT EXISTS (
+            SELECT 1 FROM manager_operation_events h
+            WHERE h.operation_id=NEW.operation_id AND h.event_type='observation_recorded'
+              AND h.evidence_digest=j.value AND h.sequence>u.sequence AND h.sequence<NEW.sequence
+              AND json_extract(h.evidence_json,'$.reason')='recovery_hold'
+              AND json_extract(h.evidence_json,'$.classification')='hold'
+              AND json_extract(h.evidence_json,'$.reason_code') IN ('cleanup_identity_unknown','cleanup_incomplete')))
+      )
+      OR (
+        json_type(NEW.evidence_json,'$.resolved_recovery_event_digests') IS NULL
+        AND json_type(NEW.evidence_json,'$.resolved_recovery_event_count')='integer'
+        AND json_extract(NEW.evidence_json,'$.resolved_recovery_event_count')=(
+          SELECT COUNT(*) FROM manager_operation_events h
+          WHERE h.operation_id=NEW.operation_id AND h.event_type='observation_recorded'
+            AND h.sequence>u.sequence AND h.sequence<NEW.sequence
+            AND json_extract(h.evidence_json,'$.reason')='recovery_hold'
+            AND json_extract(h.evidence_json,'$.classification')='hold'
+            AND json_extract(h.evidence_json,'$.reason_code') IN ('cleanup_identity_unknown','cleanup_incomplete'))
+        AND json_type(NEW.evidence_json,'$.resolved_recovery_event_root')='text'
+        AND length(json_extract(NEW.evidence_json,'$.resolved_recovery_event_root'))=64
+        AND json_extract(NEW.evidence_json,'$.resolved_recovery_event_root') NOT GLOB '*[^0-9a-f]*'
+      )
+    )
     AND NOT EXISTS (
       SELECT 1 FROM manager_operation_events h
       WHERE h.operation_id=NEW.operation_id AND h.event_type='observation_recorded'
@@ -364,15 +391,6 @@ WHEN NEW.event_type='cleanup_reverified' AND NOT EXISTS (
         AND (json_extract(h.evidence_json,'$.reason')<>'recovery_hold'
           OR json_extract(h.evidence_json,'$.classification')<>'hold'
           OR json_extract(h.evidence_json,'$.reason_code') NOT IN ('cleanup_identity_unknown','cleanup_incomplete')))
-    AND NOT EXISTS (
-      SELECT 1 FROM json_each(NEW.evidence_json,'$.resolved_recovery_event_digests') j
-      WHERE NOT EXISTS (
-        SELECT 1 FROM manager_operation_events h
-        WHERE h.operation_id=NEW.operation_id AND h.event_type='observation_recorded'
-          AND h.evidence_digest=j.value AND h.sequence<NEW.sequence
-          AND json_extract(h.evidence_json,'$.reason')='recovery_hold'
-          AND json_extract(h.evidence_json,'$.classification')='hold'
-          AND json_extract(h.evidence_json,'$.reason_code') IN ('cleanup_identity_unknown','cleanup_incomplete')))
     AND NOT EXISTS (
       SELECT 1 FROM manager_operation_events x
       WHERE x.operation_id=NEW.operation_id AND x.sequence>u.sequence AND x.sequence<NEW.sequence

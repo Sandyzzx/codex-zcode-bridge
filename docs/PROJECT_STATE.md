@@ -27,6 +27,7 @@
 - Result、进程退出、Cleanup 与 Release 是不同事实。官方 close resolved 不能单独授权 Release；exact Worker identity、recorded-tree scan、resource facts、Cleanup Digest 和现有 CAS 仍然必需。
 - Attention/Thin Waiter 读取同一 SQLite Authority；`zcode_doctor` 也绑定该 Authority。
 - SQLite 支持统一为 `SQLite v14 ONLY`。生产 Lifecycle Gate 保留 Fresh v14、既有 v14、历史迁移记录、Recovery/Cleanup/Release；v13 数据库和未完成升级 Marker 以 `unsupported_sqlite_schema` 非破坏性拒绝。v13 自动/离线升级、冻结 Schema 和升级 CLI 已退役。
+- Recovery Observation 不再有固定 8 条额度。相同材料事实的重复观察在 SQLite 事务内去重，材料事实变化仍追加不可覆盖 Event；超过 8 条 Cleanup/Cancel Hold 的消解使用完整事件集合的 count/root 承诺，旧 digest 数组继续可校验。既有 v14 的精确旧 Cleanup Trigger 可由只读 Recovery 读取，只在实际可写打开时事务升级，不提升 Schema Version。
 - R7 在同一 v14 Authority 内使用 `runtime_task_events`。Worker 只通过一次性 fd14 提交 Runtime observation；Manager 从持久 Task/Attempt/Generation/Claim 派生绑定，SQLite 负责 sequence 幂等、stale-Attempt 拒绝和统一 public cursor。`zcode_events(view="summary")` 可合并相邻安全模型文本，`zcode_feedback` 只提供机器投影，缓存 Usage 与 Result 共用同一持久事实；Lifecycle Event 与 Runtime Event 仍分开。
 - MCP Event 默认页预算为 32 KiB；预算只限制单页输出，不删除 SQLite 历史。消费者必须持续读取 `has_more`/`scan_incomplete`。默认模式允许单条超限 Event 推进 cursor，显式 `max_bytes` 仍为硬预算。已安装 Host 的 16 MiB MCP 行上限不变，超过该边界的完整 Result 仍不能通过 MCP-only 回读。
 

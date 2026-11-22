@@ -218,6 +218,93 @@ export function readAllLifecycleEventsForRecovery(
   }
 }
 
+const RESOLVED_RECOVERY_SET_CONTRACT = "wp6c-resolved-recovery-set-v2";
+
+function resolvedRecoveryEventSet(
+  evidence: Readonly<Record<string, unknown>>,
+  eligibleDigests: readonly string[],
+  errorCode: string,
+): readonly string[] {
+  const ordered = [...eligibleDigests].sort();
+  const hasArray = Object.hasOwn(evidence, "resolved_recovery_event_digests");
+  const hasCount = Object.hasOwn(evidence, "resolved_recovery_event_count");
+  const hasRoot = Object.hasOwn(evidence, "resolved_recovery_event_root");
+  if (hasArray === (hasCount || hasRoot) || hasCount !== hasRoot) {
+    throw new LifecycleGateError(errorCode);
+  }
+  if (hasArray) {
+    const digests = evidence.resolved_recovery_event_digests;
+    if (!Array.isArray(digests)
+      || digests.some((value) => typeof value !== "string")
+      || new Set(digests).size !== digests.length
+      || digests.join("|") !== [...digests].sort().join("|")
+      || digests.join("|") !== ordered.join("|")) {
+      throw new LifecycleGateError(errorCode);
+    }
+    return ordered;
+  }
+  const count = evidence.resolved_recovery_event_count;
+  const root = evidence.resolved_recovery_event_root;
+  const expectedRoot = sha256(canonicalJson({
+    contract: RESOLVED_RECOVERY_SET_CONTRACT,
+    event_digests: ordered,
+  }));
+  if (!Number.isSafeInteger(count) || count !== ordered.length
+    || typeof root !== "string" || root !== expectedRoot) {
+    throw new LifecycleGateError(errorCode);
+  }
+  return ordered;
+}
+
+function resolvedRecoveryDigestsFromHistory(
+  lifecycleEvents: readonly Readonly<Record<string, unknown>>[],
+): ReadonlySet<string> {
+  const recoveries = lifecycleEvents.flatMap((event) => {
+    if (event.event_type !== "observation_recorded") return [];
+    const evidence = parseEvidence(event.evidence_json, "recovery_event_evidence_invalid");
+    if (evidence.reason !== "recovery_hold" && evidence.reason !== "recovery_quarantine") return [];
+    return [{
+      sequence: positive(Number(event.sequence), "recovery_event_sequence_invalid"),
+      digest: text(event.evidence_digest, "recovery_event_digest_missing"),
+    }];
+  });
+  const byDigest = new Map(lifecycleEvents.map((event) => [String(event.evidence_digest), event]));
+  const resolved = new Set<string>();
+  for (const event of lifecycleEvents) {
+    const evidence = event.event_type === "observation_recorded"
+      ? parseEvidence(event.evidence_json, "recovery_event_evidence_invalid") : null;
+    if (event.event_type === "cleanup_reverified") {
+      const cleanupEvidence = parseEvidence(event.evidence_json, "recovery_cleanup_resolution_invalid");
+      const prior = lifecycleEvents.find((candidate) => candidate.event_type === "cleanup_unverified");
+      if (!prior) throw new LifecycleGateError("recovery_cleanup_resolution_invalid");
+      const priorSequence = positive(Number(prior.sequence), "recovery_cleanup_sequence_invalid");
+      const eligible = recoveries.filter((item) => item.sequence > priorSequence
+        && item.sequence < Number(event.sequence) && !resolved.has(item.digest));
+      for (const digest of resolvedRecoveryEventSet(
+        cleanupEvidence,
+        eligible.map((item) => item.digest),
+        "recovery_cleanup_resolution_invalid",
+      )) resolved.add(digest);
+      continue;
+    }
+    if (event.event_type !== "observation_recorded" || evidence?.reason !== "cancel_recovery_resolved") continue;
+    const verificationDigest = text(evidence.cancellation_verification_digest,
+      "cancellation_resolution_binding_invalid");
+    const verification = byDigest.get(verificationDigest);
+    if (!verification) throw new LifecycleGateError("cancellation_resolution_binding_invalid");
+    const verificationSequence = positive(Number(verification.sequence),
+      "cancellation_resolution_binding_invalid");
+    const eligible = recoveries.filter((item) => item.sequence < verificationSequence
+      && item.sequence < Number(event.sequence) && !resolved.has(item.digest));
+    for (const digest of resolvedRecoveryEventSet(
+      evidence,
+      eligible.map((item) => item.digest),
+      "cancellation_resolution_binding_invalid",
+    )) resolved.add(digest);
+  }
+  return resolved;
+}
+
 /**
  * Any persisted Runtime event means the Adapter reached an execution boundary
  * whose external effects cannot be reconstructed from SQLite. Absence of such
@@ -1485,28 +1572,7 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
       if (phase === "reserved") return { state: "reserved", operation_id: operationId, phase };
 
       const lifecycleEvents = readAllLifecycleEventsForRecovery(port, operationId);
-      const reverifiedCleanup = lifecycleEvents.find((event) => event.event_type === "cleanup_reverified");
-      let resolvedRecoveryDigests = new Set<string>();
-      if (reverifiedCleanup) {
-        try {
-          const evidence = JSON.parse(String(reverifiedCleanup.evidence_json)) as Record<string, unknown>;
-          if (!Array.isArray(evidence.resolved_recovery_event_digests)
-            || evidence.resolved_recovery_event_digests.some((value) => typeof value !== "string")) {
-            throw new LifecycleGateError("recovery_cleanup_resolution_invalid");
-          }
-          resolvedRecoveryDigests = new Set(evidence.resolved_recovery_event_digests as string[]);
-        } catch (error) {
-          if (error instanceof LifecycleGateError) throw error;
-          throw new LifecycleGateError("recovery_cleanup_resolution_invalid");
-        }
-      }
-      for (const event of lifecycleEvents) {
-        if (event.event_type !== "observation_recorded") continue;
-        const evidence = parseEvidence(event.evidence_json, "recovery_event_evidence_invalid");
-        if (evidence.reason === "cancel_recovery_resolved") {
-          for (const hash of evidence.resolved_recovery_event_digests as string[]) resolvedRecoveryDigests.add(hash);
-        }
-      }
+      const resolvedRecoveryDigests = resolvedRecoveryDigestsFromHistory(lifecycleEvents);
       const activeRecovery = lifecycleEvents.filter((event) => {
         if (event.event_type !== "observation_recorded") return false;
         try {
@@ -2136,10 +2202,12 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
       recoveryEvidenceBindings.set(evidenceDigest, { ...input, evidence_json: canonicalJson(evidence) });
       try {
         const recorded = asRecord(port.recordRecoveryObservation(input, evidence));
+        const persistedEvidenceDigest = typeof recorded.evidence_digest === "string"
+          ? recorded.evidence_digest : evidenceDigest;
         const reportedReason = adapterCleanupUnverified && operation.result_status !== "cancelled"
           ? "adapter_cleanup_unverified" : reasonCode;
         return { state: "held", operation_id: operationId, phase, reason: reportedReason, revision: recorded.revision,
-          identity_state: identityState, probe_reason: probeReason, evidence_digest: evidenceDigest,
+          identity_state: identityState, probe_reason: probeReason, evidence_digest: persistedEvidenceDigest,
           recovery_disposition: disposition, process_tree_scan_clean: evidence.process_tree_scan_clean,
           process_tree_root_observed: releaseTreeProbe };
       } catch (error) {
@@ -2234,11 +2302,7 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
       });
       // A persisted proof may predate a later cleanup Hold. Re-probe and scan
       // rather than reusing that proof to resolve a newly observed obstruction.
-      const resolvedHolds = new Set(cancellationHistory.flatMap((event) => {
-        if (event.event_type !== "observation_recorded") return [];
-        const evidence = parseEvidence(event.evidence_json, "cancellation_recovery_invalid");
-        return evidence.reason === "cancel_recovery_resolved" ? evidence.resolved_recovery_event_digests as string[] : [];
-      }));
+      const resolvedHolds = resolvedRecoveryDigestsFromHistory(cancellationHistory);
       const hasRecoveryHold = cancellationHistory.some((event) => event.event_type === "observation_recorded"
         && !resolvedHolds.has(String(event.evidence_digest))
         && ["recovery_hold", "recovery_quarantine"].includes(parseEvidence(event.evidence_json, "cancellation_recovery_invalid").reason as string));

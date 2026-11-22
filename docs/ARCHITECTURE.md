@@ -3,9 +3,9 @@
 > Status: AUTHORITATIVE
 
 > 2026-11-16 本地候选修订：[ADR-039](decisions/ADR-039-host-authorized-cancellation.md) 将取消授权与清理事实分离。queued + Launch Intent 无 Claim 时允许原子持久化取消并禁止迟到 Claim，未证明的进程/资源占用保留；Running 的 cleanup-only Hold 可经新鲜取消树证明追加消解记录，再继续原 CAS。此修复不增加 MCP 工具、Schema、重派或第二套恢复引擎。
-> Last updated: 2026-11-22（PR #116、ADR-039 严格行政释放、ADR-048 默认 Event 页）
-> Last verified: 2026-11-22，核对 PR #116 已合入 Preview、ADR-039 durable Spawn/active Worker/tree proof 保护与 ADR-048 默认 32 KiB Event 页及 cursor 续读；真实计费与生产取消 NOT RUN。
-> Verified against: Preview `450c18afc0c8af2700734399c5aebd87a36df795` + unified integration candidate
+> Last updated: 2026-11-22（PR #116、ADR-039 严格行政释放、ADR-048 默认 Event 页、Recovery Observation 限额移除）
+> Last verified: 2026-11-22，核对 PR #116 已合入 Preview、ADR-039 durable Spawn/active Worker/tree proof 保护、ADR-048 默认 32 KiB Event 页及 cursor 续读，以及 Recovery 材料事实去重/超过 8 条消解承诺；真实计费与生产取消 NOT RUN。
+> Verified against: `origin/preview@1bf039fda2ccfd17a992458a871bddd7b48b38c1` + this Recovery-limit removal candidate
 
 本文件描述当前 Preview.10 候选的生产架构。Windows x64 已默认切换到官方 Host 路径，R7 Runtime Events/Usage 复用同一 SQLite Authority；候选保留 ZCode 3.18.2 Host 模块、官方 Start Plan 认证投影与官方签名 runtime host，并完成 ADR-041 的 Thin Official Host 收敛。PR #116 已在 `450c18af` 合入 opt-in Result 摘要/默认完整 Result 与 Event Attempt 归属；统一集成候选另含 ADR-048 默认 Event 页和严格 ADR-039 行政释放保护。公开合同继续以 [INTERFACES.md](INTERFACES.md) 为准，宿主和运行配置分别见 [SHARED_CORE.md](SHARED_CORE.md) 与 [ZCODE_RUNTIME.md](ZCODE_RUNTIME.md)。
 
@@ -54,7 +54,7 @@ Worker 接收私有 Bootstrap，经精确 OS 进程身份、Launch/Claim 绑定�
 
 执行、交付与清理期限保持 [ADR-027](decisions/ADR-027-execution-and-cleanup-deadlines.md)。Manager 一次解析 Task/Host 默认执行预算，Worker/Adapter 使用相同快照；执行结束即停止执行 timer，Adapter 清理使用独立预算。迟到或缺失 Cleanup proof 不自动释放路径。
 
-Recovery 由 SQLite 持久事实和当前 Host 共同协调，并可在 Host 存活期间重复执行。[ADR-036](decisions/ADR-036-host-native-interruption-requeue.md) 定义了没有 Result 的 running Attempt 的原子中断/重派门槛与合成实现：持久 Claim 的精确 Worker 已退出、recorded-tree claimant scan clean、Adapter Cleanup 证明完整、没有 Runtime 执行事件、无未回答交互，并且当前 Host 不触碰另一个 Host 的存活进程。当前生产 Adapter 不提供满足该门槛的独立 Cleanup Proof，因此真实 Result-less Attempt 默认停在 Operation/Workspace Hold，`zcode_status.execution_observation.state` 为 `interrupted_without_result`，恢复审计原因为 `adapter_cleanup_unverified`；只有 `testOnlyFakeAdapter` 合成测试能走到成功重派分支。不得用 OS PID/tree 扫描替代 Adapter resource facts，也不得把该合成分支宣传为已具备生产能力。显式 `zcode_cancel` 先复用持久 Claim、取消 intent、termination 与 CAS；身份不明或树不干净时默认保留占用，重复恢复不 Spawn、不重复 Release。ADR-039 只允许无 Launch Receipt/Identity 的已取消历史 `launch_intent` 行政释放；终态 `cancelled` 的 `cleanup_unverified` 还要求 exact identity exited、tree scan clean 与无 live PID，才能对缺失 Adapter closure 执行行政释放。live/unknown/term-fail/probe-fail/live-descendant 保持占用；唯一 Store 以 CAS 追加 `user_authorized_release_unverified`，不伪造 `cleanup_verified`，旧 Result/事件保留。`zcode_status`/Doctor 只读报告 queued 阻塞的 Task/Operation/phase/Workspace 与时长；所有写入仍经唯一 Authority，与 ADR-045 Executor Lease 兼容。
+Recovery 由 SQLite 持久事实和当前 Host 共同协调，并可在 Host 存活期间重复执行。[ADR-036](decisions/ADR-036-host-native-interruption-requeue.md) 定义了没有 Result 的 running Attempt 的原子中断/重派门槛与合成实现：持久 Claim 的精确 Worker 已退出、recorded-tree claimant scan clean、Adapter Cleanup 证明完整、没有 Runtime 执行事件、无未回答交互，并且当前 Host 不触碰另一个 Host 的存活进程。当前生产 Adapter 不提供满足该门槛的独立 Cleanup Proof，因此真实 Result-less Attempt 默认停在 Operation/Workspace Hold，`zcode_status.execution_observation.state` 为 `interrupted_without_result`，恢复审计原因为 `adapter_cleanup_unverified`；只有 `testOnlyFakeAdapter` 合成测试能走到成功重派分支。不得用 OS PID/tree 扫描替代 Adapter resource facts，也不得把该合成分支宣传为已具备生产能力。显式 `zcode_cancel` 先复用持久 Claim、取消 intent、termination 与 CAS；身份不明或树不干净时默认保留占用，重复恢复不 Spawn、不重复 Release。Recovery Observation 不再按 Operation 固定 8 条截断：相同材料事实（身份状态、probe 原因、进程/树证据与 phase）重复出现时不新增 Revision/Event，返回既有持久 Evidence Digest；材料变化必须追加事件。超过 8 条 Cleanup/Cancel Hold 的消解以 count/root 承诺完整事件集合，旧 digest 数组仍兼容校验。既有 v14 的旧 Trigger 在只读 Recovery 中按精确 DDL 识别并继续读取；可写打开时才精确匹配并事务升级，不提升 Schema Version，只读 Recovery 不修改数据库。ADR-039 只允许无 Launch Receipt/Identity 的已取消历史 `launch_intent` 行政释放；终态 `cancelled` 的 `cleanup_unverified` 还要求 exact identity exited、tree scan clean 与无 live PID，才能对缺失 Adapter closure 执行行政释放。live/unknown/term-fail/probe-fail/live-descendant 保持占用；唯一 Store 以 CAS 追加 `user_authorized_release_unverified`，不伪造 `cleanup_verified`，旧 Result/事件保留。`zcode_status`/Doctor 只读报告 queued 阻塞的 Task/Operation/phase/Workspace 与时长；所有写入仍经唯一 Authority，与 ADR-045 Executor Lease 兼容。
 
 ## 官方 Host、账户与清理
 
