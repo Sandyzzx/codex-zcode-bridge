@@ -236,4 +236,3 @@ remain unmet, so the Preview recommendation is:
    Result/Cleanup/Release facts.
 4. Use one real Async Handoff task to verify that the Master ends its Turn only
    after reliable acceptance and independently validates the Wake later.
-
