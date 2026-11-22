@@ -167,8 +167,11 @@ PR #131 基线 `a1bc911ec1b03cd22bbf13e717fc2233284e6183` 的后续验收实现
   Worker 的原 Attempt Result、Cleanup 与 Release，单次 Spawn，新 Host 重连
   读取同一 Result。
 
-当前提交只完成定向测试、构建、插件校验与生成物检查。历史 `c75c3433` 的
-1060 项完整回归和 GitHub Release Gate 不自动适用于 `7f54531a`。真实
-Desktop 全退、严格 Wake C/D、真实 Queue ACK/Turn/Master、Desktop visible、
-真实 Official Runtime 和真实模型 Skill 遵循率仍为 `NOT_RUN / BLOCKED`；
-PR #131 保持 open，不合入 Preview、不发布。
+`7f54531a` 完成定向测试、构建、插件校验与生成物检查；其后的 CI 已核实 head
+`3a238ee8`（相对实现提交仅文档收尾）通过 [CI run 45024250578](https://github.com/Sandyzzx/codex-zcode-bridge/actions/runs/45024250578)：
+Ubuntu/Windows verification、Windows shards、聚合 Verify 与 SQLite resource
+matrix 均通过。`Cost Lab` 和 `Integration` 按影响选择跳过，不将该结果扩大为
+这些 job 的 PASS；历史 `c75c3433` 的本地 1060 项完整回归也不自动转移到
+`7f54531a/3a238ee8`。真实 Desktop 全退、严格 Wake C/D、真实 Queue
+ACK/Turn/Master、Desktop visible、真实 Official Runtime 和真实模型 Skill
+遵循率仍为 `NOT_RUN / BLOCKED`；PR #131 保持 open，不合入 Preview、不发布。

@@ -4,6 +4,7 @@
 > Date: 2026-11-22 (Asia/Shanghai)
 > Baseline: PR #131 RC `a1bc911ec1b03cd22bbf13e717fc2233284e6183`
 > Acceptance implementation: `7f54531acba0844937bc134609dae840090294ec`
+> CI-verified head: `3a238ee8fb3c04aaeb35b08ee089ce41bcb01aca`
 > Conclusion: `PARTIAL / BLOCKED`
 > Paid model requests during this acceptance: `0`
 
@@ -202,16 +203,20 @@ Worker**, not as a real Codex Desktop close or real Official Runtime test.
 | Official Runtime zero-model inspect | `PASS`, exact 3.19 fingerprint / safety verified / authorization required |
 | Paid model requests | `0` |
 | Complete local matrix | `ABORTED — NOT A PASS`; the docs-only impact command expanded to the full suite because the branch delta includes implementation commits, so it was interrupted per the Owner policy |
+| Documentation correction T0 | `PASS`; typecheck, build, plugin validation, generated artifact freshness and `git diff --check`; impact selection `NO_TESTS_APPLICABLE` |
+| GitHub exact-head checks | `PASS`; `3a238ee8` run [45024250578](https://github.com/Sandyzzx/codex-zcode-bridge/actions/runs/45024250578), including Ubuntu/Windows verification and SQLite resource matrices; Cost Lab/Integration skipped by impact selection |
 
 Raw local evidence is under
 `C:\Users\Sandy\.codex\worktrees\async-executor-pr5-20261122\codex-zcode-bridge\.run\async-executor-real-acceptance-20261122`.
 It is intentionally not committed.
 
-Historical exact-head GitHub checks for
-`a1bc911ec1b03cd22bbf13e717fc2233284e6183` passed in run `45017172570`
-(including Windows/Ubuntu verification and the SQLite resource matrix), but that
-result is invalidated for `7f54531a`. A new exact-head CI run is required after
-the report/docs head is pushed.
+Exact-head GitHub checks for the CI-verified PR head
+`3a238ee8fb3c04aaeb35b08ee089ce41bcb01aca` passed in run `45024250578`,
+including Ubuntu/Windows verification, Windows shards, aggregate Verify, and
+the SQLite resource matrices. The `Cost Lab` and `Integration` jobs were
+impact-selected as skipped; they are not counted as PASS. This exact-head CI
+result does not replace the still-blocked real Desktop/Wake/Official Runtime
+gates.
 
 ## Preview Recommendation
 

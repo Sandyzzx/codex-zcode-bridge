@@ -80,8 +80,8 @@ Skill 遵循率仍未运行；PR #131 可以保持 open 评审，但不得合入
 | Production CLI test-seam rejection | `PASS` | Fake Adapter 与任意 Worker entry 在 Lease 获取前拒绝 |
 | Startup failure rollback | `PASS` | pipe 启动失败仅在 Store idle close 与 exact Lease 证明后释放；Authority 启动失败保留 Lease 并阻止第二 Owner |
 | Development gate | `PASS` | 延期 FULL 运行直接/域安全测试；Integration 安全集合 fail closed，完整 Release Gate 仍延期 |
-| Historical complete local release matrix | `PASS — HISTORICAL CANDIDATE` | `c75c3433`：1060 tests、1058 pass、0 fail、2 skip；注册压力 4/4；生成物与插件校验通过。该结果不自动属于 `7f54531a` |
-| GitHub complete release matrix | `NOT_RUN` | Pushed RC 必须通过 Ubuntu/Windows/Stress Required Checks 后才能合并 |
+| Historical complete local release matrix | `PASS — HISTORICAL CANDIDATE` | `c75c3433`：1060 tests、1058 pass、0 fail、2 skip；注册压力 4/4；生成物与插件校验通过。该结果不自动属于 `7f54531a` 或 `3a238ee8` |
+| GitHub complete release matrix | `PASS — EXACT HEAD` | `3a238ee8`（`7f54531a` + docs-only commits）的 [CI run 45024250578](https://github.com/Sandyzzx/codex-zcode-bridge/actions/runs/45024250578) 成功：Ubuntu/Windows verification 与 SQLite resource matrix 均通过；Cost Lab/Integration 按影响选择跳过 |
 
 ## PR 3–6 Candidate Update
 
@@ -92,7 +92,7 @@ Skill 遵循率仍未运行；PR #131 可以保持 open 评审，但不得合入
 | Executor Wake | `PASS — SYNTHETIC / REAL BLOCKED` | post-Release once-only Queue + Web Notify、SQLite v14 evidence、exact-config fail closed；Owner policy/CLI/Web 展示通过；当前无 App Server socket 时 0 Queue 并降级，真实 Queue/C/D 未运行 |
 | Async Master Handoff | `PASS — CONTRACT / MODEL NOT_RUN` | deterministic Skill decision contract；真实 Host 模型遵循率、真实 Wake 恢复与 Desktop visible 未验证 |
 | Historical unified local release gate | `PASS — LOCAL` | Windows 1060 项完整回归、4/4 压力矩阵、生成物与插件校验通过（`c75c3433`） |
-| Unified GitHub release gate | `NOT_RUN` | 推送后运行 Ubuntu/Windows/Stress；任何失败不得以重跑替代根因处理 |
+| Unified GitHub release gate | `PASS — EXACT HEAD` | `3a238ee8` 的 [CI run 45024250578](https://github.com/Sandyzzx/codex-zcode-bridge/actions/runs/45024250578) 成功；这是该已验证提交的 CI 事实，不替代真实 Desktop/Wake/Official Runtime 验收 |
 | Root-exited shutdown race | `PASS — DETERMINISTIC + FULL REGRESSION` | 仅精确 `process_tree_root_exited` 可由 fresh exact probe 加原 recorded-tree clean proof 收敛；定向 20/20、负载 12/12、composition 67/67 |
 
 ## Follow-up
