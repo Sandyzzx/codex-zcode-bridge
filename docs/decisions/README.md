@@ -1,9 +1,9 @@
 # 决策路由 / Decisions
 
 > Status: AUTHORITATIVE（仅指本索引）
-> Last updated: 2026-11-22（记录 Async Executor PR #131 real-host acceptance）
-> Last verified: 2026-11-22，核对 ADR-039 行政释放保护、ADR-048 默认 32 KiB Event 页、ADR-045 Lease/IPC/Thin MCP/Fake Worker 证据、ADR-049 Task CLI Wake 授权入口、ADR-050 loopback Web Wake 展示、ADR-051 release-bound Wake evidence 与 ADR-052 Master workflow contract；历史 `c75c3433` 的 1060 项完整回归不自动属于当前 `7f54531a`。真实 Desktop E2E、严格 C/D、真实 Queue/Turn/Master、真实 Runtime 和真实模型遵循率仍为 `NOT_RUN / BLOCKED`。
-> Verified against: Preview `ac1e8396f25a1a1d3ff373def84726d28c1f4193` + PR #131 baseline `a1bc911ec1b03cd22bbf13e717fc2233284e6183` + acceptance implementation `7f54531acba0844937bc134609dae840090294ec`
+> Last updated: 2026-11-22（terminal-result release + Async Executor Web real-process acceptance）
+> Last verified: 2026-11-22，核对 ADR-039 四种终态 Result 统一行政释放绑定、ADR-048 默认 32 KiB Event 页、ADR-045 Lease/IPC/Thin MCP/Fake Worker 证据、ADR-049 Task CLI Wake 授权入口、ADR-050 loopback Web 发现/Deep Link/Wake 展示、ADR-051 release-bound Wake evidence 与 ADR-052 Master workflow contract。真实 Desktop E2E、严格 C/D、真实 Queue/Turn/Master、真实 Runtime 和真实模型遵循率仍为 `NOT_RUN / BLOCKED`。
+> Verified against: Preview `c941f578ec00834ab0e93f235134d24bf14a827a` + PR #131 `codex/async-executor-rc-20261122`
 
 先读当前 [架构](../ARCHITECTURE.md)/[接口](../INTERFACES.md)，只在需要解释取舍时加载对应决策。文件保持原路径和历史正文；Partially superseded 的标注优先于历史段落。
 
@@ -34,14 +34,14 @@
 | 平台启用 | [035](ADR-035-worker-platform-adapter-selection.md) | Accepted；Windows x64 启用 Official Host；ADR-038 将 Linux、macOS 与 Windows 非 x64 收敛为构造 Adapter 前 fail closed，direct Adapter 仅保留测试注入覆盖 |
 | 官方认证复用 | [037](ADR-037-official-zcode-authentication-reuse.md) | Accepted；Official Host 拥有凭据、OAuth、账户身份和请求认证；Bridge 不维护第二套认证；Preview.6 仅声明 Windows x64 + Desktop 3.18.2.10443，旧版本保持 NOT_VERIFIED |
 | 最小架构整改 | [038](ADR-038-preview6-minimum-architecture-remediation.md) | Accepted；保留 SQLite/Worker/官方 Runtime 核心，退役旧 JSON 查询、Ledger、人类报告/主会话 Token 链、Desktop task-index 镜像；修正 Usage/Context/Events/Recovery 与 CI/生成物合同 |
-| Host 授权取消 | [039](ADR-039-host-authorized-cancellation.md) | 当前本地修复；无 Claim 的 Launch Intent 首次取消保留未核实占用；用户重复 `zcode_cancel` 可对历史 `launch_intent`/终态 `cleanup_unverified` 执行原子行政释放并记录 `user_authorized_release_unverified`；Running cleanup-only Hold 仍先走新鲜取消树证明，保留原 CAS 与历史 |
+| Host 授权取消 | [039](ADR-039-host-authorized-cancellation.md) | 当前本地修复；无 Claim 的 Launch Intent 首次取消保留未核实占用，用户再次显式 `zcode_cancel` 可行政释放；四种终态 Result 的 `cleanup_unverified` 由同一 `zcode_cancel` 入口进入原子行政释放，新证据统一绑定 Result/Claim/Worker/Recovery，旧取消证明仅作历史读取兼容；Running cleanup-only Hold 仍先走新鲜取消树证明，保留原 CAS 与历史 |
 | 官方 Runtime | [040](ADR-040-installed-official-appserver-runtime.md) | 候选集成；安装版官方 AppServer 的统一 Runtime 与精确 Manifest 门禁 |
 | Thin Official Host | [041](ADR-041-thin-official-host-end-state.md) | 统一 Model Catalog/Worker session factory；所有 Provider 走安装版 AppServer；direct stdio 仅测试；三项 patch 暂留 |
 | 未知版本实验授权 | [042](ADR-042-unknown-runtime-experimental-authorization.md) | 安全检查与 Manifest 兼容分离；精确指纹授权后可进行 Provider 分 scope 探测；不自动提升为 VERIFIED |
 | Recovery 编号对账 | [044](ADR-044-preview-lifecycle-recovery-reconciliation.md) | Preview 保留 ADR-037 官方认证语义；Stable Host Recovery 在未来对账中使用 ADR-044；不做机械覆盖 |
 | Result 摘要、Event 归属 | [047](ADR-047-compatible-result-summary.md) | 候选 MCP 可选摘要、全量证据读取及 Attempt 核对 |
 | Event 默认预算 | [048](ADR-048-bounded-default-event-pages.md) | `zcode_events` 省略 `max_bytes` 时使用 32 KiB 页预算；显式预算仍为硬限制；所有事件可按 cursor 完整续读 |
-| Async Executor | [045](ADR-045-async-executor-ownership.md) | Accepted；当前 `7f54531a` 通过 Owner Wake policy/Web 展示、App Server 缺失降级和 shipped MCP Host 退出后的 synthetic Worker Result/Cleanup/Release；历史 `c75c3433` 有 1060 项完整回归/4/4 压力矩阵；真实 Desktop 全退、严格 C/D、真实 Queue/Turn/Master 和付费 Runtime 仍 `BLOCKED`，未合入 Preview |
+| Async Executor | [045](ADR-045-async-executor-ownership.md) | Accepted；PR #131 已整合最新 `c941f578` Preview，通过 Console 发现/Deep Link、真实 MCP Host 退出后的 Web/Executor 可用性与 synthetic Worker Result/Cleanup/Release；真实 Desktop 全退、严格 C/D、真实 Queue/Turn/Master 和付费 Runtime 仍 `BLOCKED`，未合入 Preview |
 | Task CLI | [049](ADR-049-task-cli-control-surface.md) | CLI 只经 Executor Control 管理同一 Authority；不打开 SQLite、不实现调度或恢复；已有 Executor 不重复 Spawn，过渡和 Shutdown unknown 均有显式边界 |
 | Task Web Console | [050](ADR-050-local-task-web-console.md) | 仅 loopback；Root 级动态发现/CAS 复用、Deep Link 与跨页 summary；经同一 Executor Control 读取 Task/Event/Result/Attention 并显式转发 Cancel/Reply；不创建 Task、不打开 SQLite、不拥有 Executor 生命周期 |
 | Executor Wake | [051](ADR-051-executor-wake-delivery.md) | post-Release 一次性 Wake；Owner policy 经 Task CLI 排他写入；loaded/idle exact-config 才允许 Queue，其余 Web Notify；CLI/Web 从 SQLite v14 observation 展示，不重试 |

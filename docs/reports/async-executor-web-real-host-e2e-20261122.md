@@ -2,8 +2,8 @@
 
 > Status: RESEARCH
 > Date: 2026-11-22 (Asia/Shanghai)
-> Latest integrated Preview: `origin/preview@3daffe476b12b3eb16cec957d18422c3ff4c775e`
-> Code candidate: `8f83bd340f1d6f31ddac12360583257969bb5863`
+> Latest integrated Preview: `origin/preview@c941f578ec00834ab0e93f235134d24bf14a827a`
+> C1 evidence candidate: `8f83bd340f1d6f31ddac12360583257969bb5863`
 > Pull request: [#131](https://github.com/Sandyzzx/codex-zcode-bridge/pull/131), open
 > Conclusion: `PARTIAL / BLOCKED`
 > Paid model requests during this acceptance: `0`
@@ -203,17 +203,22 @@ Notify.
 
 ## Preview Integration
 
-The branch was merged with the then-current remote Preview through merge commit
-`8f83bd340f1d6f31ddac12360583257969bb5863`.
+The branch was first merged with Preview `3daffe476` through merge commit
+`8f83bd340f1d6f31ddac12360583257969bb5863`, then integrated with the latest
+Preview `c941f578` (terminal Result administrative release unification).
 
-The Preview delta relative to the common baseline was the AgentReport parser
-scan-boundary fix. Both semantics were preserved:
+The integrated Preview deltas were:
 
-- the former 400,000-character scan ceiling remains removed;
-- the Worker bundle was rebuilt from the merged source;
-- current Executor, IPC, Thin MCP, Web, Skill, and architecture tests pass.
+- the AgentReport 400,000-character scan ceiling remains removed;
+- ADR-039 administrative release now supports `completed`, `failed`,
+  `waiting_for_master`, and `cancelled` terminal Results with Result/Claim/
+  Worker identity/Recovery evidence binding;
+- the Worker and plugin bundles are rebuilt from the merged source;
+- current Executor, IPC, Thin MCP, Web, Skill, Result Recovery, and architecture
+  tests must be rerun on the merged candidate.
 
-No upstream Token Efficiency implementation was overwritten.
+No upstream Token Efficiency or terminal-Result release implementation was
+overwritten.
 
 ## Verification
 

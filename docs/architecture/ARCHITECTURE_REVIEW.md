@@ -2,7 +2,7 @@
 
 > Status: IMPLEMENTED — PR 2–6 CANDIDATE（architecture accepted；release blocked）
 > Date: 2026-11-22
-> Review baseline: `origin/preview` `3daffe476b12b3eb16cec957d18422c3ff4c775e` + PR #131 candidate `8f83bd340f1d6f31ddac12360583257969bb5863`; historical full-matrix candidate `c75c34330287266702cab5949662bf897b74ed5a`
+> Review baseline: `origin/preview` `c941f578ec00834ab0e93f235134d24bf14a827a` + PR #131 `codex/async-executor-rc-20261122`; C1 evidence candidate `8f83bd340f1d6f31ddac12360583257969bb5863`; historical full-matrix candidate `c75c34330287266702cab5949662bf897b74ed5a`
 
 ## Verdict
 
@@ -13,8 +13,8 @@ candidate 进一步把 shipped MCP 入口收敛为单一 Thin MCP，并把生产
 composition 固定在 Executor；确定性四层 E2E 与类型/边界检查通过。PR 3–6
 candidate 已加入 Control-only CLI、loopback Web、fail-closed Wake 与 Async
 Master Handoff。历史候选 `c75c3433` 已通过 1060 项本地完整回归
-（1058 pass / 0 fail / 2 skip）与 4/4 注册压力矩阵；当前 `8f83bd34`
-已整合最新 Preview，新增 Console 动态发现/CAS 复用、Task Deep Link 和
+（1058 pass / 0 fail / 2 skip）与 4/4 注册压力矩阵；PR #131 已整合最新
+Preview，新增 Console 动态发现/CAS 复用、Task Deep Link 和
 Result pending 独立显示，并通过真实 MCP Host / Executor / Console /
 Chromium + synthetic Worker 的 C1 E2E。当前结论仍为
 `PARTIAL / BLOCKED`：真实 Codex Desktop 关闭、严格 Wake C/D、真实 Queue

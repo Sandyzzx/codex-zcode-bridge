@@ -6,9 +6,9 @@ description: 用户明确要求使用 ZCode/Codex ZCode Bridge、查询或继续
 # ZCode Bridge — Master Skill
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-22
-> Last verified: 2026-11-22，核对 opt-in Result 摘要/默认完整 Result、默认 32 KiB Event 页、ADR-039 行政释放保护、Async Handoff、Executor Wake 与渐进加载路由；真实 Host 文案消费和真实模型遵循率未做 A/B。
-> Verified against: `codex/async-executor-pr6-20261122` stacked candidate
+> Last updated: 2026-11-22（terminal-result release + Async Handoff）
+> Last verified: 2026-11-22，核对 opt-in Result 摘要/默认完整 Result、默认 32 KiB Event 页、ADR-039 四种终态 Result 统一行政释放、默认 13 工具面、Async Handoff、Executor Wake 与渐进加载路由；真实 Host 文案消费和真实模型遵循率未做 A/B。
+> Verified against: Preview `c941f578ec00834ab0e93f235134d24bf14a827a` + PR #131 `codex/async-executor-rc-20261122`
 > Scope: Master 授权、派发、监控、独立验收与恢复；不修改 Bridge TaskPackage Schema 或 MCP 工具 API。
 
 ## 职责与授权
@@ -44,7 +44,7 @@ Task Scope 与 Handoff Mechanism 分开决定。`whole_task`/`staged` 只定义�
 - Turn 结束、客户端断连、MCP 停止或调用超时不取消已受理 Task。只有用户明确授权具体取消时才走 `zcode_cancel`；回执未知时先以原 `task_id` 对账，不换 ID 重派。
 - Wake 只表示有持久 Result 可读，不表示 Master 已恢复、Task 已验收或资源已释放。恢复后核对 Task/Attempt/Operation/digest，读取 Result 摘要和 Cleanup/Release 证据，再独立检查实际 diff、文件与测试。
 - 已知 Pending Interaction 是阻塞事实，不是完成或可忽略状态。结束 Turn 前必须先处理；返回时按原请求与明确授权审批，不得自动放行。Async Handoff 不新增 Pending Wake，必要审批仍经 Web/CLI 或下一次用户 Turn 进入。
-- 已知 SQLite 清理 Hold 不得绕过。`zcode_cancel` 是唯一标准恢复入口，可能终止原身份 Worker；调用前必须取得用户明确授权。用户重复取消只可行政释放已被取消且无持久 Spawn 证据的历史 `launch_intent`，或已确认 exact exit + clean tree 但缺少 Adapter closure 的终态取消 Cleanup；活动/不可验证 Worker 与有 Receipt 的 Launch Intent 必须保持占用。`released`、`unverified_admin_release` 不是 `cleanup_verified`。成功后也须先检查原 workspace WIP，再讨论新 Attempt。
+- 已知 SQLite 清理 Hold 不得绕过。`zcode_cancel` 是唯一标准恢复入口，一次调用就是用户授权；状态只决定内部动作，不决定是否需要额外用户资格。它可能终止原身份 Worker。已被取消且无持久 Spawn 证据的历史 `launch_intent` 需用户再次显式取消才能行政释放；`completed`、`failed`、`waiting_for_master`、`cancelled` 四种终态 Result 的 `cleanup_unverified` 在 exact exit + clean tree 但缺少 Adapter closure 时，用户显式调用一次即可进入同一行政释放流程；活动/不可验证 Worker 与有 Receipt 的 Launch Intent 必须保持占用。`released`、`unverified_admin_release` 不是 `cleanup_verified`。成功后也须先检查原 workspace WIP，再讨论新 Attempt。
 - Worktree、路径声明和 `yolo` profile 不是 OS 沙箱；Worker 使用当前本机账户权限。未获用户相应授权不得提交、推送、发布、读取/修改凭据或删除任务外数据。
 
 ## 渐进式加载

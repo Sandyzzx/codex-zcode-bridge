@@ -1,9 +1,9 @@
 # 文档路由 / Documentation
 
 > Status: AUTHORITATIVE（仅指本索引）
-> Last updated: 2026-11-22（Preview.12 + Async Executor Web real-process acceptance）
-> Last verified: 2026-11-22，核对最新 Preview 集成后的 PR #131：动态 Console 发现/复用、`task console-url`、Task Deep Link、Result pending 独立显示，以及真实 MCP Host 退出后 Web/Executor 保持可用、原 Attempt Result/Cleanup/Release 各一次。历史候选 `c75c3433` 的 1060 项完整回归与 4/4 压力矩阵仍只属于该提交；当前合并候选另跑 92 项受影响测试。真实 Desktop 关闭、严格 Wake C/D、真实 Queue/Turn/Master、Official Runtime 执行与真实模型 Skill 遵循率仍为 `NOT_RUN / BLOCKED`。
-> Verified against: `origin/preview@3daffe476b12b3eb16cec957d18422c3ff4c775e` + PR #131 candidate `8f83bd340f1d6f31ddac12360583257969bb5863`
+> Last updated: 2026-11-22（Preview.12 + terminal-result release + Async Executor Web real-process acceptance）
+> Last verified: 2026-11-22，核对最新 `origin/preview@c941f578` 集成后的 PR #131：四种终态 Result 统一行政释放、动态 Console 发现/复用、`task console-url`、Task Deep Link、Result pending 独立显示，以及真实 MCP Host 退出后 Web/Executor 保持可用、原 Attempt Result/Cleanup/Release 各一次。历史候选 `c75c3433` 的 1060 项完整回归仍只属于该提交；当前合并候选另跑 92 项受影响测试。真实 Desktop 关闭、严格 Wake C/D、真实 Queue/Turn/Master、Official Runtime 执行与真实模型 Skill 遵循率仍为 `NOT_RUN / BLOCKED`。
+> Verified against: `origin/preview@c941f578ec00834ab0e93f235134d24bf14a827a` + PR #131 `codex/async-executor-rc-20261122`
 
 English users start at [README.md](../README.md). 技术文档为中文。先读当前事实，按问题加载合同；研究或历史材料不作为当前实现或发布证明。
 
@@ -57,7 +57,7 @@ AUTHORITATIVE 描述当前事实或合同；DECISION 记录已批准取舍；RES
 
 当前 Preview 发布候选身份为 `2.0.0-preview.12`。`package.json`、`package-lock.json`、插件 manifest、MCP server version、官方签名 Runtime Host 与固定官方 Host/BOM 必须来自同一提交、Tag 和 Release。发布支持范围仍限定为 Windows x64、Node.js `24.16.0` 与 ZCode Desktop `3.18.2.10443`。Preview.12 在 Preview.11 的 Result、Event 与用户授权释放合同上移除 Recovery Observation 固定次数限制，对未变化 active 材料事实去重，并兼容超过 8 条历史 Hold 的 count/root 消解；SQLite v14 仍是唯一当前 Schema。ADR-042 允许其他安全但未知的精确安装指纹在用户授权后进入 `OFFICIAL_RUNTIME_EXPERIMENTAL`，但不把该版本加入发布支持范围，也不提升 Provider、折扣或 Start Plan 能力。ADR-041 implementation 为 `a676c6cd14573f2620339f992a345ed0715541ff`；Final Closure implementation 为 `f19ab1d75dcced7613bfe6e12c84d780d01f7127`。旧 JSON/CLI 生产链退役决策见 [ADR-029](decisions/ADR-029-legacy-runtime-retirement.md)。ADR-041 后插件不再分发 `app-server/zcode.cjs` 或随附 builtin Provider 配置，所有 Provider 使用安装版 AppServer。
 
-Async Executor PR 2–6 是单独的 Release Candidate，基于 Preview.12 并已整合至 `origin/preview@3daffe476`，但尚未合入。历史候选 `c75c3433` 的 1060 项本地完整回归、4/4 注册压力矩阵、生成物与插件校验仍只属于该提交。当前 PR #131 在 Web 修复后完成 92/92 项受影响测试，并以真实 MCP Host / Executor / Console / Chromium 进程和 synthetic Worker 验证 Deep Link、Host 退出后 Web 可观察、原 Attempt Result、Cleanup 与 Release。该证据固定为 `REAL PROCESS + SYNTHETIC WORKER`，不等同真实 Codex Desktop 关闭、真实 Queue Wake 或 Official Runtime 执行；正式 Release Gate 仍须在最终候选上单独运行。
+Async Executor PR 2–6 是单独的 Release Candidate，基于 Preview.12 并已整合至 `origin/preview@c941f578`，但尚未合入。历史候选 `c75c3433` 的 1060 项本地完整回归、4/4 注册压力矩阵、生成物与插件校验仍只属于该提交。当前 PR #131 在 Web 修复后完成 92/92 项受影响测试，并以真实 MCP Host / Executor / Console / Chromium 进程和 synthetic Worker 验证 Deep Link、Host 退出后 Web 可观察、原 Attempt Result、Cleanup 与 Release。该证据固定为 `REAL PROCESS + SYNTHETIC WORKER`，不等同真实 Codex Desktop 关闭、真实 Queue Wake 或 Official Runtime 执行；正式 Release Gate 仍须在最终候选上单独运行。
 
 ADR-032 已接受且已在 Preview.5 实现“现有 Worker 内官方 Host”。ADR-033 的账户 refresh 协调、ADR-034 的正常 Cleanup 复用和 ADR-035 的平台选择由固定上游 patch 与同一 Worker 实现。ADR-037 已接受“官方 Host 拥有认证、Bridge 不维护第二套凭据/身份系统”的目标；Preview.6 已实现该接线。Preview.6/Preview.7 历史路径上的真实 Coding Plan 完整 E2E 和 Start Plan 核心功能路径曾通过；但 2026-11-19 统一安装版 Runtime 的 Start Plan 真实 Entitlement/E2E/Billing Observation 尚未运行。历史 Start Plan 完整 E2E 因 Workspace 内 PowerShell cache 保持 FAIL。Desktop 3.18.0/3.18.1 保持 `NOT_VERIFIED`，不得写成 PASS 或不兼容。
 

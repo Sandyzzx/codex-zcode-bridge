@@ -59,7 +59,8 @@ test("Master proactively reports known cleanup Holds and gates Recovery on autho
   assert.match(skill, /已知 SQLite 清理 Hold 不得绕过/);
   assert.match(skill, /`zcode_cancel` 是唯一标准恢复入口/);
   assert.match(skill, /可能终止原身份 Worker/);
-  assert.match(skill, /调用前必须取得用户明确授权/);
+  assert.match(skill, /一次调用就是用户授权/);
+  assert.match(skill, /不决定是否需要额外用户资格/);
   assert.match(recovery, /failed \+ cleanup_unverified/);
   assert.match(recovery, /核心 MCP 没有 Bridge Task\/Attempt 全局枚举工具/);
   assert.match(recovery, /可选 Ledger 只能枚举其管理的 ProjectTask/);
