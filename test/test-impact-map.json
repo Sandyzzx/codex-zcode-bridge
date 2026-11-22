@@ -350,7 +350,8 @@
         "manager-lifecycle",
         "mcp-host",
         "worker-launch",
-        "process-cleanup-and-locks"
+        "process-cleanup-and-locks",
+        "sqlite-persistence"
       ]
     },
     {

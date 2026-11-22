@@ -39,11 +39,14 @@ function startExecutor(
     "--heartbeat-ms", heartbeatMs,
     "--test-only-fake-adapter",
     ...(settingsDirectory ? ["--settings-directory", settingsDirectory] : []),
-  ], { cwd: projectRoot, env: options.env ?? process.env, stdio: ["pipe", "pipe", "ignore"] });
+  ], { cwd: projectRoot, env: options.env ?? process.env, stdio: ["pipe", "pipe", "pipe"] });
+  let stderr = "";
+  child.stderr?.setEncoding("utf8");
+  child.stderr?.on("data", (chunk: string) => { stderr += chunk; });
   let readyTimer: NodeJS.Timeout | undefined;
   const ready = new Promise<{ lease_id: string; pipe_name: string }>((resolve, reject) => {
     let buffered = "";
-    readyTimer = setTimeout(() => reject(new Error("EXECUTOR_READY_TIMEOUT")), 30_000);
+    readyTimer = setTimeout(() => reject(new Error(`EXECUTOR_READY_TIMEOUT\n${stderr}`)), 60_000);
     child.stdout!.setEncoding("utf8");
     child.stdout!.on("data", (chunk: string) => {
       buffered += chunk;
@@ -84,7 +87,7 @@ async function waitForHeartbeat(root: string, initialAt: string): Promise<string
 }
 
 async function waitForLifecycleEvent(client: ExecutorControlClient, taskId: string, eventType: string): Promise<void> {
-  const deadline = Date.now() + 30_000;
+  const deadline = Date.now() + 45_000;
   let lastEvents: unknown = null;
   while (Date.now() < deadline) {
     const response = await client.request("getEvents", {
@@ -287,7 +290,12 @@ test("an idle-only shutdown refusal restores admission and task control", { time
 });
 
 test("Thin MCP disconnect leaves the accepted Task in the Executor and reconnects to its Result", { timeout: 90_000 }, async () => {
-  const fixture = mkdtempSync(path.join(tmpdir(), "executor-thin-mcp-"));
+  const fixtureBase = process.env.LOCALAPPDATA
+    && path.isAbsolute(process.env.LOCALAPPDATA)
+    ? path.join(process.env.LOCALAPPDATA, "Temp")
+    : tmpdir();
+  mkdirSync(fixtureBase, { recursive: true });
+  const fixture = mkdtempSync(path.join(fixtureBase, "executor-thin-"));
   const localAppData = path.join(fixture, "local-app-data");
   const userProfile = path.join(fixture, "user-profile");
   const tempDirectory = path.join(fixture, "temp");

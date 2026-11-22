@@ -1,10 +1,10 @@
 # Bridge Async Execution Architecture v1
 
-> Status: PROPOSED ARCHITECTURE（Owner 条件批准；仍不是当前实现）
-> Decision status: [ADR-045](../decisions/ADR-045-async-executor-ownership.md) = ACCEPTED with implementation gates；本文档 = PROPOSED，待 PR 1 评审合入后作为实施输入
-> Date: 2026-11-21（Asia/Shanghai）
-> Baseline: `origin/preview` `1f9ff9ef37528205e76156e13fe06ed2b1fd3711`
-> Evidence classification: 文中逐项标注 `VERIFIED`、`INFERRED`、`UNVERIFIED`
+> Status: IMPLEMENTED — PR 2 PARTIAL（feature branch candidate；未合入 Preview，不可发布）
+> Decision status: [ADR-045](../decisions/ADR-045-async-executor-ownership.md) = ACCEPTED；本文档记录目标合同与 PR 2 当前实现边界
+> Date: 2026-11-22（Asia/Shanghai）
+> Baseline: `origin/preview` `1bf039fda2ccfd17a992458a871bddd7b48b38c1`；implementation branch `codex/async-executor-pr2`
+> Evidence classification: 文中逐项标注 `VERIFIED`、`INFERRED`、`UNVERIFIED`；PR 2 证据报告见 [2026-11-22 report](../reports/async-executor-pr2-20261122.md)
 
 ## 1. 目标与非目标
 
@@ -39,7 +39,24 @@
 | Queue 支持 notLoaded Thread 或 Desktop 全退 | UNVERIFIED | 严格 C/D 未执行 |
 | 独立 Executor 能在真实 Codex Desktop 关闭后保持运行 | UNVERIFIED | 需阶段 1 Host E2E |
 
-Preview.10 当前基线为 Windows x64、Node `24.16.0`、ZCode Desktop `3.18.2.10443`、SQLite v14 ONLY。架构文档不得把实验性 ADR-042 安装或 Token Efficiency 未合并分支写成当前支持范围。
+当前集成基线为 `origin/preview@1bf039fda2ccfd17a992458a871bddd7b48b38c1`
+（Preview.11）；发布支持范围仍按现有文档限定为 Windows x64、Node `24.16.0`、
+ZCode Desktop `3.18.2.10443`、SQLite v14 ONLY。PR 2 branch 不扩大该范围，也不把
+实验性 ADR-042 安装或 Token Efficiency 候选写成当前支持范围。
+
+### 2.1 PR 2 实施边界
+
+PR 2 candidate 已在独立分支实现并通过合成/确定性证据：Authority Root
+`executor-lease.json` lifetime lease、精确 PID/start fingerprint 仲裁、Idle-only
+Shutdown、Named Pipe Control Client/Server、`ZCODE_BRIDGE_MCP_TRANSPORT=control`
+Thin MCP、原 Attempt Result/Cleanup/Release 的跨进程 fake Worker E2E，以及
+32 MiB Result IPC 回读。legacy in-process MCP Host 仍是默认路径；`control`
+transport 是显式 feature flag。
+
+真实 Codex Desktop 关闭后原 Attempt 继续执行、原 Result 提交、Cleanup/Release
+完成尚为 `NOT_RUN / BLOCKED_BY_OWNER_ENVIRONMENT`；未关闭 Owner 当前正在使用的
+Desktop，未发起付费模型请求。不得把 PR 2 合入 Preview、声明发布通过或对外宣称
+Desktop 关闭场景已验证。
 
 ## 3. 目标架构
 
@@ -177,7 +194,9 @@ ControlResponse { protocol_version, request_id, ok, result | error, executor_sta
 
 - `protocol_version=1`；
 - request id 必须唯一，有界；
-- 每个 frame 有原始 UTF-8 byte 上限（建议先沿用 16 MiB 以内并单独定义更小控制消息上限）；
+- 每个 frame 有原始 UTF-8 byte 上限。PR 2 Control frame budget 为 33 MiB，
+  用于容纳既有 32 MiB canonical Result 和协议 envelope；普通控制消息仍受同一
+  上限保护，超限在 Manager dispatch 前 fail closed；
 - 控制方法只覆盖现有 MCP 生命周期操作和只读列表查询；
 - 幂等键复用 Task/Continue 现有规范化身份，不创建第二套幂等语义；
 - 客户端断开只取消该请求等待，不取消 Task；
@@ -227,7 +246,7 @@ Wake 不新增第二套持久化权威。PR 5 前必须先完成一次 schema �
 | 阶段 | 范围 | 硬门槛 |
 |---|---|---|
 | PR 1 | 本文档 + ADR + 接口/测试矩阵 | Owner 批准 |
-| PR 2 | Independent Executor + IPC + Thin MCP | 关闭 Codex 后原 Attempt 继续执行并提交 Result/Cleanup/Release |
+| PR 2 | Independent Executor + IPC + Thin MCP | 合成跨进程 Result/Cleanup/Release PASS；真实关闭 Codex 后原 Attempt 仍为 `NOT_RUN / BLOCKED` |
 | PR 3 | Task CLI + shared Control Client | MCP/CLI 并发读写同一权威 |
 | PR 4 | Web Console | 本地安全、无模型调用、页面关闭不影响 Task |
 | PR 5 | Queue Wake Adapter | 已加载 idle Thread 交付确认；严格 C/D 独立验收 |
@@ -302,12 +321,12 @@ Wake 不新增第二套持久化权威。PR 5 前必须先完成一次 schema �
 
 ## 9. 已知风险与未验证项
 
-1. 独立 Executor 在真实 Codex Desktop 关闭后的 Windows 进程存活：UNVERIFIED。
+1. 独立 Executor 在真实 Codex Desktop 关闭后的 Windows 进程存活：`NOT_RUN / BLOCKED_BY_OWNER_ENVIRONMENT`；合成进程与 fake Worker 路径已通过。
 2. SDK 强制终止导致原 Worker Result 丢失：VERIFIED；S2 必须先解决 owner，再考虑持久化交接。
 3. Executor IPC 的同用户安全边界在 Windows named pipe 上仍需实现和测试：INFERRED，合同已冻结，实现 UNVERIFIED。
-4. MCP 等待请求与 Executor 控制请求的生命周期解耦仍需 PR 2 详细设计。
+4. MCP 等待请求与 Executor 控制请求的生命周期已在 PR 2 candidate 中实现并覆盖 `REQUEST_CANCELLED`、`TASK_CANCEL_REQUESTED`、`SUBMISSION_UNKNOWN`、`EXECUTOR_UNAVAILABLE`；真实 Host 行为仍待 E2E。
 5. Web 列表投影的扫描规模与 Token 输出仍需基准，不得无界读取全部事件。
-6. Queue 只证明 loaded/idle；notLoaded 与 Desktop 全退 UNVERIFIED。
+6. Queue 只证明 loaded/idle；notLoaded 与 Desktop 全退 UNVERIFIED。Queue Adapter 属于后续 PR 5，不在 PR 2 实现。
 7. A 实验 Sol/xhigh 费用/额度变化不可观察，不估算。
 8. 并行 Token Efficiency 分支尚未合入 Preview；本架构不得预设其结果。
 

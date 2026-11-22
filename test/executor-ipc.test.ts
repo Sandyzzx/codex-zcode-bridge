@@ -165,6 +165,36 @@ test("lost submission responses are distinct from an unavailable Executor", asyn
   }
 });
 
+test("closing a client with an in-flight submission reports submission unknown", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "executor-ipc-"));
+  const pipe = pipeName(root, "close-pending");
+  const server = net.createServer((socket) => {
+    socket.once("data", () => undefined);
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(pipe, () => resolve());
+  });
+  const client = new ExecutorControlClient({ pipeName: pipe });
+  try {
+    await client.connect();
+    const pending = client.request("createTask", {
+      task: {
+        task_id: "task-close-pending", workspace: root, objective: "ACK",
+        requirements: [], allowed_paths: [], forbidden_paths: [],
+        acceptance_criteria: [], test_commands: [],
+      },
+    });
+    client.close();
+    await assert.rejects(pending, (error: unknown) =>
+      (error as { code?: string }).code === "SUBMISSION_UNKNOWN");
+  } finally {
+    client.close();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("the full 32 MiB Result contract remains readable through IPC", { timeout: 30_000 }, async () => {
   const root = mkdtempSync(path.join(tmpdir(), "executor-ipc-"));
   const manager = managerWith();

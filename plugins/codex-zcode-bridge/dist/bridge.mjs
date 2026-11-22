@@ -39919,7 +39919,7 @@ var ExecutorControlClient = class {
   close() {
     const socket = this.#socket;
     this.#socket = null;
-    this.#failPending("EXECUTOR_UNAVAILABLE");
+    this.#failPending(void 0);
     socket?.destroy();
   }
 };

@@ -129,7 +129,10 @@ export class ExecutorControlClient {
   close(): void {
     const socket = this.#socket;
     this.#socket = null;
-    this.#failPending("EXECUTOR_UNAVAILABLE");
+    // A pending submission may already have reached the Executor. Preserve
+    // the method-specific unknown/cancel classification on an intentional
+    // client close just as for a lost socket response.
+    this.#failPending(undefined);
     socket?.destroy();
   }
 }

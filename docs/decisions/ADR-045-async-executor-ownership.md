@@ -1,7 +1,8 @@
 # ADR-045：独立 Async Executor 所有权
 
-> Status: ACCEPTED（Owner 条件批准；架构方向已接受，实现与发布仍按本 ADR 验收门执行）
-> Date: 2026-11-21
+> Status: ACCEPTED（Owner 条件批准；架构方向已接受）
+> Implementation status: PARTIAL — PR 2 candidate；未合入 Preview，未发布
+> Date: 2026-11-22
 > Baseline: `origin/preview` `1f9ff9ef37528205e76156e13fe06ed2b1fd3711`
 > Related architecture: [BRIDGE_ASYNC_EXECUTION_V1.md](../architecture/BRIDGE_ASYNC_EXECUTION_V1.md)
 
@@ -34,3 +35,15 @@ Preview.10 的 `SqliteLifecycleMcpAuthority` 在 MCP stdio Host 进程内运行�
 ## Validation Gate
 
 实施首阶段必须证明：真实 Codex Host 关闭后，已受理 Attempt 继续执行并提交原 Result，随后按现有合同完成 Cleanup 与 Release。若失败，停止 CLI/Web/Wake 功能迁移，先修复执行所有权。
+
+## PR 2 Implementation Record
+
+PR 2 candidate 已实现 lifetime lease、精确 PID/start fingerprint、legacy Host
+互斥、Idle-only Shutdown、Named Pipe IPC、Thin MCP control transport，以及
+fake Worker 跨进程 Result/Cleanup/Release E2E。确定性 IPC、Lease、单实例、
+32 MiB Result 和 reconnect 测试通过。
+
+真实 Codex Desktop 关闭后的 E2E 仍未运行，原因是不得关闭 Owner 当前正在使用的
+Desktop；真实 Official Runtime 也没有新的付费模型授权。因此 ADR-045 的
+`Validation Gate` 尚未满足，PR 2 只能以 `PARTIAL / BLOCKED` 提交评审，不得
+合入 Preview、发布或迁移 CLI/Web/Wake。

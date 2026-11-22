@@ -2,12 +2,12 @@
   "schema_version": 1,
   "platform": "win32",
   "runner": "windows-2022",
-  "measured_at": "2026-11-21",
-  "source": "PR #106 split-file estimates rebalanced from four local Windows shard-pair runs; estimates remain empirical, not a per-file benchmark",
+  "measured_at": "2026-11-22",
+  "source": "PR #106 split-file estimates plus PR 2 Executor lifecycle estimates; estimates remain empirical, not a per-file benchmark",
   "shards": [
     {
       "id": 1,
-      "estimated_ms": 714224,
+      "estimated_ms": 781224,
       "tests": [
         {
           "file": "test/agent-report.test.ts",
@@ -84,6 +84,18 @@
         {
           "file": "test/process-spawn.test.ts",
           "estimated_ms": 8938
+        },
+        {
+          "file": "test/executor-ipc.test.ts",
+          "estimated_ms": 5000
+        },
+        {
+          "file": "test/executor-lease.test.ts",
+          "estimated_ms": 7000
+        },
+        {
+          "file": "test/executor-process.test.ts",
+          "estimated_ms": 55000
         },
         {
           "file": "test/runtime-preferences.test.ts",
