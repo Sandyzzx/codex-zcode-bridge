@@ -3,13 +3,13 @@
 > Status: AUTHORITATIVE
 
 > 2026-11-16 本地候选修订：[ADR-039](decisions/ADR-039-host-authorized-cancellation.md) 将取消授权与清理事实分离。queued + Launch Intent 无 Claim 时允许原子持久化取消并禁止迟到 Claim，未证明的进程/资源占用保留；Running 的 cleanup-only Hold 可经新鲜取消树证明追加消解记录，再继续原 CAS。此修复不增加 MCP 工具、Schema、重派或第二套恢复引擎。
-> Last updated: 2026-11-22（PR #116、ADR-039 严格行政释放、ADR-048 默认 Event 页、Recovery Observation 限额移除）
-> Last verified: 2026-11-22，核对 PR #116 已合入 Preview、ADR-039 durable Spawn/active Worker/tree proof 保护、ADR-048 默认 32 KiB Event 页及 cursor 续读，以及 Recovery 材料事实去重/超过 8 条消解承诺；真实计费与生产取消 NOT RUN。
-> Verified against: `origin/preview@1bf039fda2ccfd17a992458a871bddd7b48b38c1` + this Recovery-limit removal candidate
+> Last updated: 2026-11-22（Preview.12：Recovery Observation 限额移除与历史 Hold 兼容）
+> Last verified: 2026-11-22，核对 PR #116、PR #121、ADR-039 durable Spawn/active Worker/tree proof 保护、ADR-048 默认 32 KiB Event 页及 cursor 续读，以及 Recovery 材料事实去重/超过 8 条消解承诺；真实计费与生产取消 NOT RUN。
+> Verified against: `origin/preview@f51e965ebe38e85b3b8d3dea1396384aa634d2d4` + Preview.12 release candidate
 
-本文件描述当前 Preview.10 候选的生产架构。Windows x64 已默认切换到官方 Host 路径，R7 Runtime Events/Usage 复用同一 SQLite Authority；候选保留 ZCode 3.18.2 Host 模块、官方 Start Plan 认证投影与官方签名 runtime host，并完成 ADR-041 的 Thin Official Host 收敛。PR #116 已在 `450c18af` 合入 opt-in Result 摘要/默认完整 Result 与 Event Attempt 归属；统一集成候选另含 ADR-048 默认 Event 页和严格 ADR-039 行政释放保护。公开合同继续以 [INTERFACES.md](INTERFACES.md) 为准，宿主和运行配置分别见 [SHARED_CORE.md](SHARED_CORE.md) 与 [ZCODE_RUNTIME.md](ZCODE_RUNTIME.md)。
+本文件描述当前 Preview.12 候选的生产架构。Windows x64 已默认切换到官方 Host 路径，R7 Runtime Events/Usage 复用同一 SQLite Authority；候选保留 ZCode 3.18.2 Host 模块、官方 Start Plan 认证投影与官方签名 runtime host，并完成 ADR-041 的 Thin Official Host 收敛。PR #116 已在 `450c18af` 合入 opt-in Result 摘要/默认完整 Result 与 Event Attempt 归属；PR #121 已在 `f51e965e` 合入无固定次数的 Recovery 观察去重与历史 v14 Hold 兼容。公开合同继续以 [INTERFACES.md](INTERFACES.md) 为准，宿主和运行配置分别见 [SHARED_CORE.md](SHARED_CORE.md) 与 [ZCODE_RUNTIME.md](ZCODE_RUNTIME.md)。
 
-> 2026-11-21 架构决策：Owner 条件批准 [BRIDGE_ASYNC_EXECUTION_V1.md](architecture/BRIDGE_ASYNC_EXECUTION_V1.md)，并接受 [ADR-045](decisions/ADR-045-async-executor-ownership.md)。该方向尚未实施，不是当前生产事实；本文件仍以现有 Preview.10 单 Host Manager 架构为准。PR 2 必须先验证 Executor 生存期、真实 Host 关闭和原 Attempt Result Durability。
+> 2026-11-21 架构决策：Owner 条件批准 [BRIDGE_ASYNC_EXECUTION_V1.md](architecture/BRIDGE_ASYNC_EXECUTION_V1.md)，并接受 [ADR-045](decisions/ADR-045-async-executor-ownership.md)。该方向尚未实施，不是当前生产事实；本文件仍以现有 Preview.12 单 Host Manager 架构为准。PR 2 必须先验证 Executor 生存期、真实 Host 关闭和原 Attempt Result Durability。
 
 2026-11-19 的集成候选应用 [ADR-040](decisions/ADR-040-installed-official-appserver-runtime.md) 与 [ADR-041](decisions/ADR-041-thin-official-host-end-state.md)：所有受支持 Provider 在通过精确 Manifest 校验后，统一使用用户已安装的官方 AppServer Bundle、同根 builtin Provider 配置和 runtime host；Provider 只决定认证/权益能力，不再选择 AppServer 来源。未知安装版不再仅因不在 Manifest 中永久拒绝：[ADR-042](decisions/ADR-042-unknown-runtime-experimental-authorization.md) 先完成完整安装安全检查与指纹计算，只有精确指纹获得本地显式授权后才进入 `OFFICIAL_RUNTIME_EXPERIMENTAL`。授权按 `coding_plan_probe`、`start_plan_probe`、`other_provider_probe` 分 scope；不安全安装、无效签名、非 x64、混合根和不支持 Node 仍 hard block。实验态不自动提升 Manifest、Provider 能力或折扣状态，也不存在静默回退到打包 AppServer 的路径。Provider capability 在 `session/create` 后按 Runtime 实际报告的 Provider/Model 重新分类，并在 `session/subscribe`/`session/send` 前完成门禁；显式与隐式选择走同一检查点。
 
@@ -82,6 +82,6 @@ Store 在任何可写 SQLite 句柄之前执行只读 `PRAGMA user_version` 预�
 
 ## 发布边界
 
-`2.0.0-preview.11` 的 `package.json`、`package-lock.json`、插件 manifest、MCP server version、固定官方 Host、BOM、Runtime Events Schema 与 Administrative Recovery CLI 应由同一 Tag 和 Release asset 提供。Preview 支持声明限定为 Windows x64、Node.js `24.16.0` 和已安装的官方 ZCode Desktop `3.18.2.10443`。Preview.11 保持 v14 数据合同，并加入默认完整 Result、可选摘要、分页 Event 监控、Attempt 归属与用户授权阻塞释放。
+`2.0.0-preview.12` 的 `package.json`、`package-lock.json`、插件 manifest、MCP server version、固定官方 Host、BOM、Runtime Events Schema 与 Administrative Recovery CLI 应由同一 Tag 和 Release asset 提供。Preview 支持声明限定为 Windows x64、Node.js `24.16.0` 和已安装的官方 ZCode Desktop `3.18.2.10443`。Preview.12 保持 v14 数据合同，在 Preview.11 的默认完整 Result、可选摘要、分页 Event、Attempt 归属与用户授权阻塞释放之上，移除 Recovery Observation 固定次数限制并保持旧 v14 Trigger 兼容。
 
 Preview.6 的固定源码树重建、ordered-patch replay、same-source-tree repeatability、BOM/native load、clean install、签名 helper ProcessManager smoke 和带数据的升级回滚为 `PASS`。Preview.7 的 Windows/Ubuntu Release Gate、SQLite 矩阵、生成物 Freshness、CI dispatch 边界与 MCP Events 分页为 `PASS`；真实模型流量不重复执行。跨机器复现仍为 `NOT_VERIFIED`，仅作为 Preview 阶段风险接受；完整 ZCode 产品资源图不进入 Bridge 支持范围。真实 Coding Plan 完整 E2E 和 Start Plan 核心功能路径已通过；历史 Start Plan 完整 E2E 因 Workspace 边界保持 `FAIL`，一般 Desktop Main 独立性、真实 OAuth refresh 与 3.18.0/3.18.1 实机安装组合仍未验证。3.18.0/3.18.1 是 `NOT_VERIFIED`，不是已证明不兼容。
