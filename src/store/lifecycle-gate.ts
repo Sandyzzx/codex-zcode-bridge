@@ -192,6 +192,18 @@ interface ClaimOnlyPort {
     readonly cancellation_verification_digest?: string;
     readonly recovery_evidence_digest?: string;
   }): Readonly<Record<string, unknown>>;
+  recordExecutorWakeObservation(input: {
+    readonly operation_id: string;
+    readonly task_id: string;
+    readonly attempt: number;
+    readonly generation: number;
+    readonly state: "intent" | "queued" | "submission_unknown" | "turn_started" | "web_notify";
+    readonly thread_id: string | null;
+    readonly delivery_id: string;
+    readonly policy_digest: string;
+    readonly authorization_digest: string;
+    readonly reason_code: string;
+  }): Readonly<Record<string, unknown>>;
   requestCancellation(input: Readonly<Record<string, unknown>>, evidence: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>>;
   recordCancellationVerification(input: Readonly<Record<string, unknown>>, evidence: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>>;
   readInteractionRequest(taskId: string, requestId: string): Readonly<Record<string, unknown>> | null;
@@ -1331,6 +1343,18 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
     readonly cancellation_verification_digest?: string;
     readonly recovery_evidence_digest?: string;
   }): Readonly<Record<string, unknown>>;
+  recordExecutorWakeObservation(input: {
+    readonly operation_id: string;
+    readonly task_id: string;
+    readonly attempt: number;
+    readonly generation: number;
+    readonly state: "intent" | "queued" | "submission_unknown" | "turn_started" | "web_notify";
+    readonly thread_id: string | null;
+    readonly delivery_id: string;
+    readonly policy_digest: string;
+    readonly authorization_digest: string;
+    readonly reason_code: string;
+  }): Readonly<Record<string, unknown>>;
   requestCancellation(input: Readonly<Record<string, unknown>>, evidence: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>>;
   recordCancellationVerification(input: Readonly<Record<string, unknown>>, evidence: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>>;
   readInteractionRequest(taskId: string, requestId: string): Readonly<Record<string, unknown>> | null;
@@ -2179,6 +2203,7 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
     }),
     cancelQueuedAttempt: (input) => port.cancelQueuedAttempt(input),
     userAuthorizedReleaseUnverifiedOperation: (input) => port.userAuthorizedReleaseUnverifiedOperation(input),
+    recordExecutorWakeObservation: (input) => port.recordExecutorWakeObservation(input),
     requestCancellation: (input, evidence) => port.requestCancellation(input, evidence),
     recordCancellationVerification: (input, evidence) => port.recordCancellationVerification(input, evidence),
     async cancelRunning(taskId, attempt) {

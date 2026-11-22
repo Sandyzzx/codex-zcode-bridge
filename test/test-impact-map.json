@@ -403,6 +403,16 @@
       ]
     },
     {
+      "file": "test/executor-wake.test.ts",
+      "type": "Unit",
+      "gate": "T1",
+      "domains": [
+        "manager-lifecycle",
+        "mcp-host",
+        "sqlite-persistence"
+      ]
+    },
+    {
       "file": "test/batch2-evidence.test.ts",
       "type": "Integration",
       "gate": "T2",
@@ -774,6 +784,15 @@
       ]
     },
     {
+      "file": "test/fixtures/fake-app-server-proxy.mjs",
+      "type": "Fixture",
+      "gate": "T1",
+      "domains": [
+        "test-execution-contract",
+        "manager-lifecycle"
+      ]
+    },
+    {
       "file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter-official-host.test.ts",
       "type": "Integration",
       "gate": "T2",
@@ -958,6 +977,15 @@
         "sqlite-persistence",
         "manager-lifecycle",
         "process-cleanup-and-locks"
+      ]
+    },
+    {
+      "file": "test/sqlite-candidate/wp6c/executor-wake.test.mjs",
+      "type": "Integration",
+      "gate": "T2",
+      "domains": [
+        "sqlite-persistence",
+        "manager-lifecycle"
       ]
     },
     {

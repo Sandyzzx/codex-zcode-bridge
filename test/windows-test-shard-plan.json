@@ -7,7 +7,7 @@
   "shards": [
     {
       "id": 1,
-      "estimated_ms": 781224,
+      "estimated_ms": 782724,
       "tests": [
         {
           "file": "test/agent-report.test.ts",
@@ -98,6 +98,10 @@
           "estimated_ms": 55000
         },
         {
+          "file": "test/executor-wake.test.ts",
+          "estimated_ms": 500
+        },
+        {
           "file": "test/runtime-preferences.test.ts",
           "estimated_ms": 377
         },
@@ -144,6 +148,10 @@
         {
           "file": "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
           "estimated_ms": 4257
+        },
+        {
+          "file": "test/sqlite-candidate/wp6c/executor-wake.test.mjs",
+          "estimated_ms": 1000
         },
         {
           "file": "test/sqlite-candidate/wp6c/interrupt-requeue.test.mjs",

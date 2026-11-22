@@ -215,6 +215,12 @@ const RECOVERY_QUARANTINE_CODES = new Set(['claim_identity_conflict','operation_
 const RECOVERY_EVIDENCE_KEYS = Object.freeze(['attempt','claim_id','classification','envelope_digest','evidence_digest','evidence_source','expected_revision','reason','reason_code','task_id','worker_identity_digest']);
 const RECOVERY_RELEASE_EVIDENCE_KEYS = Object.freeze([...RECOVERY_EVIDENCE_KEYS,'process_tree_root_observed','process_tree_scan_clean','process_tree_scan_digest','recovery_disposition']);
 const RECOVERY_LIMIT = 8;
+const EXECUTOR_WAKE_EVIDENCE_KEYS = Object.freeze([
+  'attempt','authorization_digest','delivery_id','evidence_digest','generation','operation_id','policy_digest',
+  'reason','reason_code','result_commit_ref','result_digest','state','task_id','thread_id',
+]);
+const EXECUTOR_WAKE_STATES = new Set(['intent','queued','submission_unknown','turn_started','web_notify']);
+const EXECUTOR_WAKE_LIMIT = 5;
 export const digest = value => createHash('sha256').update(typeof value === 'string' ? value : canonical(value)).digest('hex');
 const rawDigest = value => createHash('sha256').update(Buffer.from(value)).digest('hex');
 // SQLite rows may contain BLOBs. Hash their native bytes without converting
@@ -296,7 +302,9 @@ function validateEvidence(eventType,value) {
     ||!Number.isSafeInteger(value.attempt)||value.attempt<1||!Number.isSafeInteger(value.generation)||value.generation<1))fail('invalid_cleanup_reverification');
   for(const key of ['launch_id','claim_id'])if(key in value&&!validText(value[key],128))fail('invalid_evidence');
   if('launch_epoch' in value&&(!Number.isInteger(value.launch_epoch)||value.launch_epoch<1))fail('invalid_evidence');
-  const json=canonical(value);const maxBytes=['cleanup_verified','cleanup_reverified'].includes(eventType)?2048:1024;
+  const json=canonical(value);
+  const maxBytes=eventType==='observation_recorded'&&value.reason==='executor_wake'?2048
+    :['cleanup_verified','cleanup_reverified'].includes(eventType)?2048:1024;
   if(Buffer.byteLength(json,'utf8')>maxBytes)fail('invalid_evidence');
   return value;
 }
@@ -316,6 +324,22 @@ function validateInteractionEvidence(eventType,value){
 }
 function validateObservationEventEvidence(value){
   const own=Object.keys(value).sort().join('|');
+  if(own===EXECUTOR_WAKE_EVIDENCE_KEYS.join('|')){
+    const {evidence_digest,...unsigned}=value;
+    if(value.reason!=='executor_wake'||!EXECUTOR_WAKE_STATES.has(value.state)
+      ||!validId(value.task_id)||!validId(value.operation_id)
+      ||!Number.isSafeInteger(value.attempt)||value.attempt<1
+      ||!Number.isSafeInteger(value.generation)||value.generation<1
+      ||![value.result_digest,value.policy_digest,value.authorization_digest,value.delivery_id]
+        .every(item=>typeof item==='string'&&/^[0-9a-f]{64}$/u.test(item))
+      ||!validId(value.result_commit_ref)||!validText(value.reason_code,128)
+      ||(value.thread_id!==null&&!validId(value.thread_id))
+      ||(value.state!=='web_notify'&&value.thread_id===null)
+      ||evidence_digest!==digest(unsigned)
+      ||[value.task_id,value.operation_id,value.result_commit_ref]
+        .some(item=>item!==item.normalize('NFC')))fail('invalid_executor_wake_evidence');
+    return;
+  }
   if(own==='cancel_id|evidence_digest|launch_id|reason|request_digest|token_digest'){
     const {evidence_digest,...unsigned}=value;
     if(value.reason!=='cancelled_before_claim'||![value.cancel_id,value.launch_id].every(validId)
@@ -422,8 +446,9 @@ function recoveryEventsFor(events,operationId){
   for(const event of operationEvents){
     if(event.event_type!=='observation_recorded')continue;
     let evidence;try{evidence=event.evidence??JSON.parse(event.evidence_json);}catch{fail('invalid_evidence');}
-    const recoveryMarker=typeof evidence?.reason==='string'&&evidence.reason.startsWith('recovery_')
-      ||evidence&&['classification','envelope_digest','expected_revision','reason_code'].some(key=>Object.hasOwn(evidence,key));
+    const recoveryMarker=typeof evidence?.reason==='string'&&(
+      evidence.reason.startsWith('recovery_')||Object.hasOwn(evidence,'classification')
+    );
     if(!recoveryMarker)continue;
     validateObservationEventEvidence(evidence);
     if(!operation)fail('recovery_operation_binding_required');
@@ -602,7 +627,22 @@ const ADMIN_ABANDONMENT_INPUT_KEYS='attempt|claim_id|claim_worker_identity_diges
 const ADMIN_ABANDONMENT_EVIDENCE_KEYS='boot_time|claimant_scan_clean|claimant_scan_digest|failed_at|hosts_closed|observed_at|platform_probe_digest|process_inventory_digest|worker_exited|worker_process_id|worker_start_fingerprint|writer_closed';
 const USER_AUTHORIZED_RELEASE_INPUT_KEYS='attempt|cancel_id|generation|operation_id|release_reason|revision|task_id';
 const USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS='attempt|cancel_id|cancellation_verification_digest|generation|operation_id|recovery_evidence_digest|release_reason|revision|task_id';
+const EXECUTOR_WAKE_INPUT_KEYS='attempt|authorization_digest|delivery_id|generation|operation_id|policy_digest|reason_code|state|task_id|thread_id';
 function validIsoInstant(value){return typeof value==='string'&&Number.isFinite(Date.parse(value));}
+function validateExecutorWakeInput(input){
+  if(!input||Object.getPrototypeOf(input)!==Object.prototype||Object.keys(input).sort().join('|')!==EXECUTOR_WAKE_INPUT_KEYS
+    ||!validId(input.operation_id)||!validId(input.task_id)
+    ||!Number.isSafeInteger(input.attempt)||input.attempt<1
+    ||!Number.isSafeInteger(input.generation)||input.generation<1
+    ||!EXECUTOR_WAKE_STATES.has(input.state)||!validText(input.reason_code,128)
+    ||![input.policy_digest,input.authorization_digest,input.delivery_id]
+      .every(item=>typeof item==='string'&&/^[0-9a-f]{64}$/u.test(item))
+    ||(input.thread_id!==null&&!validId(input.thread_id))
+    ||(input.state!=='web_notify'&&input.thread_id===null)
+    ||[input.operation_id,input.task_id,input.reason_code].some(item=>item!==item.normalize('NFC')))
+    fail('invalid_executor_wake_request');
+  return input;
+}
 function validateAdminAbandonmentInput(input){
   if(!input||Object.getPrototypeOf(input)!==Object.prototype||Object.keys(input).sort().join('|')!==ADMIN_ABANDONMENT_INPUT_KEYS
     ||!validId(input.operation_id)||!validId(input.task_id)||!Number.isSafeInteger(input.attempt)||input.attempt<1
@@ -1410,14 +1450,16 @@ export class IsolatedAdmissionStore {
       const previous=this.#db.prepare("SELECT * FROM manager_operations WHERE operation_id=? AND operation_kind='attempt_lifecycle'").get(input.previous_operation_id);
       if(!taskRow||!previousAttempt||!previous||previous.task_id!==input.task_id||previous.attempt!==input.previous_attempt
         ||taskRow.current_attempt!==input.previous_attempt||previousAttempt.generation!==input.expected_generation
-        ||previous.revision!==input.expected_revision||previous.claim_id!==input.claim_id
+        ||previous.revision<input.expected_revision||previous.claim_id!==input.claim_id
+        ||(previous.revision>input.expected_revision
+          &&!this.#db.prepare("SELECT 1 FROM manager_operation_events WHERE operation_id=? AND event_type='released' AND sequence=?").get(previous.operation_id,input.expected_revision))
         ||previous.claim_generation!==input.expected_generation||previous.claim_worker_identity_digest!==input.claim_worker_identity_digest)
         fail('stale_continue_cas');
       const eligible=new Set(['completed','failed','waiting_for_master']);
       if(!eligible.has(taskRow.status)||taskRow.status!==previousAttempt.status||taskRow.status!==previous.result_status)
         fail(taskRow.status==='cancelled'?'continue_cancelled_not_supported':'continue_status_not_eligible');
       if(previous.phase!=='released'||!previous.result_digest||!previous.result_commit_ref||!previous.claim_id
-        ||!this.#db.prepare("SELECT 1 FROM manager_operation_events WHERE operation_id=? AND event_type='released'").get(previous.operation_id))
+        ||!this.#db.prepare("SELECT 1 FROM manager_operation_events WHERE operation_id=? AND event_type='released' AND sequence=?").get(previous.operation_id,input.expected_revision))
         fail('continue_prior_not_released');
       this.#assertRecoveryNotLatched(previous.operation_id);
       const nextAttempt=input.previous_attempt+1;
@@ -1513,7 +1555,9 @@ export class IsolatedAdmissionStore {
           ||prior.result_json===null||priorResult?.error_code!==input.reason
           ||typeof storedEvidenceDigest!=='string'||!/^[0-9a-f]{64}$/u.test(storedEvidenceDigest)
           ||!this.#db.prepare("SELECT 1 FROM manager_operation_events WHERE operation_id=? AND event_type='observation_recorded' AND json_extract(evidence_json,'$.reason')=? AND json_extract(evidence_json,'$.evidence_digest')=?").get(input.operation_id,input.reason,storedEvidenceDigest)
-          ||stored?.previous_revision!==prior.revision)fail('interruption_requeue_conflict');
+          ||!Number.isSafeInteger(stored?.previous_revision)||prior.revision<stored.previous_revision
+          ||!this.#db.prepare("SELECT 1 FROM manager_operation_events WHERE operation_id=? AND event_type='released' AND sequence=?").get(input.operation_id,stored.previous_revision))
+          fail('interruption_requeue_conflict');
         const cleanupEvent=this.#db.prepare("SELECT evidence_json FROM manager_operation_events WHERE operation_id=? AND event_type='cleanup_verified'").get(input.operation_id);
         let cleanupEvidence;
         try{cleanupEvidence=JSON.parse(cleanupEvent?.evidence_json);}catch{fail('interruption_requeue_conflict');}
@@ -1884,9 +1928,9 @@ export class IsolatedAdmissionStore {
           recovery_evidence_digest:input.recovery_evidence_digest}:{})};
       const evidence={...unsignedEvidence,evidence_digest:digest(unsignedEvidence)};
       if(o.phase==='released'){
-        const released=this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? AND event_type='observation_recorded' ORDER BY sequence DESC LIMIT 1").get(input.operation_id);
+        const released=this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? AND event_type='observation_recorded' AND json_extract(evidence_json,'$.reason')='user_authorized_release_unverified' ORDER BY sequence DESC LIMIT 1").get(input.operation_id);
         let parsed;try{parsed=JSON.parse(released?.evidence_json);}catch{parsed=null;}
-        if(released&&released.sequence===o.revision&&parsed?.reason==='user_authorized_release_unverified'
+        if(released&&parsed?.reason==='user_authorized_release_unverified'
           &&parsed?.cancel_id===input.cancel_id
           &&parsed?.cancellation_verification_digest===input.cancellation_verification_digest
           &&parsed?.recovery_evidence_digest===input.recovery_evidence_digest
@@ -2304,6 +2348,76 @@ export class IsolatedAdmissionStore {
       return {revision:revision+1,phase:'reserved'};
     });
   }
+  /**
+   * Append a bounded, release-bound Wake fact to the existing SQLite Authority.
+   * A deterministic delivery id may advance only through one terminal Queue
+   * acknowledgement and one observed Turn start. Wake facts never change Task,
+   * Result, Cleanup, Release, capacity, or Recovery state.
+   */
+  recordExecutorWakeObservation(input) {
+    validateExecutorWakeInput(input);
+    this.#assertWritable();
+    return this.#transaction(()=>{
+      const o=this.#attemptOperation(input);
+      if(o.phase!=='released'||o.result_digest===null||o.result_commit_ref===null)
+        fail('executor_wake_operation_not_released');
+      const releaseEvent=this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? AND event_type='released'").get(input.operation_id);
+      if(!releaseEvent)fail('executor_wake_cleanup_release_required');
+      const wake=[];
+      for(const row of this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? AND event_type='observation_recorded' ORDER BY sequence").all(input.operation_id)){
+        let evidence;try{evidence=JSON.parse(row.evidence_json);}catch{fail('invalid_executor_wake_evidence');}
+        if(evidence.reason!=='executor_wake')continue;
+        validateObservationEventEvidence(evidence);
+        wake.push({row,evidence});
+      }
+      const unsigned={
+        reason:'executor_wake',state:input.state,task_id:input.task_id,attempt:input.attempt,
+        operation_id:input.operation_id,generation:input.generation,result_digest:o.result_digest,
+        result_commit_ref:o.result_commit_ref,thread_id:input.thread_id,delivery_id:input.delivery_id,
+        policy_digest:input.policy_digest,authorization_digest:input.authorization_digest,reason_code:input.reason_code,
+      };
+      const evidence={...unsigned,evidence_digest:digest(unsigned)};
+      validateObservationEventEvidence(evidence);
+      const same=wake.find(item=>item.evidence.delivery_id===input.delivery_id&&item.evidence.state===input.state);
+      if(same){
+        if(same.evidence.evidence_digest===evidence.evidence_digest&&canonical(same.evidence)===canonical(evidence))
+          return {duplicate:true,operation_id:o.operation_id,task_id:o.task_id,attempt:o.attempt,generation:o.generation,
+            revision:o.revision,event_sequence:same.row.sequence,state:input.state,delivery_id:input.delivery_id,
+            desktop_visible:'UNKNOWN'};
+        fail('executor_wake_observation_conflict');
+      }
+      if(wake.length>=EXECUTOR_WAKE_LIMIT)fail('executor_wake_observation_limit');
+      if(wake.some(item=>item.evidence.delivery_id!==input.delivery_id))
+        fail('executor_wake_delivery_conflict');
+      if(wake.some(item=>item.evidence.result_digest!==o.result_digest||item.evidence.result_commit_ref!==o.result_commit_ref
+        ||item.evidence.task_id!==o.task_id||item.evidence.attempt!==o.attempt||item.evidence.generation!==o.generation))
+        fail('executor_wake_operation_binding_conflict');
+      const states=new Set(wake.map(item=>item.evidence.state));
+      if(input.state==='intent'&&wake.length!==0)fail('executor_wake_intent_not_first');
+      if(['queued','submission_unknown'].includes(input.state)
+        &&(!states.has('intent')||states.has('queued')||states.has('submission_unknown')||states.has('web_notify')))
+        fail('executor_wake_ack_transition_invalid');
+      if(input.state==='turn_started'
+        &&(!states.has('intent')||(!states.has('queued')&&!states.has('submission_unknown'))
+          ||states.has('turn_started')||states.has('web_notify')))
+        fail('executor_wake_turn_transition_invalid');
+      if(input.state==='web_notify'&&states.has('turn_started'))fail('executor_wake_turn_transition_invalid');
+      if(wake.length){
+        const binding=wake[0].evidence;
+        if(binding.thread_id!==input.thread_id||binding.policy_digest!==input.policy_digest
+          ||binding.authorization_digest!==input.authorization_digest)
+          fail('executor_wake_binding_conflict');
+      }
+      const changed=this.#db.prepare("UPDATE manager_operations SET revision=revision+1 WHERE operation_id=? AND task_id=? AND attempt=? AND generation=? AND phase='released' AND revision=? AND result_digest=? AND result_commit_ref=?")
+        .run(o.operation_id,o.task_id,o.attempt,o.generation,o.revision,o.result_digest,o.result_commit_ref);
+      if(changed.changes!==1)fail('stale_executor_wake_cas');
+      this.#faultPoint('after_projection');
+      this.#event(o.operation_id,o.revision+1,'observation_recorded','released','released',o.generation,evidence,new Date().toISOString());
+      return {duplicate:false,operation_id:o.operation_id,task_id:o.task_id,attempt:o.attempt,generation:o.generation,
+        revision:o.revision+1,event_sequence:o.revision+1,state:input.state,delivery_id:input.delivery_id,
+        desktop_visible:'UNKNOWN'};
+    });
+  }
   /** Diagnostic only: no Result, phase transition, cleanup proof or Release. */
   recordResultSubmissionFailure(input,reason) {
     if(!validText(reason,128))fail('invalid_result_failure_reason');
@@ -2719,7 +2833,8 @@ export class IsolatedAdmissionStore {
       const release=this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? AND event_type='released'").get(input.operation_id);
       if(o.phase==='released'){
         const e=release&&JSON.parse(release.evidence_json);
-        if(release&&release.sequence===input.revision+1&&e.claim_id===input.claim_id&&e.cleanup_digest===input.cleanup_digest
+        if(release&&(release.sequence===input.revision+1||input.revision===o.revision)
+          &&e.claim_id===input.claim_id&&e.cleanup_digest===input.cleanup_digest
           &&e.worker_identity_digest===input.claim_worker_identity_digest)return {duplicate:true,operation_id:o.operation_id,generation:o.generation,
             revision:release.sequence,phase:'released',capacity_released:true};
         this.#poison('release_conflict_after_release',digest({operation_id:o.operation_id,generation:o.generation,cleanup_digest:input.cleanup_digest}));
@@ -3074,9 +3189,10 @@ export class IsolatedAdmissionStore {
           const preclaim=e?.event_type==='observation_recorded'&&evidence?.reason==='cancelled_before_claim';
           const o=this.#db.prepare("SELECT * FROM manager_operations WHERE operation_id=? AND operation_kind='attempt_lifecycle'").get(a.queued_cancel_operation_id);
           const operationEvents=this.#db.prepare('SELECT * FROM manager_operation_events WHERE operation_id=? ORDER BY sequence').all(a.queued_cancel_operation_id);
-          let terminalEvidence;try{terminalEvidence=operationEvents.at(-1)?JSON.parse(operationEvents.at(-1)?.evidence_json):null;}catch{terminalEvidence=null;}
-          const administrativeRelease=o?.phase==='released'&&operationEvents.at(-1)?.event_type==='observation_recorded'
-            &&terminalEvidence?.reason==='user_authorized_release_unverified';
+          const administrativeRelease=o?.phase==='released'&&operationEvents.some(row=>{
+            if(row.event_type!=='observation_recorded')return false;
+            try{return JSON.parse(row.evidence_json).reason==='user_authorized_release_unverified';}catch{return false;}
+          });
           if(!o||o.task_id!==a.task_id||o.attempt!==a.attempt||o.generation!==a.generation
             ||(preclaim?(o.phase!=='launch_intent'&&o.phase!=='released'||e.from_phase!=='launch_intent'||e.to_phase!=='launch_intent'
                 ||evidence.launch_id!==o.launch_id||evidence.token_digest!==o.launch_token_digest)
@@ -3107,8 +3223,9 @@ export class IsolatedAdmissionStore {
         const op=this.#db.prepare("SELECT * FROM manager_operations WHERE operation_kind='attempt_lifecycle' AND task_id=? AND attempt=?").get(a.task_id,a.attempt);
         const priorAttempt=this.#db.prepare('SELECT status,generation FROM attempts WHERE task_id=? AND attempt=?').get(a.task_id,c.previous_attempt);
         if(!prior||prior.task_id!==a.task_id||prior.attempt!==c.previous_attempt||prior.generation!==c.previous_generation
-          ||prior.revision!==c.previous_revision||prior.claim_id!==c.previous_claim_id||prior.claim_worker_identity_digest!==c.previous_worker_identity_digest
+          ||prior.revision<c.previous_revision||prior.claim_id!==c.previous_claim_id||prior.claim_worker_identity_digest!==c.previous_worker_identity_digest
           ||prior.phase!=='released'||!['completed','failed','waiting_for_master'].includes(prior.result_status)
+          ||!this.#db.prepare("SELECT 1 FROM manager_operation_events WHERE operation_id=? AND event_type='released' AND sequence=?").get(prior.operation_id,c.previous_revision)
           ||priorAttempt?.status!==prior.result_status)fail('continue_history_mismatch');
         const current=this.#db.prepare('SELECT current_attempt,status FROM tasks WHERE task_id=?').get(a.task_id);
         const cancelledCurrent=current?.status==='cancelled'&&a.status==='cancelled'&&a.queued_cancel_id!==null;
@@ -3144,7 +3261,7 @@ export class IsolatedAdmissionStore {
         const launchEvents={launch_intent:[],launch_receipt:[],claim_committed:[]};
         const cleanupEvents={cleanup_pending:[],cleanup_verified:[],cleanup_unverified:[],cleanup_reverified:[],released:[]};
         const resultEvents=[];
-        const recoveryEvents=[],cancellationIntents=[],cancellationVerifications=[];
+        const recoveryEvents=[],cancellationIntents=[],cancellationVerifications=[],executorWakeEvents=[];
         for(let i=0;i<es.length;i++){
           const e=es[i];if(e.sequence!==i+1||e.evidence_digest!==digest(e.evidence_json)||(i===0?e.from_phase!==null:e.from_phase!==es[i-1].to_phase))fail('projection_event_mismatch');
           let parsed;try{parsed=JSON.parse(e.evidence_json);}catch{fail('invalid_evidence');}validateEvidence(e.event_type,parsed);
@@ -3154,6 +3271,7 @@ export class IsolatedAdmissionStore {
           if(e.event_type==='observation_recorded'&&(parsed.reason==='recovery_hold'||parsed.reason==='recovery_quarantine'))recoveryEvents.push({event:e,evidence:parsed});
           if(e.event_type==='observation_recorded'&&parsed.reason==='cancel_requested')cancellationIntents.push({event:e,evidence:parsed});
           if(e.event_type==='observation_recorded'&&parsed.reason==='cancel_tree_verified')cancellationVerifications.push({event:e,evidence:parsed});
+          if(e.event_type==='observation_recorded'&&parsed.reason==='executor_wake')executorWakeEvents.push({event:e,evidence:parsed});
           if(i>0&&e.from_phase!==es[i-1].to_phase)fail('projection_event_mismatch');
           if(e.event_type==='launch_receipt'&&(e.from_phase!=='launch_intent'||e.to_phase!=='launch_intent'))fail('invalid_event_phase');
           if(e.event_type==='claim_committed'&&(e.from_phase!=='launch_intent'||e.to_phase!=='running'))fail('invalid_event_phase');
@@ -3170,11 +3288,50 @@ export class IsolatedAdmissionStore {
               &&((e.from_phase==='launch_intent'&&o.claim_id===null&&o.result_digest===null)
                 ||(e.from_phase==='cleanup_unverified'&&o.result_digest!==null&&o.result_status==='cancelled'))
               &&e.to_phase==='released'))fail('invalid_event_phase');
+          if(parsed.reason==='executor_wake'&&(e.from_phase!=='released'||e.to_phase!=='released'))
+            fail('invalid_executor_wake_phase');
           if(e.event_type!=='launch_receipt'&&e.event_type!=='claim_committed'&&e.event_type!=='launch_intent'&&e.event_type!=='observation_recorded'
             &&!e.event_type.startsWith('interaction_')&&EVENT_PHASE[e.event_type]!==e.to_phase)fail('invalid_event_phase');
           if(e.event_type.startsWith('interaction_')&&(e.from_phase!=='running'||e.to_phase!=='running'))fail('invalid_event_phase');
           if(o.operation_kind==='attempt_lifecycle'&&e.generation!==o.generation)fail('invalid_event_phase');
           if(o.operation_kind==='capacity_policy_change'&&(e.generation!==null||e.event_type!=='capacity_policy_committed'||e.to_phase!=='policy_change_committed'))fail('invalid_event_phase');
+        }
+        if(executorWakeEvents.length){
+          if(o.phase!=='released'||o.result_digest===null||o.result_commit_ref===null)
+            fail('executor_wake_operation_not_released');
+          const releaseEvent=es.find(event=>event.event_type==='released');
+          if(!releaseEvent||executorWakeEvents[0].event.sequence<=releaseEvent.sequence
+            ||executorWakeEvents.length>EXECUTOR_WAKE_LIMIT)
+            fail('executor_wake_history_invalid');
+          const releaseSequence=releaseEvent.sequence;
+          if(es.some(event=>event.sequence>releaseSequence&&(event.event_type!=='observation_recorded'
+            ||JSON.parse(event.evidence_json).reason!=='executor_wake')))
+            fail('executor_wake_terminal_history_invalid');
+          const deliveryId=executorWakeEvents[0].evidence.delivery_id;
+          const binding=executorWakeEvents[0].evidence;
+          let stage='start';
+          for(const {event,evidence} of executorWakeEvents){
+            if(evidence.delivery_id!==deliveryId||evidence.operation_id!==o.operation_id||evidence.task_id!==o.task_id
+              ||evidence.attempt!==o.attempt||evidence.generation!==o.generation
+              ||evidence.result_digest!==o.result_digest||evidence.result_commit_ref!==o.result_commit_ref
+              ||evidence.thread_id!==binding.thread_id||evidence.policy_digest!==binding.policy_digest
+              ||evidence.authorization_digest!==binding.authorization_digest
+              ||event.generation!==o.generation||event.sequence<=releaseSequence)
+              fail('executor_wake_history_binding_mismatch');
+            if(stage==='start'){
+              if(evidence.state==='intent')stage='intent';
+              else if(evidence.state==='web_notify')stage='web_notify';
+              else fail('executor_wake_history_transition_invalid');
+            }else if(stage==='intent'){
+              if(evidence.state==='queued'||evidence.state==='submission_unknown')stage='ack';
+              else if(evidence.state==='web_notify')stage='web_notify';
+              else fail('executor_wake_history_transition_invalid');
+            }else if(stage==='ack'){
+              if(evidence.state==='turn_started')stage='turn_started';
+              else if(evidence.state==='web_notify')stage='web_notify';
+              else fail('executor_wake_history_transition_invalid');
+            }else fail('executor_wake_history_transition_invalid');
+          }
         }
         if(o.operation_kind==='attempt_lifecycle'){
           const intents=launchEvents.launch_intent,receipts=launchEvents.launch_receipt,claims=launchEvents.claim_committed;
@@ -3312,9 +3469,12 @@ export class IsolatedAdmissionStore {
                 ||re.result_commit_ref!==o.result_commit_ref||re.worker_identity_digest!==o.claim_worker_identity_digest)fail('release_history_mismatch');}
             const expected=o.phase==='quarantined'?'quarantined':released.length?'released':verified.length?'cleanup_verified':unverified.length?'cleanup_unverified':'cleanup_pending';
             let administrativeRelease=false;
-            const terminal=es.at(-1);
+            const terminal=[...es].reverse().find(event=>{
+              if(event.event_type!=='observation_recorded')return false;
+              try{return JSON.parse(event.evidence_json).reason==='user_authorized_release_unverified';}catch{return false;}
+            });
             if(terminal?.event_type==='observation_recorded'&&terminal.from_phase==='cleanup_unverified'
-              &&terminal.to_phase==='released'&&terminal.sequence===o.revision){
+              &&terminal.to_phase==='released'){
               let terminalEvidence;try{terminalEvidence=JSON.parse(terminal.evidence_json);}catch{fail('cleanup_projection_mismatch');}
               const parsedEvents=es.map(event=>{
                 try{return {event,evidence:JSON.parse(event.evidence_json)};}catch{fail('cleanup_projection_mismatch');}
@@ -3350,8 +3510,10 @@ export class IsolatedAdmissionStore {
             if(o.phase!==expected&&!(o.phase==='released'&&administrativeRelease))fail('cleanup_projection_mismatch');
           } else if(['cleanup_pending','cleanup_verified','cleanup_unverified','cleanup_reverified','released'].includes(o.phase)
             &&!adminAbandonments.has(o.operation_id)){
-            const administrativeRelease=es.at(-1)?.event_type==='observation_recorded'
-              &&JSON.parse(es.at(-1)?.evidence_json).reason==='user_authorized_release_unverified';
+            const administrativeRelease=es.some(event=>{
+              if(event.event_type!=='observation_recorded')return false;
+              try{return JSON.parse(event.evidence_json).reason==='user_authorized_release_unverified';}catch{return false;}
+            });
             if(!administrativeRelease)fail('cleanup_projection_mismatch');
           }
           const adminAbandonment=adminAbandonments.get(o.operation_id);
@@ -3382,7 +3544,7 @@ export class IsolatedAdmissionStore {
               ||adminAbandonment.request_digest!==expectedRouteDigest
               ||o.phase!=='released'||o.result_digest!==null||o.result_json!==null||o.result_commit_ref!==null
               ||!Number.isFinite(Date.parse(adminAbandonment.abandoned_at)))fail('admin_abandonment_projection_mismatch');
-            const terminalEvent=es.at(-1);
+            const terminalEvent=es.find(event=>event.sequence===adminAbandonment.event_sequence);
             let terminalEvidence;try{terminalEvidence=JSON.parse(terminalEvent.evidence_json);}catch{fail('admin_abandonment_projection_mismatch');}
             if(!terminalEvent||terminalEvent.sequence!==adminAbandonment.event_sequence||terminalEvent.event_type!=='observation_recorded'
               ||terminalEvent.from_phase!=='running'||terminalEvent.to_phase!=='released'

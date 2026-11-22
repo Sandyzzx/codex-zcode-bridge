@@ -3602,7 +3602,7 @@ function validateEvidence(eventType, value) {
   for (const key of ["launch_id", "claim_id"]) if (key in value && !validText3(value[key], 128)) fail2("invalid_evidence");
   if ("launch_epoch" in value && (!Number.isInteger(value.launch_epoch) || value.launch_epoch < 1)) fail2("invalid_evidence");
   const json = canonical4(value);
-  const maxBytes = ["cleanup_verified", "cleanup_reverified"].includes(eventType) ? 2048 : 1024;
+  const maxBytes = eventType === "observation_recorded" && value.reason === "executor_wake" ? 2048 : ["cleanup_verified", "cleanup_reverified"].includes(eventType) ? 2048 : 1024;
   if (Buffer.byteLength(json, "utf8") > maxBytes) fail2("invalid_evidence");
   return value;
 }
@@ -3617,6 +3617,11 @@ function validateInteractionEvidence(eventType, value) {
 }
 function validateObservationEventEvidence(value) {
   const own2 = Object.keys(value).sort().join("|");
+  if (own2 === EXECUTOR_WAKE_EVIDENCE_KEYS.join("|")) {
+    const { evidence_digest, ...unsigned } = value;
+    if (value.reason !== "executor_wake" || !EXECUTOR_WAKE_STATES.has(value.state) || !validId3(value.task_id) || !validId3(value.operation_id) || !Number.isSafeInteger(value.attempt) || value.attempt < 1 || !Number.isSafeInteger(value.generation) || value.generation < 1 || ![value.result_digest, value.policy_digest, value.authorization_digest, value.delivery_id].every((item) => typeof item === "string" && /^[0-9a-f]{64}$/u.test(item)) || !validId3(value.result_commit_ref) || !validText3(value.reason_code, 128) || value.thread_id !== null && !validId3(value.thread_id) || value.state !== "web_notify" && value.thread_id === null || evidence_digest !== digest2(unsigned) || [value.task_id, value.operation_id, value.result_commit_ref].some((item) => item !== item.normalize("NFC"))) fail2("invalid_executor_wake_evidence");
+    return;
+  }
   if (own2 === "cancel_id|evidence_digest|launch_id|reason|request_digest|token_digest") {
     const { evidence_digest, ...unsigned } = value;
     if (value.reason !== "cancelled_before_claim" || ![value.cancel_id, value.launch_id].every(validId3) || ![value.request_digest, value.token_digest].every((v) => typeof v === "string" && /^[0-9a-f]{64}$/u.test(v)) || evidence_digest !== digest2(unsigned)) fail2("invalid_queued_cancel");
@@ -3716,7 +3721,7 @@ function recoveryEventsFor(events, operationId) {
     } catch {
       fail2("invalid_evidence");
     }
-    const recoveryMarker = typeof evidence?.reason === "string" && evidence.reason.startsWith("recovery_") || evidence && ["classification", "envelope_digest", "expected_revision", "reason_code"].some((key) => Object.hasOwn(evidence, key));
+    const recoveryMarker = typeof evidence?.reason === "string" && (evidence.reason.startsWith("recovery_") || Object.hasOwn(evidence, "classification"));
     if (!recoveryMarker) continue;
     validateObservationEventEvidence(evidence);
     if (!operation) fail2("recovery_operation_binding_required");
@@ -3853,6 +3858,11 @@ function presentOperation(row, adminAbandonment) {
 }
 function validIsoInstant(value) {
   return typeof value === "string" && Number.isFinite(Date.parse(value));
+}
+function validateExecutorWakeInput(input) {
+  if (!input || Object.getPrototypeOf(input) !== Object.prototype || Object.keys(input).sort().join("|") !== EXECUTOR_WAKE_INPUT_KEYS || !validId3(input.operation_id) || !validId3(input.task_id) || !Number.isSafeInteger(input.attempt) || input.attempt < 1 || !Number.isSafeInteger(input.generation) || input.generation < 1 || !EXECUTOR_WAKE_STATES.has(input.state) || !validText3(input.reason_code, 128) || ![input.policy_digest, input.authorization_digest, input.delivery_id].every((item) => typeof item === "string" && /^[0-9a-f]{64}$/u.test(item)) || input.thread_id !== null && !validId3(input.thread_id) || input.state !== "web_notify" && input.thread_id === null || [input.operation_id, input.task_id, input.reason_code].some((item) => item !== item.normalize("NFC")))
+    fail2("invalid_executor_wake_request");
+  return input;
 }
 function validateAdminAbandonmentInput(input) {
   if (!input || Object.getPrototypeOf(input) !== Object.prototype || Object.keys(input).sort().join("|") !== ADMIN_ABANDONMENT_INPUT_KEYS || !validId3(input.operation_id) || !validId3(input.task_id) || !Number.isSafeInteger(input.attempt) || input.attempt < 1 || !Number.isSafeInteger(input.generation) || input.generation < 1 || !Number.isSafeInteger(input.revision) || input.revision < 1 || !validId3(input.claim_id) || typeof input.claim_worker_identity_digest !== "string" || !/^[0-9a-f]{64}$/u.test(input.claim_worker_identity_digest))
@@ -4273,7 +4283,7 @@ function callDecision(fn, workspace, input) {
     return { state: "unknown" };
   }
 }
-var HERE, SCHEMA, RUNTIME_EVENTS_SCHEMA, ADMIN_ABANDONMENT_SCHEMA, NORMALIZED_ADMIN_ABANDONMENT_SCHEMA, LEGACY_ADMIN_ABANDONMENT_SCHEMA, CONSTRUCT, SCHEMA_VERSION, SCHEMA_OBJECT_QUERY, RUNTIME_EVENT_SCHEMA_OBJECTS, expectedSchemas, ADMIN_ABANDONMENT_TABLE_SQL, LEGACY_ADMIN_ABANDONMENT_TABLE_SQL, NORMALIZED_ADMIN_ABANDONMENT_TABLE_SQL, NORMALIZED_LEGACY_ADMIN_ABANDONMENT_TABLE_SQL, SQLITE_V14_ONLY_MESSAGE, V13_UPGRADE_MARKER_MESSAGE, v13UpgradeMarker, RESULT_CONTRACT_VERSION, RESULT_STATUSES2, RECOVERY_PHASES, RECOVERY_SOURCES, RECOVERY_REASON_CODES, RECOVERY_QUARANTINE_CODES, RECOVERY_EVIDENCE_KEYS, RECOVERY_RELEASE_EVIDENCE_KEYS, RECOVERY_LIMIT, digest2, rawDigest, upgradeRowJson, EVIDENCE_KEYS, FUTURE_EVENT_TYPES, FUTURE_EVIDENCE_KEYS, EVENT_PHASE, RECOVERY_INPUT_KEYS, RECOVERY_RELEASE_INPUT_KEYS, ADMIN_ABANDONMENT_INPUT_KEYS, ADMIN_ABANDONMENT_EVIDENCE_KEYS, USER_AUTHORIZED_RELEASE_INPUT_KEYS, USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS, AdmissionError, fail2, IsolatedAdmissionStore;
+var HERE, SCHEMA, RUNTIME_EVENTS_SCHEMA, ADMIN_ABANDONMENT_SCHEMA, NORMALIZED_ADMIN_ABANDONMENT_SCHEMA, LEGACY_ADMIN_ABANDONMENT_SCHEMA, CONSTRUCT, SCHEMA_VERSION, SCHEMA_OBJECT_QUERY, RUNTIME_EVENT_SCHEMA_OBJECTS, expectedSchemas, ADMIN_ABANDONMENT_TABLE_SQL, LEGACY_ADMIN_ABANDONMENT_TABLE_SQL, NORMALIZED_ADMIN_ABANDONMENT_TABLE_SQL, NORMALIZED_LEGACY_ADMIN_ABANDONMENT_TABLE_SQL, SQLITE_V14_ONLY_MESSAGE, V13_UPGRADE_MARKER_MESSAGE, v13UpgradeMarker, RESULT_CONTRACT_VERSION, RESULT_STATUSES2, RECOVERY_PHASES, RECOVERY_SOURCES, RECOVERY_REASON_CODES, RECOVERY_QUARANTINE_CODES, RECOVERY_EVIDENCE_KEYS, RECOVERY_RELEASE_EVIDENCE_KEYS, RECOVERY_LIMIT, EXECUTOR_WAKE_EVIDENCE_KEYS, EXECUTOR_WAKE_STATES, EXECUTOR_WAKE_LIMIT, digest2, rawDigest, upgradeRowJson, EVIDENCE_KEYS, FUTURE_EVENT_TYPES, FUTURE_EVIDENCE_KEYS, EVENT_PHASE, RECOVERY_INPUT_KEYS, RECOVERY_RELEASE_INPUT_KEYS, ADMIN_ABANDONMENT_INPUT_KEYS, ADMIN_ABANDONMENT_EVIDENCE_KEYS, USER_AUTHORIZED_RELEASE_INPUT_KEYS, USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS, EXECUTOR_WAKE_INPUT_KEYS, AdmissionError, fail2, IsolatedAdmissionStore;
 var init_store = __esm({
   "src/sqlite-candidate/wp6b2b1/store.mjs"() {
     "use strict";
@@ -4320,6 +4330,24 @@ var init_store = __esm({
     RECOVERY_EVIDENCE_KEYS = Object.freeze(["attempt", "claim_id", "classification", "envelope_digest", "evidence_digest", "evidence_source", "expected_revision", "reason", "reason_code", "task_id", "worker_identity_digest"]);
     RECOVERY_RELEASE_EVIDENCE_KEYS = Object.freeze([...RECOVERY_EVIDENCE_KEYS, "process_tree_root_observed", "process_tree_scan_clean", "process_tree_scan_digest", "recovery_disposition"]);
     RECOVERY_LIMIT = 8;
+    EXECUTOR_WAKE_EVIDENCE_KEYS = Object.freeze([
+      "attempt",
+      "authorization_digest",
+      "delivery_id",
+      "evidence_digest",
+      "generation",
+      "operation_id",
+      "policy_digest",
+      "reason",
+      "reason_code",
+      "result_commit_ref",
+      "result_digest",
+      "state",
+      "task_id",
+      "thread_id"
+    ]);
+    EXECUTOR_WAKE_STATES = /* @__PURE__ */ new Set(["intent", "queued", "submission_unknown", "turn_started", "web_notify"]);
+    EXECUTOR_WAKE_LIMIT = 5;
     digest2 = (value) => createHash15("sha256").update(typeof value === "string" ? value : canonical4(value)).digest("hex");
     rawDigest = (value) => createHash15("sha256").update(Buffer.from(value)).digest("hex");
     upgradeRowJson = (row) => canonical4(Object.fromEntries(Object.entries(row).map(([key, value]) => [
@@ -4370,6 +4398,7 @@ var init_store = __esm({
     ADMIN_ABANDONMENT_EVIDENCE_KEYS = "boot_time|claimant_scan_clean|claimant_scan_digest|failed_at|hosts_closed|observed_at|platform_probe_digest|process_inventory_digest|worker_exited|worker_process_id|worker_start_fingerprint|writer_closed";
     USER_AUTHORIZED_RELEASE_INPUT_KEYS = "attempt|cancel_id|generation|operation_id|release_reason|revision|task_id";
     USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS = "attempt|cancel_id|cancellation_verification_digest|generation|operation_id|recovery_evidence_digest|release_reason|revision|task_id";
+    EXECUTOR_WAKE_INPUT_KEYS = "attempt|authorization_digest|delivery_id|generation|operation_id|policy_digest|reason_code|state|task_id|thread_id";
     AdmissionError = class extends Error {
       constructor(code, message = code) {
         super(message);
@@ -5218,12 +5247,12 @@ var init_store = __esm({
           const taskRow = this.#db.prepare("SELECT task_id,status,current_attempt FROM tasks WHERE task_id=?").get(input.task_id);
           const previousAttempt = this.#db.prepare("SELECT task_id,attempt,generation,status FROM attempts WHERE task_id=? AND attempt=?").get(input.task_id, input.previous_attempt);
           const previous = this.#db.prepare("SELECT * FROM manager_operations WHERE operation_id=? AND operation_kind='attempt_lifecycle'").get(input.previous_operation_id);
-          if (!taskRow || !previousAttempt || !previous || previous.task_id !== input.task_id || previous.attempt !== input.previous_attempt || taskRow.current_attempt !== input.previous_attempt || previousAttempt.generation !== input.expected_generation || previous.revision !== input.expected_revision || previous.claim_id !== input.claim_id || previous.claim_generation !== input.expected_generation || previous.claim_worker_identity_digest !== input.claim_worker_identity_digest)
+          if (!taskRow || !previousAttempt || !previous || previous.task_id !== input.task_id || previous.attempt !== input.previous_attempt || taskRow.current_attempt !== input.previous_attempt || previousAttempt.generation !== input.expected_generation || previous.revision < input.expected_revision || previous.claim_id !== input.claim_id || previous.revision > input.expected_revision && !this.#db.prepare("SELECT 1 FROM manager_operation_events WHERE operation_id=? AND event_type='released' AND sequence=?").get(previous.operation_id, input.expected_revision) || previous.claim_generation !== input.expected_generation || previous.claim_worker_identity_digest !== input.claim_worker_identity_digest)
             fail2("stale_continue_cas");
           const eligible = /* @__PURE__ */ new Set(["completed", "failed", "waiting_for_master"]);
           if (!eligible.has(taskRow.status) || taskRow.status !== previousAttempt.status || taskRow.status !== previous.result_status)
             fail2(taskRow.status === "cancelled" ? "continue_cancelled_not_supported" : "continue_status_not_eligible");
-          if (previous.phase !== "released" || !previous.result_digest || !previous.result_commit_ref || !previous.claim_id || !this.#db.prepare("SELECT 1 FROM manager_operation_events WHERE operation_id=? AND event_type='released'").get(previous.operation_id))
+          if (previous.phase !== "released" || !previous.result_digest || !previous.result_commit_ref || !previous.claim_id || !this.#db.prepare("SELECT 1 FROM manager_operation_events WHERE operation_id=? AND event_type='released' AND sequence=?").get(previous.operation_id, input.expected_revision))
             fail2("continue_prior_not_released");
           this.#assertRecoveryNotLatched(previous.operation_id);
           const nextAttempt = input.previous_attempt + 1;
@@ -5332,7 +5361,8 @@ var init_store = __esm({
             }
             const issue2 = Array.isArray(priorResult?.issues) ? priorResult.issues.find((value) => typeof value === "string" && value.startsWith("interruption_evidence:")) : null;
             const storedEvidenceDigest = issue2?.slice("interruption_evidence:".length);
-            if (existing.task_id !== input.task_id || existing.attempt !== nextAttemptNumber || existing.continuation_digest !== digest2(existing.continuation_json) || stored?.operation_id !== input.continuation_operation_id || stored?.previous_operation_id !== input.operation_id || stored?.previous_attempt !== input.attempt || stored?.previous_generation !== input.generation || stored?.previous_claim_id !== input.claim_id || stored?.previous_worker_identity_digest !== input.claim_worker_identity_digest || !prior || prior.phase !== "released" || prior.result_status !== "failed" || prior.result_digest === null || prior.result_json === null || priorResult?.error_code !== input.reason || typeof storedEvidenceDigest !== "string" || !/^[0-9a-f]{64}$/u.test(storedEvidenceDigest) || !this.#db.prepare("SELECT 1 FROM manager_operation_events WHERE operation_id=? AND event_type='observation_recorded' AND json_extract(evidence_json,'$.reason')=? AND json_extract(evidence_json,'$.evidence_digest')=?").get(input.operation_id, input.reason, storedEvidenceDigest) || stored?.previous_revision !== prior.revision) fail2("interruption_requeue_conflict");
+            if (existing.task_id !== input.task_id || existing.attempt !== nextAttemptNumber || existing.continuation_digest !== digest2(existing.continuation_json) || stored?.operation_id !== input.continuation_operation_id || stored?.previous_operation_id !== input.operation_id || stored?.previous_attempt !== input.attempt || stored?.previous_generation !== input.generation || stored?.previous_claim_id !== input.claim_id || stored?.previous_worker_identity_digest !== input.claim_worker_identity_digest || !prior || prior.phase !== "released" || prior.result_status !== "failed" || prior.result_digest === null || prior.result_json === null || priorResult?.error_code !== input.reason || typeof storedEvidenceDigest !== "string" || !/^[0-9a-f]{64}$/u.test(storedEvidenceDigest) || !this.#db.prepare("SELECT 1 FROM manager_operation_events WHERE operation_id=? AND event_type='observation_recorded' AND json_extract(evidence_json,'$.reason')=? AND json_extract(evidence_json,'$.evidence_digest')=?").get(input.operation_id, input.reason, storedEvidenceDigest) || !Number.isSafeInteger(stored?.previous_revision) || prior.revision < stored.previous_revision || !this.#db.prepare("SELECT 1 FROM manager_operation_events WHERE operation_id=? AND event_type='released' AND sequence=?").get(input.operation_id, stored.previous_revision))
+              fail2("interruption_requeue_conflict");
             const cleanupEvent = this.#db.prepare("SELECT evidence_json FROM manager_operation_events WHERE operation_id=? AND event_type='cleanup_verified'").get(input.operation_id);
             let cleanupEvidence2;
             try {
@@ -5867,14 +5897,14 @@ var init_store = __esm({
           };
           const evidence = { ...unsignedEvidence, evidence_digest: digest2(unsignedEvidence) };
           if (o.phase === "released") {
-            const released = this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? AND event_type='observation_recorded' ORDER BY sequence DESC LIMIT 1").get(input.operation_id);
+            const released = this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? AND event_type='observation_recorded' AND json_extract(evidence_json,'$.reason')='user_authorized_release_unverified' ORDER BY sequence DESC LIMIT 1").get(input.operation_id);
             let parsed;
             try {
               parsed = JSON.parse(released?.evidence_json);
             } catch {
               parsed = null;
             }
-            if (released && released.sequence === o.revision && parsed?.reason === "user_authorized_release_unverified" && parsed?.cancel_id === input.cancel_id && parsed?.cancellation_verification_digest === input.cancellation_verification_digest && parsed?.recovery_evidence_digest === input.recovery_evidence_digest && parsed?.evidence_digest === evidence.evidence_digest)
+            if (released && parsed?.reason === "user_authorized_release_unverified" && parsed?.cancel_id === input.cancel_id && parsed?.cancellation_verification_digest === input.cancellation_verification_digest && parsed?.recovery_evidence_digest === input.recovery_evidence_digest && parsed?.evidence_digest === evidence.evidence_digest)
               return {
                 duplicate: true,
                 operation_id: o.operation_id,
@@ -6508,6 +6538,102 @@ var init_store = __esm({
           const evidenceJson = canonical4(evidence);
           this.#event(operation_id, revision + 1, "observation_recorded", "reserved", "reserved", generation, evidence, at);
           return { revision: revision + 1, phase: "reserved" };
+        });
+      }
+      /**
+       * Append a bounded, release-bound Wake fact to the existing SQLite Authority.
+       * A deterministic delivery id may advance only through one terminal Queue
+       * acknowledgement and one observed Turn start. Wake facts never change Task,
+       * Result, Cleanup, Release, capacity, or Recovery state.
+       */
+      recordExecutorWakeObservation(input) {
+        validateExecutorWakeInput(input);
+        this.#assertWritable();
+        return this.#transaction(() => {
+          const o = this.#attemptOperation(input);
+          if (o.phase !== "released" || o.result_digest === null || o.result_commit_ref === null)
+            fail2("executor_wake_operation_not_released");
+          const releaseEvent = this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? AND event_type='released'").get(input.operation_id);
+          if (!releaseEvent) fail2("executor_wake_cleanup_release_required");
+          const wake = [];
+          for (const row of this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? AND event_type='observation_recorded' ORDER BY sequence").all(input.operation_id)) {
+            let evidence2;
+            try {
+              evidence2 = JSON.parse(row.evidence_json);
+            } catch {
+              fail2("invalid_executor_wake_evidence");
+            }
+            if (evidence2.reason !== "executor_wake") continue;
+            validateObservationEventEvidence(evidence2);
+            wake.push({ row, evidence: evidence2 });
+          }
+          const unsigned = {
+            reason: "executor_wake",
+            state: input.state,
+            task_id: input.task_id,
+            attempt: input.attempt,
+            operation_id: input.operation_id,
+            generation: input.generation,
+            result_digest: o.result_digest,
+            result_commit_ref: o.result_commit_ref,
+            thread_id: input.thread_id,
+            delivery_id: input.delivery_id,
+            policy_digest: input.policy_digest,
+            authorization_digest: input.authorization_digest,
+            reason_code: input.reason_code
+          };
+          const evidence = { ...unsigned, evidence_digest: digest2(unsigned) };
+          validateObservationEventEvidence(evidence);
+          const same = wake.find((item) => item.evidence.delivery_id === input.delivery_id && item.evidence.state === input.state);
+          if (same) {
+            if (same.evidence.evidence_digest === evidence.evidence_digest && canonical4(same.evidence) === canonical4(evidence))
+              return {
+                duplicate: true,
+                operation_id: o.operation_id,
+                task_id: o.task_id,
+                attempt: o.attempt,
+                generation: o.generation,
+                revision: o.revision,
+                event_sequence: same.row.sequence,
+                state: input.state,
+                delivery_id: input.delivery_id,
+                desktop_visible: "UNKNOWN"
+              };
+            fail2("executor_wake_observation_conflict");
+          }
+          if (wake.length >= EXECUTOR_WAKE_LIMIT) fail2("executor_wake_observation_limit");
+          if (wake.some((item) => item.evidence.delivery_id !== input.delivery_id))
+            fail2("executor_wake_delivery_conflict");
+          if (wake.some((item) => item.evidence.result_digest !== o.result_digest || item.evidence.result_commit_ref !== o.result_commit_ref || item.evidence.task_id !== o.task_id || item.evidence.attempt !== o.attempt || item.evidence.generation !== o.generation))
+            fail2("executor_wake_operation_binding_conflict");
+          const states = new Set(wake.map((item) => item.evidence.state));
+          if (input.state === "intent" && wake.length !== 0) fail2("executor_wake_intent_not_first");
+          if (["queued", "submission_unknown"].includes(input.state) && (!states.has("intent") || states.has("queued") || states.has("submission_unknown") || states.has("web_notify")))
+            fail2("executor_wake_ack_transition_invalid");
+          if (input.state === "turn_started" && (!states.has("intent") || !states.has("queued") && !states.has("submission_unknown") || states.has("turn_started") || states.has("web_notify")))
+            fail2("executor_wake_turn_transition_invalid");
+          if (input.state === "web_notify" && states.has("turn_started")) fail2("executor_wake_turn_transition_invalid");
+          if (wake.length) {
+            const binding = wake[0].evidence;
+            if (binding.thread_id !== input.thread_id || binding.policy_digest !== input.policy_digest || binding.authorization_digest !== input.authorization_digest)
+              fail2("executor_wake_binding_conflict");
+          }
+          const changed = this.#db.prepare("UPDATE manager_operations SET revision=revision+1 WHERE operation_id=? AND task_id=? AND attempt=? AND generation=? AND phase='released' AND revision=? AND result_digest=? AND result_commit_ref=?").run(o.operation_id, o.task_id, o.attempt, o.generation, o.revision, o.result_digest, o.result_commit_ref);
+          if (changed.changes !== 1) fail2("stale_executor_wake_cas");
+          this.#faultPoint("after_projection");
+          this.#event(o.operation_id, o.revision + 1, "observation_recorded", "released", "released", o.generation, evidence, (/* @__PURE__ */ new Date()).toISOString());
+          return {
+            duplicate: false,
+            operation_id: o.operation_id,
+            task_id: o.task_id,
+            attempt: o.attempt,
+            generation: o.generation,
+            revision: o.revision + 1,
+            event_sequence: o.revision + 1,
+            state: input.state,
+            delivery_id: input.delivery_id,
+            desktop_visible: "UNKNOWN"
+          };
         });
       }
       /** Diagnostic only: no Result, phase transition, cleanup proof or Release. */
@@ -7161,7 +7287,7 @@ var init_store = __esm({
           const release = this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? AND event_type='released'").get(input.operation_id);
           if (o.phase === "released") {
             const e = release && JSON.parse(release.evidence_json);
-            if (release && release.sequence === input.revision + 1 && e.claim_id === input.claim_id && e.cleanup_digest === input.cleanup_digest && e.worker_identity_digest === input.claim_worker_identity_digest) return {
+            if (release && (release.sequence === input.revision + 1 || input.revision === o.revision) && e.claim_id === input.claim_id && e.cleanup_digest === input.cleanup_digest && e.worker_identity_digest === input.claim_worker_identity_digest) return {
               duplicate: true,
               operation_id: o.operation_id,
               generation: o.generation,
@@ -7549,13 +7675,14 @@ var init_store = __esm({
               const preclaim = e?.event_type === "observation_recorded" && evidence?.reason === "cancelled_before_claim";
               const o = this.#db.prepare("SELECT * FROM manager_operations WHERE operation_id=? AND operation_kind='attempt_lifecycle'").get(a.queued_cancel_operation_id);
               const operationEvents = this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? ORDER BY sequence").all(a.queued_cancel_operation_id);
-              let terminalEvidence;
-              try {
-                terminalEvidence = operationEvents.at(-1) ? JSON.parse(operationEvents.at(-1)?.evidence_json) : null;
-              } catch {
-                terminalEvidence = null;
-              }
-              const administrativeRelease = o?.phase === "released" && operationEvents.at(-1)?.event_type === "observation_recorded" && terminalEvidence?.reason === "user_authorized_release_unverified";
+              const administrativeRelease = o?.phase === "released" && operationEvents.some((row) => {
+                if (row.event_type !== "observation_recorded") return false;
+                try {
+                  return JSON.parse(row.evidence_json).reason === "user_authorized_release_unverified";
+                } catch {
+                  return false;
+                }
+              });
               if (!o || o.task_id !== a.task_id || o.attempt !== a.attempt || o.generation !== a.generation || (preclaim ? o.phase !== "launch_intent" && o.phase !== "released" || e.from_phase !== "launch_intent" || e.to_phase !== "launch_intent" || evidence.launch_id !== o.launch_id || evidence.token_digest !== o.launch_token_digest : !(o.phase === "cancelled_before_launch" && o.launch_id === null && e?.event_type === "cancelled_before_launch" || o.phase === "released" && administrativeRelease && e?.event_type === "observation_recorded" && evidence?.reason === "cancelled_before_claim")) || o.claim_id !== null || o.result_digest !== null || !e || evidence.cancel_id !== a.queued_cancel_id || evidence.request_digest !== requestDigest) fail2("queued_cancel_operation_mismatch");
             }
           }
@@ -7587,7 +7714,7 @@ var init_store = __esm({
             const prior = this.#db.prepare("SELECT * FROM manager_operations WHERE operation_id=? AND operation_kind='attempt_lifecycle'").get(c.previous_operation_id);
             const op = this.#db.prepare("SELECT * FROM manager_operations WHERE operation_kind='attempt_lifecycle' AND task_id=? AND attempt=?").get(a.task_id, a.attempt);
             const priorAttempt = this.#db.prepare("SELECT status,generation FROM attempts WHERE task_id=? AND attempt=?").get(a.task_id, c.previous_attempt);
-            if (!prior || prior.task_id !== a.task_id || prior.attempt !== c.previous_attempt || prior.generation !== c.previous_generation || prior.revision !== c.previous_revision || prior.claim_id !== c.previous_claim_id || prior.claim_worker_identity_digest !== c.previous_worker_identity_digest || prior.phase !== "released" || !["completed", "failed", "waiting_for_master"].includes(prior.result_status) || priorAttempt?.status !== prior.result_status) fail2("continue_history_mismatch");
+            if (!prior || prior.task_id !== a.task_id || prior.attempt !== c.previous_attempt || prior.generation !== c.previous_generation || prior.revision < c.previous_revision || prior.claim_id !== c.previous_claim_id || prior.claim_worker_identity_digest !== c.previous_worker_identity_digest || prior.phase !== "released" || !["completed", "failed", "waiting_for_master"].includes(prior.result_status) || !this.#db.prepare("SELECT 1 FROM manager_operation_events WHERE operation_id=? AND event_type='released' AND sequence=?").get(prior.operation_id, c.previous_revision) || priorAttempt?.status !== prior.result_status) fail2("continue_history_mismatch");
             const current = this.#db.prepare("SELECT current_attempt,status FROM tasks WHERE task_id=?").get(a.task_id);
             const cancelledCurrent = current?.status === "cancelled" && a.status === "cancelled" && a.queued_cancel_id !== null;
             if (op ? op.generation !== a.generation || a.generation === null : a.generation !== null || current?.current_attempt !== a.attempt || !(current.status === "queued" && a.status === "queued") && !cancelledCurrent) fail2("continue_history_mismatch");
@@ -7627,7 +7754,7 @@ var init_store = __esm({
             const launchEvents = { launch_intent: [], launch_receipt: [], claim_committed: [] };
             const cleanupEvents = { cleanup_pending: [], cleanup_verified: [], cleanup_unverified: [], cleanup_reverified: [], released: [] };
             const resultEvents = [];
-            const recoveryEvents = [], cancellationIntents = [], cancellationVerifications = [];
+            const recoveryEvents = [], cancellationIntents = [], cancellationVerifications = [], executorWakeEvents = [];
             for (let i = 0; i < es.length; i++) {
               const e = es[i];
               if (e.sequence !== i + 1 || e.evidence_digest !== digest2(e.evidence_json) || (i === 0 ? e.from_phase !== null : e.from_phase !== es[i - 1].to_phase)) fail2("projection_event_mismatch");
@@ -7644,6 +7771,7 @@ var init_store = __esm({
               if (e.event_type === "observation_recorded" && (parsed.reason === "recovery_hold" || parsed.reason === "recovery_quarantine")) recoveryEvents.push({ event: e, evidence: parsed });
               if (e.event_type === "observation_recorded" && parsed.reason === "cancel_requested") cancellationIntents.push({ event: e, evidence: parsed });
               if (e.event_type === "observation_recorded" && parsed.reason === "cancel_tree_verified") cancellationVerifications.push({ event: e, evidence: parsed });
+              if (e.event_type === "observation_recorded" && parsed.reason === "executor_wake") executorWakeEvents.push({ event: e, evidence: parsed });
               if (i > 0 && e.from_phase !== es[i - 1].to_phase) fail2("projection_event_mismatch");
               if (e.event_type === "launch_receipt" && (e.from_phase !== "launch_intent" || e.to_phase !== "launch_intent")) fail2("invalid_event_phase");
               if (e.event_type === "claim_committed" && (e.from_phase !== "launch_intent" || e.to_phase !== "running")) fail2("invalid_event_phase");
@@ -7655,10 +7783,42 @@ var init_store = __esm({
               if (e.event_type === "released" && (e.from_phase !== "cleanup_verified" || e.to_phase !== "released")) fail2("invalid_event_phase");
               if (e.event_type === "launch_intent" && (e.from_phase !== "reserved" || e.to_phase !== "launch_intent")) fail2("invalid_event_phase");
               if (e.event_type === "observation_recorded" && e.from_phase !== e.to_phase && !(parsed.reason === "admin_abandoned" && e.from_phase === "running" && e.to_phase === "released") && !(parsed.reason === "user_authorized_release_unverified" && (e.from_phase === "launch_intent" && o.claim_id === null && o.result_digest === null || e.from_phase === "cleanup_unverified" && o.result_digest !== null && o.result_status === "cancelled") && e.to_phase === "released")) fail2("invalid_event_phase");
+              if (parsed.reason === "executor_wake" && (e.from_phase !== "released" || e.to_phase !== "released"))
+                fail2("invalid_executor_wake_phase");
               if (e.event_type !== "launch_receipt" && e.event_type !== "claim_committed" && e.event_type !== "launch_intent" && e.event_type !== "observation_recorded" && !e.event_type.startsWith("interaction_") && EVENT_PHASE[e.event_type] !== e.to_phase) fail2("invalid_event_phase");
               if (e.event_type.startsWith("interaction_") && (e.from_phase !== "running" || e.to_phase !== "running")) fail2("invalid_event_phase");
               if (o.operation_kind === "attempt_lifecycle" && e.generation !== o.generation) fail2("invalid_event_phase");
               if (o.operation_kind === "capacity_policy_change" && (e.generation !== null || e.event_type !== "capacity_policy_committed" || e.to_phase !== "policy_change_committed")) fail2("invalid_event_phase");
+            }
+            if (executorWakeEvents.length) {
+              if (o.phase !== "released" || o.result_digest === null || o.result_commit_ref === null)
+                fail2("executor_wake_operation_not_released");
+              const releaseEvent = es.find((event) => event.event_type === "released");
+              if (!releaseEvent || executorWakeEvents[0].event.sequence <= releaseEvent.sequence || executorWakeEvents.length > EXECUTOR_WAKE_LIMIT)
+                fail2("executor_wake_history_invalid");
+              const releaseSequence = releaseEvent.sequence;
+              if (es.some((event) => event.sequence > releaseSequence && (event.event_type !== "observation_recorded" || JSON.parse(event.evidence_json).reason !== "executor_wake")))
+                fail2("executor_wake_terminal_history_invalid");
+              const deliveryId = executorWakeEvents[0].evidence.delivery_id;
+              const binding = executorWakeEvents[0].evidence;
+              let stage = "start";
+              for (const { event, evidence } of executorWakeEvents) {
+                if (evidence.delivery_id !== deliveryId || evidence.operation_id !== o.operation_id || evidence.task_id !== o.task_id || evidence.attempt !== o.attempt || evidence.generation !== o.generation || evidence.result_digest !== o.result_digest || evidence.result_commit_ref !== o.result_commit_ref || evidence.thread_id !== binding.thread_id || evidence.policy_digest !== binding.policy_digest || evidence.authorization_digest !== binding.authorization_digest || event.generation !== o.generation || event.sequence <= releaseSequence)
+                  fail2("executor_wake_history_binding_mismatch");
+                if (stage === "start") {
+                  if (evidence.state === "intent") stage = "intent";
+                  else if (evidence.state === "web_notify") stage = "web_notify";
+                  else fail2("executor_wake_history_transition_invalid");
+                } else if (stage === "intent") {
+                  if (evidence.state === "queued" || evidence.state === "submission_unknown") stage = "ack";
+                  else if (evidence.state === "web_notify") stage = "web_notify";
+                  else fail2("executor_wake_history_transition_invalid");
+                } else if (stage === "ack") {
+                  if (evidence.state === "turn_started") stage = "turn_started";
+                  else if (evidence.state === "web_notify") stage = "web_notify";
+                  else fail2("executor_wake_history_transition_invalid");
+                } else fail2("executor_wake_history_transition_invalid");
+              }
             }
             if (o.operation_kind === "attempt_lifecycle") {
               const intents = launchEvents.launch_intent, receipts = launchEvents.launch_receipt, claims = launchEvents.claim_committed;
@@ -7831,8 +7991,15 @@ var init_store = __esm({
                 }
                 const expected = o.phase === "quarantined" ? "quarantined" : released.length ? "released" : verified.length ? "cleanup_verified" : unverified2.length ? "cleanup_unverified" : "cleanup_pending";
                 let administrativeRelease = false;
-                const terminal = es.at(-1);
-                if (terminal?.event_type === "observation_recorded" && terminal.from_phase === "cleanup_unverified" && terminal.to_phase === "released" && terminal.sequence === o.revision) {
+                const terminal = [...es].reverse().find((event) => {
+                  if (event.event_type !== "observation_recorded") return false;
+                  try {
+                    return JSON.parse(event.evidence_json).reason === "user_authorized_release_unverified";
+                  } catch {
+                    return false;
+                  }
+                });
+                if (terminal?.event_type === "observation_recorded" && terminal.from_phase === "cleanup_unverified" && terminal.to_phase === "released") {
                   let terminalEvidence;
                   try {
                     terminalEvidence = JSON.parse(terminal.evidence_json);
@@ -7853,7 +8020,14 @@ var init_store = __esm({
                 }
                 if (o.phase !== expected && !(o.phase === "released" && administrativeRelease)) fail2("cleanup_projection_mismatch");
               } else if (["cleanup_pending", "cleanup_verified", "cleanup_unverified", "cleanup_reverified", "released"].includes(o.phase) && !adminAbandonments.has(o.operation_id)) {
-                const administrativeRelease = es.at(-1)?.event_type === "observation_recorded" && JSON.parse(es.at(-1)?.evidence_json).reason === "user_authorized_release_unverified";
+                const administrativeRelease = es.some((event) => {
+                  if (event.event_type !== "observation_recorded") return false;
+                  try {
+                    return JSON.parse(event.evidence_json).reason === "user_authorized_release_unverified";
+                  } catch {
+                    return false;
+                  }
+                });
                 if (!administrativeRelease) fail2("cleanup_projection_mismatch");
               }
               const adminAbandonment = adminAbandonments.get(o.operation_id);
@@ -7878,7 +8052,7 @@ var init_store = __esm({
                   audit_digest: adminAbandonment.audit_digest
                 });
                 if (adminAbandonment.operation_kind !== "attempt_lifecycle" || adminAbandonment.task_id !== o.task_id || adminAbandonment.attempt !== o.attempt || adminAbandonment.generation !== o.generation || adminAbandonment.claim_id !== o.claim_id || adminAbandonment.worker_identity_digest !== o.claim_worker_identity_digest || adminAbandonment.original_revision + 1 !== o.revision || adminAbandonment.event_sequence !== o.revision || adminAbandonment.outcome !== "admin_abandoned" || adminAbandonment.result_absent !== 1 || adminAbandonment.cleanup_verified !== 0 || adminAbandonment.release_reason !== "cleanup_incomplete" || adminAbandonment.audit_digest !== digest2(adminAbandonment.audit_json) || adminAbandonment.request_digest !== expectedRouteDigest || o.phase !== "released" || o.result_digest !== null || o.result_json !== null || o.result_commit_ref !== null || !Number.isFinite(Date.parse(adminAbandonment.abandoned_at))) fail2("admin_abandonment_projection_mismatch");
-                const terminalEvent = es.at(-1);
+                const terminalEvent = es.find((event) => event.sequence === adminAbandonment.event_sequence);
                 let terminalEvidence;
                 try {
                   terminalEvidence = JSON.parse(terminalEvent.evidence_json);
@@ -8182,6 +8356,9 @@ function createSqliteLifecyclePort(store, { recoveryEvidenceVerifier, workerIden
   for (const method of USER_RELEASE_METHODS) {
     if (typeof store[method] !== "function") throw new TypeError(`candidate SQLite Store missing ${method}`);
   }
+  for (const method of EXECUTOR_WAKE_METHODS) {
+    if (typeof store[method] !== "function") throw new TypeError(`candidate SQLite Store missing ${method}`);
+  }
   for (const method of INTERACTION_METHODS) {
     if (typeof store[method] !== "function") throw new TypeError(`candidate SQLite Store missing ${method}`);
   }
@@ -8227,6 +8404,12 @@ function createSqliteLifecyclePort(store, { recoveryEvidenceVerifier, workerIden
     value: (input) => store.cancelQueuedAttempt(input)
   });
   for (const method of USER_RELEASE_METHODS) {
+    Object.defineProperty(port, method, {
+      enumerable: true,
+      value: (...args) => store[method](...args)
+    });
+  }
+  for (const method of EXECUTOR_WAKE_METHODS) {
     Object.defineProperty(port, method, {
       enumerable: true,
       value: (...args) => store[method](...args)
@@ -8321,7 +8504,7 @@ function createSqliteLifecyclePort(store, { recoveryEvidenceVerifier, workerIden
   });
   return Object.freeze(port);
 }
-var UnsupportedLifecycleOperationError, B1_METHODS, C1_METHODS, C2_METHODS, C3_READ_METHODS, CANCEL_METHODS, QUEUED_CANCEL_METHODS, USER_RELEASE_METHODS, INTERACTION_METHODS, RUNTIME_EVENT_METHODS;
+var UnsupportedLifecycleOperationError, B1_METHODS, C1_METHODS, C2_METHODS, C3_READ_METHODS, CANCEL_METHODS, QUEUED_CANCEL_METHODS, USER_RELEASE_METHODS, EXECUTOR_WAKE_METHODS, INTERACTION_METHODS, RUNTIME_EVENT_METHODS;
 var init_lifecycle_port = __esm({
   "src/sqlite-candidate/wp6b2b1/lifecycle-port.mjs"() {
     "use strict";
@@ -8361,6 +8544,7 @@ var init_lifecycle_port = __esm({
     CANCEL_METHODS = Object.freeze(["requestCancellation", "recordCancellationVerification"]);
     QUEUED_CANCEL_METHODS = Object.freeze(["cancelQueuedAttempt"]);
     USER_RELEASE_METHODS = Object.freeze(["userAuthorizedReleaseUnverifiedOperation"]);
+    EXECUTOR_WAKE_METHODS = Object.freeze(["recordExecutorWakeObservation"]);
     INTERACTION_METHODS = Object.freeze(["recordInteractionRequest", "readInteractionRequest", "beginInteractionReply", "commitInteractionReply", "completeInteractionReply"]);
     RUNTIME_EVENT_METHODS = Object.freeze(["appendRuntimeTaskEvent"]);
   }
@@ -8369,11 +8553,11 @@ var init_lifecycle_port = __esm({
 // src/executor/main.ts
 init_host_profile();
 import { fileURLToPath as fileURLToPath5 } from "node:url";
-import path20 from "node:path";
+import path21 from "node:path";
 import process2 from "node:process";
 
 // src/executor/service.ts
-import { homedir as homedir7 } from "node:os";
+import { homedir as homedir8 } from "node:os";
 
 // src/manager/spawn-worker.ts
 import { spawn } from "node:child_process";
@@ -8810,7 +8994,7 @@ var FRESH_SQLITE_DATABASE_FILE = "bridge.sqlite";
 init_host_profile();
 
 // src/executor/production-composition.ts
-import { homedir as homedir6 } from "node:os";
+import { homedir as homedir7 } from "node:os";
 import { pathToFileURL as pathToFileURL2 } from "node:url";
 
 // src/diagnostics/failure-facts.ts
@@ -14180,6 +14364,7 @@ async function openClaimOnlyDriver(options) {
     }),
     cancelQueuedAttempt: (input) => port.cancelQueuedAttempt(input),
     userAuthorizedReleaseUnverifiedOperation: (input) => port.userAuthorizedReleaseUnverifiedOperation(input),
+    recordExecutorWakeObservation: (input) => port.recordExecutorWakeObservation(input),
     requestCancellation: (input, evidence) => port.requestCancellation(input, evidence),
     recordCancellationVerification: (input, evidence) => port.recordCancellationVerification(input, evidence),
     async cancelRunning(taskId, attempt) {
@@ -15710,14 +15895,14 @@ function verifyPersistedLaunchEvidence(port, input, operation, snapshot, request
   };
   if (deriveAdmissionPolicySnapshotDigest(persistedSnapshot) !== snapshot.policy_snapshot_digest) throw new LifecycleGateError("persisted_policy_snapshot_mismatch");
 }
-function parseEvidence(value, errorCode3) {
-  if (typeof value !== "string") throw new LifecycleGateError(errorCode3);
+function parseEvidence(value, errorCode4) {
+  if (typeof value !== "string") throw new LifecycleGateError(errorCode4);
   try {
     const parsed = JSON.parse(value);
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("not an object");
     return parsed;
   } catch {
-    throw new LifecycleGateError(errorCode3);
+    throw new LifecycleGateError(errorCode4);
   }
 }
 function classifyStartPlanEntitlementRejection(error2) {
@@ -16178,10 +16363,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path21) {
-  if (!path21)
+function getElementAtPath(obj, path22) {
+  if (!path22)
     return obj;
-  return path21.reduce((acc, key) => acc?.[key], obj);
+  return path22.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -16521,11 +16706,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path21, issues) {
+function prefixIssues(path22, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path21);
+    iss.path.unshift(path22);
     return iss;
   });
 }
@@ -16971,16 +17156,16 @@ function flattenError(error2, mapper = (issue2) => issue2.message) {
 }
 function formatError(error2, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error3, path21 = []) => {
+  const processError = (error3, path22 = []) => {
     for (const issue2 of error3.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path21, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path22, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path21, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path22, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path21, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path22, ...issue2.path]);
       } else {
-        const fullpath = [...path21, ...issue2.path];
+        const fullpath = [...path22, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -22220,7 +22405,8 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
   #startPlanPrivateAuthFactory;
   #testOnlyFakeAdapter;
   #routeTaskModel;
-  constructor(driver, context, processProbe, testBeforeDispatch, testOnScheduler, shutdownWaitMs = DEFAULT_HOST_SHUTDOWN_WAIT_MS, startPlanAuthAvailable = false, testOnlyFakeAdapter = false, routeTaskModel2, startPlanAuthInjected = false, startPlanPrivateAuthFactory) {
+  #onOperationReleased;
+  constructor(driver, context, processProbe, testBeforeDispatch, testOnScheduler, shutdownWaitMs = DEFAULT_HOST_SHUTDOWN_WAIT_MS, startPlanAuthAvailable = false, testOnlyFakeAdapter = false, routeTaskModel2, startPlanAuthInjected = false, startPlanPrivateAuthFactory, onOperationReleased) {
     this.#driver = driver;
     this.#context = context;
     this.#processProbe = processProbe;
@@ -22232,6 +22418,7 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
     this.#startPlanPrivateAuthFactory = startPlanPrivateAuthFactory;
     this.#testOnlyFakeAdapter = testOnlyFakeAdapter;
     this.#routeTaskModel = routeTaskModel2;
+    this.#onOperationReleased = onOperationReleased;
   }
   async createTask(task) {
     this.#assertOpen();
@@ -22379,6 +22566,11 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
     const snapshot = this.#readSnapshot(taskId);
     if (!snapshot.result) throw new TaskManagerError("TASK_NOT_FINISHED", `task ${taskId} has no committed SQLite Result${snapshot.result_submission_error ? `: ${String(snapshot.result_submission_error)}; Recovery required; no automatic retry` : ""}`);
     return snapshot.result;
+  }
+  recordExecutorWakeObservation(input) {
+    this.#assertOpen();
+    const result = this.#driver.recordExecutorWakeObservation(input);
+    return result;
   }
   async getEvents(input) {
     this.#assertOpen();
@@ -23004,6 +23196,7 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
       testOnScheduler,
       testShutdownWaitMs,
       routeTaskModel: routeTaskModel2,
+      onOperationReleased,
       ...driverOptions
     } = options;
     const shutdownWaitMs = testShutdownWaitMs ?? DEFAULT_HOST_SHUTDOWN_WAIT_MS;
@@ -23022,7 +23215,8 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
       options.testOnlyFakeAdapter === true,
       routeTaskModel2,
       options.startPlanPrivateAuth !== void 0,
-      options.startPlanPrivateAuthFactory
+      options.startPlanPrivateAuthFactory,
+      onOperationReleased
     );
     try {
       await authority.recoverTasks();
@@ -23213,6 +23407,7 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
         this.#acceptRunOutcome(run);
         await this.#recoverAfterRun(next, run);
         const after = this.#readSnapshot(next.taskId);
+        await this.#notifyOperationReleased(after);
         if (after.projection.status === "queued" && after.operation === null && run.reason === "capacity_exhausted") {
           this.#queue.unshift(next);
           this.#queued.add(queueKey(next.taskId, next.attempt));
@@ -23310,6 +23505,36 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
       });
     }
   }
+  async #notifyOperationReleased(snapshot) {
+    if (!this.#onOperationReleased) return;
+    const operation = snapshot.operation;
+    const result = snapshot.result;
+    if (!operation || !result || result.status === "cancelled" || String(operation.phase) !== "released" || typeof operation.result_digest !== "string" || typeof operation.result_commit_ref !== "string") return;
+    const attempt = Number(snapshot.attempt.attempt);
+    const generation = Number(operation.generation);
+    if (!Number.isSafeInteger(attempt) || attempt < 1 || !Number.isSafeInteger(generation) || generation < 1) return;
+    const fact = {
+      task_id: String(operation.task_id),
+      attempt,
+      operation_id: String(operation.operation_id),
+      generation,
+      task_status: taskStatus(snapshot.projection.status),
+      result_status: result.status,
+      result_digest: operation.result_digest,
+      result_commit_ref: operation.result_commit_ref,
+      workspace: snapshot.task.workspace
+    };
+    try {
+      await this.#onOperationReleased(fact, (input) => this.recordExecutorWakeObservation(input));
+    } catch (error2) {
+      this.#schedulerStage("post_release_wake_failed", {
+        task_id: fact.task_id,
+        attempt: fact.attempt,
+        operation_id: fact.operation_id,
+        reason: errorCode2(error2) ?? "executor_wake_failed"
+      });
+    }
+  }
   #assertOpen() {
     if (this.#closed) throw new TaskManagerError("TASK_STATE", "SQLite lifecycle authority is closed");
   }
@@ -23350,11 +23575,12 @@ function toProgressEvent(value, includeAttempt) {
     throw new TaskManagerError("TASK_STATE", "SQLite lifecycle event evidence is corrupt");
   }
   const attempt = includeAttempt ? positiveOrNull(value.operation_attempt) : null;
+  const wakeSummary = details?.reason === "executor_wake" && typeof details.state === "string" ? `Executor Wake: ${details.state}${typeof details.reason_code === "string" ? ` (${details.reason_code})` : ""}` : null;
   return {
     seq: Number(value.cursor ?? value.sequence),
     at: string3(value.at, "event_time_missing"),
     type: string3(value.event_type, "event_type_missing"),
-    summary: typeof value.summary === "string" ? value.summary : `SQLite lifecycle: ${string3(value.event_type, "event_type_missing")}`,
+    summary: typeof value.summary === "string" ? value.summary : wakeSummary ?? `SQLite lifecycle: ${string3(value.event_type, "event_type_missing")}`,
     ...attempt === null ? {} : { attempt },
     ...details ? { details } : {}
   };
@@ -23545,6 +23771,775 @@ function errorCode2(error2) {
   return error2.code;
 }
 
+// src/executor/wake.ts
+import { createHash as createHash19 } from "node:crypto";
+import {
+  spawn as spawn6
+} from "node:child_process";
+import {
+  existsSync as existsSync11,
+  lstatSync as lstatSync4,
+  readFileSync as readFileSync11,
+  realpathSync as realpathSync5
+} from "node:fs";
+import { homedir as homedir6 } from "node:os";
+import path20 from "node:path";
+var WAKE_POLICY_FILE = "wake-policy.json";
+var WAKE_POLICY_MAX_BYTES = 16 * 1024;
+var WAKE_AUTHORIZATION_MAX_MS = 24 * 60 * 60 * 1e3;
+var WAKE_CONTROL_FRAME_MAX_BYTES = 1024 * 1024;
+var WAKE_CONTROL_STDERR_MAX_BYTES = 8 * 1024;
+var WAKE_QUEUE_TIMEOUT_MS = 1e4;
+var WAKE_CONTROL_TIMEOUT_MS = 2e3;
+var WAKE_TURN_OBSERVATION_MS = 2e3;
+var WAKE_TURN_POLL_MS = 200;
+var WAKE_LOADED_PAGE_LIMIT = 200;
+var WAKE_LOADED_MAX_PAGES = 50;
+var SAFE_REASONING_EFFORTS = /* @__PURE__ */ new Set(["minimal", "low", "medium"]);
+var WAKE_POLICY_KEYS = [
+  "attempt",
+  "authorization",
+  "enabled",
+  "fallback",
+  "model",
+  "model_provider",
+  "reasoning_effort",
+  "schema_version",
+  "task_id",
+  "thread_id",
+  "workspace"
+];
+var WAKE_AUTHORIZATION_KEYS = ["expires_at", "granted_at", "granted_by", "scope"];
+function defaultAppServerControlSocket(env = process.env, homeDir = homedir6()) {
+  const override = env.ZCODE_BRIDGE_APP_SERVER_CONTROL_SOCKET?.trim();
+  if (override) return path20.resolve(override);
+  const codexHome = env.CODEX_HOME?.trim() || path20.join(homeDir, ".codex");
+  return path20.join(path20.resolve(codexHome), "app-server-control", "app-server-control.sock");
+}
+function defaultCodexExecutable(env = process.env) {
+  return env.ZCODE_BRIDGE_CODEX_EXECUTABLE?.trim() || (process.platform === "win32" ? "codex.exe" : "codex");
+}
+function createExecutorWakeCoordinator(options) {
+  const authorityRoot = path20.resolve(options.authorityRoot);
+  const now = options.now ?? Date.now;
+  const appServer = options.appServer ?? new AppServerProxyConnector();
+  const queue = options.queue ?? new QueueCommandRunner();
+  const codexExecutable = options.codexExecutable ?? defaultCodexExecutable();
+  const socketPath = options.socketPath ?? defaultAppServerControlSocket();
+  const queueTimeoutMs = boundedDuration(options.queueTimeoutMs, WAKE_QUEUE_TIMEOUT_MS, 1, 6e4);
+  const controlTimeoutMs = boundedDuration(options.controlTimeoutMs, WAKE_CONTROL_TIMEOUT_MS, 250, 1e4);
+  const turnObservationMs = boundedDuration(options.turnObservationMs, WAKE_TURN_OBSERVATION_MS, 0, 1e4);
+  const turnPollMs = boundedDuration(options.turnPollMs, WAKE_TURN_POLL_MS, 25, 1e3);
+  const notifyWeb = options.notifyWeb ?? ((input) => {
+    console.error(`EXECUTOR_WAKE_WEB_NOTIFY ${JSON.stringify(input)}`);
+  });
+  return {
+    async handle(release, recorderOverride) {
+      const recorder = recorderOverride ?? options.recorder;
+      if (!recorder) throw new Error("EXECUTOR_WAKE_RECORDER_UNAVAILABLE");
+      const policyRead = readWakePolicy(authorityRoot, now());
+      if (!policyRead.ok) {
+        return recordWebFallback(
+          recorder,
+          notifyWeb,
+          release,
+          policyRead.thread_id,
+          policyRead.policy_digest,
+          policyRead.authorization_digest,
+          policyRead.reason_code
+        );
+      }
+      const bindingFailure = validatePolicyBinding(policyRead.policy, release);
+      if (bindingFailure) {
+        return recordWebFallback(
+          recorder,
+          notifyWeb,
+          release,
+          policyRead.policy.thread_id,
+          policyRead.policy_digest,
+          policyRead.authorization_digest,
+          bindingFailure
+        );
+      }
+      if (!policyRead.policy.enabled) {
+        return recordWebFallback(
+          recorder,
+          notifyWeb,
+          release,
+          policyRead.policy.thread_id,
+          policyRead.policy_digest,
+          policyRead.authorization_digest,
+          "policy_disabled"
+        );
+      }
+      if (!SAFE_REASONING_EFFORTS.has(policyRead.policy.reasoning_effort)) {
+        return recordWebFallback(
+          recorder,
+          notifyWeb,
+          release,
+          policyRead.policy.thread_id,
+          policyRead.policy_digest,
+          policyRead.authorization_digest,
+          "unsafe_reasoning_effort"
+        );
+      }
+      let session;
+      try {
+        session = await appServer.connect({ socketPath, executable: codexExecutable, timeoutMs: controlTimeoutMs });
+      } catch {
+        return recordWebFallback(
+          recorder,
+          notifyWeb,
+          release,
+          policyRead.policy.thread_id,
+          policyRead.policy_digest,
+          policyRead.authorization_digest,
+          "app_server_unavailable"
+        );
+      }
+      try {
+        let preflight;
+        try {
+          preflight = await session.preflight(policyRead.policy.thread_id, controlTimeoutMs);
+        } catch {
+          return await recordWebFallback(
+            recorder,
+            notifyWeb,
+            release,
+            policyRead.policy.thread_id,
+            policyRead.policy_digest,
+            policyRead.authorization_digest,
+            "app_server_preflight_failed"
+          );
+        }
+        const preflightFailure = validatePreflight(policyRead.policy, preflight);
+        if (preflightFailure) {
+          return await recordWebFallback(
+            recorder,
+            notifyWeb,
+            release,
+            policyRead.policy.thread_id,
+            policyRead.policy_digest,
+            policyRead.authorization_digest,
+            preflightFailure
+          );
+        }
+        const baselineTurnIds = preflight.recent_turns.map((turn) => turn.id);
+        const deliveryId = wakeDeliveryId(release, policyRead.policy_digest);
+        const intent = {
+          operation_id: release.operation_id,
+          task_id: release.task_id,
+          attempt: release.attempt,
+          generation: release.generation,
+          state: "intent",
+          thread_id: policyRead.policy.thread_id,
+          delivery_id: deliveryId,
+          policy_digest: policyRead.policy_digest,
+          authorization_digest: policyRead.authorization_digest,
+          reason_code: "queue_preflight_passed"
+        };
+        try {
+          const recorded = recorder.recordExecutorWakeObservation(intent);
+          if (recorded.duplicate) return wakeResult("already_handled", "prior_intent_already_recorded");
+        } catch (error2) {
+          const code = errorCode3(error2);
+          if (code === "executor_wake_intent_not_first") {
+            return wakeResult("already_handled", "wake_history_already_exists");
+          }
+          throw error2;
+        }
+        let submission;
+        try {
+          submission = await queue.submit({
+            executable: codexExecutable,
+            threadId: policyRead.policy.thread_id,
+            message: wakeMessage(release),
+            timeoutMs: queueTimeoutMs
+          });
+        } catch {
+          return await recordObservation(
+            recorder,
+            notifyWeb,
+            release,
+            policyRead,
+            deliveryId,
+            "submission_unknown",
+            "queue_submission_outcome_unknown",
+            policyRead.policy.thread_id
+          );
+        }
+        if (!submission.started) {
+          return await recordObservation(
+            recorder,
+            notifyWeb,
+            release,
+            policyRead,
+            deliveryId,
+            "web_notify",
+            "queue_command_unavailable",
+            policyRead.policy.thread_id
+          );
+        }
+        if (submission.timed_out || submission.signal !== null || submission.exit_code !== 0) {
+          return await recordObservation(
+            recorder,
+            notifyWeb,
+            release,
+            policyRead,
+            deliveryId,
+            "submission_unknown",
+            submission.timed_out ? "queue_submission_timeout" : "queue_submission_outcome_unknown",
+            policyRead.policy.thread_id
+          );
+        }
+        const queued = await recordObservation(
+          recorder,
+          notifyWeb,
+          release,
+          policyRead,
+          deliveryId,
+          "queued",
+          "queue_command_accepted",
+          policyRead.policy.thread_id
+        );
+        if (queued.state !== "queued" || turnObservationMs === 0) return queued;
+        const deadline = Date.now() + turnObservationMs;
+        do {
+          try {
+            if (await session.observeNewInProgressTurn(
+              policyRead.policy.thread_id,
+              baselineTurnIds,
+              Math.max(1, Math.min(controlTimeoutMs, deadline - Date.now()))
+            )) {
+              return await recordObservation(
+                recorder,
+                notifyWeb,
+                release,
+                policyRead,
+                deliveryId,
+                "turn_started",
+                "turn_in_progress_observed",
+                policyRead.policy.thread_id
+              );
+            }
+          } catch {
+            break;
+          }
+          if (Date.now() >= deadline) break;
+          await delay3(Math.min(turnPollMs, Math.max(1, deadline - Date.now())));
+        } while (Date.now() < deadline);
+        return queued;
+      } finally {
+        await session.close().catch(() => void 0);
+      }
+    }
+  };
+}
+function validatePolicyBinding(policy, release) {
+  if (policy.task_id !== release.task_id) return "policy_task_mismatch";
+  if (policy.attempt !== release.attempt) return "policy_attempt_mismatch";
+  if (normalizeWorkspace(policy.workspace) !== normalizeWorkspace(release.workspace)) return "policy_workspace_mismatch";
+  return null;
+}
+function validatePreflight(policy, preflight) {
+  if (!preflight.loaded) return "thread_not_loaded";
+  if (preflight.status !== "idle") return `thread_status_${preflight.status}`;
+  if (preflight.can_accept_direct_input !== true) return "thread_direct_input_unavailable";
+  if (preflight.cwd === null || normalizeWorkspace(preflight.cwd) !== normalizeWorkspace(policy.workspace)) {
+    return "thread_workspace_mismatch";
+  }
+  if (preflight.model !== policy.model) return "thread_model_mismatch";
+  if (preflight.model_provider !== policy.model_provider) return "thread_provider_mismatch";
+  if (preflight.reasoning_effort !== policy.reasoning_effort) return "thread_reasoning_mismatch";
+  if (preflight.reasoning_effort !== null && !SAFE_REASONING_EFFORTS.has(preflight.reasoning_effort)) {
+    return "unsafe_reasoning_effort";
+  }
+  return null;
+}
+async function recordWebFallback(recorder, notifyWeb, release, threadId, policyDigest, authorizationDigest, reasonCode) {
+  return recordObservation(
+    recorder,
+    notifyWeb,
+    release,
+    { policy_digest: policyDigest, authorization_digest: authorizationDigest },
+    wakeDeliveryId(release, policyDigest),
+    "web_notify",
+    reasonCode,
+    threadId
+  );
+}
+async function recordObservation(recorder, notifyWeb, release, binding, deliveryId, state, reasonCode, threadId) {
+  if (state !== "web_notify" && threadId === null) {
+    throw new Error("EXECUTOR_WAKE_THREAD_BINDING_INTERNAL");
+  }
+  const result = recorder.recordExecutorWakeObservation({
+    operation_id: release.operation_id,
+    task_id: release.task_id,
+    attempt: release.attempt,
+    generation: release.generation,
+    state,
+    thread_id: threadId,
+    delivery_id: deliveryId,
+    policy_digest: binding.policy_digest,
+    authorization_digest: binding.authorization_digest,
+    reason_code: reasonCode
+  });
+  if (state === "web_notify" && !result.duplicate) {
+    try {
+      notifyWeb({
+        task_id: release.task_id,
+        attempt: release.attempt,
+        operation_id: release.operation_id,
+        reason_code: reasonCode,
+        state: "web_notify"
+      });
+    } catch {
+    }
+  }
+  return wakeResult(state, reasonCode, result.duplicate);
+}
+function wakeResult(state, reasonCode, duplicate = false) {
+  return {
+    state,
+    reason_code: reasonCode,
+    desktop_visible: "UNKNOWN",
+    ...duplicate ? { duplicate: true } : {}
+  };
+}
+function readWakePolicy(authorityRoot, nowMs) {
+  const policyPath = path20.join(authorityRoot, WAKE_POLICY_FILE);
+  if (!existsSync11(policyPath)) {
+    return {
+      ok: false,
+      reason_code: "policy_missing",
+      policy_digest: wakeDigest({ state: "missing", schema_version: 1 }),
+      authorization_digest: wakeDigest({ state: "not_granted", schema_version: 1 }),
+      thread_id: null
+    };
+  }
+  let raw = "";
+  try {
+    const stat2 = lstatSync4(policyPath);
+    if (!stat2.isFile() || stat2.isSymbolicLink() || stat2.size < 2 || stat2.size > WAKE_POLICY_MAX_BYTES) {
+      throw new Error("wake_policy_file_invalid");
+    }
+    raw = readFileSync11(policyPath, "utf8");
+    const value = JSON.parse(raw);
+    const policy = parseWakePolicy(value, nowMs);
+    return {
+      ok: true,
+      policy,
+      policy_digest: wakeDigest(policy),
+      authorization_digest: wakeDigest(policy.authorization)
+    };
+  } catch {
+    return {
+      ok: false,
+      reason_code: "policy_invalid",
+      policy_digest: createHash19("sha256").update(raw || "wake-policy:invalid", "utf8").digest("hex"),
+      authorization_digest: wakeDigest({ state: "invalid", schema_version: 1 }),
+      thread_id: safeThreadHint(raw)
+    };
+  }
+}
+function parseWakePolicy(value, nowMs) {
+  if (!isRecord7(value) || !hasExactKeys(value, WAKE_POLICY_KEYS)) throw new Error("wake_policy_shape_invalid");
+  if (value.schema_version !== 1 || typeof value.enabled !== "boolean" || value.fallback !== "web_notify") {
+    throw new Error("wake_policy_version_invalid");
+  }
+  const taskId = boundedIdentifier(value.task_id);
+  const threadId = boundedIdentifier(value.thread_id);
+  const model = boundedText(value.model, 256);
+  const provider = boundedText(value.model_provider, 256);
+  if (!Number.isSafeInteger(value.attempt) || Number(value.attempt) < 1) throw new Error("wake_policy_attempt_invalid");
+  if (typeof value.workspace !== "string" || !path20.isAbsolute(value.workspace)) throw new Error("wake_policy_workspace_invalid");
+  if (value.reasoning_effort !== "minimal" && value.reasoning_effort !== "low" && value.reasoning_effort !== "medium") {
+    throw new Error("wake_policy_reasoning_invalid");
+  }
+  if (!isRecord7(value.authorization) || !hasExactKeys(value.authorization, WAKE_AUTHORIZATION_KEYS)) {
+    throw new Error("wake_authorization_shape_invalid");
+  }
+  if (value.authorization.scope !== "one_turn" || value.authorization.granted_by !== "owner") {
+    throw new Error("wake_authorization_scope_invalid");
+  }
+  const grantedAt = Date.parse(String(value.authorization.granted_at));
+  const expiresAt = Date.parse(String(value.authorization.expires_at));
+  if (!Number.isFinite(grantedAt) || !Number.isFinite(expiresAt) || grantedAt > nowMs || expiresAt <= nowMs || expiresAt <= grantedAt || expiresAt - grantedAt > WAKE_AUTHORIZATION_MAX_MS) {
+    throw new Error("wake_authorization_time_invalid");
+  }
+  return {
+    schema_version: 1,
+    enabled: value.enabled,
+    task_id: taskId,
+    attempt: Number(value.attempt),
+    thread_id: threadId,
+    workspace: normalizeWorkspace(value.workspace),
+    model,
+    model_provider: provider,
+    reasoning_effort: value.reasoning_effort,
+    fallback: "web_notify",
+    authorization: {
+      scope: "one_turn",
+      granted_by: "owner",
+      granted_at: String(value.authorization.granted_at),
+      expires_at: String(value.authorization.expires_at)
+    }
+  };
+}
+function safeThreadHint(raw) {
+  try {
+    const value = JSON.parse(raw);
+    return isRecord7(value) && typeof value.thread_id === "string" && isIdentifier(value.thread_id) ? value.thread_id : null;
+  } catch {
+    return null;
+  }
+}
+function wakeMessage(release) {
+  return [
+    "[CODEX-ZCODE BRIDGE WAKE]",
+    `Task ${release.task_id} attempt ${release.attempt} completed with status ${release.result_status}.`,
+    `Operation ${release.operation_id} released; result digest ${release.result_digest}.`,
+    "Read the persisted result with zcode_result (view=summary) before deciding the next action.",
+    "This Wake reports delivery only. It does not accept the Task, release Bridge resources, or authorize new work."
+  ].join("\n");
+}
+function wakeDeliveryId(release, policyDigest) {
+  return wakeDigest({
+    contract: "executor-wake-delivery-v1",
+    task_id: release.task_id,
+    attempt: release.attempt,
+    operation_id: release.operation_id,
+    generation: release.generation,
+    result_digest: release.result_digest,
+    result_commit_ref: release.result_commit_ref,
+    policy_digest: policyDigest
+  });
+}
+function normalizeWorkspace(value) {
+  const resolved = path20.resolve(value);
+  try {
+    const canonical5 = realpathSync5.native(resolved);
+    return process.platform === "win32" ? canonical5.toLowerCase() : canonical5;
+  } catch {
+    return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+  }
+}
+function boundedDuration(value, fallback, min, max) {
+  if (value === void 0) return fallback;
+  if (!Number.isSafeInteger(value) || value < min || value > max) throw new Error("EXECUTOR_WAKE_DURATION_INVALID");
+  return value;
+}
+function boundedIdentifier(value) {
+  if (!isIdentifier(value)) throw new Error("wake_identifier_invalid");
+  return value;
+}
+function isIdentifier(value) {
+  return typeof value === "string" && value.length > 0 && value.length <= 128 && /^[A-Za-z0-9._:-]+$/u.test(value) && value === value.normalize("NFC");
+}
+function boundedText(value, maxBytes) {
+  if (typeof value !== "string" || !value.trim() || Buffer.byteLength(value, "utf8") > maxBytes || value !== value.normalize("NFC")) {
+    throw new Error("wake_text_invalid");
+  }
+  return value;
+}
+function hasExactKeys(value, expected) {
+  return Object.keys(value).sort().join("|") === [...expected].sort().join("|");
+}
+function isRecord7(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function wakeDigest(value) {
+  return createHash19("sha256").update(canonicalJson5(value), "utf8").digest("hex");
+}
+function canonicalJson5(value) {
+  if (value === null || typeof value === "boolean" || typeof value === "string") return JSON.stringify(value);
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new Error("wake_digest_number_invalid");
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) return `[${value.map(canonicalJson5).join(",")}]`;
+  if (isRecord7(value)) {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson5(value[key])}`).join(",")}}`;
+  }
+  throw new Error("wake_digest_value_invalid");
+}
+function errorCode3(error2) {
+  return isRecord7(error2) && typeof error2.code === "string" ? error2.code : null;
+}
+function delay3(ms) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    timer.unref?.();
+  });
+}
+var AppServerProxyConnector = class {
+  #spawnImpl;
+  #clientVersion;
+  constructor(options = {}) {
+    this.#spawnImpl = options.spawnImpl ?? spawn6;
+    this.#clientVersion = options.clientVersion ?? "2.0.0-preview.11";
+  }
+  async connect(input) {
+    if (!existsSync11(input.socketPath)) throw new Error("app_server_control_socket_unavailable");
+    const child = this.#spawnImpl(
+      input.executable,
+      ["app-server", "proxy", "--sock", input.socketPath],
+      { stdio: ["pipe", "pipe", "pipe"], windowsHide: true, shell: false }
+    );
+    const session = new AppServerProxySession(child, this.#clientVersion);
+    try {
+      await session.initialize(input.timeoutMs);
+      return session;
+    } catch (error2) {
+      await session.close().catch(() => void 0);
+      throw error2;
+    }
+  }
+};
+var AppServerProxySession = class {
+  #child;
+  #clientVersion;
+  #pending = /* @__PURE__ */ new Map();
+  #nextId = 1;
+  #buffer = "";
+  #stderr = "";
+  #closed = false;
+  constructor(child, clientVersion) {
+    this.#child = child;
+    this.#clientVersion = clientVersion;
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => this.#onData(chunk));
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk) => {
+      this.#stderr = `${this.#stderr}${chunk}`.slice(-WAKE_CONTROL_STDERR_MAX_BYTES);
+    });
+    child.once("error", (error2) => this.#fail(new Error(`app_server_proxy_spawn_failed:${error2.message}`)));
+    child.once("close", () => this.#fail(new Error("app_server_proxy_closed")));
+  }
+  async initialize(timeoutMs) {
+    await this.#request("initialize", {
+      clientInfo: { name: "codex-zcode-bridge-executor", version: this.#clientVersion },
+      capabilities: { experimentalApi: false }
+    }, timeoutMs);
+    this.#write({ method: "initialized" });
+  }
+  async preflight(threadId, timeoutMs) {
+    let loaded = false;
+    let cursor = null;
+    for (let page = 0; page < WAKE_LOADED_MAX_PAGES; page += 1) {
+      const value = await this.#request("thread/loaded/list", {
+        cursor,
+        limit: WAKE_LOADED_PAGE_LIMIT
+      }, timeoutMs);
+      if (!Array.isArray(value.data) || !value.data.every((item) => typeof item === "string")) {
+        throw new Error("app_server_loaded_list_invalid");
+      }
+      if (value.data.includes(threadId)) loaded = true;
+      if (loaded || value.nextCursor === null || value.nextCursor === void 0) break;
+      if (typeof value.nextCursor !== "string" || value.nextCursor === cursor) throw new Error("app_server_loaded_cursor_invalid");
+      cursor = value.nextCursor;
+    }
+    const read = await this.#request("thread/read", { threadId, includeTurns: false }, timeoutMs);
+    const thread = read.thread;
+    if (!isRecord7(thread) || thread.id !== threadId || !isRecord7(thread.status)) {
+      throw new Error("app_server_thread_read_invalid");
+    }
+    const status = typeof thread.status.type === "string" ? thread.status.type : "unknown";
+    const turns = await this.#turns(threadId, timeoutMs);
+    return {
+      loaded,
+      status,
+      can_accept_direct_input: typeof thread.canAcceptDirectInput === "boolean" ? thread.canAcceptDirectInput : null,
+      cwd: typeof thread.cwd === "string" ? thread.cwd : null,
+      model: typeof thread.model === "string" ? thread.model : null,
+      model_provider: typeof thread.modelProvider === "string" ? thread.modelProvider : null,
+      reasoning_effort: typeof thread.reasoningEffort === "string" ? thread.reasoningEffort : null,
+      recent_turns: turns
+    };
+  }
+  async observeNewInProgressTurn(threadId, baselineTurnIds, timeoutMs) {
+    const baseline = new Set(baselineTurnIds);
+    const turns = await this.#turns(threadId, timeoutMs);
+    return turns.some((turn) => !baseline.has(turn.id) && turn.status === "inProgress");
+  }
+  async close() {
+    if (this.#closed) return;
+    this.#closed = true;
+    this.#fail(new Error("app_server_proxy_session_closed"));
+    if (!this.#child.killed) this.#child.kill();
+    await Promise.race([
+      new Promise((resolve) => this.#child.once("close", () => resolve())),
+      delay3(250)
+    ]);
+  }
+  async #turns(threadId, timeoutMs) {
+    const value = await this.#request("thread/turns/list", {
+      threadId,
+      cursor: null,
+      limit: 5,
+      sortDirection: "desc",
+      itemsView: "notLoaded"
+    }, timeoutMs);
+    if (!Array.isArray(value.data)) throw new Error("app_server_turn_list_invalid");
+    return value.data.flatMap((item) => {
+      if (!isRecord7(item) || typeof item.id !== "string" || !["completed", "interrupted", "failed", "inProgress"].includes(String(item.status))) return [];
+      return [{ id: item.id, status: item.status }];
+    });
+  }
+  #request(method, params, timeoutMs) {
+    if (this.#closed) return Promise.reject(new Error("app_server_proxy_session_closed"));
+    const id = this.#nextId++;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.#pending.delete(id);
+        reject(new Error(`app_server_proxy_timeout:${method}`));
+        void this.close();
+      }, timeoutMs);
+      timer.unref?.();
+      this.#pending.set(id, { method, resolve, reject, timer });
+      this.#write({ id, method, params });
+    });
+  }
+  #write(value) {
+    if (this.#closed || !this.#child.stdin.writable) throw new Error("app_server_proxy_write_unavailable");
+    this.#child.stdin.write(`${JSON.stringify(value)}
+`, (error2) => {
+      if (error2) this.#fail(new Error(`app_server_proxy_write_failed:${error2.message}`));
+    });
+  }
+  #onData(chunk) {
+    if (this.#closed) return;
+    this.#buffer += chunk;
+    if (Buffer.byteLength(this.#buffer, "utf8") > WAKE_CONTROL_FRAME_MAX_BYTES && !this.#buffer.includes("\n")) {
+      this.#fail(new Error("app_server_proxy_frame_oversize"));
+      return;
+    }
+    let newline = this.#buffer.indexOf("\n");
+    while (newline >= 0) {
+      const line = this.#buffer.slice(0, newline).trim();
+      this.#buffer = this.#buffer.slice(newline + 1);
+      if (line) this.#onLine(line);
+      if (this.#closed) return;
+      newline = this.#buffer.indexOf("\n");
+    }
+  }
+  #onLine(line) {
+    if (Buffer.byteLength(line, "utf8") > WAKE_CONTROL_FRAME_MAX_BYTES) {
+      this.#fail(new Error("app_server_proxy_frame_oversize"));
+      return;
+    }
+    let value;
+    try {
+      value = JSON.parse(line);
+    } catch {
+      this.#fail(new Error("app_server_proxy_frame_invalid"));
+      return;
+    }
+    if (!isRecord7(value)) {
+      this.#fail(new Error("app_server_proxy_message_invalid"));
+      return;
+    }
+    if (typeof value.id === "number" && typeof value.method === "string") {
+      this.#write({ id: value.id, error: { code: -32601, message: "unsupported app-server request" } });
+      return;
+    }
+    if (typeof value.id !== "number") return;
+    const pending = this.#pending.get(value.id);
+    if (!pending) return;
+    this.#pending.delete(value.id);
+    clearTimeout(pending.timer);
+    if (isRecord7(value.error)) {
+      pending.reject(new Error(
+        `app_server_proxy_request_failed:${pending.method}:${String(value.error.code ?? "unknown")}`
+      ));
+      return;
+    }
+    if (!isRecord7(value.result)) {
+      pending.reject(new Error(`app_server_proxy_result_invalid:${pending.method}`));
+      return;
+    }
+    pending.resolve(value.result);
+  }
+  #fail(error2) {
+    this.#closed = true;
+    for (const pending of this.#pending.values()) {
+      clearTimeout(pending.timer);
+      pending.reject(error2);
+    }
+    this.#pending.clear();
+  }
+};
+var QueueCommandRunner = class {
+  #spawnImpl;
+  constructor(options = {}) {
+    this.#spawnImpl = options.spawnImpl ?? spawn6;
+  }
+  submit(input) {
+    return new Promise((resolve) => {
+      let started = false;
+      let settled = false;
+      let timedOut = false;
+      let stdout = "";
+      let stderr = "";
+      const child = this.#spawnImpl(
+        input.executable,
+        ["queue", "--thread", input.threadId, "--message", input.message],
+        { stdio: ["ignore", "pipe", "pipe"], windowsHide: true, shell: false }
+      );
+      const finish = (submission) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(submission);
+      };
+      const timer = setTimeout(() => {
+        timedOut = true;
+        if (!child.killed) child.kill();
+        finish({
+          started,
+          exit_code: null,
+          signal: null,
+          timed_out: true,
+          stdout,
+          stderr
+        });
+      }, input.timeoutMs);
+      timer.unref?.();
+      child.once("spawn", () => {
+        started = true;
+      });
+      child.stdout.setEncoding("utf8");
+      child.stdout.on("data", (chunk) => {
+        stdout = `${stdout}${chunk}`.slice(-8 * 1024);
+      });
+      child.stderr.setEncoding("utf8");
+      child.stderr.on("data", (chunk) => {
+        stderr = `${stderr}${chunk}`.slice(-8 * 1024);
+      });
+      child.once("error", () => {
+        finish({
+          started,
+          exit_code: null,
+          signal: null,
+          timed_out: timedOut,
+          stdout,
+          stderr
+        });
+      });
+      child.once("close", (exitCode, signal) => {
+        finish({
+          started,
+          exit_code: exitCode,
+          signal,
+          timed_out: timedOut,
+          stdout,
+          stderr
+        });
+      });
+    });
+  }
+};
+
 // src/executor/production-composition.ts
 async function createHostStartPlanIssuer(options) {
   try {
@@ -23606,7 +24601,7 @@ function createWorkerDiagnosticSink(prefix) {
 }
 async function createProductionAuthorityComposition(options) {
   const env = options.env ?? process.env;
-  const homeDir = options.homeDir ?? homedir6();
+  const homeDir = options.homeDir ?? homedir7();
   const processProbe = options.processProbe ?? createPlatformProbe();
   const trustedLocalContext = createTrustedLocalStdioContext(options.host);
   if (trustedLocalContext.status !== "enabled") {
@@ -23640,6 +24635,11 @@ async function createProductionAuthorityComposition(options) {
       }
     }
   });
+  const wakeCoordinator = createExecutorWakeCoordinator({
+    authorityRoot: options.authorityRoot,
+    codexExecutable: defaultCodexExecutable(env),
+    socketPath: defaultAppServerControlSocket(env, homeDir)
+  });
   await initializeFreshInstallSqliteRoot(
     options.authorityRoot,
     FRESH_SQLITE_DATABASE_FILE,
@@ -23665,6 +24665,9 @@ async function createProductionAuthorityComposition(options) {
       journal: modelRoutingJournal
     }),
     routeTaskModel: routeTaskModel2,
+    onOperationReleased: (fact, recorder) => wakeCoordinator.handle(fact, {
+      recordExecutorWakeObservation: (input) => recorder(input)
+    }).then(() => void 0),
     onWorkerDiagnosticLine: options.onWorkerDiagnosticLine ?? createWorkerDiagnosticSink("[bridge]"),
     ...options.testOnlyFakeAdapter === true ? { testOnlyFakeAdapter: true } : {},
     ...options.testBeforeDispatch ? { testBeforeDispatch: options.testBeforeDispatch } : {},
@@ -24034,7 +25037,7 @@ async function cleanupFailedStartup(authority, composition, server, leaseHandle)
   }
 }
 async function startExecutorService(options) {
-  const host = options.host ?? codexHostProfile(homedir7());
+  const host = options.host ?? codexHostProfile(homedir8());
   validateHostProfile(host);
   const workerPath = options.testWorkerEntryPath ?? host.workerEntryPath ?? workerEntryPath();
   const bridge = fingerprintRuntimeArtifact(options.bridgeEntryPath);
@@ -24287,9 +25290,9 @@ async function runExecutorMain(argv = process2.argv.slice(2), options = {}) {
     else fail3(`unknown_argument:${argument}`);
     index += 1;
   }
-  if (!parsed.dataRoot || !path20.isAbsolute(parsed.dataRoot)) fail3("data_root_absolute_required");
-  if (parsed.settingsDirectory !== void 0 && !path20.isAbsolute(parsed.settingsDirectory)) fail3("settings_directory_absolute_required");
-  const bridgeEntry = parsed.bridgeEntry ?? path20.resolve("dist/src/executor/main.js");
+  if (!parsed.dataRoot || !path21.isAbsolute(parsed.dataRoot)) fail3("data_root_absolute_required");
+  if (parsed.settingsDirectory !== void 0 && !path21.isAbsolute(parsed.settingsDirectory)) fail3("settings_directory_absolute_required");
+  const bridgeEntry = parsed.bridgeEntry ?? path21.resolve("dist/src/executor/main.js");
   try {
     const service = await startExecutorService({
       dataRoot: parsed.dataRoot,
@@ -24343,7 +25346,7 @@ async function runExecutorMain(argv = process2.argv.slice(2), options = {}) {
     fail3(message);
   }
 }
-if (process2.argv[1] && path20.resolve(process2.argv[1]) === path20.resolve(fileURLToPath5(import.meta.url))) {
+if (process2.argv[1] && path21.resolve(process2.argv[1]) === path21.resolve(fileURLToPath5(import.meta.url))) {
   void runExecutorMain();
 }
 export {

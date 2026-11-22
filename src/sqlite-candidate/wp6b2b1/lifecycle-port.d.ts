@@ -422,6 +422,34 @@ export interface CandidateInterruptAndRequeueOutcome {
   readonly evidence_digest: string;
 }
 
+export type CandidateExecutorWakeState = 'intent' | 'queued' | 'submission_unknown' | 'turn_started' | 'web_notify';
+
+export interface CandidateExecutorWakeObservationInput {
+  readonly operation_id: string;
+  readonly task_id: string;
+  readonly attempt: number;
+  readonly generation: number;
+  readonly state: CandidateExecutorWakeState;
+  readonly thread_id: string | null;
+  readonly delivery_id: string;
+  readonly policy_digest: string;
+  readonly authorization_digest: string;
+  readonly reason_code: string;
+}
+
+export interface CandidateExecutorWakeObservationOutcome {
+  readonly duplicate: boolean;
+  readonly operation_id: string;
+  readonly task_id: string;
+  readonly attempt: number;
+  readonly generation: number;
+  readonly revision: number;
+  readonly event_sequence: number;
+  readonly state: CandidateExecutorWakeState;
+  readonly delivery_id: string;
+  readonly desktop_visible: 'UNKNOWN';
+}
+
 export interface SqliteLifecyclePort {
   createTask(task: CandidateTaskPackage, createdAt?: string): { task_id: string; current_attempt: 1; status: 'queued'; created_at: string };
   readTask(taskId: string): CandidateTaskPackage | null;
@@ -460,6 +488,7 @@ export interface SqliteLifecyclePort {
   recordCleanupEvidence(input: CandidateCleanupFence & CandidateCleanupOutcome): { readonly duplicate: boolean; readonly operation_id: string; readonly generation: number; readonly revision: number; readonly phase: 'cleanup_verified' | 'cleanup_unverified' | 'released'; readonly cleanup_verified: boolean; readonly cleanup_digest?: string };
   reverifyCleanup(input: CandidateCleanupFence & { readonly cleanup_evidence: CandidateCleanupEvidence }): { readonly duplicate: boolean; readonly operation_id: string; readonly task_id: string; readonly attempt: number; readonly generation: number; readonly claim_id: string; readonly revision: number; readonly event_sequence: number; readonly phase: 'cleanup_verified' | 'released'; readonly cleanup_verified: true; readonly cleanup_digest: string; readonly resolved_recovery_event_digests: readonly string[] };
   releaseCapacity(input: CandidateCleanupFence & { readonly cleanup_digest: string }): { readonly duplicate: boolean; readonly operation_id: string; readonly generation: number; readonly revision: number; readonly phase: 'released'; readonly capacity_released: true };
+  recordExecutorWakeObservation(input: CandidateExecutorWakeObservationInput): CandidateExecutorWakeObservationOutcome;
   requestCancellation(input: CandidateCancellationFence, evidence: Readonly<Record<string, unknown>>): CandidateCancellationOutcome;
   recordCancellationVerification(input: CandidateCancellationFence, evidence: Readonly<Record<string, unknown>>): CandidateCancellationOutcome;
   cancelQueuedAttempt(input: CandidateQueuedCancelInput): CandidateQueuedCancelOutcome;

@@ -117,6 +117,33 @@ async function waitForLifecycleEvent(client: ExecutorControlClient, taskId: stri
   throw new Error(`EXECUTOR_EVENT_TIMEOUT ${eventType} ${JSON.stringify(lastEvents)}`);
 }
 
+async function waitForExecutorWakeEvent(
+  client: ExecutorControlClient,
+  taskId: string,
+  state: "queued" | "submission_unknown" | "turn_started" | "web_notify",
+): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  let lastEvents: unknown = null;
+  while (Date.now() < deadline) {
+    const response = await client.request("getEvents", {
+      input: { task_id: taskId, after_seq: 0, limit: 200 },
+    });
+    assert.equal(response.ok, true);
+    const events = Array.isArray(response.result?.events)
+      ? response.result.events as Array<Record<string, unknown>>
+      : [];
+    lastEvents = events;
+    if (events.some((event) => {
+      const details = event.details;
+      return event.type === "observation_recorded" && typeof details === "object" && details !== null
+        && (details as Record<string, unknown>).reason === "executor_wake"
+        && (details as Record<string, unknown>).state === state;
+    })) return;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`EXECUTOR_WAKE_EVENT_TIMEOUT ${state} ${JSON.stringify(lastEvents)}`);
+}
+
 async function waitForInteractionRequest(
   client: ExecutorControlClient,
   taskId: string,
@@ -948,6 +975,7 @@ test("a real Executor commits a synthetic Worker Result, Cleanup, and Release ac
     assert.equal((resultResponse.result as { status?: unknown }).status, "completed");
     assert.equal((resultResponse.result as { attempt?: unknown }).attempt, 1);
     await waitForLifecycleEvent(client, taskId, "released");
+    await waitForExecutorWakeEvent(client, taskId, "web_notify");
 
     const modules = await loadLifecycleCandidateModules();
     const recovery = modules.Store.openForRecovery(root, { databaseFileName: "bridge.sqlite", managedDataDirectory: true });
@@ -955,7 +983,7 @@ test("a real Executor commits a synthetic Worker Result, Cleanup, and Release ac
     try {
       const snapshot = modules.createPort(recovery).readRecoverySnapshot() as {
         operations: Array<Record<string, unknown>>;
-        events: Array<{ event_type: string; operation_id: string }>;
+        events: Array<{ event_type: string; operation_id: string; evidence_json: string }>;
       };
       const operation = snapshot.operations.find((item) => item.task_id === taskId);
       assert.ok(operation, "the original Attempt Operation must remain persisted");
@@ -968,6 +996,17 @@ test("a real Executor commits a synthetic Worker Result, Cleanup, and Release ac
         assert.equal(eventTypes.includes(expected), true, `missing lifecycle event ${expected}`);
       }
       assert.equal(eventTypes.filter((event) => event === "result_committed").length, 1);
+      const wakeEvents = snapshot.events.filter((event) => {
+        if (event.operation_id !== operation.operation_id || event.event_type !== "observation_recorded") return false;
+        return (JSON.parse(event.evidence_json) as { reason?: unknown }).reason === "executor_wake";
+      });
+      assert.equal(wakeEvents.length, 1);
+      const wake = JSON.parse(wakeEvents[0]!.evidence_json) as Record<string, unknown>;
+      assert.equal(wake.state, "web_notify");
+      assert.equal(wake.reason_code, "policy_missing");
+      assert.equal(wake.thread_id, null);
+      assert.equal(operation.phase, "released");
+      assert.equal(operation.result_status, "completed");
     } finally {
       recovery.close();
     }

@@ -1,7 +1,7 @@
 # 测试入口与成本边界
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-22（Executor PR 2.5 / PR 3 Task CLI 定向验证）
+> Last updated: 2026-11-22（Executor PR 2.5 / PR 3 / PR 5 定向验证）
 > Last verified: 2026-11-22，核对 `release-candidate` 标签与 `workflow_dispatch.release_gate` 分流、开发期 `FULL_SUITE_DEFERRED_TO_RELEASE_GATE`、Required Check 占位、Push 完整门禁及 Cost Lab/Stress 独立边界；执行证据见 Async Executor PR 2/2.5 与 PR 3 报告。
 > Verified against: `origin/preview` `1bf039fda2ccfd17a992458a871bddd7b48b38c1` + `codex/async-executor-pr2.5` CI governance revision
 
@@ -61,6 +61,20 @@ PR 4 Web Console 的定向集合增加
 `dist/web-console.mjs` 的生成物/Plugin 校验。HTTP smoke 必须在独立 Executor
 Root 上完成 loopback session、Host/Origin/CSRF 和“关闭 Console 后 Executor
 仍 active”验证；不得用页面成功加载替代 Task/Result/Cleanup 验收。
+
+PR 5 Executor Wake 的定向集合增加：
+
+- `node --test dist-test/test/executor-wake.test.js`：策略/授权、App Server
+  preflight、Queue ACK、pending/unknown、Turn observation、no-retry 与 Web
+  fallback；
+- `node --test test/sqlite-candidate/wp6b2b1/lifecycle-port.test.mjs test/sqlite-candidate/wp6c/executor-wake.test.mjs`：
+  SQLite v14 Wake evidence、幂等/冲突、Release retry/Continue 兼容；
+- `test/executor-process.test.ts` 的跨进程 fake Worker Result -> Cleanup ->
+  Release -> Wake -> Web fallback E2E。
+
+不得运行真实 `codex queue`、真实 App Server control socket 或付费模型作为
+普通 PR 门禁。严格 C/D、真实 Desktop 关闭与真实模型费用/额度保持独立
+`NOT_RUN / BLOCKED`，不能用合成 Queue 或 `QUEUED` 代替。
 
 ## 退役与保留
 

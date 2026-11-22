@@ -1,10 +1,10 @@
 # Bridge Async Execution Architecture v1
 
-> Status: IMPLEMENTED — PR 2.5 + PR 3 TASK CLI + PR 4 WEB CONSOLE（stacked feature branch；未合入 Preview，不可发布）
-> Decision status: [ADR-045](../decisions/ADR-045-async-executor-ownership.md) = ACCEPTED；本文档记录目标合同与 PR 2/2.5 当前实现边界
+> Status: IMPLEMENTED — PARTIAL（PR 2/2.5/3/4/5 stacked candidates；未合入 Preview，不可发布）
+> Decision status: [ADR-045](../decisions/ADR-045-async-executor-ownership.md) = ACCEPTED；[ADR-051](../decisions/ADR-051-executor-wake-delivery.md) = ACCEPTED；本文档记录目标合同与当前实现边界
 > Date: 2026-11-22（Asia/Shanghai）
 > Baseline: `origin/preview` `1bf039fda2ccfd17a992458a871bddd7b48b38c1`；PR 2 base `f330b511270934fa40014006333aa7747dad684c`；implementation branch `codex/async-executor-pr2.5`
-> Evidence classification: 文中逐项标注 `VERIFIED`、`INFERRED`、`UNVERIFIED`；PR 2/2.5 证据见 [PR 2 report](../reports/async-executor-pr2-20261122.md) 与 [PR 2.5 report](../reports/async-executor-pr2.5-20261122.md)
+> Evidence classification: 文中逐项标注 `VERIFIED`、`INFERRED`、`UNVERIFIED`；证据见 [PR 2 report](../reports/async-executor-pr2-20261122.md)、[PR 2.5 report](../reports/async-executor-pr2.5-20261122.md) 与 [PR 5 report](../reports/async-executor-pr5-20261122.md)
 
 ## 1. 目标与非目标
 
@@ -37,6 +37,8 @@
 | Desktop 运行且 owning backend loaded/idle 时，官方 Queue 能启动原 Thread 新 Turn | VERIFIED | 2026-11-21 B/C 实验 |
 | CLI queue 参数能覆盖原 Thread 当前模型/effort | REFUTED | A 实验：实际仍为 Sol/xhigh |
 | Queue 支持 notLoaded Thread 或 Desktop 全退 | UNVERIFIED | 严格 C/D 未执行 |
+| Queue ACK 与 Turn 启动是不同事实 | VERIFIED | CLI help 说明 Queue 使用 Thread 当前 model；PR 5 coordinator 以新 `inProgress` Turn 记录 `TURN_STARTED` |
+| loaded/idle Thread + exact model/provider/effort preflight 可安全转成一次性 Queue 请求 | VERIFIED（合成客户端） | `test/executor-wake.test.ts` 8/8；真实 App Server control socket 当前不存在 |
 | 独立 Executor 能在真实 Codex Desktop 关闭后保持运行 | UNVERIFIED | 需阶段 1 Host E2E |
 
 当前集成基线为 `origin/preview@1bf039fda2ccfd17a992458a871bddd7b48b38c1`
@@ -251,14 +253,24 @@ ControlResponse { protocol_version, request_id, ok, result | error, executor_sta
 
 ### 5.1 Wake Intent / Delivery 持久化
 
-Wake 不新增第二套持久化权威。PR 5 前必须先完成一次 schema 裁决：
+PR 5 裁决采用 SQLite v14 事件记录，不新增 schema/表：
 
-1. **优先方案 A：SQLite v14 事件记录**。为已释放的 terminal Operation 追加一条 bounded `observation_recorded` 事件，把 Wake Intent/Delivery 的事实摘要写入受验证的 evidence JSON，并用 `evidence_digest` 绑定 Task、Attempt、Operation、Result digest、Thread ID、delivery ID、授权来源和状态。该方案需要扩展现有 evidence allowlist 与事件校验，属于受控 schema/校验变更，不新增表和第二状态机。
-2. **方案 B：Authority Root 下的私有 append-only journal**。只有方案 A 无法在 2 KiB evidence 限制内表达必要事实且无法安全修改校验时才评估。仍必须位于同一 Authority Root、绑定 Result digest、原子写入、无 schema 变更；不得变成任务调度事实源。
-3. **禁止**：独立 SQLite/JSON 任务库、Web 侧缓存权威、把 Wake 状态混入 Task 状态、或仅依赖 Web 进程内存。
-4. 若 PR 5 无法证明方案 A 的 evidence 结构、幂等和审核边界，Wake 持久化保持 `INCONCLUSIVE`，只允许 Web Notify，不开放自动 Queue。
+1. 已 `released` 的 terminal Operation 追加 bounded
+   `observation_recorded` evidence，`reason=executor_wake`。
+2. evidence 绑定 Task、Attempt、Operation、generation、Result digest、
+   Result commit ref、Thread ID、delivery ID、policy digest、authorization
+   digest、state、reason code 和 evidence digest；单条上限 2 KiB。
+3. 同一 Operation 最多 5 条 Wake evidence。相同 observation 幂等；
+   delivery/binding/transition 冲突、重复 Queue ACK、超过上限或非 `released`
+   Operation 均 fail closed。
+4. Wake 事件只允许 `released -> released`，不改变 Task、Result、Cleanup、
+   Release、Capacity、Writer 或 Recovery projection。Web Notify 只在首次
+   `web_notify` 事实持久化后触发；展示失败不回滚或重试 Queue。
+5. 没有第二 SQLite/JSON/journal、Web 缓存权威或内存状态 Authority。
 
-该问题不阻塞 PR 2/3/4。
+实现见 [ADR-051](../decisions/ADR-051-executor-wake-delivery.md)。持久化
+兼容性覆盖 Release retry、Continue history、Administrative Release 和
+Recovery；真实 Desktop UI acknowledgement 仍是 `UNKNOWN`。
 
 ## 6. 分阶段实施
 
@@ -269,7 +281,7 @@ Wake 不新增第二套持久化权威。PR 5 前必须先完成一次 schema �
 | PR 2.5 | MCP → Executor → Adapter → ZCode 四层收敛 | Thin MCP 不再构造 Authority；静态依赖边界、MCP schema parity、Executor IPC 与四层 fake Official Runtime E2E PASS；不新增执行路径 |
 | PR 3 | Task CLI + shared Control Client | MCP/CLI 并发读写同一权威；CLI 分发不拥有 SQLite/Manager |
 | PR 4 | Web Console | 已实现 loopback/Origin/CSRF、只读 Task/Event/Result、显式 Cancel/Reply；无模型调用、页面关闭不影响独立 Executor |
-| PR 5 | Queue Wake Adapter | 已加载 idle Thread 交付确认；严格 C/D 独立验收 |
+| PR 5 | Queue Wake Adapter | 已实现 loaded/idle exact-config 一次性 Queue + Web Notify fallback；严格 C/D 独立验收 |
 | PR 6 | Async Master Skill & Dispatch Workflow | Master Turn 结束、通知、恢复与独立验收 |
 
 允许按依赖合并 PR，但每阶段不得扩大到重构生产合同。统一 Release Candidate
@@ -317,11 +329,24 @@ Wake 不新增第二套持久化权威。PR 5 前必须先完成一次 schema �
 
 ### 7.3 Wake 验收
 
-- loaded/idle：Queue 投递后必须有 `TURN_STARTED` 与终态证据。
+- loaded/idle：Queue 投递后必须区分 `QUEUED` 与 `TURN_STARTED`，`TURN_COMPLETED`
+  另行由 Thread 事件/后续验收观察，不能由 Queue ACK 推断。
 - notLoaded：严格 C，普通 Queue 与 `--resume` 分别验证。
 - Desktop 全退：D 场景验证是否持久排队或由独立 owner 消费。
 - 模型失控负例：当前 model/effort/budget 未确认时 fail-closed 转 Web Notify。
 - 多 writer、版本漂移、提交未知：不自动重发。
+- Desktop visible：没有显式 UI acknowledgement 时固定为 `UNKNOWN`。
+
+当前确定性证据：
+
+- `test/executor-wake.test.ts`：8/8，覆盖策略缺失/失效、disabled、App Server
+  不可用、notLoaded/active/systemError/direct-input、workspace/model/provider/
+  effort 不匹配、一次性 intent、ACK lost、Turn observation 与 fallback。
+- `test/sqlite-candidate/wp6c/executor-wake.test.mjs`：4/4，覆盖 SQLite v14
+  evidence、幂等/冲突、Web fallback、Release retry 与 Continue 兼容。
+- `test/executor-process.test.ts` 的 fake Worker E2E：Result -> Cleanup ->
+  Release -> Wake -> Web fallback 通过，原 Attempt Result 与 release 未被改写。
+- 真实 strict C/D、真实 App Server socket、真实 Queue 和付费模型：`NOT_RUN`。
 
 ## 8. 发布门槛
 
@@ -342,6 +367,8 @@ Wake 不新增第二套持久化权威。PR 5 前必须先完成一次 schema �
 
 - 仅 loaded/idle 实验版可先开放；正式版必须补严格 C/D、多 writer 和版本漂移。
 - A 类模型失控必须有负例测试；未确认 model/effort/budget 一律 Web Notify。
+- Queue 失败/未知不得影响 Result/Cleanup/Release；Desktop visible 不得由
+  Queue ACK 推断。
 
 ### Preview integration
 
@@ -357,7 +384,9 @@ Wake 不新增第二套持久化权威。PR 5 前必须先完成一次 schema �
 4. MCP 等待请求与 Executor 控制请求的生命周期已在 PR 2/2.5 candidate 中实现并覆盖 `REQUEST_CANCELLED`、`TASK_CANCEL_REQUESTED`、`SUBMISSION_UNKNOWN`、`EXECUTOR_UNAVAILABLE`；真实 Host 行为仍待 E2E。
 5. Thin MCP 已删除 `in_process` 分支；仍依赖客户端在 Executor 未启动时明确得到 `EXECUTOR_UNAVAILABLE`，而不是自动拉起 Executor。
 6. Web 列表投影的扫描规模与 Token 输出仍需基准，不得无界读取全部事件。
-7. Queue 只证明 loaded/idle；notLoaded 与 Desktop 全退 UNVERIFIED。Queue Adapter 属于后续 PR 5，不在 PR 2/2.5 实现。
+7. Queue 只证明 loaded/idle；notLoaded 与 Desktop 全退 UNVERIFIED。PR 5
+   已实现 fail-closed Wake Adapter，但真实 App Server/Queue 没有在当前环境
+   重放，严格 C/D 仍是独立发布门禁。
 8. A 实验 Sol/xhigh 费用/额度变化不可观察，不估算。
 9. Token Efficiency 架构敏感候选保持冻结；本架构不得预设其结果。
 

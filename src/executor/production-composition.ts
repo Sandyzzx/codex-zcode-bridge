@@ -27,6 +27,11 @@ import { SqliteLifecycleMcpAuthority as SqliteAuthority } from "../manager/sqlit
 import { zcodeDataBaseDir } from "../runtime/account-provider.js";
 import { workerEntryPath } from "../manager/spawn-worker.js";
 import type { BridgeHostProfile } from "../runtime/host-profile.js";
+import {
+  createExecutorWakeCoordinator,
+  defaultAppServerControlSocket,
+  defaultCodexExecutable,
+} from "./wake.js";
 
 export interface HostStartPlanIssuerOptions {
   readonly env: NodeJS.ProcessEnv;
@@ -186,6 +191,11 @@ export async function createProductionAuthorityComposition(
       }
     },
   });
+  const wakeCoordinator = createExecutorWakeCoordinator({
+    authorityRoot: options.authorityRoot,
+    codexExecutable: defaultCodexExecutable(env),
+    socketPath: defaultAppServerControlSocket(env, homeDir),
+  });
 
   await initializeFreshInstallSqliteRoot(
     options.authorityRoot,
@@ -212,6 +222,9 @@ export async function createProductionAuthorityComposition(
       journal: modelRoutingJournal,
     }),
     routeTaskModel,
+    onOperationReleased: (fact, recorder) => wakeCoordinator.handle(fact, {
+      recordExecutorWakeObservation: (input) => recorder(input),
+    }).then(() => undefined),
     onWorkerDiagnosticLine: options.onWorkerDiagnosticLine
       ?? createWorkerDiagnosticSink("[bridge]"),
     ...(options.testOnlyFakeAdapter === true ? { testOnlyFakeAdapter: true as const } : {}),

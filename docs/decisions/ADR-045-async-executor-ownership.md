@@ -1,7 +1,7 @@
 # ADR-045：独立 Async Executor 所有权
 
 > Status: ACCEPTED（Owner 条件批准；架构方向已接受）
-> Implementation status: PARTIAL / BLOCKED — PR 2/2.5/3/4 candidate；未合入 Preview，未发布
+> Implementation status: PARTIAL / BLOCKED — PR 2/2.5/3/4/5 candidate；未合入 Preview，未发布
 > Date: 2026-11-22
 > Baseline: `origin/preview` `1bf039fda2ccfd17a992458a871bddd7b48b38c1`
 > Related architecture: [BRIDGE_ASYNC_EXECUTION_V1.md](../architecture/BRIDGE_ASYNC_EXECUTION_V1.md)
@@ -108,3 +108,23 @@ Task、Event 和 Result，并仅转发显式 Cancel/Interaction Reply；不提�
 
 插件生成 `dist/web-console.mjs`。定向 HTTP、安全、Architecture Boundary 和
 打包校验通过；真实多用户隔离、Desktop 关闭和付费 Runtime 仍未验证。
+
+## PR 5 Implementation Record
+
+PR 5 按 [ADR-051](ADR-051-executor-wake-delivery.md) 在 Executor 内增加
+post-Release、一次性 Wake Adapter。Queue 仅用于已经由 App Server 确认
+loaded、idle、可接收 direct input，且 workspace、model、provider、reasoning
+effort 与 Owner 单 Turn 授权完全一致的 Thread。任何不确定条件转
+`web_notify`。Queue 不附加 `--resume`，不重试；非零/信号/timeout 记为
+`submission_unknown`，只有观察到 baseline 之外的新 `inProgress` Turn 才记
+`turn_started`。
+
+Wake Intent/Delivery 复用 SQLite v14 terminal Operation 的 bounded
+`observation_recorded` evidence，不新增表或 schema。Wake 事实不改变
+Task/Result/Cleanup/Release/Capacity/Recovery，只追加 `released -> released`
+observation。跨进程 fake Worker Result/Cleanup/Release -> Wake -> Web fallback
+E2E 与 coordinator fail-closed 矩阵通过。
+
+真实 App Server control socket、真实 Queue、严格 notLoaded C、Desktop 全退 D
+和真实付费模型均未在候选验证中运行；这些门禁保持 `NOT_RUN / BLOCKED`。
+Queue Wake 仍不得扩展为发布承诺，持久化结果与安全回退也不能以 F5 代替。
