@@ -4,15 +4,15 @@
   "generator": "npm run test:inventory",
   "summary": {
     "executable_or_manual_files": 109,
-    "declarations": 982,
+    "declarations": 989,
     "by_type": {
       "Unit": 262,
-      "Integration": 716,
+      "Integration": 723,
       "Stress": 4
     },
     "by_gate": {
       "T1": 301,
-      "T2": 677,
+      "T2": 684,
       "T3": 4
     },
     "stress_tests": 2,
@@ -27123,8 +27123,8 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-DC13463828427D8C",
-      "test_name": "<dynamic-name>`formal MCP keeps a user-authorized cleanup Hold occupied when the Worker is ${stopMode==='still-alive'?'still alive':'not terminable'}`@test/sqlite-candidate/wp6b-wiring/composition.test.ts",
+      "test_id": "TII-52D3130744469849",
+      "test_name": "formal MCP deduplicates a refreshed Recovery Hold and releases it through ADR-039 without claiming Cleanup",
       "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
       "test_line": 4156,
       "test_type": "Integration",
@@ -27132,6 +27132,107 @@
       "runtime": "NOT_MEASURED",
       "runtime_evidence": {
         "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": 45000,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Disk",
+        "Memory",
+        "Process"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/adapters/process-spawn.ts",
+          "src/executor/production-composition.ts",
+          "src/manager/sqlite-lifecycle-mcp-authority.ts",
+          "src/mcp/server.ts",
+          "src/runtime/doctor.ts",
+          "src/runtime/process-probe.ts",
+          "src/store/lifecycle-gate.ts",
+          "src/workspace/direct-provider.ts"
+        ],
+        "impact_domains": [
+          "sqlite-persistence",
+          "manager-lifecycle",
+          "mcp-host",
+          "worker-launch",
+          "workspace-provider",
+          "process-cleanup-and-locks"
+        ]
+      },
+      "trigger_source_paths": [
+        "src/sqlite-candidate/**",
+        "src/runtime/sqlite-install-config.ts",
+        "src/runtime/sqlite-runtime-roster.ts",
+        "src/store/lifecycle-gate.ts",
+        "src/runtime/task-timeout.ts",
+        "src/manager/sqlite-lifecycle-mcp-authority.ts",
+        "src/cli/admin-abandon-held-operation.ts",
+        "src/host/profile.ts",
+        "src/host/stdio.ts",
+        "src/executor/production-composition.ts",
+        "src/runtime/host-profile.ts",
+        "src/runtime/doctor.ts",
+        "src/runtime/sqlite-doctor.ts",
+        "src/runtime/trusted-local-deployment.ts",
+        "src/runtime/trusted-local-policy-config.ts",
+        "src/runtime/trusted-local-profile.ts",
+        "src/manager/errors.ts",
+        "src/manager/normalize.ts",
+        "src/runtime/process-probe.ts",
+        "src/manager/sqlite-lifecycle-mcp-authority.ts",
+        "src/executor/**",
+        "src/cli/main.ts",
+        "src/web/**",
+        "src/task-list.ts",
+        "src/result-summary.ts",
+        "src/runtime/host-profile.ts",
+        "src/task-errors.ts",
+        "src/mcp/main.ts",
+        "src/mcp/server.ts",
+        "src/mcp/schemas.ts",
+        "src/mcp/contracts.ts",
+        "src/mcp/result-summary.ts",
+        "src/host/stdio.ts",
+        "src/api-schemas.ts",
+        "src/executor/control-client.ts",
+        "src/executor/pipe.ts",
+        "src/executor/remote-model-settings.ts",
+        "src/executor/remote-task-manager.ts",
+        "src/task-errors.ts",
+        "src/manager/spawn-worker.ts",
+        "src/runtime/build-provenance.ts",
+        "src/runtime/child-env.ts",
+        "src/runtime/node-runtime.ts",
+        "src/worker/production-adapter-selection.ts",
+        "src/worker/worker-main.ts",
+        "src/runtime/start-plan-private-channel.ts",
+        "src/runtime/start-plan-private-frame.ts",
+        "src/runtime/start-plan-private-lease.ts",
+        "src/runtime/start-plan-handle-gate.ts",
+        "src/workspace/direct-provider.ts",
+        "src/adapters/process-spawn.ts",
+        "src/adapters/windows-process-cleanup.ts",
+        "src/runtime/process-probe.ts",
+        "src/store/process-lock.ts",
+        "src/store/atomic-rename.ts"
+      ],
+      "trigger_test_files": [
+        "test/sqlite-candidate/wp6b-wiring/composition.test.ts"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-F25937AE2E13F9BC",
+      "test_name": "<dynamic-name>`formal MCP keeps a user-authorized cleanup Hold occupied when the Worker is ${stopMode==='still-alive'?'still alive':'not terminable'}`@test/sqlite-candidate/wp6b-wiring/composition.test.ts",
+      "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
+      "test_line": 4225,
+      "test_type": "Integration",
+      "gate": "T2",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
         "timeout_milliseconds": 30000,
         "historical_baseline": null
       },
@@ -27224,10 +27325,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-A25DD669B6AEEA4F",
+      "test_id": "TII-F7792CF4964ED1DA",
       "test_name": "<dynamic-name>`formal MCP cancels a running cleanup Hold only after fresh identity/tree proof (prior ${priorProof}, clean ${scanClean})`@test/sqlite-candidate/wp6b-wiring/composition.test.ts",
       "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-      "test_line": 4196,
+      "test_line": 4265,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -27325,10 +27426,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-05133544D1E28FE1",
+      "test_id": "TII-E5CFEB84D88ABA03",
       "test_name": "formal MCP running Cancel persists intent, verifies the Worker tree, and releases only after Cleanup",
       "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-      "test_line": 4254,
+      "test_line": 4323,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -27426,10 +27527,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-6FAA0753A8D4D748",
+      "test_id": "TII-7FF7C68E56E10A10",
       "test_name": "formal MCP concurrent zcode_cancel calls recover one held Task with one verified termination and Release",
       "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-      "test_line": 4310,
+      "test_line": 4379,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -27527,10 +27628,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-C5B966A7C5E40E2E",
+      "test_id": "TII-E5258FDEBAED9703",
       "test_name": "formal MCP Host shutdown cancels an active Worker and closes only after verified Cleanup and Release",
       "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-      "test_line": 4486,
+      "test_line": 4555,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -27628,10 +27729,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-0EEFC4AF409CF94D",
+      "test_id": "TII-A27A44CB073722CD",
       "test_name": "formal MCP Host shutdown lets a committed Result finish Cleanup without cancelling the terminal Attempt",
       "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-      "test_line": 4554,
+      "test_line": 4623,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -27729,10 +27830,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-7D87BDB36EE79BA7",
+      "test_id": "TII-1EE6C533F1FD0EF2",
       "test_name": "formal MCP Host shutdown is bounded on unknown cancellation and can be retried after verified Cleanup",
       "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-      "test_line": 4594,
+      "test_line": 4663,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -27830,10 +27931,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-A82837DE9B1AE923",
+      "test_id": "TII-5C496DB2607BD727",
       "test_name": "formal SQLite MCP stdio shutdown closes only after verified Cleanup and Release",
       "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-      "test_line": 4662,
+      "test_line": 4731,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -27931,10 +28032,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-D4B74D236D19512E",
+      "test_id": "TII-ED07AB03AFD54015",
       "test_name": "stdio remains queryable after Unknown Shutdown and an existing Worker can commit before retry",
       "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-      "test_line": 4700,
+      "test_line": 4769,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -28032,10 +28133,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-A508C038C28DCA96",
+      "test_id": "TII-5484C6324C0A3B04",
       "test_name": "stdio EOF attempts graceful shutdown without promising a disconnected query channel",
       "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-      "test_line": 4882,
+      "test_line": 4951,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -28133,10 +28234,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-DE2BB106E120DD15",
+      "test_id": "TII-38D775CBA1220157",
       "test_name": "stdio Host restart preserves active Operation occupancy without replay or Root Hold",
       "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-      "test_line": 4901,
+      "test_line": 4970,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -28234,10 +28335,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-966CD1A3D0BCED15",
+      "test_id": "TII-4D98C221DE22EF57",
       "test_name": "formal MCP interaction reply uses persisted SQLite request and a verified live Worker channel",
       "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-      "test_line": 4943,
+      "test_line": 5012,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -28335,10 +28436,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-6469B89583786FE4",
+      "test_id": "TII-F86C2B0FA3F53360",
       "test_name": "SQLite Manager preserves attention waiting and rejects invalid cursors before waiting",
       "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-      "test_line": 4981,
+      "test_line": 5050,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -41578,10 +41679,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-EB18870023A579DE",
+      "test_id": "TII-F043ACCBF615E8FF",
       "test_name": "verified cleanup is operation-scoped and release frees only its own slot",
       "test_file": "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
-      "test_line": 104,
+      "test_line": 135,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -41646,10 +41747,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-6C71D34FBBC1C808",
+      "test_id": "TII-0368B2450CB0DC18",
       "test_name": "Recovery distinguishes verified cleanup awaiting Release from unknown cleanup for a shared Workspace",
       "test_file": "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
-      "test_line": 116,
+      "test_line": 147,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -41714,10 +41815,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-AA2AC7C53FCB4197",
+      "test_id": "TII-1526B6152BE95DD1",
       "test_name": "Result, Worker exit, or PID absence without verified operation resources cannot release capacity",
       "test_file": "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
-      "test_line": 136,
+      "test_line": 167,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -41782,10 +41883,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-5AFF637CAA4EC0C1",
+      "test_id": "TII-667CCBFF1C7226AC",
       "test_name": "unknown OS probe and incomplete cleanup preserve occupancy and permanent Claim",
       "test_file": "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
-      "test_line": 146,
+      "test_line": 177,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -41850,10 +41951,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-5C8A938CD8A8686D",
-      "test_name": "complete new evidence resolves only the exact Cleanup Holds and preserves their immutable history",
+      "test_id": "TII-EB11946A237C3B3F",
+      "test_name": "complete new evidence resolves more than eight exact Cleanup Holds and preserves their immutable history",
       "test_file": "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
-      "test_line": 154,
+      "test_line": 185,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -41918,144 +42019,8 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-35C34CE00934AAD1",
-      "test_name": "a non-Cleanup Hold blocks re-verification without changing the Operation or releasing Capacity",
-      "test_file": "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
-      "test_line": 199,
-      "test_type": "Integration",
-      "gate": "T2",
-      "runtime": "NOT_MEASURED",
-      "runtime_evidence": {
-        "actual_runtime_milliseconds": null,
-        "timeout_milliseconds": null,
-        "historical_baseline": null
-      },
-      "resource": [
-        "CPU",
-        "Disk",
-        "Memory"
-      ],
-      "dependency": {
-        "static_source_imports": [
-          "src/sqlite-candidate/wp6b2b1/lifecycle-port.ts",
-          "src/sqlite-candidate/wp6b2b1/store.ts"
-        ],
-        "impact_domains": [
-          "sqlite-persistence",
-          "manager-lifecycle",
-          "process-cleanup-and-locks"
-        ]
-      },
-      "trigger_source_paths": [
-        "src/sqlite-candidate/**",
-        "src/runtime/sqlite-install-config.ts",
-        "src/runtime/sqlite-runtime-roster.ts",
-        "src/store/lifecycle-gate.ts",
-        "src/runtime/task-timeout.ts",
-        "src/manager/sqlite-lifecycle-mcp-authority.ts",
-        "src/cli/admin-abandon-held-operation.ts",
-        "src/host/profile.ts",
-        "src/host/stdio.ts",
-        "src/executor/production-composition.ts",
-        "src/runtime/host-profile.ts",
-        "src/runtime/doctor.ts",
-        "src/runtime/sqlite-doctor.ts",
-        "src/runtime/trusted-local-deployment.ts",
-        "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/manager/errors.ts",
-        "src/manager/normalize.ts",
-        "src/runtime/process-probe.ts",
-        "src/manager/sqlite-lifecycle-mcp-authority.ts",
-        "src/executor/**",
-        "src/cli/main.ts",
-        "src/web/**",
-        "src/task-list.ts",
-        "src/result-summary.ts",
-        "src/runtime/host-profile.ts",
-        "src/task-errors.ts",
-        "src/adapters/process-spawn.ts",
-        "src/adapters/windows-process-cleanup.ts",
-        "src/runtime/process-probe.ts",
-        "src/store/process-lock.ts",
-        "src/store/atomic-rename.ts"
-      ],
-      "trigger_test_files": [
-        "test/sqlite-candidate/wp6c/cleanup-release.test.mjs"
-      ],
-      "stress_boundary": null
-    },
-    {
-      "test_id": "TII-F5A2380E058F3E14",
-      "test_name": "known failure after the re-verification Event rolls back both phases and keeps the Hold active",
-      "test_file": "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
-      "test_line": 215,
-      "test_type": "Integration",
-      "gate": "T2",
-      "runtime": "NOT_MEASURED",
-      "runtime_evidence": {
-        "actual_runtime_milliseconds": null,
-        "timeout_milliseconds": null,
-        "historical_baseline": null
-      },
-      "resource": [
-        "CPU",
-        "Disk",
-        "Memory"
-      ],
-      "dependency": {
-        "static_source_imports": [
-          "src/sqlite-candidate/wp6b2b1/lifecycle-port.ts",
-          "src/sqlite-candidate/wp6b2b1/store.ts"
-        ],
-        "impact_domains": [
-          "sqlite-persistence",
-          "manager-lifecycle",
-          "process-cleanup-and-locks"
-        ]
-      },
-      "trigger_source_paths": [
-        "src/sqlite-candidate/**",
-        "src/runtime/sqlite-install-config.ts",
-        "src/runtime/sqlite-runtime-roster.ts",
-        "src/store/lifecycle-gate.ts",
-        "src/runtime/task-timeout.ts",
-        "src/manager/sqlite-lifecycle-mcp-authority.ts",
-        "src/cli/admin-abandon-held-operation.ts",
-        "src/host/profile.ts",
-        "src/host/stdio.ts",
-        "src/executor/production-composition.ts",
-        "src/runtime/host-profile.ts",
-        "src/runtime/doctor.ts",
-        "src/runtime/sqlite-doctor.ts",
-        "src/runtime/trusted-local-deployment.ts",
-        "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/manager/errors.ts",
-        "src/manager/normalize.ts",
-        "src/runtime/process-probe.ts",
-        "src/manager/sqlite-lifecycle-mcp-authority.ts",
-        "src/executor/**",
-        "src/cli/main.ts",
-        "src/web/**",
-        "src/task-list.ts",
-        "src/result-summary.ts",
-        "src/runtime/host-profile.ts",
-        "src/task-errors.ts",
-        "src/adapters/process-spawn.ts",
-        "src/adapters/windows-process-cleanup.ts",
-        "src/runtime/process-probe.ts",
-        "src/store/process-lock.ts",
-        "src/store/atomic-rename.ts"
-      ],
-      "trigger_test_files": [
-        "test/sqlite-candidate/wp6c/cleanup-release.test.mjs"
-      ],
-      "stress_boundary": null
-    },
-    {
-      "test_id": "TII-082B0DB8FBD71924",
-      "test_name": "two independent Managers re-verifying the same evidence append one remediation chain",
+      "test_id": "TII-5548893CE487A842",
+      "test_name": "eight material-free v14 Holds remain readable and resolvable after the limit removal",
       "test_file": "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
       "test_line": 233,
       "test_type": "Integration",
@@ -42122,10 +42087,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-AADFE8C29AA5FDE6",
-      "test_name": "unknown re-verification commit poisons Root and never treats cleanup as released",
+      "test_id": "TII-527706B6D4D0ECB4",
+      "test_name": "read-only Recovery accepts the exact v14 guard before writable open upgrades it without a schema bump",
       "test_file": "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
-      "test_line": 253,
+      "test_line": 269,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -42190,10 +42155,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-2E3883404B60E43A",
-      "test_name": "Schema v11 roots remain untouched and are rejected without automatic migration",
+      "test_id": "TII-60D87B5A0577568F",
+      "test_name": "a legacy Hold without material_digest cannot hide changed material facts",
       "test_file": "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
-      "test_line": 270,
+      "test_line": 303,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -42258,348 +42223,8 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-3396C71463BA884E",
-      "test_name": "PID reuse or mismatch with the recorded Receipt/Claim identity refuses verification",
-      "test_file": "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
-      "test_line": 283,
-      "test_type": "Integration",
-      "gate": "T2",
-      "runtime": "NOT_MEASURED",
-      "runtime_evidence": {
-        "actual_runtime_milliseconds": null,
-        "timeout_milliseconds": null,
-        "historical_baseline": null
-      },
-      "resource": [
-        "CPU",
-        "Disk",
-        "Memory"
-      ],
-      "dependency": {
-        "static_source_imports": [
-          "src/sqlite-candidate/wp6b2b1/lifecycle-port.ts",
-          "src/sqlite-candidate/wp6b2b1/store.ts"
-        ],
-        "impact_domains": [
-          "sqlite-persistence",
-          "manager-lifecycle",
-          "process-cleanup-and-locks"
-        ]
-      },
-      "trigger_source_paths": [
-        "src/sqlite-candidate/**",
-        "src/runtime/sqlite-install-config.ts",
-        "src/runtime/sqlite-runtime-roster.ts",
-        "src/store/lifecycle-gate.ts",
-        "src/runtime/task-timeout.ts",
-        "src/manager/sqlite-lifecycle-mcp-authority.ts",
-        "src/cli/admin-abandon-held-operation.ts",
-        "src/host/profile.ts",
-        "src/host/stdio.ts",
-        "src/executor/production-composition.ts",
-        "src/runtime/host-profile.ts",
-        "src/runtime/doctor.ts",
-        "src/runtime/sqlite-doctor.ts",
-        "src/runtime/trusted-local-deployment.ts",
-        "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/manager/errors.ts",
-        "src/manager/normalize.ts",
-        "src/runtime/process-probe.ts",
-        "src/manager/sqlite-lifecycle-mcp-authority.ts",
-        "src/executor/**",
-        "src/cli/main.ts",
-        "src/web/**",
-        "src/task-list.ts",
-        "src/result-summary.ts",
-        "src/runtime/host-profile.ts",
-        "src/task-errors.ts",
-        "src/adapters/process-spawn.ts",
-        "src/adapters/windows-process-cleanup.ts",
-        "src/runtime/process-probe.ts",
-        "src/store/process-lock.ts",
-        "src/store/atomic-rename.ts"
-      ],
-      "trigger_test_files": [
-        "test/sqlite-candidate/wp6c/cleanup-release.test.mjs"
-      ],
-      "stress_boundary": null
-    },
-    {
-      "test_id": "TII-D26FB6398D3F1AD6",
-      "test_name": "Workspace mutation and incomplete process/resource evidence are rejected",
-      "test_file": "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
-      "test_line": 291,
-      "test_type": "Integration",
-      "gate": "T2",
-      "runtime": "NOT_MEASURED",
-      "runtime_evidence": {
-        "actual_runtime_milliseconds": null,
-        "timeout_milliseconds": null,
-        "historical_baseline": null
-      },
-      "resource": [
-        "CPU",
-        "Disk",
-        "Memory"
-      ],
-      "dependency": {
-        "static_source_imports": [
-          "src/sqlite-candidate/wp6b2b1/lifecycle-port.ts",
-          "src/sqlite-candidate/wp6b2b1/store.ts"
-        ],
-        "impact_domains": [
-          "sqlite-persistence",
-          "manager-lifecycle",
-          "process-cleanup-and-locks"
-        ]
-      },
-      "trigger_source_paths": [
-        "src/sqlite-candidate/**",
-        "src/runtime/sqlite-install-config.ts",
-        "src/runtime/sqlite-runtime-roster.ts",
-        "src/store/lifecycle-gate.ts",
-        "src/runtime/task-timeout.ts",
-        "src/manager/sqlite-lifecycle-mcp-authority.ts",
-        "src/cli/admin-abandon-held-operation.ts",
-        "src/host/profile.ts",
-        "src/host/stdio.ts",
-        "src/executor/production-composition.ts",
-        "src/runtime/host-profile.ts",
-        "src/runtime/doctor.ts",
-        "src/runtime/sqlite-doctor.ts",
-        "src/runtime/trusted-local-deployment.ts",
-        "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/manager/errors.ts",
-        "src/manager/normalize.ts",
-        "src/runtime/process-probe.ts",
-        "src/manager/sqlite-lifecycle-mcp-authority.ts",
-        "src/executor/**",
-        "src/cli/main.ts",
-        "src/web/**",
-        "src/task-list.ts",
-        "src/result-summary.ts",
-        "src/runtime/host-profile.ts",
-        "src/task-errors.ts",
-        "src/adapters/process-spawn.ts",
-        "src/adapters/windows-process-cleanup.ts",
-        "src/runtime/process-probe.ts",
-        "src/store/process-lock.ts",
-        "src/store/atomic-rename.ts"
-      ],
-      "trigger_test_files": [
-        "test/sqlite-candidate/wp6c/cleanup-release.test.mjs"
-      ],
-      "stress_boundary": null
-    },
-    {
-      "test_id": "TII-D67F412B22ED9903",
-      "test_name": "stale generation, revision, Attempt, Claim, and Worker identity cannot record Cleanup or release",
-      "test_file": "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
-      "test_line": 299,
-      "test_type": "Integration",
-      "gate": "T2",
-      "runtime": "NOT_MEASURED",
-      "runtime_evidence": {
-        "actual_runtime_milliseconds": null,
-        "timeout_milliseconds": null,
-        "historical_baseline": null
-      },
-      "resource": [
-        "CPU",
-        "Disk",
-        "Memory"
-      ],
-      "dependency": {
-        "static_source_imports": [
-          "src/sqlite-candidate/wp6b2b1/lifecycle-port.ts",
-          "src/sqlite-candidate/wp6b2b1/store.ts"
-        ],
-        "impact_domains": [
-          "sqlite-persistence",
-          "manager-lifecycle",
-          "process-cleanup-and-locks"
-        ]
-      },
-      "trigger_source_paths": [
-        "src/sqlite-candidate/**",
-        "src/runtime/sqlite-install-config.ts",
-        "src/runtime/sqlite-runtime-roster.ts",
-        "src/store/lifecycle-gate.ts",
-        "src/runtime/task-timeout.ts",
-        "src/manager/sqlite-lifecycle-mcp-authority.ts",
-        "src/cli/admin-abandon-held-operation.ts",
-        "src/host/profile.ts",
-        "src/host/stdio.ts",
-        "src/executor/production-composition.ts",
-        "src/runtime/host-profile.ts",
-        "src/runtime/doctor.ts",
-        "src/runtime/sqlite-doctor.ts",
-        "src/runtime/trusted-local-deployment.ts",
-        "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/manager/errors.ts",
-        "src/manager/normalize.ts",
-        "src/runtime/process-probe.ts",
-        "src/manager/sqlite-lifecycle-mcp-authority.ts",
-        "src/executor/**",
-        "src/cli/main.ts",
-        "src/web/**",
-        "src/task-list.ts",
-        "src/result-summary.ts",
-        "src/runtime/host-profile.ts",
-        "src/task-errors.ts",
-        "src/adapters/process-spawn.ts",
-        "src/adapters/windows-process-cleanup.ts",
-        "src/runtime/process-probe.ts",
-        "src/store/process-lock.ts",
-        "src/store/atomic-rename.ts"
-      ],
-      "trigger_test_files": [
-        "test/sqlite-candidate/wp6c/cleanup-release.test.mjs"
-      ],
-      "stress_boundary": null
-    },
-    {
-      "test_id": "TII-A0CE35E8B1532274",
-      "test_name": "begin and verified Cleanup are idempotent without adding duplicate Events",
-      "test_file": "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
-      "test_line": 313,
-      "test_type": "Integration",
-      "gate": "T2",
-      "runtime": "NOT_MEASURED",
-      "runtime_evidence": {
-        "actual_runtime_milliseconds": null,
-        "timeout_milliseconds": null,
-        "historical_baseline": null
-      },
-      "resource": [
-        "CPU",
-        "Disk",
-        "Memory"
-      ],
-      "dependency": {
-        "static_source_imports": [
-          "src/sqlite-candidate/wp6b2b1/lifecycle-port.ts",
-          "src/sqlite-candidate/wp6b2b1/store.ts"
-        ],
-        "impact_domains": [
-          "sqlite-persistence",
-          "manager-lifecycle",
-          "process-cleanup-and-locks"
-        ]
-      },
-      "trigger_source_paths": [
-        "src/sqlite-candidate/**",
-        "src/runtime/sqlite-install-config.ts",
-        "src/runtime/sqlite-runtime-roster.ts",
-        "src/store/lifecycle-gate.ts",
-        "src/runtime/task-timeout.ts",
-        "src/manager/sqlite-lifecycle-mcp-authority.ts",
-        "src/cli/admin-abandon-held-operation.ts",
-        "src/host/profile.ts",
-        "src/host/stdio.ts",
-        "src/executor/production-composition.ts",
-        "src/runtime/host-profile.ts",
-        "src/runtime/doctor.ts",
-        "src/runtime/sqlite-doctor.ts",
-        "src/runtime/trusted-local-deployment.ts",
-        "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/manager/errors.ts",
-        "src/manager/normalize.ts",
-        "src/runtime/process-probe.ts",
-        "src/manager/sqlite-lifecycle-mcp-authority.ts",
-        "src/executor/**",
-        "src/cli/main.ts",
-        "src/web/**",
-        "src/task-list.ts",
-        "src/result-summary.ts",
-        "src/runtime/host-profile.ts",
-        "src/task-errors.ts",
-        "src/adapters/process-spawn.ts",
-        "src/adapters/windows-process-cleanup.ts",
-        "src/runtime/process-probe.ts",
-        "src/store/process-lock.ts",
-        "src/store/atomic-rename.ts"
-      ],
-      "trigger_test_files": [
-        "test/sqlite-candidate/wp6c/cleanup-release.test.mjs"
-      ],
-      "stress_boundary": null
-    },
-    {
-      "test_id": "TII-60754B19FBD46B03",
-      "test_name": "different Cleanup evidence cannot overwrite the first verified evidence",
-      "test_file": "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
-      "test_line": 322,
-      "test_type": "Integration",
-      "gate": "T2",
-      "runtime": "NOT_MEASURED",
-      "runtime_evidence": {
-        "actual_runtime_milliseconds": null,
-        "timeout_milliseconds": null,
-        "historical_baseline": null
-      },
-      "resource": [
-        "CPU",
-        "Disk",
-        "Memory"
-      ],
-      "dependency": {
-        "static_source_imports": [
-          "src/sqlite-candidate/wp6b2b1/lifecycle-port.ts",
-          "src/sqlite-candidate/wp6b2b1/store.ts"
-        ],
-        "impact_domains": [
-          "sqlite-persistence",
-          "manager-lifecycle",
-          "process-cleanup-and-locks"
-        ]
-      },
-      "trigger_source_paths": [
-        "src/sqlite-candidate/**",
-        "src/runtime/sqlite-install-config.ts",
-        "src/runtime/sqlite-runtime-roster.ts",
-        "src/store/lifecycle-gate.ts",
-        "src/runtime/task-timeout.ts",
-        "src/manager/sqlite-lifecycle-mcp-authority.ts",
-        "src/cli/admin-abandon-held-operation.ts",
-        "src/host/profile.ts",
-        "src/host/stdio.ts",
-        "src/executor/production-composition.ts",
-        "src/runtime/host-profile.ts",
-        "src/runtime/doctor.ts",
-        "src/runtime/sqlite-doctor.ts",
-        "src/runtime/trusted-local-deployment.ts",
-        "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/manager/errors.ts",
-        "src/manager/normalize.ts",
-        "src/runtime/process-probe.ts",
-        "src/manager/sqlite-lifecycle-mcp-authority.ts",
-        "src/executor/**",
-        "src/cli/main.ts",
-        "src/web/**",
-        "src/task-list.ts",
-        "src/result-summary.ts",
-        "src/runtime/host-profile.ts",
-        "src/task-errors.ts",
-        "src/adapters/process-spawn.ts",
-        "src/adapters/windows-process-cleanup.ts",
-        "src/runtime/process-probe.ts",
-        "src/store/process-lock.ts",
-        "src/store/atomic-rename.ts"
-      ],
-      "trigger_test_files": [
-        "test/sqlite-candidate/wp6c/cleanup-release.test.mjs"
-      ],
-      "stress_boundary": null
-    },
-    {
-      "test_id": "TII-899772D0FD4D4BF6",
-      "test_name": "release requires the exact verified digest and is idempotent",
+      "test_id": "TII-D3521E625B00B54D",
+      "test_name": "a non-Cleanup Hold blocks re-verification without changing the Operation or releasing Capacity",
       "test_file": "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
       "test_line": 329,
       "test_type": "Integration",
@@ -42666,10 +42291,690 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-25BDF58816537F61",
+      "test_id": "TII-B5CBB36E92CFE7F6",
+      "test_name": "known failure after the re-verification Event rolls back both phases and keeps the Hold active",
+      "test_file": "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
+      "test_line": 345,
+      "test_type": "Integration",
+      "gate": "T2",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Disk",
+        "Memory"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/sqlite-candidate/wp6b2b1/lifecycle-port.ts",
+          "src/sqlite-candidate/wp6b2b1/store.ts"
+        ],
+        "impact_domains": [
+          "sqlite-persistence",
+          "manager-lifecycle",
+          "process-cleanup-and-locks"
+        ]
+      },
+      "trigger_source_paths": [
+        "src/sqlite-candidate/**",
+        "src/runtime/sqlite-install-config.ts",
+        "src/runtime/sqlite-runtime-roster.ts",
+        "src/store/lifecycle-gate.ts",
+        "src/runtime/task-timeout.ts",
+        "src/manager/sqlite-lifecycle-mcp-authority.ts",
+        "src/cli/admin-abandon-held-operation.ts",
+        "src/host/profile.ts",
+        "src/host/stdio.ts",
+        "src/executor/production-composition.ts",
+        "src/runtime/host-profile.ts",
+        "src/runtime/doctor.ts",
+        "src/runtime/sqlite-doctor.ts",
+        "src/runtime/trusted-local-deployment.ts",
+        "src/runtime/trusted-local-policy-config.ts",
+        "src/runtime/trusted-local-profile.ts",
+        "src/manager/errors.ts",
+        "src/manager/normalize.ts",
+        "src/runtime/process-probe.ts",
+        "src/manager/sqlite-lifecycle-mcp-authority.ts",
+        "src/executor/**",
+        "src/cli/main.ts",
+        "src/web/**",
+        "src/task-list.ts",
+        "src/result-summary.ts",
+        "src/runtime/host-profile.ts",
+        "src/task-errors.ts",
+        "src/adapters/process-spawn.ts",
+        "src/adapters/windows-process-cleanup.ts",
+        "src/runtime/process-probe.ts",
+        "src/store/process-lock.ts",
+        "src/store/atomic-rename.ts"
+      ],
+      "trigger_test_files": [
+        "test/sqlite-candidate/wp6c/cleanup-release.test.mjs"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-D294D1408873EA8B",
+      "test_name": "two independent Managers re-verifying the same evidence append one remediation chain",
+      "test_file": "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
+      "test_line": 363,
+      "test_type": "Integration",
+      "gate": "T2",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Disk",
+        "Memory"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/sqlite-candidate/wp6b2b1/lifecycle-port.ts",
+          "src/sqlite-candidate/wp6b2b1/store.ts"
+        ],
+        "impact_domains": [
+          "sqlite-persistence",
+          "manager-lifecycle",
+          "process-cleanup-and-locks"
+        ]
+      },
+      "trigger_source_paths": [
+        "src/sqlite-candidate/**",
+        "src/runtime/sqlite-install-config.ts",
+        "src/runtime/sqlite-runtime-roster.ts",
+        "src/store/lifecycle-gate.ts",
+        "src/runtime/task-timeout.ts",
+        "src/manager/sqlite-lifecycle-mcp-authority.ts",
+        "src/cli/admin-abandon-held-operation.ts",
+        "src/host/profile.ts",
+        "src/host/stdio.ts",
+        "src/executor/production-composition.ts",
+        "src/runtime/host-profile.ts",
+        "src/runtime/doctor.ts",
+        "src/runtime/sqlite-doctor.ts",
+        "src/runtime/trusted-local-deployment.ts",
+        "src/runtime/trusted-local-policy-config.ts",
+        "src/runtime/trusted-local-profile.ts",
+        "src/manager/errors.ts",
+        "src/manager/normalize.ts",
+        "src/runtime/process-probe.ts",
+        "src/manager/sqlite-lifecycle-mcp-authority.ts",
+        "src/executor/**",
+        "src/cli/main.ts",
+        "src/web/**",
+        "src/task-list.ts",
+        "src/result-summary.ts",
+        "src/runtime/host-profile.ts",
+        "src/task-errors.ts",
+        "src/adapters/process-spawn.ts",
+        "src/adapters/windows-process-cleanup.ts",
+        "src/runtime/process-probe.ts",
+        "src/store/process-lock.ts",
+        "src/store/atomic-rename.ts"
+      ],
+      "trigger_test_files": [
+        "test/sqlite-candidate/wp6c/cleanup-release.test.mjs"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-463A82E809A9CB2F",
+      "test_name": "unknown re-verification commit poisons Root and never treats cleanup as released",
+      "test_file": "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
+      "test_line": 383,
+      "test_type": "Integration",
+      "gate": "T2",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Disk",
+        "Memory"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/sqlite-candidate/wp6b2b1/lifecycle-port.ts",
+          "src/sqlite-candidate/wp6b2b1/store.ts"
+        ],
+        "impact_domains": [
+          "sqlite-persistence",
+          "manager-lifecycle",
+          "process-cleanup-and-locks"
+        ]
+      },
+      "trigger_source_paths": [
+        "src/sqlite-candidate/**",
+        "src/runtime/sqlite-install-config.ts",
+        "src/runtime/sqlite-runtime-roster.ts",
+        "src/store/lifecycle-gate.ts",
+        "src/runtime/task-timeout.ts",
+        "src/manager/sqlite-lifecycle-mcp-authority.ts",
+        "src/cli/admin-abandon-held-operation.ts",
+        "src/host/profile.ts",
+        "src/host/stdio.ts",
+        "src/executor/production-composition.ts",
+        "src/runtime/host-profile.ts",
+        "src/runtime/doctor.ts",
+        "src/runtime/sqlite-doctor.ts",
+        "src/runtime/trusted-local-deployment.ts",
+        "src/runtime/trusted-local-policy-config.ts",
+        "src/runtime/trusted-local-profile.ts",
+        "src/manager/errors.ts",
+        "src/manager/normalize.ts",
+        "src/runtime/process-probe.ts",
+        "src/manager/sqlite-lifecycle-mcp-authority.ts",
+        "src/executor/**",
+        "src/cli/main.ts",
+        "src/web/**",
+        "src/task-list.ts",
+        "src/result-summary.ts",
+        "src/runtime/host-profile.ts",
+        "src/task-errors.ts",
+        "src/adapters/process-spawn.ts",
+        "src/adapters/windows-process-cleanup.ts",
+        "src/runtime/process-probe.ts",
+        "src/store/process-lock.ts",
+        "src/store/atomic-rename.ts"
+      ],
+      "trigger_test_files": [
+        "test/sqlite-candidate/wp6c/cleanup-release.test.mjs"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-963B505837DFB85D",
+      "test_name": "Schema v11 roots remain untouched and are rejected without automatic migration",
+      "test_file": "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
+      "test_line": 400,
+      "test_type": "Integration",
+      "gate": "T2",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Disk",
+        "Memory"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/sqlite-candidate/wp6b2b1/lifecycle-port.ts",
+          "src/sqlite-candidate/wp6b2b1/store.ts"
+        ],
+        "impact_domains": [
+          "sqlite-persistence",
+          "manager-lifecycle",
+          "process-cleanup-and-locks"
+        ]
+      },
+      "trigger_source_paths": [
+        "src/sqlite-candidate/**",
+        "src/runtime/sqlite-install-config.ts",
+        "src/runtime/sqlite-runtime-roster.ts",
+        "src/store/lifecycle-gate.ts",
+        "src/runtime/task-timeout.ts",
+        "src/manager/sqlite-lifecycle-mcp-authority.ts",
+        "src/cli/admin-abandon-held-operation.ts",
+        "src/host/profile.ts",
+        "src/host/stdio.ts",
+        "src/executor/production-composition.ts",
+        "src/runtime/host-profile.ts",
+        "src/runtime/doctor.ts",
+        "src/runtime/sqlite-doctor.ts",
+        "src/runtime/trusted-local-deployment.ts",
+        "src/runtime/trusted-local-policy-config.ts",
+        "src/runtime/trusted-local-profile.ts",
+        "src/manager/errors.ts",
+        "src/manager/normalize.ts",
+        "src/runtime/process-probe.ts",
+        "src/manager/sqlite-lifecycle-mcp-authority.ts",
+        "src/executor/**",
+        "src/cli/main.ts",
+        "src/web/**",
+        "src/task-list.ts",
+        "src/result-summary.ts",
+        "src/runtime/host-profile.ts",
+        "src/task-errors.ts",
+        "src/adapters/process-spawn.ts",
+        "src/adapters/windows-process-cleanup.ts",
+        "src/runtime/process-probe.ts",
+        "src/store/process-lock.ts",
+        "src/store/atomic-rename.ts"
+      ],
+      "trigger_test_files": [
+        "test/sqlite-candidate/wp6c/cleanup-release.test.mjs"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-77CE0BB33BF8C67D",
+      "test_name": "PID reuse or mismatch with the recorded Receipt/Claim identity refuses verification",
+      "test_file": "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
+      "test_line": 413,
+      "test_type": "Integration",
+      "gate": "T2",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Disk",
+        "Memory"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/sqlite-candidate/wp6b2b1/lifecycle-port.ts",
+          "src/sqlite-candidate/wp6b2b1/store.ts"
+        ],
+        "impact_domains": [
+          "sqlite-persistence",
+          "manager-lifecycle",
+          "process-cleanup-and-locks"
+        ]
+      },
+      "trigger_source_paths": [
+        "src/sqlite-candidate/**",
+        "src/runtime/sqlite-install-config.ts",
+        "src/runtime/sqlite-runtime-roster.ts",
+        "src/store/lifecycle-gate.ts",
+        "src/runtime/task-timeout.ts",
+        "src/manager/sqlite-lifecycle-mcp-authority.ts",
+        "src/cli/admin-abandon-held-operation.ts",
+        "src/host/profile.ts",
+        "src/host/stdio.ts",
+        "src/executor/production-composition.ts",
+        "src/runtime/host-profile.ts",
+        "src/runtime/doctor.ts",
+        "src/runtime/sqlite-doctor.ts",
+        "src/runtime/trusted-local-deployment.ts",
+        "src/runtime/trusted-local-policy-config.ts",
+        "src/runtime/trusted-local-profile.ts",
+        "src/manager/errors.ts",
+        "src/manager/normalize.ts",
+        "src/runtime/process-probe.ts",
+        "src/manager/sqlite-lifecycle-mcp-authority.ts",
+        "src/executor/**",
+        "src/cli/main.ts",
+        "src/web/**",
+        "src/task-list.ts",
+        "src/result-summary.ts",
+        "src/runtime/host-profile.ts",
+        "src/task-errors.ts",
+        "src/adapters/process-spawn.ts",
+        "src/adapters/windows-process-cleanup.ts",
+        "src/runtime/process-probe.ts",
+        "src/store/process-lock.ts",
+        "src/store/atomic-rename.ts"
+      ],
+      "trigger_test_files": [
+        "test/sqlite-candidate/wp6c/cleanup-release.test.mjs"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-34D1E633262BF6D5",
+      "test_name": "Workspace mutation and incomplete process/resource evidence are rejected",
+      "test_file": "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
+      "test_line": 421,
+      "test_type": "Integration",
+      "gate": "T2",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Disk",
+        "Memory"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/sqlite-candidate/wp6b2b1/lifecycle-port.ts",
+          "src/sqlite-candidate/wp6b2b1/store.ts"
+        ],
+        "impact_domains": [
+          "sqlite-persistence",
+          "manager-lifecycle",
+          "process-cleanup-and-locks"
+        ]
+      },
+      "trigger_source_paths": [
+        "src/sqlite-candidate/**",
+        "src/runtime/sqlite-install-config.ts",
+        "src/runtime/sqlite-runtime-roster.ts",
+        "src/store/lifecycle-gate.ts",
+        "src/runtime/task-timeout.ts",
+        "src/manager/sqlite-lifecycle-mcp-authority.ts",
+        "src/cli/admin-abandon-held-operation.ts",
+        "src/host/profile.ts",
+        "src/host/stdio.ts",
+        "src/executor/production-composition.ts",
+        "src/runtime/host-profile.ts",
+        "src/runtime/doctor.ts",
+        "src/runtime/sqlite-doctor.ts",
+        "src/runtime/trusted-local-deployment.ts",
+        "src/runtime/trusted-local-policy-config.ts",
+        "src/runtime/trusted-local-profile.ts",
+        "src/manager/errors.ts",
+        "src/manager/normalize.ts",
+        "src/runtime/process-probe.ts",
+        "src/manager/sqlite-lifecycle-mcp-authority.ts",
+        "src/executor/**",
+        "src/cli/main.ts",
+        "src/web/**",
+        "src/task-list.ts",
+        "src/result-summary.ts",
+        "src/runtime/host-profile.ts",
+        "src/task-errors.ts",
+        "src/adapters/process-spawn.ts",
+        "src/adapters/windows-process-cleanup.ts",
+        "src/runtime/process-probe.ts",
+        "src/store/process-lock.ts",
+        "src/store/atomic-rename.ts"
+      ],
+      "trigger_test_files": [
+        "test/sqlite-candidate/wp6c/cleanup-release.test.mjs"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-629464AFD0EC6D24",
+      "test_name": "stale generation, revision, Attempt, Claim, and Worker identity cannot record Cleanup or release",
+      "test_file": "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
+      "test_line": 429,
+      "test_type": "Integration",
+      "gate": "T2",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Disk",
+        "Memory"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/sqlite-candidate/wp6b2b1/lifecycle-port.ts",
+          "src/sqlite-candidate/wp6b2b1/store.ts"
+        ],
+        "impact_domains": [
+          "sqlite-persistence",
+          "manager-lifecycle",
+          "process-cleanup-and-locks"
+        ]
+      },
+      "trigger_source_paths": [
+        "src/sqlite-candidate/**",
+        "src/runtime/sqlite-install-config.ts",
+        "src/runtime/sqlite-runtime-roster.ts",
+        "src/store/lifecycle-gate.ts",
+        "src/runtime/task-timeout.ts",
+        "src/manager/sqlite-lifecycle-mcp-authority.ts",
+        "src/cli/admin-abandon-held-operation.ts",
+        "src/host/profile.ts",
+        "src/host/stdio.ts",
+        "src/executor/production-composition.ts",
+        "src/runtime/host-profile.ts",
+        "src/runtime/doctor.ts",
+        "src/runtime/sqlite-doctor.ts",
+        "src/runtime/trusted-local-deployment.ts",
+        "src/runtime/trusted-local-policy-config.ts",
+        "src/runtime/trusted-local-profile.ts",
+        "src/manager/errors.ts",
+        "src/manager/normalize.ts",
+        "src/runtime/process-probe.ts",
+        "src/manager/sqlite-lifecycle-mcp-authority.ts",
+        "src/executor/**",
+        "src/cli/main.ts",
+        "src/web/**",
+        "src/task-list.ts",
+        "src/result-summary.ts",
+        "src/runtime/host-profile.ts",
+        "src/task-errors.ts",
+        "src/adapters/process-spawn.ts",
+        "src/adapters/windows-process-cleanup.ts",
+        "src/runtime/process-probe.ts",
+        "src/store/process-lock.ts",
+        "src/store/atomic-rename.ts"
+      ],
+      "trigger_test_files": [
+        "test/sqlite-candidate/wp6c/cleanup-release.test.mjs"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-66E5DC05C42B374C",
+      "test_name": "begin and verified Cleanup are idempotent without adding duplicate Events",
+      "test_file": "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
+      "test_line": 443,
+      "test_type": "Integration",
+      "gate": "T2",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Disk",
+        "Memory"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/sqlite-candidate/wp6b2b1/lifecycle-port.ts",
+          "src/sqlite-candidate/wp6b2b1/store.ts"
+        ],
+        "impact_domains": [
+          "sqlite-persistence",
+          "manager-lifecycle",
+          "process-cleanup-and-locks"
+        ]
+      },
+      "trigger_source_paths": [
+        "src/sqlite-candidate/**",
+        "src/runtime/sqlite-install-config.ts",
+        "src/runtime/sqlite-runtime-roster.ts",
+        "src/store/lifecycle-gate.ts",
+        "src/runtime/task-timeout.ts",
+        "src/manager/sqlite-lifecycle-mcp-authority.ts",
+        "src/cli/admin-abandon-held-operation.ts",
+        "src/host/profile.ts",
+        "src/host/stdio.ts",
+        "src/executor/production-composition.ts",
+        "src/runtime/host-profile.ts",
+        "src/runtime/doctor.ts",
+        "src/runtime/sqlite-doctor.ts",
+        "src/runtime/trusted-local-deployment.ts",
+        "src/runtime/trusted-local-policy-config.ts",
+        "src/runtime/trusted-local-profile.ts",
+        "src/manager/errors.ts",
+        "src/manager/normalize.ts",
+        "src/runtime/process-probe.ts",
+        "src/manager/sqlite-lifecycle-mcp-authority.ts",
+        "src/executor/**",
+        "src/cli/main.ts",
+        "src/web/**",
+        "src/task-list.ts",
+        "src/result-summary.ts",
+        "src/runtime/host-profile.ts",
+        "src/task-errors.ts",
+        "src/adapters/process-spawn.ts",
+        "src/adapters/windows-process-cleanup.ts",
+        "src/runtime/process-probe.ts",
+        "src/store/process-lock.ts",
+        "src/store/atomic-rename.ts"
+      ],
+      "trigger_test_files": [
+        "test/sqlite-candidate/wp6c/cleanup-release.test.mjs"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-C231A4517277B10C",
+      "test_name": "different Cleanup evidence cannot overwrite the first verified evidence",
+      "test_file": "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
+      "test_line": 452,
+      "test_type": "Integration",
+      "gate": "T2",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Disk",
+        "Memory"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/sqlite-candidate/wp6b2b1/lifecycle-port.ts",
+          "src/sqlite-candidate/wp6b2b1/store.ts"
+        ],
+        "impact_domains": [
+          "sqlite-persistence",
+          "manager-lifecycle",
+          "process-cleanup-and-locks"
+        ]
+      },
+      "trigger_source_paths": [
+        "src/sqlite-candidate/**",
+        "src/runtime/sqlite-install-config.ts",
+        "src/runtime/sqlite-runtime-roster.ts",
+        "src/store/lifecycle-gate.ts",
+        "src/runtime/task-timeout.ts",
+        "src/manager/sqlite-lifecycle-mcp-authority.ts",
+        "src/cli/admin-abandon-held-operation.ts",
+        "src/host/profile.ts",
+        "src/host/stdio.ts",
+        "src/executor/production-composition.ts",
+        "src/runtime/host-profile.ts",
+        "src/runtime/doctor.ts",
+        "src/runtime/sqlite-doctor.ts",
+        "src/runtime/trusted-local-deployment.ts",
+        "src/runtime/trusted-local-policy-config.ts",
+        "src/runtime/trusted-local-profile.ts",
+        "src/manager/errors.ts",
+        "src/manager/normalize.ts",
+        "src/runtime/process-probe.ts",
+        "src/manager/sqlite-lifecycle-mcp-authority.ts",
+        "src/executor/**",
+        "src/cli/main.ts",
+        "src/web/**",
+        "src/task-list.ts",
+        "src/result-summary.ts",
+        "src/runtime/host-profile.ts",
+        "src/task-errors.ts",
+        "src/adapters/process-spawn.ts",
+        "src/adapters/windows-process-cleanup.ts",
+        "src/runtime/process-probe.ts",
+        "src/store/process-lock.ts",
+        "src/store/atomic-rename.ts"
+      ],
+      "trigger_test_files": [
+        "test/sqlite-candidate/wp6c/cleanup-release.test.mjs"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-292988A1A08682D6",
+      "test_name": "release requires the exact verified digest and is idempotent",
+      "test_file": "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
+      "test_line": 459,
+      "test_type": "Integration",
+      "gate": "T2",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Disk",
+        "Memory"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/sqlite-candidate/wp6b2b1/lifecycle-port.ts",
+          "src/sqlite-candidate/wp6b2b1/store.ts"
+        ],
+        "impact_domains": [
+          "sqlite-persistence",
+          "manager-lifecycle",
+          "process-cleanup-and-locks"
+        ]
+      },
+      "trigger_source_paths": [
+        "src/sqlite-candidate/**",
+        "src/runtime/sqlite-install-config.ts",
+        "src/runtime/sqlite-runtime-roster.ts",
+        "src/store/lifecycle-gate.ts",
+        "src/runtime/task-timeout.ts",
+        "src/manager/sqlite-lifecycle-mcp-authority.ts",
+        "src/cli/admin-abandon-held-operation.ts",
+        "src/host/profile.ts",
+        "src/host/stdio.ts",
+        "src/executor/production-composition.ts",
+        "src/runtime/host-profile.ts",
+        "src/runtime/doctor.ts",
+        "src/runtime/sqlite-doctor.ts",
+        "src/runtime/trusted-local-deployment.ts",
+        "src/runtime/trusted-local-policy-config.ts",
+        "src/runtime/trusted-local-profile.ts",
+        "src/manager/errors.ts",
+        "src/manager/normalize.ts",
+        "src/runtime/process-probe.ts",
+        "src/manager/sqlite-lifecycle-mcp-authority.ts",
+        "src/executor/**",
+        "src/cli/main.ts",
+        "src/web/**",
+        "src/task-list.ts",
+        "src/result-summary.ts",
+        "src/runtime/host-profile.ts",
+        "src/task-errors.ts",
+        "src/adapters/process-spawn.ts",
+        "src/adapters/windows-process-cleanup.ts",
+        "src/runtime/process-probe.ts",
+        "src/store/process-lock.ts",
+        "src/store/atomic-rename.ts"
+      ],
+      "trigger_test_files": [
+        "test/sqlite-candidate/wp6c/cleanup-release.test.mjs"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-7577224F80D01A02",
       "test_name": "two processes racing to release one Operation produce one release Event",
       "test_file": "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
-      "test_line": 338,
+      "test_line": 468,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -42734,10 +43039,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-576B5E8DCD5483D3",
+      "test_id": "TII-968705F57B987559",
       "test_name": "same Workspace admission rejects a second Operation and cleanup preserves the Workspace",
       "test_file": "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
-      "test_line": 348,
+      "test_line": 478,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -42802,10 +43107,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-9A64E13DC0F98989",
+      "test_id": "TII-6929714271B43E56",
       "test_name": "known failure after Cleanup projection rolls back both projection and Event",
       "test_file": "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
-      "test_line": 356,
+      "test_line": 486,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -42870,10 +43175,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-EFFE4C16F3DC6157",
+      "test_id": "TII-2061A4D61CD11A07",
       "test_name": "known failure after Cleanup Verified projection rolls back projection and evidence Event",
       "test_file": "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
-      "test_line": 364,
+      "test_line": 494,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -42938,10 +43243,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-E9944EA98F37851A",
+      "test_id": "TII-CE28EE1D45676B9D",
       "test_name": "known failure after Release projection rolls back capacity release",
       "test_file": "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
-      "test_line": 372,
+      "test_line": 502,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -43006,10 +43311,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-16AA7A1FDF685C5B",
+      "test_id": "TII-53B3F5BDD3F6EF4B",
       "test_name": "unknown Release commit poisons the root and prevents further writes or guessed fallback",
       "test_file": "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
-      "test_line": 380,
+      "test_line": 510,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -43074,10 +43379,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-D3CCE01D7B117058",
+      "test_id": "TII-6CF9E2DBEC992C34",
       "test_name": "Recovery latch fences C2 Cleanup Pending, Cleanup Evidence, and Release while preserving other Operations",
       "test_file": "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
-      "test_line": 390,
+      "test_line": 520,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -43142,10 +43447,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-DDFEE2A176B93B91",
+      "test_id": "TII-DE50B9B1471CD6A3",
       "test_name": "Schema v5 is rejected without migration or mutation",
       "test_file": "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
-      "test_line": 406,
+      "test_line": 536,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -43912,8 +44217,8 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-FEF04962C62B2224",
-      "test_name": "reopen rejects a resolution that mixes the historical verification with the fresh proof",
+      "test_id": "TII-0CB417B92CD9DAB6",
+      "test_name": "the same material Recovery facts become a new active Hold after an earlier resolution",
       "test_file": "test/sqlite-candidate/wp6c/result-recovery.test.mjs",
       "test_line": 185,
       "test_type": "Integration",
@@ -43980,10 +44285,146 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-6D0E68B789436366",
+      "test_id": "TII-260A89E509A4ADE4",
+      "test_name": "explicit cancellation resolves more than eight cleanup Holds with a bounded evidence commitment",
+      "test_file": "test/sqlite-candidate/wp6c/result-recovery.test.mjs",
+      "test_line": 210,
+      "test_type": "Integration",
+      "gate": "T2",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Disk",
+        "Memory"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/sqlite-candidate/wp6b2b1/lifecycle-port.ts",
+          "src/sqlite-candidate/wp6b2b1/store.ts"
+        ],
+        "impact_domains": [
+          "sqlite-persistence",
+          "manager-lifecycle",
+          "process-cleanup-and-locks"
+        ]
+      },
+      "trigger_source_paths": [
+        "src/sqlite-candidate/**",
+        "src/runtime/sqlite-install-config.ts",
+        "src/runtime/sqlite-runtime-roster.ts",
+        "src/store/lifecycle-gate.ts",
+        "src/runtime/task-timeout.ts",
+        "src/manager/sqlite-lifecycle-mcp-authority.ts",
+        "src/cli/admin-abandon-held-operation.ts",
+        "src/host/profile.ts",
+        "src/host/stdio.ts",
+        "src/executor/production-composition.ts",
+        "src/runtime/host-profile.ts",
+        "src/runtime/doctor.ts",
+        "src/runtime/sqlite-doctor.ts",
+        "src/runtime/trusted-local-deployment.ts",
+        "src/runtime/trusted-local-policy-config.ts",
+        "src/runtime/trusted-local-profile.ts",
+        "src/manager/errors.ts",
+        "src/manager/normalize.ts",
+        "src/runtime/process-probe.ts",
+        "src/manager/sqlite-lifecycle-mcp-authority.ts",
+        "src/executor/**",
+        "src/cli/main.ts",
+        "src/web/**",
+        "src/task-list.ts",
+        "src/result-summary.ts",
+        "src/runtime/host-profile.ts",
+        "src/task-errors.ts",
+        "src/adapters/process-spawn.ts",
+        "src/adapters/windows-process-cleanup.ts",
+        "src/runtime/process-probe.ts",
+        "src/store/process-lock.ts",
+        "src/store/atomic-rename.ts"
+      ],
+      "trigger_test_files": [
+        "test/sqlite-candidate/wp6c/result-recovery.test.mjs"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-88847BEE3CD5658E",
+      "test_name": "reopen rejects a resolution that mixes the historical verification with the fresh proof",
+      "test_file": "test/sqlite-candidate/wp6c/result-recovery.test.mjs",
+      "test_line": 239,
+      "test_type": "Integration",
+      "gate": "T2",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Disk",
+        "Memory"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/sqlite-candidate/wp6b2b1/lifecycle-port.ts",
+          "src/sqlite-candidate/wp6b2b1/store.ts"
+        ],
+        "impact_domains": [
+          "sqlite-persistence",
+          "manager-lifecycle",
+          "process-cleanup-and-locks"
+        ]
+      },
+      "trigger_source_paths": [
+        "src/sqlite-candidate/**",
+        "src/runtime/sqlite-install-config.ts",
+        "src/runtime/sqlite-runtime-roster.ts",
+        "src/store/lifecycle-gate.ts",
+        "src/runtime/task-timeout.ts",
+        "src/manager/sqlite-lifecycle-mcp-authority.ts",
+        "src/cli/admin-abandon-held-operation.ts",
+        "src/host/profile.ts",
+        "src/host/stdio.ts",
+        "src/executor/production-composition.ts",
+        "src/runtime/host-profile.ts",
+        "src/runtime/doctor.ts",
+        "src/runtime/sqlite-doctor.ts",
+        "src/runtime/trusted-local-deployment.ts",
+        "src/runtime/trusted-local-policy-config.ts",
+        "src/runtime/trusted-local-profile.ts",
+        "src/manager/errors.ts",
+        "src/manager/normalize.ts",
+        "src/runtime/process-probe.ts",
+        "src/manager/sqlite-lifecycle-mcp-authority.ts",
+        "src/executor/**",
+        "src/cli/main.ts",
+        "src/web/**",
+        "src/task-list.ts",
+        "src/result-summary.ts",
+        "src/runtime/host-profile.ts",
+        "src/task-errors.ts",
+        "src/adapters/process-spawn.ts",
+        "src/adapters/windows-process-cleanup.ts",
+        "src/runtime/process-probe.ts",
+        "src/store/process-lock.ts",
+        "src/store/atomic-rename.ts"
+      ],
+      "trigger_test_files": [
+        "test/sqlite-candidate/wp6c/result-recovery.test.mjs"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-1602625433660C77",
       "test_name": "explicit cancellation cannot resolve quarantine or unknown Hold reasons",
       "test_file": "test/sqlite-candidate/wp6c/result-recovery.test.mjs",
-      "test_line": 220,
+      "test_line": 274,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -44048,10 +44489,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-10F11C82AAE1229C",
+      "test_id": "TII-9F99EE4277F696AC",
       "test_name": "Result, terminal Attempt projection, and one Event commit atomically",
       "test_file": "test/sqlite-candidate/wp6c/result-recovery.test.mjs",
-      "test_line": 258,
+      "test_line": 312,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -44116,10 +44557,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-0F0B6A5E11FFE6A7",
+      "test_id": "TII-2880A892F3CB2009",
       "test_name": "all four OD-7 Result statuses persist without merging status or releasing capacity",
       "test_file": "test/sqlite-candidate/wp6c/result-recovery.test.mjs",
-      "test_line": 273,
+      "test_line": 327,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -44184,10 +44625,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-91748D3C95223920",
+      "test_id": "TII-B56E0340AC207390",
       "test_name": "running cancellation persists exact Worker identity, is idempotent, and binds verified tree before cancelled Result",
       "test_file": "test/sqlite-candidate/wp6c/result-recovery.test.mjs",
-      "test_line": 308,
+      "test_line": 362,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -44252,10 +44693,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-212F94935BDFC0AE",
+      "test_id": "TII-05950224B9B14F9E",
       "test_name": "enriched cleanup Recovery release is idempotent and survives SQLite reopen validation",
       "test_file": "test/sqlite-candidate/wp6c/result-recovery.test.mjs",
-      "test_line": 339,
+      "test_line": 393,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -44320,10 +44761,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-17D32B2936D0DDF6",
+      "test_id": "TII-1D9D8B38F8B235B7",
       "test_name": "a newer live Hold prevents authorized release from falling back to stale eligible Recovery evidence",
       "test_file": "test/sqlite-candidate/wp6c/result-recovery.test.mjs",
-      "test_line": 365,
+      "test_line": 423,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -44388,10 +44829,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-5A0F9F710D897AC9",
+      "test_id": "TII-E25816BD34856DF5",
       "test_name": "cancellation identity and tree verification fail closed; unverified cancellation cannot commit Result",
       "test_file": "test/sqlite-candidate/wp6c/result-recovery.test.mjs",
-      "test_line": 382,
+      "test_line": 440,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -44456,10 +44897,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-052E685A49DD30A2",
+      "test_id": "TII-2E096377059FD723",
       "test_name": "Result wins cancellation race and verified cancellation still requires Cleanup before Release",
       "test_file": "test/sqlite-candidate/wp6c/result-recovery.test.mjs",
-      "test_line": 397,
+      "test_line": 455,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -44524,10 +44965,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-2F8889E34FA15EFA",
+      "test_id": "TII-96CB1E869BB9F6CA",
       "test_name": "Result rejects status projection mismatches, unknown fields, and payloads over the byte limit",
       "test_file": "test/sqlite-candidate/wp6c/result-recovery.test.mjs",
-      "test_line": 416,
+      "test_line": 474,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -44592,10 +45033,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-6FFFAEACFA55C027",
+      "test_id": "TII-80A90AA87FEA3593",
       "test_name": "mid-transaction fault rolls back Result, Event, and Attempt projection together",
       "test_file": "test/sqlite-candidate/wp6c/result-recovery.test.mjs",
-      "test_line": 427,
+      "test_line": 485,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -44660,10 +45101,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-D30BA4FAB748AEC7",
+      "test_id": "TII-B17FFD3CB9D3C2DF",
       "test_name": "same Result Digest is idempotent across close/reopen with no duplicate Event",
       "test_file": "test/sqlite-candidate/wp6c/result-recovery.test.mjs",
-      "test_line": 436,
+      "test_line": 494,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -44728,10 +45169,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-6FE59E73C56643BE",
+      "test_id": "TII-746D17ADA1D6509B",
       "test_name": "Result canonicalization sorts object fields and preserves optional absence versus null",
       "test_file": "test/sqlite-candidate/wp6c/result-recovery.test.mjs",
-      "test_line": 443,
+      "test_line": 501,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -44796,10 +45237,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-AB7B736DADD519EA",
+      "test_id": "TII-09458AA992E8CBB3",
       "test_name": "different Result Digest persists one bounded quarantine and preserves the original Result and capacity",
       "test_file": "test/sqlite-candidate/wp6c/result-recovery.test.mjs",
-      "test_line": 457,
+      "test_line": 515,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -44864,10 +45305,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-B2D7BA8F7BDC87F9",
+      "test_id": "TII-B168ACB2612D1EDC",
       "test_name": "stale Revision, wrong Generation, Attempt, or Claim cannot commit Result",
       "test_file": "test/sqlite-candidate/wp6c/result-recovery.test.mjs",
-      "test_line": 468,
+      "test_line": 526,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -44932,10 +45373,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-549073EDE95EC0F8",
+      "test_id": "TII-75303DF2DECC2D1F",
       "test_name": "two independent processes compete to commit one Result; winner is unique and loser conflicts",
       "test_file": "test/sqlite-candidate/wp6c/result-recovery.test.mjs",
-      "test_line": 478,
+      "test_line": 536,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -45000,10 +45441,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-4FA5531468680B92",
+      "test_id": "TII-77042FB36E781309",
       "test_name": "commit acknowledgement loss is simulated, poisons writes, and Recovery reads the durable Digest",
       "test_file": "test/sqlite-candidate/wp6c/result-recovery.test.mjs",
-      "test_line": 489,
+      "test_line": 547,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -45068,10 +45509,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-28428EDAC20922CC",
+      "test_id": "TII-D8A46CAAC73F21BB",
       "test_name": "Recovery reconstructs missing Receipt, unknown OS identity, and unverified Cleanup conservatively",
       "test_file": "test/sqlite-candidate/wp6c/result-recovery.test.mjs",
-      "test_line": 502,
+      "test_line": 560,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -45136,10 +45577,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-3696BC20EFF83756",
+      "test_id": "TII-B97AEAD743769EBD",
       "test_name": "Recovery Port reads a read-only snapshot and never spawns, retries, cleans, or releases",
       "test_file": "test/sqlite-candidate/wp6c/result-recovery.test.mjs",
-      "test_line": 514,
+      "test_line": 572,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -45204,10 +45645,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-C37133390382F178",
+      "test_id": "TII-BDBEC641695432BC",
       "test_name": "Recovery snapshot fence cannot commit stale Cleanup evidence after another writer advances Revision",
       "test_file": "test/sqlite-candidate/wp6c/result-recovery.test.mjs",
-      "test_line": 531,
+      "test_line": 589,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -45272,10 +45713,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-93EE94307EE6AD93",
+      "test_id": "TII-251702BC2A502341",
       "test_name": "committed Result does not prove Cleanup or release Claim/Capacity after restart",
       "test_file": "test/sqlite-candidate/wp6c/result-recovery.test.mjs",
-      "test_line": 549,
+      "test_line": 607,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -45340,10 +45781,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-0D80C4FCAAE34573",
+      "test_id": "TII-1C16C712A4B21043",
       "test_name": "event/projection conflict is quarantined read-only without repairing or releasing occupancy",
       "test_file": "test/sqlite-candidate/wp6c/result-recovery.test.mjs",
-      "test_line": 556,
+      "test_line": 614,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -45408,10 +45849,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-6B17B8389B655C99",
+      "test_id": "TII-640E9F28E431A693",
       "test_name": "Recovery refuses old/unknown schema without rebuilding or migrating it",
       "test_file": "test/sqlite-candidate/wp6c/result-recovery.test.mjs",
-      "test_line": 567,
+      "test_line": 625,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -45476,10 +45917,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-462FD465AA0EA951",
+      "test_id": "TII-5E559E51954BD66A",
       "test_name": "Recovery refuses an older v3 table shape without adding Result columns",
       "test_file": "test/sqlite-candidate/wp6c/result-recovery.test.mjs",
-      "test_line": 574,
+      "test_line": 632,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -45544,10 +45985,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-FFBF298E6EE95E08",
+      "test_id": "TII-3AACAD99E93B25E6",
       "test_name": "C3B Recovery CAS records a verified phase-preserving Hold and fences Result without releasing Claim or Capacity",
       "test_file": "test/sqlite-candidate/wp6c/result-recovery.test.mjs",
-      "test_line": 582,
+      "test_line": 640,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -45612,10 +46053,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-B00391832E379526",
+      "test_id": "TII-CB0D541D62FEC61E",
       "test_name": "generic observation CAS rejects Recovery-reserved reasons before mutation and leaves the Store usable",
       "test_file": "test/sqlite-candidate/wp6c/result-recovery.test.mjs",
-      "test_line": 599,
+      "test_line": 660,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -45680,10 +46121,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-0C6449AB79BD46DB",
+      "test_id": "TII-EF60759E48EF9CC1",
       "test_name": "malformed stored Recovery-looking observation stays fail-closed without repair or release",
       "test_file": "test/sqlite-candidate/wp6c/result-recovery.test.mjs",
-      "test_line": 633,
+      "test_line": 694,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -45748,10 +46189,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-BC26CFDE17DCCFF8",
+      "test_id": "TII-61F6A1822E9E7FA4",
       "test_name": "C3B Recovery verifier, Claim, identity, generation, and revision fences reject untrusted or stale input",
       "test_file": "test/sqlite-candidate/wp6c/result-recovery.test.mjs",
-      "test_line": 667,
+      "test_line": 728,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -45816,10 +46257,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-5BB29CEC8E36FEAF",
+      "test_id": "TII-739D0E99CAF11DB5",
       "test_name": "C3B cannot persist an observation before permanent Claim and trusted Worker identity exist",
       "test_file": "test/sqlite-candidate/wp6c/result-recovery.test.mjs",
-      "test_line": 681,
+      "test_line": 742,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -45884,10 +46325,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-B1CC109D857E5BA2",
-      "test_name": "C3B Recovery classification is monotonic, quarantine cannot downgrade, and the per-operation cap is bounded",
+      "test_id": "TII-0F8A2AC0CCC28570",
+      "test_name": "C3B Recovery classification is monotonic, quarantine cannot downgrade, and unchanged facts do not consume an observation budget",
       "test_file": "test/sqlite-candidate/wp6c/result-recovery.test.mjs",
-      "test_line": 693,
+      "test_line": 754,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -45952,10 +46393,78 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-6E6F66C39F86E426",
+      "test_id": "TII-4D8F76A67D186F58",
+      "test_name": "C3B eight material Holds stay stable across twenty fresh unchanged probes",
+      "test_file": "test/sqlite-candidate/wp6c/result-recovery.test.mjs",
+      "test_line": 790,
+      "test_type": "Integration",
+      "gate": "T2",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Disk",
+        "Memory"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/sqlite-candidate/wp6b2b1/lifecycle-port.ts",
+          "src/sqlite-candidate/wp6b2b1/store.ts"
+        ],
+        "impact_domains": [
+          "sqlite-persistence",
+          "manager-lifecycle",
+          "process-cleanup-and-locks"
+        ]
+      },
+      "trigger_source_paths": [
+        "src/sqlite-candidate/**",
+        "src/runtime/sqlite-install-config.ts",
+        "src/runtime/sqlite-runtime-roster.ts",
+        "src/store/lifecycle-gate.ts",
+        "src/runtime/task-timeout.ts",
+        "src/manager/sqlite-lifecycle-mcp-authority.ts",
+        "src/cli/admin-abandon-held-operation.ts",
+        "src/host/profile.ts",
+        "src/host/stdio.ts",
+        "src/executor/production-composition.ts",
+        "src/runtime/host-profile.ts",
+        "src/runtime/doctor.ts",
+        "src/runtime/sqlite-doctor.ts",
+        "src/runtime/trusted-local-deployment.ts",
+        "src/runtime/trusted-local-policy-config.ts",
+        "src/runtime/trusted-local-profile.ts",
+        "src/manager/errors.ts",
+        "src/manager/normalize.ts",
+        "src/runtime/process-probe.ts",
+        "src/manager/sqlite-lifecycle-mcp-authority.ts",
+        "src/executor/**",
+        "src/cli/main.ts",
+        "src/web/**",
+        "src/task-list.ts",
+        "src/result-summary.ts",
+        "src/runtime/host-profile.ts",
+        "src/task-errors.ts",
+        "src/adapters/process-spawn.ts",
+        "src/adapters/windows-process-cleanup.ts",
+        "src/runtime/process-probe.ts",
+        "src/store/process-lock.ts",
+        "src/store/atomic-rename.ts"
+      ],
+      "trigger_test_files": [
+        "test/sqlite-candidate/wp6c/result-recovery.test.mjs"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-01FE347F48DAF5C6",
       "test_name": "C3B known rollback preserves projection and Unknown Commit poisons the root",
       "test_file": "test/sqlite-candidate/wp6c/result-recovery.test.mjs",
-      "test_line": 721,
+      "test_line": 829,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -46020,10 +46529,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-27C9C815290D5D44",
+      "test_id": "TII-0F5894DD65200D2B",
       "test_name": "C3B different-Workspace Operations remain independent after one Operation is latched",
       "test_file": "test/sqlite-candidate/wp6c/result-recovery.test.mjs",
-      "test_line": 738,
+      "test_line": 846,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -46088,10 +46597,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-6DA025546BF1664A",
-      "test_name": "C3B two independent Managers produce one Recovery CAS winner without overwriting stale evidence",
+      "test_id": "TII-7DA903C41A661B9C",
+      "test_name": "C3B two independent Managers deduplicate one unchanged Recovery fact without overwriting evidence",
       "test_file": "test/sqlite-candidate/wp6c/result-recovery.test.mjs",
-      "test_line": 759,
+      "test_line": 867,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",

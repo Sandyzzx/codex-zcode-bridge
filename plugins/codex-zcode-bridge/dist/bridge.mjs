@@ -22249,7 +22249,7 @@ var defaultModelSchema = object({
 
 // src/mcp/server.ts
 var SERVER_NAME = "codex-zcode-bridge";
-var SERVER_VERSION = "2.0.0-preview.11"; // x-release-please-version
+var SERVER_VERSION = "2.0.0-preview.12"; // x-release-please-version
 var EXECUTION_NOT_VERDICT = "Execution only. 'completed' is NOT calling host acceptance. Independently verify the workspace diff and checks.";
 function okResult(data) {
   return {

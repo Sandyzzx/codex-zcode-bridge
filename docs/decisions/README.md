@@ -3,7 +3,7 @@
 > Status: AUTHORITATIVE（仅指本索引）
 > Last updated: 2026-11-22（记录 ADR-045 PR 2/2.5、ADR-049 Task CLI、ADR-050 Web Console、ADR-051 Wake 与 ADR-052 Async Handoff candidate）
 > Last verified: 2026-11-22，核对 ADR-039 行政释放保护、ADR-048 默认 32 KiB Event 页、ADR-045 deterministic Lease/IPC/Thin MCP/Fake Worker 证据、ADR-049 Task CLI、ADR-050 loopback Web 边界、ADR-051 release-bound Wake evidence 与 ADR-052 Master workflow contract；真实 Desktop E2E、严格 C/D 和真实模型遵循率仍为 `NOT_RUN`。
-> Verified against: Preview `1bf039fda2ccfd17a992458a871bddd7b48b38c1` + `codex/async-executor-pr2.5` candidate
+> Verified against: Preview `ac1e8396f25a1a1d3ff373def84726d28c1f4193` + `codex/async-executor-rc-20261122` candidate
 
 先读当前 [架构](../ARCHITECTURE.md)/[接口](../INTERFACES.md)，只在需要解释取舍时加载对应决策。文件保持原路径和历史正文；Partially superseded 的标注优先于历史段落。
 

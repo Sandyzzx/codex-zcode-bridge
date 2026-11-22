@@ -493,7 +493,7 @@ test("Executor exclusively owns the production Authority, routing, auth, diagnos
   assert.match(composition, /initializeFreshInstallSqliteRoot\(/u);
   assert.match(composition, /SqliteAuthority\.create\(/u);
   assert.match(composition, /startPlanPrivateAuthFactory:\s*\(\)\s*=>\s*createHostStartPlanIssuer\(/u);
-  assert.match(composition, /routeTaskModel,\s*\n\s*onWorkerDiagnosticLine/su);
+  assert.match(composition, /routeTaskModel,\s*onOperationReleased:[\s\S]*?onWorkerDiagnosticLine:/u);
   assert.match(composition, /settings:\s*\(\)\s*=>\s*\{[\s\S]*?loadPersistedRuntimeEnvironment\(env, homeDir, options\.host\)/u);
   assert.match(composition, /registry:\s*async\s*\(\)\s*=>\s*\{[\s\S]*?loadPersistedRuntimeEnvironment\(env, homeDir, options\.host\)/u);
   assert.match(composition, /new ZCodeModelSettings\(env,/u);
@@ -4150,6 +4150,75 @@ for(const treeMode of ['clean','live','root-missing'] as const)test(`formal MCP 
         ?{clean:false,livePids:[seeded!.processId+1],observedPids:[seeded!.processId,seeded!.processId+1]}
         :{clean:true,livePids:[],observedPids:[]},
     beforeAuthority:(dataRoot,modules,workspace)=>{seeded=seedCancelledCleanupHold(dataRoot,modules,workspace,taskId,operationId);},
+  });
+});
+
+test("formal MCP deduplicates a refreshed Recovery Hold and releases it through ADR-039 without claiming Cleanup",{timeout:45_000},async()=>{
+  const taskId=`cancel-cleanup-refreshed-${randomUUID()}`,operationId=`op-${taskId}`;
+  let seeded:{readonly processId:number;readonly fingerprint:string}|undefined;
+  const probe:ProcessProbe={...createPlatformProbe(),platform:'win32',async probe(requests){return requests.map(()=>({
+    state:'exited',reason_code:'synthetic_exact_exit',observed_at:new Date().toISOString(),
+  }));}};
+  await withSqliteMcp(async(client,_manager,dataRoot)=>{
+    const released=contentObject(await client.callTool({name:'zcode_cancel',arguments:{task_id:taskId}}));
+    assert.equal(released.status,'cancelled');
+    const modules=await loadLifecycleCandidateModules(),reader=modules.Store.openForRecovery(dataRoot);
+    assert.ok(reader);
+    try{
+      const port=modules.createPort(reader);
+      const operation=port.readOperation(operationId) as Record<string,unknown>;
+      const events=port.readLifecycleEvents(operationId) as Array<Record<string,unknown>>;
+      const snapshot=port.readRecoverySnapshot() as {operations:Array<Record<string,unknown>>};
+      const occupied=snapshot.operations.find(item=>item.operation_id===operationId);
+      const recoveryHolds=events.filter(event=>event.event_type==='observation_recorded'
+        &&JSON.parse(String(event.evidence_json)).reason==='recovery_hold');
+      const releases=events.filter(event=>event.event_type==='observation_recorded'
+        &&JSON.parse(String(event.evidence_json)).reason==='user_authorized_release_unverified');
+      assert.equal(operation.phase,'released');
+      assert.equal(occupied?.capacity_occupied,false);
+      assert.equal(occupied?.cleanup_state,'unverified_admin_release');
+      assert.equal(recoveryHolds.length,1,'refreshing observed_at must not append a duplicate Recovery Hold');
+      assert.equal(releases.length,1,'ADR-039 must bind the persisted Recovery evidence digest');
+      assert.equal(events.some(event=>event.event_type==='cleanup_verified'),false);
+    }finally{reader.close();}
+  },{
+    processProbe:probe,
+    testVerifyProcessTreeClaimantsClean:async targets=>{
+      assert.deepEqual(targets.map(target=>target.pid),[seeded!.processId]);
+      return {clean:true,livePids:[],observedPids:[seeded!.processId]};
+    },
+    beforeAuthority:(dataRoot,modules,workspace)=>{
+      seeded=seedCancelledCleanupHold(dataRoot,modules,workspace,taskId,operationId);
+      const store=modules.Store.open(dataRoot);
+      try{
+        const port=modules.createPort(store,{recoveryEvidenceVerifier:({observation}:{observation:Record<string,unknown>})=>({
+          classification:observation.classification,reason_code:observation.reason_code,
+          evidence_source:observation.evidence_source,evidence_digest:observation.evidence_digest,
+        })});
+        const operation=port.readOperation(operationId) as Record<string,unknown>;
+        const scan={contract:'sqlite-candidate-recovery-release-tree-v1',operation_id:operationId,task_id:taskId,
+          attempt:1,generation:Number(operation.generation),claim_id:String(operation.claim_id),
+          worker_identity_digest:String(operation.claim_worker_identity_digest),
+          root_process_id:seeded.processId,root_start_fingerprint:seeded.fingerprint,clean:true,live_pids:[],
+          observed_pids:[seeded.processId],root_observed:true};
+        const processTreeScanDigest=candidateEvidenceDigest(scan);
+        const evidence={source:'manager_process_probe',operation_id:operationId,task_id:taskId,attempt:1,
+          generation:Number(operation.generation),phase:'cleanup_unverified',claim_id:String(operation.claim_id),
+          worker_identity_digest:String(operation.claim_worker_identity_digest),identity_state:'exited',
+          process_id:seeded.processId,start_fingerprint:seeded.fingerprint,probe_reason:'synthetic_exact_exit',
+          recovery_disposition:'complete_cleanup_closure_unavailable',process_tree_scan_clean:true,
+          process_tree_scan_scope:'recorded_roots_and_observed_claimants_only',complete_cleanup_closure:false,
+          process_tree_root_observed:true,process_tree_scan_digest:processTreeScanDigest,
+          observed_at:'2026-11-22T00:00:00.000Z'};
+        port.recordRecoveryObservation({operation_id:operationId,task_id:taskId,attempt:1,
+          generation:Number(operation.generation),expected_revision:Number(operation.revision),
+          claim_id:String(operation.claim_id),worker_identity_digest:String(operation.claim_worker_identity_digest),
+          classification:'hold',reason_code:'cleanup_incomplete',evidence_source:'manager_process_probe',
+          evidence_digest:candidateEvidenceDigest(evidence),process_tree_root_observed:true,
+          process_tree_scan_clean:true,process_tree_scan_digest:processTreeScanDigest,
+          recovery_disposition:'complete_cleanup_closure_unavailable'},evidence);
+      }finally{store.close();}
+    },
   });
 });
 

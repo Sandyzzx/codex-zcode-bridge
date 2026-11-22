@@ -2,7 +2,7 @@
 
 > Status: IMPLEMENTED — PR 2–6 CANDIDATE（architecture accepted；release blocked）
 > Date: 2026-11-22
-> Review baseline: `origin/preview` `1bf039fda2ccfd17a992458a871bddd7b48b38c1` + stacked PR 2–6 candidates
+> Review baseline: `origin/preview` `ac1e8396f25a1a1d3ff373def84726d28c1f4193` + PR 2–6 integration candidate
 
 ## Verdict
 

@@ -3,8 +3,8 @@
 > Status: IMPLEMENTED — PARTIAL（PR 2/2.5/3/4/5/6 stacked candidates；未合入 Preview，不可发布）
 > Decision status: [ADR-045](../decisions/ADR-045-async-executor-ownership.md) = ACCEPTED；[ADR-051](../decisions/ADR-051-executor-wake-delivery.md) = ACCEPTED；[ADR-052](../decisions/ADR-052-async-master-handoff.md) = ACCEPTED；本文档记录目标合同与当前实现边界
 > Date: 2026-11-22（Asia/Shanghai）
-> Baseline: `origin/preview` `1bf039fda2ccfd17a992458a871bddd7b48b38c1`；PR 2 base `f330b511270934fa40014006333aa7747dad684c`；implementation branch `codex/async-executor-pr2.5`
-> Evidence classification: 文中逐项标注 `VERIFIED`、`INFERRED`、`UNVERIFIED`；证据见 [PR 2 report](../reports/async-executor-pr2-20261122.md)、[PR 2.5 report](../reports/async-executor-pr2.5-20261122.md)、[PR 5 report](../reports/async-executor-pr5-20261122.md) 与 [PR 6 report](../reports/async-executor-pr6-20261122.md)
+> Baseline: `origin/preview` `ac1e8396f25a1a1d3ff373def84726d28c1f4193`（Preview.12）；PR 2 base `f330b511270934fa40014006333aa7747dad684c`；integration branch `codex/async-executor-rc-20261122`
+> Evidence classification: 文中逐项标注 `VERIFIED`、`INFERRED`、`UNVERIFIED`；证据见 [PR 2 report](../reports/async-executor-pr2-20261122.md)、[PR 2.5 report](../reports/async-executor-pr2.5-20261122.md)、[PR 5 report](../reports/async-executor-pr5-20261122.md)、[PR 6 report](../reports/async-executor-pr6-20261122.md) 与统一候选报告
 
 ## 1. 目标与非目标
 
@@ -41,8 +41,8 @@
 | loaded/idle Thread + exact model/provider/effort preflight 可安全转成一次性 Queue 请求 | VERIFIED（合成客户端） | `test/executor-wake.test.ts` 8/8；真实 App Server control socket 当前不存在 |
 | 独立 Executor 能在真实 Codex Desktop 关闭后保持运行 | UNVERIFIED | 需阶段 1 Host E2E |
 
-当前集成基线为 `origin/preview@1bf039fda2ccfd17a992458a871bddd7b48b38c1`
-（Preview.11）；发布支持范围仍按现有文档限定为 Windows x64、Node `24.16.0`、
+当前集成基线为 `origin/preview@ac1e8396f25a1a1d3ff373def84726d28c1f4193`
+（Preview.12）；发布支持范围仍按现有文档限定为 Windows x64、Node `24.16.0`、
 ZCode Desktop `3.18.2.10443`、SQLite v14 ONLY。PR 2 branch 不扩大该范围，也不把
 实验性 ADR-042 安装或 Token Efficiency 候选写成当前支持范围。
 
