@@ -175,6 +175,8 @@ export function createProductionCodingPlanVerificationRunner(options = {}) {
       let runtimeEvidence;
       let taskId = null;
       let released = false;
+      let status = null;
+      let events = null;
       let executorStartAttempted = false;
       let bridgeConnectAttempted = false;
       try {
@@ -217,7 +219,7 @@ export function createProductionCodingPlanVerificationRunner(options = {}) {
         if (receipt.task_id !== taskId) throw new Error("bridge_task_receipt_mismatch");
 
         phase = "task_poll";
-        const status = await waitForTerminalStatus(client, taskId, {
+        status = await waitForTerminalStatus(client, taskId, {
           signal: input.signal,
           timeoutMs: taskTimeoutMs,
           pollIntervalMs,
@@ -225,7 +227,7 @@ export function createProductionCodingPlanVerificationRunner(options = {}) {
         phase = "result_read";
         const result = await callBridgeTool(client, "zcode_result", { task_id: taskId });
         phase = "events_read";
-        const events = await collectTaskEvents(client, taskId);
+        events = await collectTaskEvents(client, taskId);
         phase = "release_wait";
         released = await waitForRelease(client, taskId, status, events, releaseTimeoutMs, pollIntervalMs);
         if (!released) throw new Error("bridge_release_unverified");
@@ -352,6 +354,21 @@ export function createProductionCodingPlanVerificationRunner(options = {}) {
           },
         };
       } catch (error) {
+        if (error && typeof error === "object") {
+          error.executor_pid ??= executor?.pid ?? null;
+          if (executor) error.executor_lease_id = executor.ready?.lease_id ?? null;
+          if (!released && taskId && connected?.client) {
+            error.release_diagnostics = await captureReleaseDiagnostics({
+              client: connected.client,
+              taskId,
+              status,
+              events,
+              stderr,
+              executor,
+              releaseTimeoutMs,
+            });
+          }
+        }
         if (taskId && connected?.client && !released) {
           await withTimeout(
             callBridgeTool(connected.client, "zcode_cancel", { task_id: taskId }).catch(() => undefined),
@@ -381,7 +398,6 @@ export function createProductionCodingPlanVerificationRunner(options = {}) {
         }
         let executorClosed = executor === undefined && !executorStartAttempted;
         if (executor) {
-          phase = "executor_shutdown";
           const shutdown = await withTimeout(
             executor.stop(),
             executorShutdownTimeoutMs,
@@ -442,6 +458,106 @@ async function waitForRelease(client, taskId, status, events, timeoutMs, pollInt
     if (hasRelease(await collectTaskEvents(client, taskId))) return true;
   }
   return false;
+}
+
+async function captureReleaseDiagnostics(input) {
+  const diagnostics = {
+    stage: "release_wait",
+    release_timeout_ms: input.releaseTimeoutMs,
+    task_id: input.taskId,
+    initial: summarizeTaskEvents(input.status, input.events),
+    executor: {
+      pid: input.executor?.pid ?? null,
+      lease_id: input.executor?.ready?.lease_id ?? null,
+    },
+    stderr_markers: input.stderr?.markers?.() ?? [],
+    final: null,
+    final_read_error: null,
+  };
+  try {
+    const status = await callBridgeTool(input.client, "zcode_status", { task_id: input.taskId });
+    const events = await collectTaskEvents(input.client, input.taskId);
+    diagnostics.final = summarizeTaskEvents(status, events);
+  } catch (error) {
+    diagnostics.final_read_error = {
+      code: typeof error?.code === "string" ? error.code : null,
+      message: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500),
+    };
+  }
+  return diagnostics;
+}
+
+function summarizeTaskEvents(status, events) {
+  const rows = Array.isArray(events) ? events : [];
+  const eventTypeCounts = Object.fromEntries(
+    [...new Set(rows.map((event) => event?.type).filter((type) => typeof type === "string"))]
+      .sort()
+      .map((type) => [type, rows.filter((event) => event?.type === type).length]),
+  );
+  const lifecycleTypes = new Set([
+    "result_committed",
+    "cleanup_pending",
+    "cleanup_verified",
+    "cleanup_unverified",
+    "cleanup_reverified",
+    "released",
+  ]);
+  const lifecycleEvents = rows
+    .filter((event) => lifecycleTypes.has(event?.type))
+    .slice(-20)
+    .map((event) => ({
+      seq: Number.isSafeInteger(event?.seq) ? event.seq : null,
+      at: typeof event?.at === "string" ? event.at.slice(0, 64) : null,
+      type: typeof event?.type === "string" ? event.type : "unknown",
+      summary: typeof event?.summary === "string" ? event.summary.slice(0, 500) : "",
+      details: pickReleaseDetails(event?.details),
+    }));
+  return {
+    status: summarizeStatus(status),
+    event_count: rows.length,
+    event_type_counts: eventTypeCounts,
+    lifecycle_events: lifecycleEvents,
+  };
+}
+
+function summarizeStatus(status) {
+  if (!status || typeof status !== "object" || Array.isArray(status)) return null;
+  const execution = status.execution_observation;
+  return {
+    task_id: typeof status.task_id === "string" ? status.task_id : null,
+    status: typeof status.status === "string" ? status.status : null,
+    attempt: Number.isSafeInteger(status.attempt) ? status.attempt : null,
+    worker_pid: Number.isSafeInteger(status.worker_pid) ? status.worker_pid : null,
+    error_code: typeof status.error_code === "string" ? status.error_code.slice(0, 200) : null,
+    execution_observation: execution && typeof execution === "object"
+      ? {
+          state: typeof execution.state === "string" ? execution.state : null,
+          observed_at: typeof execution.observed_at === "string" ? execution.observed_at.slice(0, 64) : null,
+          evidence_ref: typeof execution.evidence_ref === "string" ? execution.evidence_ref : null,
+        }
+      : null,
+  };
+}
+
+function pickReleaseDetails(details) {
+  if (!details || typeof details !== "object" || Array.isArray(details)) return null;
+  const keys = [
+    "cleanup_digest",
+    "reason",
+    "probe_state",
+    "outcome",
+    "recovery_disposition",
+    "process_tree_scan_clean",
+    "process_tree_root_observed",
+    "process_tree_probe_status",
+  ];
+  const selected = {};
+  for (const key of keys) {
+    const value = details[key];
+    if (typeof value === "string") selected[key] = value.slice(0, 256);
+    else if (typeof value === "boolean" || Number.isSafeInteger(value)) selected[key] = value;
+  }
+  return Object.keys(selected).length > 0 ? selected : null;
 }
 
 function verificationHour(usage, fallbackTimestamp) {

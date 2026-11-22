@@ -645,6 +645,122 @@ test("production runner supports a real code-edit task through the Start Plan pr
   }
 });
 
+test("production runner reports bounded release diagnostics and executor ownership on release timeout", async () => {
+  await mkdir(RUN_ROOT, { recursive: true });
+  const root = await mkdtemp(path.join(RUN_ROOT, "production-runner-release-diagnostics-"));
+  const synthetic = await fixtureFiles(root);
+  const stateRootParent = await mkdtemp(path.join(tmpdir(), "bridge-costlab-release-state-"));
+  const calls = [];
+  let statusCalls = 0;
+  try {
+    const lifecycleEvent = {
+      seq: 4,
+      at: "2026-11-17T02:03:00.000Z",
+      type: "cleanup_pending",
+      summary: "SQLite lifecycle: cleanup_pending",
+      details: { reason: "adapter_cleanup_pending" },
+    };
+    const runner = createProductionCodingPlanVerificationRunner({
+      projectRoot: root,
+      bridgeEntryPath: synthetic.bridgeEntryPath,
+      createId: () => FIXED_ID,
+      pollIntervalMs: 5,
+      releaseTimeoutMs: 40,
+      manageExecutor: true,
+      stateRootParent,
+      env: {
+        HOME: synthetic.userHome,
+        USERPROFILE: synthetic.userHome,
+        ZCODE_WINDOWS_APP_INSTALL_DIR: synthetic.install,
+        ProgramFiles: "C:\\Program Files",
+      },
+      inspectRuntime: async () => verifiedRuntime(synthetic.install),
+      startExecutorProcess: async () => ({
+        pid: 4242,
+        ready: { lease_id: "lease-diagnostics", pipe_name: "\\\\.\\pipe\\synthetic" },
+        stop: async () => ({ status: "not_idle", blockers: ["operation:cleanup_pending"] }),
+      }),
+      connectClient: async () => ({
+        client: {
+          callTool: async ({ name, arguments: args }) => {
+            calls.push({ name, args });
+            if (name === "zcode_task") return { structuredContent: { task_id: args.task_id, status: "queued" } };
+            if (name === "zcode_status") {
+              statusCalls += 1;
+              return {
+                structuredContent: {
+                  task_id: args.task_id,
+                  attempt: 1,
+                  status: statusCalls === 1 ? "running" : "completed",
+                  execution_observation: statusCalls === 1
+                    ? undefined
+                    : { state: "cleanup_held", observed_at: "2026-11-17T02:03:01.000Z", evidence_ref: "a".repeat(64) },
+                },
+              };
+            }
+            if (name === "zcode_result") {
+              return {
+                structuredContent: {
+                  task_id: args.task_id,
+                  status: "completed",
+                  exit_code: 0,
+                  model: {
+                    provider_id: PRODUCTION_VERIFICATION_CONTRACT.provider,
+                    model_id: PRODUCTION_VERIFICATION_CONTRACT.model,
+                    effective_reasoning_level: "low",
+                  },
+                },
+              };
+            }
+            if (name === "zcode_events") {
+              return {
+                structuredContent: {
+                  task_id: args.task_id,
+                  status: "completed",
+                  events: [lifecycleEvent],
+                  next_seq: lifecycleEvent.seq,
+                  has_more: false,
+                },
+              };
+            }
+            if (name === "zcode_cancel") {
+              return { structuredContent: { task_id: args.task_id, attempt: 1, status: "completed" } };
+            }
+            throw new Error(`unexpected tool ${name}`);
+          },
+        },
+        close: async () => undefined,
+      }),
+    });
+    await assert.rejects(
+      runner({
+        provider: PRODUCTION_VERIFICATION_CONTRACT.provider,
+        model: PRODUCTION_VERIFICATION_CONTRACT.model,
+        reasoning: "low",
+        beforeSnapshot: beforeSnapshot(),
+      }),
+      (error) => {
+        assert.equal(error.code, "COST_LAB_RELEASE_WAIT_FAILED");
+        assert.equal(error.executor_pid, 4242);
+        assert.equal(error.executor_lease_id, "lease-diagnostics");
+        assert.equal(error.release_diagnostics.release_timeout_ms, 40);
+        assert.equal(error.release_diagnostics.initial.event_type_counts.cleanup_pending, 1);
+        assert.equal(error.release_diagnostics.final.status.attempt, 1);
+        assert.equal(error.release_diagnostics.final.status.status, "completed");
+        assert.equal(error.release_diagnostics.final.status.execution_observation.state, "cleanup_held");
+        assert.equal(error.release_diagnostics.final.lifecycle_events[0].details.reason, "adapter_cleanup_pending");
+        return true;
+      },
+    );
+    assert.ok(calls.some((call) => call.name === "zcode_cancel"));
+  } finally {
+    await Promise.all([
+      rm(root, { recursive: true, force: true }),
+      rm(stateRootParent, { recursive: true, force: true }),
+    ]);
+  }
+});
+
 test("production runner rejects unsupported model input before creating a bridge client", async () => {
   let connected = 0;
   const runner = createProductionCodingPlanVerificationRunner({
@@ -1040,8 +1156,10 @@ test("production runner keeps Executor and MCP process ownership across a synthe
     console.error(`cost-lab runner process failure ${JSON.stringify({
       stage,
       executor_pid: executorPid,
+      executor_lease_id: error?.executor_lease_id ?? null,
       error_code: error?.code ?? null,
       error_message: error instanceof Error ? error.message.slice(0, 4_096) : String(error).slice(0, 4_096),
+      release_diagnostics: error?.release_diagnostics ?? null,
     })}`);
     if (Number.isSafeInteger(executorPid) && executorPid > 0) {
       try { process.kill(executorPid, "SIGKILL"); } catch { /* already exited */ }
