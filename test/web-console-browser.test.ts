@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { tmpdir } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { chromium } from "playwright-core";
@@ -254,13 +254,20 @@ test("real Chromium preserves Task deep links, UI preferences, and zero-cost con
     runtimeCompatibility: browserRuntime(runtimeCalls),
     executorStatus: async () => ({ state: "active", lease_id: "lease-browser" }),
   });
-  const browser = await chromium.launch({
+  const profileBase = path.join(process.env.LOCALAPPDATA ?? tmpdir(), "Temp");
+  mkdirSync(profileBase, { recursive: true });
+  const profile = mkdtempSync(path.join(profileBase, `bridge-web-console-${process.pid}-`));
+  const context = await chromium.launchPersistentContext(profile, {
     executablePath: chromePath!,
     headless: true,
+    locale: "en-US",
     args: ["--disable-background-networking", "--no-first-run"],
+    // The isolated runner relocates HOME/USERPROFILE; Chrome still needs the
+    // real OS home to initialize its path service. The browser data stays in
+    // the short-lived profile above.
+    env: { ...process.env, HOME: userInfo().homedir, USERPROFILE: userInfo().homedir },
   });
-  const context = await browser.newContext({ locale: "en-US" });
-  const page = await context.newPage();
+  const page = context.pages()[0] ?? await context.newPage();
   const pageErrors: string[] = [];
   const pageRequests: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
@@ -355,7 +362,7 @@ test("real Chromium preserves Task deep links, UI preferences, and zero-cost con
     assert.deepEqual(pageErrors, []);
   } finally {
     await context.close().catch(() => undefined);
-    await browser.close().catch(() => undefined);
+    rmSync(profile, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
     await server.close().catch(() => undefined);
   }
 });

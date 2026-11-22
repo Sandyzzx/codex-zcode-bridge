@@ -143,6 +143,7 @@
         "src/executor/**",
         "src/cli/main.ts",
         "src/web/**",
+        "src/runtime/cost-lab-official-dependencies.ts",
         "src/task-list.ts",
         "src/result-summary.ts",
         "src/runtime/host-profile.ts",

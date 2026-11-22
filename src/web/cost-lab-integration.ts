@@ -6,9 +6,9 @@ import { fileURLToPath } from "node:url";
 import {
   loadOfficialHostProductVersion,
   loadOfficialStartPlanAuthenticationResolverFactory,
-} from "../adapters/official-host-adapter.js";
+  StartPlanBillingEntitlement,
+} from "../runtime/cost-lab-official-dependencies.js";
 import { OfficialAppServerRuntimeResolver } from "../runtime/official-app-server-runtime.js";
-import { StartPlanBillingEntitlement } from "../runtime/start-plan-production-auth.js";
 import { inspectCostLabEnvironment } from "../../tools/cost-lab/web-services.mjs";
 import { resolveBillingDataBaseDir } from "../../tools/cost-lab/path-discovery.mjs";
 import { runOfficialAppServerProtocolSmoke } from "../../tools/cost-lab/official-app-server-protocol-smoke.mjs";

@@ -281,6 +281,7 @@ test("the real validator rejects injected development-path references and keeps 
       path.join(root, "scripts", "lib"),
       path.join(pluginRoot, ".codex-plugin"),
       path.join(pluginRoot, "dist"),
+      path.join(pluginRoot, "dist", "vendor"),
       path.join(pluginRoot, "worker", "vendor", "pkg"),
       path.join(pluginRoot, "hooks"),
       path.join(pluginRoot, "skills", "zcode-bridge"),
@@ -319,6 +320,10 @@ test("the real validator rejects injected development-path references and keeps 
         path.join(pluginRoot, "dist", bundle),
       );
     }
+    copyFileSync(
+      path.join(repositoryRoot, "plugins", "codex-zcode-bridge", "dist", "vendor", "official-billing-runtime.mjs"),
+      path.join(pluginRoot, "dist", "vendor", "official-billing-runtime.mjs"),
+    );
     for (const file of [
       "hooks/hooks.json",
       "hooks/session-start.mjs",
