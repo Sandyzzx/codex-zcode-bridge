@@ -4,7 +4,7 @@
 > Date: 2026-11-23 (Asia/Shanghai)
 > Branch: `codex/async-executor-rc-20261122`
 > Worktree: `C:\Users\Sandy\.codex\worktrees\async-executor-pr5-20261122\codex-zcode-bridge`
-> Candidate: `3baf91c65` (`origin/preview@8ee7ec93a82c` already contained)
+> Candidate: `1a7fcd89f` (`origin/preview@8ee7ec93a82c` already contained)
 > Conclusion: `PARTIAL / BLOCKED`
 
 ## Scope
@@ -74,11 +74,32 @@ production manifest or promote an experimental Runtime to `VERIFIED`.
 | Inventory generation | `PASS` | `npm run test:inventory`: 1015 declarations from 111 mapped files |
 | Plugin build | `PASS` | `npm run build:plugin`; `plugins/codex-zcode-bridge/dist/web-console.mjs` rebuilt |
 | Plugin structure | `PASS` | `npm run validate:plugin` |
-| Generated freshness | `PASS` | `npm run check:generated`: 14 tracked files fresh after commit `3baf91c65` |
-| Full Windows/Ubuntu Release Gate | `NOT_RUN` | Candidate has not been frozen after the final docs/report edits |
+| Generated freshness | `PASS` | `npm run check:generated`: 14 tracked files fresh on candidate `1a7fcd89f` |
+| Local Windows Bridge Release Gate | `PASS — 1086/1088, 2 existing skips` | `npm run test:full`, exit 0; `.run/async-executor-web-e2e-20261122/release-gate-repaired.log` |
+| GitHub Windows/Ubuntu Release Gate | `NOT_RUN` | Candidate must be pushed; prior failed run at `f62cd5cf8` is not current evidence |
 | Real Official Runtime Provider/Billing | `BLOCKED_BY_AUTHORIZATION` | No new paid model or Billing request authorized |
 | Real Queue Wake / Master Turn | `NOT_RUN / BLOCKED` | Requires isolated real Codex Thread/Host acceptance |
 | Real Desktop fully-exited and strict C/D | `NOT_RUN / BLOCKED` | Owner’s active Desktop was not closed |
+
+### Release Gate repair
+
+The first full gate at `b654d20d9` failed three of 1088 checks. The final
+candidate `1a7fcd89f` fixes only those failures:
+
+- `src/web/cost-lab-integration.ts` no longer imports the frozen Adapter layer
+  directly; the official dependency binding moved to
+  `src/runtime/cost-lab-official-dependencies.ts`.
+- The real plugin-validator fixture now creates
+  `dist/vendor/official-billing-runtime.mjs`.
+- The Chromium E2E now uses an owned, short-lived persistent profile and
+  restores the real OS home only for the browser child. The isolated runner’s
+  relocated `HOME`/`USERPROFILE` was the actual startup failure; a long profile
+  path was not.
+
+The repaired full gate reported `1088` tests, `1086` pass, `0` fail, and the
+same `2` explicit skips. Plugin validation returned
+`Plugin package is structurally valid`; generated-artifact freshness returned
+`14 files`. No source change was made after this gate.
 
 ### Cost Lab transient observation
 
@@ -87,8 +108,10 @@ One earlier parallel invocation of the Cost Lab suite produced 17/18 PASS with
 `startplan-web.test.mjs::simultaneous refreshes share one official read and one
 history entry`. Running the affected tests alone produced 4/4 PASS, and the
 full isolated Cost Lab suite then produced 88/88 PASS. This is recorded as a
-transient network/startup observation, not silently converted into proof; the
-final Release Gate must reproduce the passing result on the frozen candidate.
+transient network/startup observation, not silently converted into proof. The
+final repair changes no `tools/cost-lab/**` file; its 88/88 evidence remains
+attached to `3baf91c65`, while the exact final candidate carries the complete
+Bridge release gate.
 
 ## Real-Process Boundary
 
@@ -113,8 +136,10 @@ Official Runtime execution, real model response, or real Billing attribution.
 
 `PARTIAL / BLOCKED`.
 
-The implementation is suitable for targeted review and a PR update, but the
-candidate must be committed, integrated with the latest `origin/preview`,
-frozen to an exact SHA, and pass the applicable complete Release Gate before a
-Preview merge or Release recommendation. The real Host, Queue/Master, Official
-Runtime, and Billing gates remain separate Owner-authorized experiments.
+Implementation candidate `1a7fcd89f` is frozen, includes the latest verified
+`origin/preview`, and passes the complete local Windows Bridge Release Gate.
+The candidate still requires the applicable GitHub Windows/Ubuntu checks after
+push. The real Host, Queue/Master, Official Runtime, and Billing gates remain
+separate Owner-authorized experiments. No Preview merge or Release is
+recommended until the CI result and those separately authorized boundaries are
+recorded.
