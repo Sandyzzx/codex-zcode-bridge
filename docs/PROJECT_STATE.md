@@ -1,9 +1,9 @@
 # Project State
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-22（Preview.13 + Async Executor Web real-process acceptance）
-> Last verified: 2026-11-22，核对 `origin/preview@8ee7ec93a82c2093dce74707a9d1937c1c567887` 的 PR #129 AgentReport 扫描修复、PR #130 四种终态 Result 统一行政释放、Recovery Observation 限额移除、材料事实去重、超过 8 条 Hold 的 Cleanup/Cancel 消解、旧 v14 Trigger 只读兼容，以及 PR #131 Web Console 动态发现、Deep Link、真实 MCP Host 退出后的 Web/Executor 可观察性和 synthetic Worker 原 Attempt Result/Cleanup/Release。真实 Desktop 关闭、严格 Wake C/D、真实 Queue/Turn/Master、真实 Official Runtime 与真实计费仍 `NOT_RUN / BLOCKED`。
-> Verified against: Preview `8ee7ec93a82c2093dce74707a9d1937c1c567887` + PR #131 final integration candidate `7ab652baac606fedfa3e86c6db08e7892df122f7`（Web implementation/evidence `02a9e81198cffc5b90077eaba00b5abbfd40f640`）
+> Last updated: 2026-11-23（Operations Console + Cost Lab + Runtime Auto-Learn candidate）
+> Last verified: 2026-11-23，核对统一 Operations Console、单一 loopback Origin、Cost Lab same-origin 挂载、中英文与 Light/Dark/System、Task Deep Link 与 Result pending、Runtime Auto-Learn exact-fingerprint 证据、授权零模型探针和 Cost Lab Runner 跨进程 synthetic Worker；当前定向证据为 Runtime 7/7、Web 10/10、Cost Lab 88/88。真实 Desktop 全退、严格 Wake C/D、真实 Queue/Turn/Master、真实 Official Runtime、真实 Provider/Billing 和最终 Release Gate 仍为 `NOT_RUN / BLOCKED`。
+> Verified against: current Async Executor RC candidate on `codex/async-executor-rc-20261122`；最终候选提交与完整门禁结果见 [Operations Console Report](reports/operations-console-runtime-auto-learn-20261123.md)。
 
 当前发布状态：
 
@@ -21,6 +21,7 @@
 - Preview.13 通过 PR #129 移除 AgentReport 的 400,000 字符固定前缀扫描上限，改用有界内存覆盖完整已捕获响应；通过 PR #130 把 ADR-039 行政释放的终态 Result 范围扩展到 `completed`/`failed`/`waiting_for_master`/`cancelled`，并统一使用一个 `zcode_cancel` 用户流程。新释放证据统一绑定原 Result digest/commit、Claim、Worker identity 与 Recovery evidence；旧 `cancelled` 取消证明只作历史读取兼容。
 - ZCode Desktop `3.19.0.10774`：仅通过 ADR-042 的 `OFFICIAL_RUNTIME_EXPERIMENTAL` 精确指纹授权完成兼容性探测；不是 Preview.13 的发布支持版本，Coding Plan 倍率仍 `INCONCLUSIVE`，Start Plan 因无 active plan 为 `BLOCKED`。
 - Async Executor PR 2–6：PR #131 保持 open，位于 `codex/async-executor-rc-20261122`。Web implementation/evidence 为 `02a9e811`；最终 Preview.13 合并候选为 `7ab652ba`，已整合 `origin/preview@8ee7ec93`。它新增 Authority Root Console 发现/CAS 复用、经 Executor 验证的 `task console-url`、Task Deep Link 和 Result pending 独立显示。真实 MCP Host / Executor / Console / Chromium + synthetic Worker E2E 证明 Host 退出后 Web 与 Executor 继续可用，原 Attempt 的 Result/Cleanup/Release 各一次且无重复 Spawn。该证据不等同真实 Desktop 全退、真实 Wake 或 Official Runtime；历史完整矩阵不能自动继承。
+- 2026-11-23 Operations Console 候选仍位于 `codex/async-executor-rc-20261122`：Task Web Console 已扩展为 Dashboard/Tasks/Cost Lab/Runtime/Settings 的单一 loopback Origin，Cost Lab 仅通过 same-origin API 复用既有服务，Runtime Auto-Learn 按 exact fingerprint 保存兼容性证据。该候选的 Cost Lab Runner 使用隔离 Authority Root 和独立 Executor 进程；当前通过的是 synthetic Worker/合成账单证据，不能提升为真实 Provider、真实 Desktop 关闭或最终发布结论。
 
 ## 当前生产架构
 
@@ -86,10 +87,14 @@ Preview.3 的 Start Plan 历史证据覆盖 Windows、官方 AppServer `0.17.1`�
 | Preview.7 发布完整回归 | `PASS — CANDIDATE` | PR #96 Windows 完整回归 913 项：911 pass、0 fail、2 skip；Ubuntu 772 项：723 pass、0 fail、49 skip；Typecheck、Build、Plugin Validation、生成物 Freshness 与 `git diff --check` 通过。见 [CI 43720237853](https://github.com/Sandyzzx/codex-zcode-bridge/actions/runs/43720237853)。只覆盖 Windows x64、Node 24.16.0 |
 | Async Executor PR 2–6 历史本地完整回归 | `PASS — HISTORICAL CANDIDATE` | 历史候选 `c75c3433`：1060 tests、1058 pass、0 fail、2 existing skips；注册压力 4/4；生成物 13/13 fresh，插件结构校验通过。见 [统一 RC 证据](reports/async-executor-release-candidate-20261122.md)。该结果不属于当前验收提交 `7f54531a`，也不替代真实 Desktop 关闭或真实 Official Runtime |
 | Async Executor Web/real-process acceptance | `PARTIAL / BLOCKED` | PR #131 final integration candidate `7ab652ba`（Web implementation/evidence `02a9e811`，整合 `origin/preview@8ee7ec93`）：定向主集合 92/92 PASS；真实 MCP Host / Executor / Console / Chromium 进程与 synthetic Worker 完成 C1；Host 退出后 Executor/Console 仍 active，原 Attempt Result/Cleanup/Release 各一次、Spawn 一次、新 Host 读回同一 Result。真实 Desktop 全退、严格 C/D、真实 Queue ACK/Turn/Master、Official Runtime 和真实 Skill 遵循率仍 `BLOCKED`。见 [Web real-process E2E](reports/async-executor-web-real-host-e2e-20261122.md) |
+| Operations Console + Web UI | `PASS — SYNTHETIC` | 真实 Chromium 加载统一 Console；Runtime 7/7、Web 10/10；Deep Link 选中/刷新保留、Result pending 独立显示、i18n/theme、loopback/Host/Origin/CSRF、动态端口发现与同 Root 复用均通过。Worker、Billing 与 Runtime Provider 边界为 synthetic/mock，不是真实模型证据。 |
+| Cost Lab unified API + Runner | `PASS — SYNTHETIC` | Cost Lab 全量隔离套件 88/88；同时验证 same-origin 挂载、CSRF、历史/账单脱敏、并发刷新去重和显式真实确认。独立 Runner 使用真实 Executor/MCP 进程与 synthetic Worker，完成 Result、Cleanup、Release、Idle-only Shutdown 与 PID 退出。 |
+| Runtime Auto-Learn | `PASS — CONTRACT` | 静态 fingerprint 证据、去重与历史比较、Provider/Billing scope 隔离、授权零模型协议探针和 Manifest 不变均有定向测试；真实 Provider E2E、真实 Billing 和真实版本兼容提升 `NOT_RUN / BLOCKED`。 |
 | Task Console candidate | `PASS — REAL BROWSER + SYNTHETIC WORKER` | 动态发现/CAS 复用、`task console-url`、Deep Link、跨页 summary、Result pending 独立显示、Attention 与 MCP Host 退出后的真实浏览器观察 PASS；不是真实 Desktop 或真实模型证据 |
 | Official Host 启动版本上下文 | `PASS — CANDIDATE` | 有效 Desktop metadata 优先；独立 Host 使用校验后的 `3.18.2` 产品版本且不伪造 Build ID；模型请求仍使用 `--surface desktop`；受控 A/B 两边 `main_turn` 均获真实响应，A/B task contract 因测试 Prompt 保持 `FAIL`，后续正常 Prompt 核心路径通过 |
 | Windows runtime-host helper | `PASS — OFFICIAL_SIGNED_3.18.2` | 从本机 ZCode Desktop `3.18.2.10443` 复制 `zcode-runtime-host.exe`：179,608 bytes、SHA-256 `C2C8FF5FF28CBDDC4F177C094AA67C322830889612251BD173BAAABC89379AB4`、PE `0x8664`、Authenticode Valid、签名主体北京智谱华章科技股份有限公司；现有 Official ProcessManager smoke 通过。Fresh Rebuild 不再是门槛；安装器 helper/fixture 不进入 Bridge BOM |
 | 当前认证候选 CI | `PASS` | Draft PR #94 的 [run 43599440845](https://github.com/Sandyzzx/codex-zcode-bridge/actions/runs/43599440845) 在 Ubuntu/Windows `Verify` 与 SQLite resource matrix 四项全部通过；不等同 Preview.6 发布验收 |
+| 当前 Operations Console 候选 Release Gate | `NOT_RUN` | 最终候选尚未冻结；本报告只记录定向 Runtime、Web、Cost Lab 与 synthetic process 证据，不能替代 Windows/Ubuntu 完整门禁 |
 
 ## 明确边界
 
@@ -102,6 +107,8 @@ Preview.3 的 Start Plan 历史证据覆盖 Windows、官方 AppServer `0.17.1`�
 `npm audit --omit=dev` 仍报告 `@modelcontextprotocol/server@2.1.0` 与 `zod@4.6.5` 的既有 high advisories。依赖树与 `origin/preview` 相同，本候选没有引入或修复这些 advisory；它们必须由独立的安全发布流程处理。
 
 Preview.7 的本机验证只覆盖 Windows x64、Node `24.16.0`。已安装 Desktop `3.18.2.10443` 的官方签名 helper 与固定 Host 通过进程管理 smoke；Desktop `3.18.0`、`3.18.1` 实机组合未验证，不能标记为不兼容。真实 OAuth refresh 与跨机器制品复现未执行，但属于 Owner 已接受的 Preview 阶段有限风险。PR #96 合并后的 preview push 首次 Windows run 观察到既有 `released` lifecycle observation timeout；Root cause 保持 `UNCONFIRMED`，未修改断言或超时，failed-job rerun 通过。
+
+2026-11-23 的候选仍未获得真实 Codex Desktop 关闭、严格 Wake C/D、真实 Queue/Turn/Master、真实 Official Runtime Provider/Billing 的授权证据。Cost Lab Runner 的 synthetic Worker 通过不等于真实模型或真实 Host 关闭；页面加载不触发模型也不等于真实执行成功。候选最终必须冻结到精确提交后再运行一次适用 Release Gate；当前未合并 Preview、未发布 Release、未产生新的付费模型请求。
 
 ## 当前文档入口
 

@@ -1,9 +1,9 @@
 # 决策路由 / Decisions
 
 > Status: AUTHORITATIVE（仅指本索引）
-> Last updated: 2026-11-22（terminal-result release + Async Executor Web real-process acceptance）
-> Last verified: 2026-11-22，核对 ADR-039 四种终态 Result 统一行政释放绑定、ADR-048 默认 32 KiB Event 页、ADR-045 Lease/IPC/Thin MCP/Fake Worker 证据、ADR-049 Task CLI Wake 授权入口、ADR-050 loopback Web 发现/Deep Link/Wake 展示、ADR-051 release-bound Wake evidence 与 ADR-052 Master workflow contract。真实 Desktop E2E、严格 C/D、真实 Queue/Turn/Master、真实 Runtime 和真实模型遵循率仍为 `NOT_RUN / BLOCKED`。
-> Verified against: Preview `8ee7ec93a82c2093dce74707a9d1937c1c567887` + PR #131 final integration candidate `7ab652baac606fedfa3e86c6db08e7892df122f7`（Web implementation/evidence `02a9e81198cffc5b90077eaba00b5abbfd40f640`）
+> Last updated: 2026-11-23（Operations Console + Cost Lab + Runtime Auto-Learn candidate）
+> Last verified: 2026-11-23，核对 ADR-050 的统一 Console 扩展、ADR-053 的 fingerprint-bound 证据/授权/能力矩阵，以及 Web 浏览器、Runtime、Cost Lab Runner 定向路径。真实 Desktop 全退、严格 C/D、真实 Queue/Turn/Master、真实 Provider/Billing 和完整 Release Gate 仍为 `NOT_RUN / BLOCKED`。
+> Verified against: current Async Executor RC candidate on `codex/async-executor-rc-20261122`；远程 Preview 必须在最终候选冻结前重新 fetch 并核对。
 
 先读当前 [架构](../ARCHITECTURE.md)/[接口](../INTERFACES.md)，只在需要解释取舍时加载对应决策。文件保持原路径和历史正文；Partially superseded 的标注优先于历史段落。
 
@@ -46,6 +46,7 @@
 | Task Web Console | [050](ADR-050-local-task-web-console.md) | 仅 loopback；Root 级动态发现/CAS 复用、Deep Link 与跨页 summary；经同一 Executor Control 读取 Task/Event/Result/Attention 并显式转发 Cancel/Reply；不创建 Task、不打开 SQLite、不拥有 Executor 生命周期 |
 | Executor Wake | [051](ADR-051-executor-wake-delivery.md) | post-Release 一次性 Wake；Owner policy 经 Task CLI 排他写入；loaded/idle exact-config 才允许 Queue，其余 Web Notify；CLI/Web 从 SQLite v14 observation 展示，不重试 |
 | Async Handoff | [052](ADR-052-async-master-handoff.md) | Task Scope 与 Handoff 分离；可靠受理后结束 Turn/停止轮询，断连不取消；Wake 后核对身份并独立验收；Pending Interaction 仍受原审批边界 |
+| Runtime Auto-Learn | [053](ADR-053-runtime-auto-learn-compatibility.md) | exact fingerprint 证据库、静态检查、授权零模型探针、Provider/Billing 分离矩阵和待审查 Candidate Report；不修改 Manifest、不自动授权、不发起付费请求 |
 
 ADR-032、ADR-033、ADR-034 和 ADR-035 的正文记录决定作出时的状态；顶部 Applicability 标注当前适用性。当前实现状态以 [ARCHITECTURE](../ARCHITECTURE.md) 和 [PROJECT_STATE](../PROJECT_STATE.md) 为准：Windows x64 Worker 使用 `OfficialAppServerWorkerAdapter`、固定 Official Host module、安装版 ZCode AppServer、官方只读 Start Plan 认证与官方签名 runtime host；Model Catalog 使用同一 session factory。Linux、macOS 与 Windows 非 x64 在构造 Adapter 前 fail closed；direct stdio 只保留测试入口。`research/zcode-official-host-integration-v1/` 的 [Implementation Summary](../research/zcode-official-host-integration-v1/IMPLEMENTATION_SUMMARY.md) 与 [Final Acceptance](../research/zcode-official-host-integration-v1/FINAL_ACCEPTANCE_REPORT.md) 是 Preview.4/3.18.0 历史证据，不能作为当前候选的兼容通过证明。
 

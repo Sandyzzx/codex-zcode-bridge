@@ -221,7 +221,7 @@
     },
     {
       "id": 2,
-      "estimated_ms": 756819,
+      "estimated_ms": 767819,
       "tests": [
         {
           "file": "test/account-provider.test.ts",
@@ -238,6 +238,14 @@
         {
           "file": "test/web-console.test.ts",
           "estimated_ms": 3000
+        },
+        {
+          "file": "test/web-console-browser.test.ts",
+          "estimated_ms": 10000
+        },
+        {
+          "file": "test/runtime-compatibility.test.ts",
+          "estimated_ms": 1000
         },
         {
           "file": "test/attention-wait.test.ts",

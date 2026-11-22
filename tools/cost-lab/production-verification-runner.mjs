@@ -532,7 +532,8 @@ function verificationLayout(root, stateRoot) {
     appData: path.join(root, "app-data"),
     localAppData: path.join(stateRoot, "local-app-data"),
     temp: path.join(root, "temp"),
-    bridgeData: path.join(stateRoot, "bridge-data"),
+    bridgeDataRoot: path.join(stateRoot, "bridge-data"),
+    bridgeData: path.join(stateRoot, "bridge-data", "state"),
     settings: path.join(root, "home", ".codex", "codex-zcode-bridge"),
     workspace: path.join(root, "workspace"),
   });
@@ -571,6 +572,7 @@ async function createIsolatedLayout(layout, taskMode) {
     layout.appData,
     layout.localAppData,
     layout.temp,
+    layout.bridgeDataRoot,
     layout.bridgeData,
     layout.settings,
     layout.workspace,
@@ -595,7 +597,7 @@ async function createIsolatedLayout(layout, taskMode) {
 function buildRuntimeConfig(layout, official, timeoutMs, provider) {
   return Object.freeze({
     ZCODE_BRIDGE_ZCODE_CJS: official.bundle,
-    ZCODE_BRIDGE_DATA_DIR: layout.bridgeData,
+    ZCODE_BRIDGE_DATA_DIR: layout.bridgeDataRoot,
     ZCODE_BRIDGE_TIMEOUT_MS: String(timeoutMs),
     ZCODE_BRIDGE_MAX_CONCURRENT_WORKERS: "1",
     ZCODE_BRIDGE_MODE: "yolo",
@@ -614,6 +616,15 @@ function buildRuntimeConfig(layout, official, timeoutMs, provider) {
 async function writeRuntimeConfig(layout, config) {
   const pathValue = path.join(layout.settings, "runtime-config.json");
   await writeFile(pathValue, `${JSON.stringify(config, null, 2)}\n`, {
+    encoding: "utf8",
+    flag: "wx",
+  });
+  const authorityPath = path.join(layout.settings, "authority.json");
+  await writeFile(authorityPath, `${JSON.stringify({
+    schema_version: 1,
+    authority: "sqlite",
+    data_root: layout.bridgeDataRoot,
+  }, null, 2)}\n`, {
     encoding: "utf8",
     flag: "wx",
   });
@@ -732,7 +743,10 @@ function waitForExecutorReady(child, timeoutMs) {
     const onExit = () => {
       cleanup();
       const code = executorFailureCode(stderr);
-      reject(new Error(code ? `cost_lab_executor_start_${code}` : "cost_lab_executor_exited_before_ready"));
+      reject(new Error(
+        `${code ? `cost_lab_executor_start_${code}` : "cost_lab_executor_exited_before_ready"}`
+        + `\n${stderr.trim()}`,
+      ));
     };
     child.stdout.on("data", onStdout);
     child.stderr.on("data", onStderr);

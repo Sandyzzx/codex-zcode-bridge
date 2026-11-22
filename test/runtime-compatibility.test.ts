@@ -263,6 +263,46 @@ test("Billing evidence remains INCONCLUSIVE unless its own verification says VER
   }
 });
 
+test("Coding Plan execution evidence cannot elevate Start Plan or another Provider", async () => {
+  const fingerprint = "6".repeat(64);
+  const runtime = fixture(fingerprint);
+  const fixtureSet = tempService({ inspect: async () => runtime });
+  try {
+    const initial = await fixtureSet.service.inspect();
+    const staticRecord = initial.evidence[0]!;
+    const codingPlan = sealEvidence({
+      schema_version: 1,
+      evidence_id: "coding-plan-pass",
+      fingerprint,
+      captured_at: "2026-01-01T00:20:00.000Z",
+      installation: initial.installation!,
+      probe_type: "real_provider",
+      probe_scope: "provider/model/session/turn",
+      result: "PASS",
+      classification: "PROVIDER_EXECUTION_PASS",
+      provider: "account:bigmodel-individual-coding-plan",
+      model: "GLM-5.3-Flash",
+      evidence_source: "authorized real provider E2E",
+      limitations: ["Coding Plan evidence is scoped to this fingerprint and Provider."],
+    });
+    mkdirSync(path.dirname(fixtureSet.history), { recursive: true });
+    writeFileSync(fixtureSet.history, `${JSON.stringify({
+      schema_version: 1,
+      updated_at: "2026-01-01T00:20:00.000Z",
+      records: [staticRecord, codingPlan],
+    }, null, 2)}\n`, "utf8");
+
+    const snapshot = await fixtureSet.service.inspect();
+    assert.equal(snapshot.capabilities.coding_plan_execution?.status, "PASS");
+    assert.equal(snapshot.capabilities.coding_plan_execution?.evidence_id, codingPlan.evidence_id);
+    assert.equal(snapshot.capabilities.start_plan_execution?.status, "NOT_RUN");
+    assert.equal(snapshot.capabilities.other_providers?.status, "NOT_RUN");
+    assert.equal(snapshot.capabilities.coding_plan_billing?.status, "NOT_RUN");
+  } finally {
+    fixtureSet.cleanup();
+  }
+});
+
 test("Corrupt compatibility evidence fails closed instead of becoming a compatibility claim", async () => {
   const fixtureSet = tempService({
     inspect: async () => fixture("f".repeat(64)),

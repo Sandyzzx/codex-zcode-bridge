@@ -6,6 +6,7 @@
 > Baseline: `origin/preview` `8ee7ec93a82c2093dce74707a9d1937c1c567887`
 > Implementation/evidence: `02a9e81198cffc5b90077eaba00b5abbfd40f640`; final Preview.13 integration candidate `7ab652baac606fedfa3e86c6db08e7892df122f7`
 > Related architecture: [BRIDGE_ASYNC_EXECUTION_V1.md](../architecture/BRIDGE_ASYNC_EXECUTION_V1.md)
+> Extension: 2026-11-23 Operations Console / Cost Lab / Runtime Auto-Learn
 
 ## 决定
 
@@ -85,3 +86,26 @@ Host 和 synthetic Worker 验证：Host 退出前后浏览器持续观察同一 
 Executor/Console 保持 active，最终 Result/Cleanup/Release 各一次。该结论
 固定为 `PASS — REAL PROCESS / SYNTHETIC WORKER`，不得写成真实 Desktop、
 Queue Wake 或 Official Runtime 的 `PASS — REAL`。
+
+## Operations Console 扩展
+
+2026-11-23 的同一 Web 入口扩展为 Bridge Operations Console，页面分为
+Dashboard、Tasks、Cost Lab、Runtime 和 Settings。它仍只使用一个 loopback
+Origin、一个 HTTP Server 和同一个 Executor Control Client；Cost Lab 通过
+same-origin `/api/cost-lab/*` 挂载，不复制 Billing、认证、Runtime Resolver
+或历史实现，也不启动第二个长期 Web 服务。
+
+UI 支持 `zh-CN`/`en` 字典切换和 Light/Dark/System 主题，偏好只写入浏览器
+本地，不写 TaskAuthority。Task ID、Provider ID、Model ID、错误码、原始
+Event 和 JSON 保持原文。页面加载、主题切换、语言切换、历史读取和 Deep
+Link 不触发模型或官方 Billing 请求；Cost Lab 的官方余额刷新和真实验证
+仍需显式确认。
+
+Runtime 页面复用 ADR-042、Official Runtime Resolver、Cost Lab Protocol
+Smoke 和现有授权边界，兼容性证据按 exact fingerprint 记录在
+`.run/bridge-console/runtime-compatibility.json`。该文件是证据，不是 Task
+Authority；其规则见 [ADR-053](ADR-053-runtime-auto-learn-compatibility.md)。
+
+`task console-url <task_id>` 仍返回经过 live `/api/session`、Executor Lease
+和 discovery 校验的实际 URL；Console 启动失败、端口不可达或 Owner 不明时
+必须失败，不拼接猜测链接。

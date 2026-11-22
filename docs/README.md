@@ -1,9 +1,9 @@
 # 文档路由 / Documentation
 
 > Status: AUTHORITATIVE（仅指本索引）
-> Last updated: 2026-11-22（Preview.13 + Async Executor Web real-process acceptance）
-> Last verified: 2026-11-22，核对 PR #116、PR #121、PR #129、PR #130、默认完整 Result/显式 Summary、Event Attempt 归属、ADR-048 默认 Event 页预算、材料事实去重、历史 v14 Hold 兼容、统一终态行政释放，以及 PR #131 动态 Console 发现/复用、`task console-url`、Task Deep Link、Result pending 独立显示和真实 MCP Host 退出后的 Web/Executor 可用性。历史候选 `c75c3433` 的 1060 项完整回归仍只属于该提交；当前合并候选另跑 92 项定向测试。真实 Desktop 关闭、严格 Wake C/D、真实 Queue/Turn/Master、Official Runtime 执行与真实模型 Skill 遵循率仍为 `NOT_RUN / BLOCKED`。
-> Verified against: `origin/preview@8ee7ec93a82c2093dce74707a9d1937c1c567887` + PR #131 final integration candidate `7ab652baac606fedfa3e86c6db08e7892df122f7`（Web implementation/evidence `02a9e81198cffc5b90077eaba00b5abbfd40f640`）
+> Last updated: 2026-11-23（Operations Console + Cost Lab + Runtime Auto-Learn candidate）
+> Last verified: 2026-11-23，核对统一 Operations Console、Cost Lab same-origin 挂载、`zh-CN`/`en` 与 Light/Dark/System、Task Deep Link/Result pending、Runtime Auto-Learn exact-fingerprint 证据、授权零模型探针、Cost Lab Runner 跨进程 synthetic Worker、真实 Chromium 和 17 项 Web/Runtime 定向测试。真实 Desktop 关闭、严格 Wake C/D、真实 Queue/Turn/Master、真实 Provider/Billing 与最终 Release Gate 仍为 `NOT_RUN / BLOCKED`。
+> Verified against: current Async Executor RC candidate on `codex/async-executor-rc-20261122`；远程 Preview HEAD 在最终集成前重新 fetch。
 
 English users start at [README.md](../README.md). 技术文档为中文。先读当前事实，按问题加载合同；研究或历史材料不作为当前实现或发布证明。
 
@@ -35,6 +35,8 @@ English users start at [README.md](../README.md). 技术文档为中文。先读
 | Task CLI candidate | [ADR-049](decisions/ADR-049-task-cli-control-surface.md) | `IMPLEMENTED / PARTIAL`：同一 Executor Control Client、bounded Task list、Result 摘要/文件预算与已运行 Executor 检测；不拥有 SQLite |
 | Task CLI evidence | [PR 3 report](reports/async-executor-pr3-20261122.md)、[实机验收](reports/async-executor-real-host-acceptance-20261122.md) | `PASS — TARGETED`：9/9；Owner `wake-authorize` 校验当前 Attempt、安全 effort、最长 24 小时并排他写入 policy；bounded list/Result 与 start/stop 合同保持 |
 | Task Web Console candidate | [ADR-050](decisions/ADR-050-local-task-web-console.md)、[PR 4 report](reports/async-executor-pr4-20261122.md)、[Web real-process E2E](reports/async-executor-web-real-host-e2e-20261122.md) | `PASS — TARGETED / REAL BROWSER + SYNTHETIC WORKER`：动态发现/复用、Deep Link、跨页 summary、Result pending 独立显示、MCP Host 退出后 Web/Executor 继续可用；不等同真实 Desktop 或 Official Runtime |
+| Operations Console + Cost Lab | [WEB_CONSOLE.md](WEB_CONSOLE.md)、[ADR-050](decisions/ADR-050-local-task-web-console.md) | `IMPLEMENTED / TARGETED`：单一 loopback Origin、Dashboard/Tasks/Cost Lab/Runtime/Settings、i18n/theme、真实 Chromium、Cost Lab 复用、Executor 生命周期独立 |
+| Runtime Auto-Learn | [ADR-053](decisions/ADR-053-runtime-auto-learn-compatibility.md)、[WEB_CONSOLE.md](WEB_CONSOLE.md) | `IMPLEMENTED / TARGETED`：静态 fingerprint 证据、授权零模型探针、Provider/Billing scope 分隔、Candidate Report；真实 Provider/Manifest 提升未运行 |
 | Executor Wake candidate | [ADR-051](decisions/ADR-051-executor-wake-delivery.md)、[PR 5 report](reports/async-executor-pr5-20261122.md)、[实机验收](reports/async-executor-real-host-acceptance-20261122.md) | `PARTIAL / BLOCKED`：post-Release 一次性 Queue；loaded/idle exact model/provider/effort 才允许，其余 Web Notify；当前无 App Server control socket 时 0 次 Queue 并降级；真实 Queue ACK/Turn/Master 与严格 C/D `NOT_RUN` |
 | Async Master Handoff candidate | [ADR-052](decisions/ADR-052-async-master-handoff.md)、[PR 6 report](reports/async-executor-pr6-20261122.md)、[Master Skill](../plugins/codex-zcode-bridge/skills/zcode-bridge/SKILL.md) | `IMPLEMENTED / PARTIAL`：Scope 与 Handoff 分离；可靠受理后结束 Turn/停止轮询；Wake 后独立验收；真实模型遵循率与真实 Host Wake `NOT_RUN` |
 | Preview.7 Post-Audit 最小架构、正确性、Legacy JSON 与 CI 整改 | [ADR-038](decisions/ADR-038-preview6-minimum-architecture-remediation.md)、[PROJECT_STATE.md](PROJECT_STATE.md) |

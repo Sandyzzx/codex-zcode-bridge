@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { pathToFileURL } from "node:url";
 
 import {
   CODE_EDIT_EXPECTED_CONTENT,
@@ -96,14 +98,30 @@ async function fixtureFiles(root) {
   const userHome = path.join(root, "user-home");
   const install = path.join(root, "install");
   const files = [
-    path.join(userHome, ".zcode", "v2", "provider_config.json"),
-    path.join(install, "resources", "glm", "zcode.cjs"),
-    path.join(install, "resources", "tools", "runtime-host", "zcode-runtime-host.exe"),
-    path.join(install, "resources", "config", "provider", "zcode-builtin.json"),
+    [
+      path.join(userHome, ".zcode", "v2", "provider_config.json"),
+      JSON.stringify({
+        config: {
+          providerConfigRules: {
+            providerRules: {
+              [PRODUCTION_VERIFICATION_CONTRACT.provider]: {
+                models: [PRODUCTION_VERIFICATION_CONTRACT.model],
+              },
+            },
+          },
+        },
+      }),
+    ],
+    [path.join(install, "resources", "glm", "zcode.cjs"), "synthetic\n"],
+    [path.join(install, "resources", "tools", "runtime-host", "zcode-runtime-host.exe"), "synthetic\n"],
+    [
+      path.join(install, "resources", "config", "provider", "zcode-builtin.json"),
+      JSON.stringify({ config: {} }),
+    ],
   ];
-  for (const file of files) {
+  for (const [file, content] of files) {
     await mkdir(path.dirname(file), { recursive: true });
-    await writeFile(file, "synthetic\n", "utf8");
+    await writeFile(file, content, "utf8");
   }
   const bridgeEntryPath = path.join(root, "dist", "src", "mcp", "main.js");
   await mkdir(path.dirname(bridgeEntryPath), { recursive: true });
@@ -141,7 +159,7 @@ test("production runner drives the built MCP task and returns runtime/usage evid
       manageExecutor: true,
       startExecutorProcess: async (options) => {
         executorStarted += 1;
-        assert.equal(options.dataRoot.endsWith("bridge-data"), true);
+        assert.equal(options.dataRoot.endsWith(path.join("bridge-data", "state")), true);
         assert.equal(options.executorEntryPath.endsWith("executor.mjs"), true);
         assert.equal(options.bridgeEntryPath, synthetic.bridgeEntryPath);
         return {
@@ -159,11 +177,20 @@ test("production runner drives the built MCP task and returns runtime/usage evid
           path.join(root, ".run", "cost-lab-web", "verifications", FIXED_ID, "home", ".codex", "codex-zcode-bridge", "runtime-config.json"),
           "utf8",
         ));
+        const authorityConfig = JSON.parse(await readFile(
+          path.join(root, ".run", "cost-lab-web", "verifications", FIXED_ID, "home", ".codex", "codex-zcode-bridge", "authority.json"),
+          "utf8",
+        ));
         assert.equal(options.args[0], synthetic.bridgeEntryPath);
         assert.equal(options.env.HOME.endsWith("home"), true);
         assert.equal(options.env.ZCODE_BRIDGE_PLUGIN_MODE, "1");
         assert.equal(isWithin(root, options.env.LOCALAPPDATA), false);
         assert.equal(isWithin(root, runtimeConfig.ZCODE_BRIDGE_DATA_DIR), false);
+        assert.deepEqual(authorityConfig, {
+          schema_version: 1,
+          authority: "sqlite",
+          data_root: runtimeConfig.ZCODE_BRIDGE_DATA_DIR,
+        });
         assert.equal(runtimeConfig.ZCODE_BRIDGE_PREFER_STARTPLAN, "false");
         return {
           client: {
@@ -899,6 +926,117 @@ test("production runner retains result evidence when a code-edit task makes no c
     ]);
   }
 });
+
+test("production runner keeps Executor and MCP process ownership across a synthetic Worker", {
+  timeout: 120_000,
+}, async () => {
+  await mkdir(RUN_ROOT, { recursive: true });
+  const root = await mkdtemp(path.join(RUN_ROOT, "production-runner-process-"));
+  const synthetic = await fixtureFiles(root);
+  const stateRootParent = await mkdtemp(path.join(tmpdir(), "bridge-costlab-state-"));
+  const executorBundle = path.join(
+    PROJECT_ROOT,
+    "plugins",
+    "codex-zcode-bridge",
+    "dist",
+    "executor.mjs",
+  );
+  const bridgeBundle = path.join(
+    PROJECT_ROOT,
+    "plugins",
+    "codex-zcode-bridge",
+    "dist",
+    "bridge.mjs",
+  );
+  const executorWrapper = path.join(root, "test-executor-entry.mjs");
+  await writeFile(executorWrapper, [
+    `import path from "node:path";`,
+    `import { fileURLToPath } from "node:url";`,
+    `import { runExecutorMain, ExecutorControlClient } from ${JSON.stringify(pathToFileURL(executorBundle).href)};`,
+    `export { ExecutorControlClient };`,
+    `const isEntry = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));`,
+    `if (isEntry) {`,
+    `  void runExecutorMain([...process.argv.slice(2), "--test-only-fake-adapter"], { testOnly: true });`,
+    `}`,
+    "",
+  ].join("\n"), "utf8");
+  let succeeded = false;
+  try {
+    const runner = createProductionCodingPlanVerificationRunner({
+      projectRoot: root,
+      bridgeEntryPath: bridgeBundle,
+      executorEntryPath: executorWrapper,
+      createId: () => FIXED_ID,
+      pollIntervalMs: 10,
+      taskTimeoutMs: 60_000,
+      stateRootParent,
+      executorReadyTimeoutMs: 30_000,
+      executorShutdownTimeoutMs: 30_000,
+      env: {
+        HOME: synthetic.userHome,
+        USERPROFILE: synthetic.userHome,
+        ZCODE_WINDOWS_APP_INSTALL_DIR: synthetic.install,
+        ProgramFiles: "C:\\Program Files",
+      },
+      inspectRuntime: async () => verifiedRuntime(synthetic.install),
+    });
+    const result = await runner({
+      provider: PRODUCTION_VERIFICATION_CONTRACT.provider,
+      model: PRODUCTION_VERIFICATION_CONTRACT.model,
+      reasoning: "low",
+      beforeSnapshot: beforeSnapshot(),
+    });
+    assert.equal(result.model_requests, null);
+    assert.equal(result.usage, null);
+    assert.equal(result.runtime_evidence.bridge_path, "BUILT_MCP_STDIO_WITH_INDEPENDENT_EXECUTOR");
+    assert.equal(result.runtime_evidence.executor.ready_observed, true);
+    assert.equal(result.runtime_evidence.executor.shutdown, "closed");
+    assert.equal(Number.isSafeInteger(result.runtime_evidence.executor.pid), true);
+    assert.equal(result.runtime_evidence.task_id, `costlab-${FIXED_ID}`);
+    assert.equal(result.runtime_evidence.attempt, 1);
+    assert.equal(result.runtime_evidence.terminal_status, "completed");
+    assert.equal(result.runtime_evidence.operation_release_observed, true);
+    assert.equal(result.runtime_evidence.result_evidence.status, "completed");
+    await waitForPidExit(result.runtime_evidence.executor.pid, 10_000);
+    await assert.rejects(
+      lstat(path.join(
+        stateRootParent,
+        "cost-lab-web",
+        "verification-state",
+        FIXED_ID,
+      )),
+      { code: "ENOENT" },
+    );
+    await assert.rejects(
+      lstat(path.join(root, ".run", "cost-lab-web", "verifications", FIXED_ID)),
+      { code: "ENOENT" },
+    );
+    succeeded = true;
+  } finally {
+    if (succeeded) {
+      await Promise.all([
+        rm(root, { recursive: true, force: true }),
+        rm(stateRootParent, { recursive: true, force: true }),
+      ]);
+    } else {
+      console.error(`cost-lab runner process fixture retained:\n${root}\n${stateRootParent}`);
+    }
+  }
+});
+
+async function waitForPidExit(pid, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      if (error?.code === "ESRCH") return;
+      throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`executor process ${pid} did not exit`);
+}
 
 function isWithin(root, candidate) {
   const relative = path.relative(path.resolve(root), path.resolve(candidate));
