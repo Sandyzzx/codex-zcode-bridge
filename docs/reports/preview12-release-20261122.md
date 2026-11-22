@@ -31,10 +31,10 @@ Preview.12 在 Preview.11 的 Result、Event、用户授权释放和 SQLite v14 
 ## Verification
 
 - Release PR #125 final required CI attempt 2：`44997987353`。Windows 两 shard、
-  Ubuntu Verify、Cost Lab、两平台 SQLite resource matrix 和聚合 Windows Verify
-  PASS。首轮 Windows shard 1 在 `ADR-031 Gate E1` 的 75 秒清理等待边界超时；
-  失败 job 重跑通过。首轮失败日志保留在本地 `.run`，根因未独立证明，
-  不据此宣称修复。
+  Ubuntu Verify、两平台 SQLite resource matrix 和聚合 Windows Verify PASS；
+  Fast、Integration 与 Cost Lab 按 impact selector skipped。首轮 Windows
+  shard 1 在 `ADR-031 Gate E1` 的 75 秒清理等待边界超时；失败 job 重跑通过。
+  首轮失败日志保留在本地 `.run`，根因未独立证明，不据此宣称修复。
 - 合并后 Preview push CI attempt 2：`44999535808`。Cost Lab、Ubuntu Verify、
   Windows 两 shard、两平台 SQLite resource matrix 和聚合 Windows Verify PASS。
   首轮 Windows shard 2 在 `ADR-024 six lifecycle crash boundaries` 的测试
