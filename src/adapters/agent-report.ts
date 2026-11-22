@@ -10,8 +10,6 @@ export type ReportParseResult =
   | { report: AgentReport; candidate: AgentReport; error: null }
   | { report: null; candidate: Partial<AgentReport> | null; error: string };
 
-const MAX_SCAN_CHARS = 400_000;
-
 export function parseAgentReport(responseText: string): ReportParseResult {
   let lastError: string | null = null;
   let lastCandidate: Partial<AgentReport> | null = null;
@@ -65,12 +63,11 @@ function* extractJsonObjects(text: string): Generator<unknown> {
       // fall through to scanning
     }
   }
-  const limit = Math.min(text.length, MAX_SCAN_CHARS);
   let depth = 0;
   let inString = false;
   let escaped = false;
   let start = -1;
-  for (let i = 0; i < limit; i++) {
+  for (let i = 0; i < text.length; i++) {
     const ch = text[i];
     if (inString) {
       if (escaped) {

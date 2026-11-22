@@ -41,6 +41,36 @@ test("a JSON object containing braces inside strings is extracted intact", () =>
   assert.match(result.report!.summary, /\{ and \}/);
 });
 
+test("a report after the former 400_000-character scan boundary is found", () => {
+  const report = validReport({ summary: "tail report after 400_000 chars" });
+  const filler = ".".repeat(400_001);
+  const response = `${filler}${JSON.stringify(report)} tail prose`;
+  const result = parseAgentReport(response);
+  assert.equal(result.error, null);
+  assert.equal(result.report?.summary, "tail report after 400_000 chars");
+});
+
+test("string escapes inside a long report keep the candidate balanced", () => {
+  const summary = `escaped after filler: {brace} and "quotes" and \\backslash`;
+  const report = validReport({ summary });
+  const response = `x${".".repeat(400_000)}${JSON.stringify(report)}`;
+  const result = parseAgentReport(response);
+  assert.equal(result.error, null);
+  assert.equal(result.report?.summary, summary);
+});
+
+test("malformed JSON candidates are skipped and a later schema-invalid object stays rejected", () => {
+  const response = `${".".repeat(400_001)}{not-json}${JSON.stringify({
+    summary: "missing required fields",
+    files_changed: [],
+    tests: [],
+    issues: [],
+  })}`;
+  const result = parseAgentReport(response);
+  assert.equal(result.report, null);
+  assert.match(result.error!, /needs_master_decision/);
+});
+
 test("missing needs_master_decision is rejected, never defaulted", () => {
   const partial = { summary: "s", files_changed: [], tests: [], issues: [] };
   const result = parseAgentReport(JSON.stringify(partial));

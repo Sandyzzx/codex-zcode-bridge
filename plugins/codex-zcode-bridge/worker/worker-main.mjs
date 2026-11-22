@@ -3834,12 +3834,11 @@ function* extractJsonObjects(text2) {
     } catch {
     }
   }
-  const limit = Math.min(text2.length, MAX_SCAN_CHARS);
   let depth = 0;
   let inString = false;
   let escaped = false;
   let start = -1;
-  for (let i = 0; i < limit; i++) {
+  for (let i = 0; i < text2.length; i++) {
     const ch = text2[i];
     if (inString) {
       if (escaped) {
@@ -3879,12 +3878,10 @@ function isStringArray2(value) {
 function isPlainObject2(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-var MAX_SCAN_CHARS;
 var init_agent_report = __esm({
   "src/adapters/agent-report.ts"() {
     "use strict";
     init_result_contract();
-    MAX_SCAN_CHARS = 4e5;
   }
 });
 
