@@ -5,6 +5,16 @@
 > Baseline: `origin/preview@1bf039fda2ccfd17a992458a871bddd7b48b38c1`
 > Scope: SQLite Recovery Observation、Cleanup/Cancel resolution、ADR-039 持久 Evidence 绑定
 
+## Candidate Identity
+
+- `BASE_PREVIEW_SHA`: `1bf039fda2ccfd17a992458a871bddd7b48b38c1`
+- `FINAL_SOURCE_SHA`: `61a1a87c201d2098eb3563b351c9acbe7ae360d4`
+- `SOURCE_TREE`: `1d2d8446e07eba10600eee1aed0c7e2eb295b624`
+- `TARGETED_TESTS`: `result-recovery` 38 / 38 PASS；`cleanup-release` 27 / 27 PASS
+- `FULL_REGRESSION`: 990 tests / 988 PASS / 2 SKIP / 0 FAIL
+- `STRESS`: 4 / 4 PASS
+- `GENERATED_ARTIFACTS`: 10 tracked files fresh
+
 ## 结论
 
 真实阻塞根因是 Recovery 相关路径使用固定 8 条上限。`Task89` 已处于
