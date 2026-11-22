@@ -718,6 +718,7 @@ async function startIsolatedExecutor(options) {
   try {
     ready = await waitForExecutorReady(child, options.readyTimeoutMs);
   } catch (error) {
+    if (error && typeof error === "object") error.executor_pid = child.pid ?? null;
     await terminateStartupFailure(child);
     throw error;
   }

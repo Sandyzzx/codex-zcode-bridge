@@ -980,6 +980,8 @@ test("production runner keeps Executor and MCP process ownership across a synthe
     "",
   ].join("\n"), "utf8");
   let succeeded = false;
+  let result;
+  let stage = "runner";
   try {
     const runner = createProductionCodingPlanVerificationRunner({
       projectRoot: root,
@@ -999,12 +1001,13 @@ test("production runner keeps Executor and MCP process ownership across a synthe
       },
       inspectRuntime: async () => verifiedRuntime(synthetic.install),
     });
-    const result = await runner({
+    result = await runner({
       provider: PRODUCTION_VERIFICATION_CONTRACT.provider,
       model: PRODUCTION_VERIFICATION_CONTRACT.model,
       reasoning: "low",
       beforeSnapshot: beforeSnapshot(),
     });
+    stage = "result_assertions";
     assert.equal(result.model_requests, null);
     assert.equal(result.usage, null);
     assert.equal(result.runtime_evidence.bridge_path, "BUILT_MCP_STDIO_WITH_INDEPENDENT_EXECUTOR");
@@ -1016,7 +1019,9 @@ test("production runner keeps Executor and MCP process ownership across a synthe
     assert.equal(result.runtime_evidence.terminal_status, "completed");
     assert.equal(result.runtime_evidence.operation_release_observed, true);
     assert.equal(result.runtime_evidence.result_evidence.status, "completed");
+    stage = "executor_exit";
     await waitForPidExit(result.runtime_evidence.executor.pid, 10_000);
+    stage = "cleanup_assertions";
     await assert.rejects(
       lstat(path.join(
         stateRootParent,
@@ -1030,6 +1035,19 @@ test("production runner keeps Executor and MCP process ownership across a synthe
       { code: "ENOENT" },
     );
     succeeded = true;
+  } catch (error) {
+    const executorPid = result?.runtime_evidence?.executor?.pid ?? error?.executor_pid ?? null;
+    console.error(`cost-lab runner process failure ${JSON.stringify({
+      stage,
+      executor_pid: executorPid,
+      error_code: error?.code ?? null,
+      error_message: error instanceof Error ? error.message.slice(0, 4_096) : String(error).slice(0, 4_096),
+    })}`);
+    if (Number.isSafeInteger(executorPid) && executorPid > 0) {
+      try { process.kill(executorPid, "SIGKILL"); } catch { /* already exited */ }
+      await waitForPidExit(executorPid, 5_000).catch(() => undefined);
+    }
+    throw error;
   } finally {
     if (succeeded) {
       await Promise.all([
