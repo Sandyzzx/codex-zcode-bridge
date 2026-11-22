@@ -479,10 +479,13 @@ function verificationRoots(projectRoot, id, configuredStateRootParent) {
   const stateRootParent = configuredStateRootParent
     ? canonicalExistingPath(configuredStateRootParent)
     : defaultVerificationStateRootParent(projectRoot);
-  const stateRoot = path.join(stateRootParent, "cost-lab-web", "verification-state", id);
+  // Keep the canonical SQLite root short enough for the bootstrap stage file
+  // on Windows hosts whose temporary directory is exposed through an 8.3 alias.
+  const stateRoot = path.join(stateRootParent, "runs", id);
   if (isWithin(projectRoot, stateRoot)) {
     throw new Error("cost_lab_verification_state_inside_package_root");
   }
+  assertVerificationPathBudget(stateRoot);
   return Object.freeze({ runRoot, stateRoot });
 }
 
@@ -496,6 +499,19 @@ function canonicalExistingPath(candidate) {
   } catch (error) {
     if (error?.code === "ENOENT") return resolved;
     throw error;
+  }
+}
+
+function assertVerificationPathBudget(stateRoot) {
+  if (process.platform !== "win32") return;
+  const bootstrapStage = path.join(
+    stateRoot,
+    "bridge-data",
+    "state",
+    `bridge.sqlite.bootstrap-${"0".repeat(36)}.stage`,
+  );
+  if (bootstrapStage.length >= 260) {
+    throw new Error("cost_lab_verification_state_root_too_long");
   }
 }
 
@@ -698,7 +714,13 @@ async function startIsolatedExecutor(options) {
   child.stderr.setEncoding("utf8");
   child.stderr.on("data", (chunk) => options.stderr?.capture(chunk));
 
-  const ready = await waitForExecutorReady(child, options.readyTimeoutMs);
+  let ready;
+  try {
+    ready = await waitForExecutorReady(child, options.readyTimeoutMs);
+  } catch (error) {
+    await terminateStartupFailure(child);
+    throw error;
+  }
   let stopPromise;
   return {
     pid: child.pid ?? null,
@@ -716,7 +738,9 @@ function waitForExecutorReady(child, timeoutMs) {
     let stderr = "";
     const timer = setTimeout(() => {
       cleanup();
-      reject(new Error("cost_lab_executor_ready_timeout"));
+      reject(new Error(
+        `cost_lab_executor_ready_timeout${stderr.trim() ? `\n${stderr.trim()}` : ""}`,
+      ));
     }, timeoutMs);
     const cleanup = () => {
       clearTimeout(timer);
@@ -766,6 +790,16 @@ function waitForExecutorReady(child, timeoutMs) {
     child.once("error", onError);
     child.once("exit", onExit);
   });
+}
+
+async function terminateStartupFailure(child) {
+  if (child.exitCode !== null) return;
+  try {
+    child.kill();
+  } catch {
+    return;
+  }
+  await waitForChildExit(child, 5_000).catch(() => undefined);
 }
 
 async function stopExecutorProcess(child, pipeName, options) {

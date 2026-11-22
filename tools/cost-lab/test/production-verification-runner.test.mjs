@@ -134,7 +134,7 @@ test("production runner drives the built MCP task and returns runtime/usage evid
   const root = await mkdtemp(path.join(RUN_ROOT, "production-runner-test-"));
   const synthetic = await fixtureFiles(root);
   const stateRootParent = path.join(RUN_ROOT, "production-runner-state");
-  const stateRoot = path.join(stateRootParent, "cost-lab-web", "verification-state", FIXED_ID);
+  const stateRoot = path.join(stateRootParent, "runs", FIXED_ID);
   const calls = [];
   let closed = 0;
   let statusCalls = 0;
@@ -666,12 +666,31 @@ test("production runner rejects unsupported model input before creating a bridge
   assert.equal(connected, 0);
 });
 
+test("production runner rejects a Windows verification root beyond the SQLite bootstrap path budget", {
+  skip: process.platform !== "win32",
+}, async () => {
+  const runner = createProductionCodingPlanVerificationRunner({
+    projectRoot: PROJECT_ROOT,
+    createId: () => FIXED_ID,
+    stateRootParent: path.join(tmpdir(), "x".repeat(180)),
+  });
+  await assert.rejects(
+    runner({
+      provider: PRODUCTION_VERIFICATION_CONTRACT.provider,
+      model: PRODUCTION_VERIFICATION_CONTRACT.model,
+      reasoning: "low",
+      beforeSnapshot: beforeSnapshot(),
+    }),
+    /cost_lab_verification_state_root_too_long/u,
+  );
+});
+
 test("production runner fails before model dispatch when the installed runtime is unverified", async () => {
   await mkdir(RUN_ROOT, { recursive: true });
   const root = await mkdtemp(path.join(RUN_ROOT, "production-runner-unverified-"));
   const synthetic = await fixtureFiles(root);
   const stateRootParent = path.join(RUN_ROOT, "production-runner-unverified-state");
-  const stateRoot = path.join(stateRootParent, "cost-lab-web", "verification-state", FIXED_ID);
+  const stateRoot = path.join(stateRootParent, "runs", FIXED_ID);
   let connected = 0;
   try {
     const runner = createProductionCodingPlanVerificationRunner({
@@ -717,7 +736,7 @@ test("production runner preserves the Bridge SQLite marker and roots when startu
   const root = await mkdtemp(path.join(RUN_ROOT, "production-runner-marker-"));
   const synthetic = await fixtureFiles(root);
   const stateRootParent = path.join(RUN_ROOT, "production-runner-marker-state");
-  const stateRoot = path.join(stateRootParent, "cost-lab-web", "verification-state", FIXED_ID);
+  const stateRoot = path.join(stateRootParent, "runs", FIXED_ID);
   try {
     const runner = createProductionCodingPlanVerificationRunner({
       projectRoot: root,
@@ -1001,8 +1020,7 @@ test("production runner keeps Executor and MCP process ownership across a synthe
     await assert.rejects(
       lstat(path.join(
         stateRootParent,
-        "cost-lab-web",
-        "verification-state",
+        "runs",
         FIXED_ID,
       )),
       { code: "ENOENT" },
