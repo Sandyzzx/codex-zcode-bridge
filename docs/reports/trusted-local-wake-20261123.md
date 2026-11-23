@@ -2,7 +2,7 @@
 
 > Status: RESEARCH / IMPLEMENTATION EVIDENCE
 > Date: 2026-11-23（Asia/Shanghai）
-> Candidate: pending final commit
+> Candidate: `ca10518728c87b35c719b0293b48045946728932`
 > PR: #131, open, base `preview`
 > Overall result: `PARTIAL — TARGETED PASS / REAL TURN BLOCKED_BY_AUTHORIZATION`
 > Preview recommendation: `NO-GO until isolated real Wake and Master Result readback pass`

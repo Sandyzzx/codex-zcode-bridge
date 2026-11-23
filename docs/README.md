@@ -3,7 +3,7 @@
 > Status: AUTHORITATIVE（仅指本索引）
 > Last updated: 2026-11-23（Operations Console + Cost Lab + Runtime Auto-Learn candidate）
 > Last verified: 2026-11-23，核对统一 Operations Console、Cost Lab same-origin 挂载、Task Deep Link/Result pending、Runtime Auto-Learn exact-fingerprint 证据、trusted-local Wake 定向路径、授权零模型探针、Cost Lab Runner 跨进程 synthetic Worker、真实 Chromium 和 72 项 Wake/Task/Skill/SQLite 定向测试。真实自动 Wake Turn、Master Result readback、Desktop 关闭、严格 Wake C/D、真实 Provider/Billing 与最终 Release Gate 仍为 `NOT_RUN / BLOCKED`。
-> Verified against: `origin/preview@8ee7ec93a82c2093dce74707a9d1937c1c567887` + code candidate `3baf91c65`。
+> Verified against: `origin/preview@8ee7ec93a82c2093dce74707a9d1937c1c567887` + trusted-local Wake candidate `ca10518728c87b35c719b0293b48045946728932`。
 
 English users start at [README.md](../README.md). 技术文档为中文。先读当前事实，按问题加载合同；研究或历史材料不作为当前实现或发布证明。
 

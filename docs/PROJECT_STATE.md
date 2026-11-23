@@ -3,7 +3,7 @@
 > Status: AUTHORITATIVE
 > Last updated: 2026-11-23（trusted-local automatic Wake candidate）
 > Last verified: 2026-11-23，核对 `origin/preview@8ee7ec93a82c2093dce74707a9d1937c1c567887`、PR #131 baseline `ab2d09a2` 与当前 trusted-local Wake 定向实现：strict 默认保持 live exact-config fail closed；显式 trusted-local Owner policy 支持无私有 control socket 的单次官方 Queue，并把 Queue message ID、`QUEUED` 与 Turn 未确认 Web fallback 分开持久化。当前 focused evidence 为 72/72 PASS。真实自动 Wake Turn、Master Result readback、Desktop Visible、严格 C/D、真实 Official Runtime 和 Provider/Billing 仍为 `BLOCKED / NOT_RUN`。
-> Verified against: `origin/preview@8ee7ec93a82c2093dce74707a9d1937c1c567887` + Bridge candidate `1a7fcd89f` + Cost Lab CI repairs `f8e6aa7f`, `63d58994`；最终候选提交与完整门禁结果见 [Operations Console Report](reports/operations-console-runtime-auto-learn-20261123.md)。
+> Verified against: `origin/preview@8ee7ec93a82c2093dce74707a9d1937c1c567887` + trusted-local Wake candidate `ca10518728c87b35c719b0293b48045946728932`；Bridge `1a7fcd89f`、Cost Lab CI repairs `f8e6aa7f` 与 `63d58994`；最终完整门禁结果见 [Operations Console Report](reports/operations-console-runtime-auto-learn-20261123.md)。
 
 当前发布状态：
 
