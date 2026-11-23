@@ -9,6 +9,7 @@
 > PR: #131, open, base `preview`
 > Real E2E baseline: `ab73180b929be219bb680a0cc50825feca74b478`
 > Readback diagnosis baseline: `f88e0919259b17862f012f6549b57f2b2608cfc6`
+> Readback contract fix: `42667cff0646fbdac907809ba546cb500362503b`
 > Overall result: `PARTIAL — REAL AUTO QUEUE + TURN_STARTED PASS / NATIVE READBACK BLOCKED BY INSTALLED HOST VERSION`
 > Preview recommendation: `NO-GO until the current Thin MCP is installed in the Host and native Result readback passes a fresh Wake Turn`
 
@@ -189,6 +190,25 @@ Skill 已明确要求直接调用 Host 已注册的原生 `zcode_status` 和
 `exec_command`/PowerShell/Node 启动 `bridge.mjs`、Thin MCP 或 Task CLI
 读取 Named Pipe。该修改不改变 Queue、Task、Result、Cleanup、Release 或
 Recovery 合同。
+
+该修复提交后的定向验证：
+
+```text
+npm run typecheck                                  PASS
+npm run build                                      PASS
+npm run validate:plugin                            PASS
+npm run check:generated                            PASS, 14 files fresh
+npm run test:affected -- --development --t0-only   PASS
+executor-wake + skill-policy                        23/23 PASS
+MCP stdio Thin transport                            5/5 PASS
+Thin MCP reconnect + Host-exit Result durability    2/2 PASS
+git diff --check                                   PASS
+```
+
+`executor-process` 当前代码的 2 项定向 E2E 分别证明：MCP 断连后 Executor
+继续原 Attempt，并允许新 Host 读取同一 Result；shipped MCP Host 进程退出后
+synthetic Worker 只 Spawn 一次，原 Attempt 产生一个 Result、Cleanup verified
+与 released，重连后 `zcode_result` 仍返回 attempt 1。
 
 ## 定向验证
 
