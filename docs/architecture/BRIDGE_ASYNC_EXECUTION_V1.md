@@ -3,7 +3,7 @@
 > Status: IMPLEMENTED — PREVIEW.14 RELEASE CANDIDATE；loaded/idle trusted-local Wake 为 `PASS — REAL`，严格 C/D、Desktop fully exited、Official Runtime provenance 与非空工程交付为 `NOT_RUN`
 > Decision status: [ADR-045](../decisions/ADR-045-async-executor-ownership.md) = ACCEPTED；[ADR-051](../decisions/ADR-051-executor-wake-delivery.md) = ACCEPTED；[ADR-052](../decisions/ADR-052-async-master-handoff.md) = ACCEPTED；本文档记录目标合同与当前实现边界
 > Date: 2026-11-23（Asia/Shanghai）
-> Baseline: `origin/preview` `89ca334802f6e5c1e88b8284863f8151bf4be134`（ADR-054 审计基线）；historical full-matrix candidate `c75c34330287266702cab5949662bf897b74ed5a`；PR 2 base `f330b511270934fa40014006333aa7747dad684c`
+> Baseline: `origin/preview` `89ca334802f6e5c1e88b8284863f8151bf4be134`（ADR-055 审计基线）；historical full-matrix candidate `c75c34330287266702cab5949662bf897b74ed5a`；PR 2 base `f330b511270934fa40014006333aa7747dad684c`
 > Evidence classification: 文中逐项标注 `VERIFIED`、`INFERRED`、`UNVERIFIED`；证据见 [PR 2 report](../reports/async-executor-pr2-20261122.md)、[PR 2.5 report](../reports/async-executor-pr2.5-20261122.md)、[PR 5 report](../reports/async-executor-pr5-20261122.md)、[PR 6 report](../reports/async-executor-pr6-20261122.md)、[统一 RC report](../reports/async-executor-release-candidate-20261122.md)、[Web real-process E2E](../reports/async-executor-web-real-host-e2e-20261122.md) 与 [trusted-local Wake evidence](../reports/trusted-local-wake-20261123.md)
 
 ## 1. 目标与非目标
@@ -224,7 +224,7 @@ Cleanup/Release 和实际执行目录证据；Wake 本身不表示接收或验�
 Pending Interaction 始终是阻塞事实。结束 Turn 前发现 Pending 必须先处理；
 Async Handoff 不新增 Pending Wake，之后的审批仍经 Web/CLI 或下一次用户
 Turn 进入。决策与 Skill 合同见 [ADR-052](../decisions/ADR-052-async-master-handoff.md)
-与 [ADR-054](../decisions/ADR-054-whole-task-staged-dispatch-and-prompt-contract.md)。
+与 [ADR-055](../decisions/ADR-055-whole-task-staged-dispatch-and-prompt-contract.md)。
 
 ### 3.4 交付事实
 

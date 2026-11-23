@@ -6,7 +6,7 @@
 > Implementation status: IMPLEMENTED — PARTIAL / BLOCKED
 > Acceptance implementation: `7f54531acba0844937bc134609dae840090294ec`
 > Related: [ADR-015](ADR-015-master-skill-authorization-and-progressive-loading.md)、[ADR-045](ADR-045-async-executor-ownership.md)、[ADR-051](ADR-051-executor-wake-delivery.md)
-> Applicability: Async Handoff remains active. Decision 2's read-only `auto` wording is superseded by ADR-054; task scope is now `whole_task` or `staged`, and read-only is a permission scope.
+> Applicability: Async Handoff remains active. Decision 2's read-only `auto` wording is superseded by ADR-055; task scope is now `whole_task` or `staged`, and read-only is a permission scope.
 
 ## Context
 

@@ -1,4 +1,4 @@
-# ADR-054：Whole Task / Staged 派发与 Worker Prompt 合同
+# ADR-055：Whole Task / Staged 派发与 Worker Prompt 合同
 
 > Status: DECISION
 > Decision: Accepted（用户于 2026-11-23 明确批准）

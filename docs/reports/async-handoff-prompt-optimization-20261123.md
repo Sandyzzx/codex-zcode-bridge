@@ -47,7 +47,7 @@ Prompt Builder 现在：
 
 ### Decision
 
-- `docs/decisions/ADR-054-whole-task-staged-dispatch-and-prompt-contract.md`
+- `docs/decisions/ADR-055-whole-task-staged-dispatch-and-prompt-contract.md`
 - `docs/decisions/README.md`
 - `docs/architecture/BRIDGE_ASYNC_EXECUTION_V1.md`（同步当前派发/Handoff 语义）
 - ADR-010、ADR-015、ADR-052 的 Applicability 标注；历史正文保留。
@@ -176,7 +176,8 @@ UTF-16 单元和 UTF-8 字节。未调用模型，也未宣称 Token 或 Cache R
 - `npm run test:affected -- --development`：`121/121 PASS`；`typecheck`、build、
   plugin validation、generated-artifact freshness 与 diff check 均通过
 - `git diff --check`：`PASS`
-- GitHub Release Gate：待提交并推送最终候选后运行
+- GitHub Release Gate：每个已推送候选 SHA 由 PR #135 的 `release-candidate` 标签触发；
+  最终结果以该 PR 当前 Head 的完整 CI 检查为准
 
 首次完整运行出现两个测试失败。其中一个是对旧输出断言的测试未随实现更新，修正后定向
 测试通过；另一个是 `formal MCP Host shutdown is bounded on unknown cancellation` 合成

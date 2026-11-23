@@ -1,9 +1,9 @@
 # 决策路由 / Decisions
 
 > Status: AUTHORITATIVE（仅指本索引）
-> Last updated: 2026-11-23（Preview.14 release preparation；ADR-054 派发合同）
-> Last verified: 2026-11-23，核对 ADR-045/051/052 的合并状态、loaded/idle trusted-local Wake、Native MCP Result readback、Master 生命周期独立验收与 Desktop Visible，以及 ADR-054 的 whole_task/staged 合同。严格 C/D、Desktop fully exited、Official Runtime provenance、非空工程交付和真实模型 Skill 遵循率仍为 `NOT_RUN`。
-> Verified against: `origin/preview@89ca334802f6e5c1e88b8284863f8151bf4be134`（ADR-054 审计基线；运行时证据仍引用其原始提交）。
+> Last updated: 2026-11-23（Preview.14 release preparation；ADR-055 派发合同）
+> Last verified: 2026-11-23，核对 ADR-045/051/052 的合并状态、loaded/idle trusted-local Wake、Native MCP Result readback、Master 生命周期独立验收与 Desktop Visible，以及 ADR-055 的 whole_task/staged 合同。严格 C/D、Desktop fully exited、Official Runtime provenance、非空工程交付和真实模型 Skill 遵循率仍为 `NOT_RUN`。
+> Verified against: `origin/preview@89ca334802f6e5c1e88b8284863f8151bf4be134`（ADR-055 审计基线；运行时证据仍引用其原始提交）。
 
 先读当前 [架构](../ARCHITECTURE.md)/[接口](../INTERFACES.md)，只在需要解释取舍时加载对应决策。文件保持原路径和历史正文；Partially superseded 的标注优先于历史段落。
 
@@ -16,7 +16,7 @@
 | Provider/报告 | [006](ADR-006-provider-quota-failure-diagnostics.md) | 明确额度耗尽分类；不自动重试 |
 | Browser | [007](ADR-007-browser-host-rpc.md) | 可选独立 managed CDP；默认关闭 |
 | Windows 身份 | [009](ADR-009-windows-identity-bound-tree-termination.md)、[023](ADR-023-completion-window-cleanup-prewarm.md) | 原生句柄与 claimant proof；空 helper 预热 |
-| Master 委派 | [010](ADR-010-whole-task-delegation.md)、[015](ADR-015-master-skill-authorization-and-progressive-loading.md)、[054](ADR-054-whole-task-staged-dispatch-and-prompt-contract.md) | whole_task 默认、Staged 例外、删除 Auto、授权和按需加载 |
+| Master 委派 | [010](ADR-010-whole-task-delegation.md)、[015](ADR-015-master-skill-authorization-and-progressive-loading.md)、[055](ADR-055-whole-task-staged-dispatch-and-prompt-contract.md) | whole_task 默认、Staged 例外、删除 Auto、授权和按需加载 |
 | Workspace | [017](ADR-017-single-user-trusted-local-workspace-admission.md) | 单用户本机 Admission；无需项目白名单 |
 | Recovery | [018](ADR-018-administrative-abandonment-of-cleanup-incomplete-hold.md)、[024](ADR-024-scoped-sqlite-hold-and-local-cleanup-recovery.md)、[036](ADR-036-host-native-interruption-requeue.md) | 行政兜底、Operation-scoped Hold/清理恢复，以及 Host 内单次中断重派发 |
 | 配置/诊断 | [021](ADR-021-zcode-path-discovery.md)、[022](ADR-022-authority-bound-doctor.md) | ZCode 路径发现；诊断绑定 SQLite |
