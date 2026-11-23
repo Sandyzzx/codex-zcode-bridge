@@ -117,14 +117,14 @@ function makeRecoveryHarness(input: {
     routeTaskModel?: undefined,
     startPlanAuthInjected?: boolean,
     startPlanPrivateAuthFactory?: undefined,
-    onOperationReleased?: (fact: Detail, recorder: { recordExecutorWakeObservation(input: Detail): Detail }) => Promise<void>,
+    onOperationReleased?: (fact: Detail, recorder: (input: Detail) => Detail) => Promise<void>,
   ) => SqliteLifecycleMcpAuthority;
   const manager = new Constructor(driver, { name: "release-wake-recovery-test" }, { platform: "win32" }, undefined,
     (stage, detail) => stages.push({ stage, detail }), 1_000,
     false, false, undefined, false, undefined,
     async (fact, recorder) => {
       wakeFacts.push(fact);
-      recorder.recordExecutorWakeObservation({
+      recorder({
         operation_id: fact.operation_id,
         task_id: fact.task_id,
         attempt: fact.attempt,

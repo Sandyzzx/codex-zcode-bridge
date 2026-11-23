@@ -2545,6 +2545,9 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       });
     }
     entry.turnCompletedAt = this.#now().toISOString();
+    // Publish the completion like the direct settle path so the worker and the
+    // event log see the same terminal fact exactly once (P1 §3.1).
+    this.#publishSessionEvent("turn.completed", held.payload, entry, held.event);
     this.#resolveTurnCompleted(entry, held.payload, held.event);
   }
 

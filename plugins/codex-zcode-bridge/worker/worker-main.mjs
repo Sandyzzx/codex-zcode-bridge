@@ -29040,6 +29040,7 @@ var init_zcode_app_server_adapter = __esm({
           });
         }
         entry.turnCompletedAt = this.#now().toISOString();
+        this.#publishSessionEvent("turn.completed", held.payload, entry, held.event);
         this.#resolveTurnCompleted(entry, held.payload, held.event);
       }
       /** Single settle path for turn completions; resultType is validated here so

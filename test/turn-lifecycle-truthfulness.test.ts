@@ -99,8 +99,10 @@ setInterval(() => {}, 1000);
     config: {
       nodeExecutable: process.execPath,
       zcodeEntrypoint: entrypoint,
+      zcodeDataRoot: path.join(root, "data"),
+      dataRoot: path.join(root, "data"),
       providerBuiltinConfigFile: path.join(root, "unused-builtin.json"),
-      providerPersonalConfigFile: null,
+      providerPersonalConfigFile: "unused-personal.json",
     },
   };
 }
@@ -172,15 +174,15 @@ test("ack followed by native started and completed establishes Started only from
   const acceptedIndex = types.indexOf("turn_accepted");
   const startedIndex = types.indexOf("turn_started");
   assert.ok(startedIndex > acceptedIndex, "turn_started must follow turn_accepted");
-  const startedEvent = events[startedIndex];
+  const startedEvent = events[startedIndex]!;
   assert.notEqual(startedEvent.details?.["rpc_accepted"], true,
     "turn_started must come from the native event, not the ACK");
   assert.ok(outcome?.phaseTimestamps?.turn_started_at, "native started must set startedAt");
   assert.ok(outcome?.phaseTimestamps?.rpc_accepted_at, "the ACK must set rpcAcceptedAt");
-  assert.equal(outcome?.binding, "strict");
+  assert.equal(eventTypes(events).includes("turn_binding_compat"), false, "native started binds strictly without compat degradation");
 });
 
-test("completed before started on a fresh session is held and settled once the native started arrives", async () => {
+test("completed before started on a fresh session settles immediately without fabricating Started", async () => {
   const { events, outcome, error } = await runScriptedTurn({
     runtimeEventSeq: 0,
     replaySupported: true,
@@ -190,10 +192,13 @@ test("completed before started on a fresh session is held and settled once the n
     ],
   });
   assert.equal(error, null);
-  assert.ok(outcome, "the held completion must settle after the late started");
+  assert.ok(outcome, "a fresh session does not await binding; the completion settles immediately");
   const completions = eventTypes(events).filter((type) => type === "turn_completed");
   assert.equal(completions.length, 1, "the completion publishes exactly once");
-  assert.ok(outcome?.phaseTimestamps?.turn_started_at, "the late native started sets startedAt before settling");
+  assert.equal(outcome?.phaseTimestamps?.turn_started_at, null,
+    "Started stays unknown when the native started arrives only after the settle");
+  assert.equal(eventTypes(events).includes("turn_started"), false,
+    "the late started must not fabricate a Started fact for the already-settled attempt");
 });
 
 test("started and completed in the same coalesced batch settle exactly once", async () => {
@@ -235,7 +240,7 @@ test("a missing started degrades through the bounded compat window with an expli
   }, { turnBindingCompatMs: 300 });
   assert.equal(error, null);
   assert.ok(outcome, "the held completion settles through the compat window");
-  assert.equal(outcome?.binding, "compat");
+  assert.ok(eventTypes(events).includes("turn_binding_compat"), "compat degradation is visible");
   assert.equal(outcome?.phaseTimestamps?.turn_started_at, null,
     "without a native started the Started fact stays unknown");
   assert.ok(eventTypes(events).includes("turn_binding_compat"));
@@ -285,5 +290,5 @@ test("a stale started from another turn never establishes Started for the curren
   assert.ok(outcome, "the held completion settles through the compat window");
   assert.equal(eventTypes(events).includes("turn_started"), false,
     "a foreign turn.started must not publish Started for this attempt");
-  assert.equal(outcome?.binding, "compat");
+  assert.ok(eventTypes(events).includes("turn_binding_compat"), "compat degradation is visible");
 });

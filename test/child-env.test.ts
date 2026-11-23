@@ -40,8 +40,6 @@ test("worker environments forward the env-only browser settings and nothing broa
     ZCODE_BRIDGE_BROWSER_EXECUTABLE: "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
     ZCODE_BRIDGE_BROWSER_SECRET: "must-not-leak",
   });
-  assert.equal(
-  );
   assert.equal(worker.ZCODE_BRIDGE_BROWSER_USE, "headless");
   assert.equal(worker.ZCODE_BRIDGE_BROWSER_EXECUTABLE, "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe");
   assert.equal(worker.ZCODE_BRIDGE_BROWSER_SECRET, undefined, "only the two documented browser keys are forwarded");

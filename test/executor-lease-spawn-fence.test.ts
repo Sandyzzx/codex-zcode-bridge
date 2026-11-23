@@ -116,7 +116,7 @@ function makeFenceDriver(snapshot: Detail): FenceDriver {
   const runCalls: string[] = [];
   const driver: FenceDriver = {
     readRecoverySnapshot() {
-      return recoverySnapshot(snapshot.operations ?? []);
+      return recoverySnapshot(Array.isArray(snapshot.operations) ? snapshot.operations as Detail[] : []);
     },
     readRecoverableQueuedAttempts() {
       return snapshot.queued ?? [];
@@ -224,23 +224,23 @@ test("an in-flight Worker result still settles while the fence blocks the next d
       "behind-fence": lifecycleSnapshot("behind-fence", "D:\\behind-fence"),
     },
   });
-  const originalRun = driver.run.bind(driver);
-  driver.run = (async (input: { task: TaskPackage }) => {
+  const originalRun = (driver.run as unknown as (input: { task: TaskPackage }) => Promise<ClaimOnlyRunResult>).bind(driver);
+  (driver as Record<string, unknown>).run = async (input: { task: TaskPackage }) => {
     if (input.task.task_id === "inflight") {
       driver.runCalls.push("inflight");
       await firstRunGate;
       return releasedRun("inflight");
     }
     return originalRun(input);
-  }) as typeof driver.run;
-  const originalRead = driver.readTaskLifecycle.bind(driver);
+  };
+  const originalRead = (driver.readTaskLifecycle as unknown as (taskId: string) => Detail | null).bind(driver);
   let inflightSettled = false;
-  driver.readTaskLifecycle = ((taskId: string) => {
+  (driver as Record<string, unknown>).readTaskLifecycle = (taskId: string) => {
     if (String(taskId) === "inflight" && inflightSettled) {
       return lifecycleSnapshot("inflight", "D:\\inflight", "completed", releasedOperationSnapshot(), completedResultSnapshot());
     }
     return originalRead(taskId);
-  }) as typeof driver.readTaskLifecycle;
+  };
   let fenced = false;
   const { manager } = makeFenceManager(driver, () => (fenced ? "lease_ownership_unknown" : null));
   await manager.recoverTasks();
