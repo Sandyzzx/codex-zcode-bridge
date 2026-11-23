@@ -35,6 +35,19 @@ PR #131 合并提交：
 - Cost Lab PASS。
 - PR-only impact、Fast 与 Integration gates 按 push 事件跳过。
 
+Release Prep 本地验证：
+
+- `npm ci`、`npm run typecheck`、`npm run build`、`npm run validate:plugin`
+  与 `git diff --check` PASS。
+- `npm run check:generated` 在生成物提交后 PASS，14 个 tracked artifact fresh。
+- package、lockfile、两份插件 manifest、MCP server version 均为
+  `2.0.0-preview.14`。
+- 修改文档的本地 Markdown 链接检查 PASS。
+- `plugins/codex-zcode-bridge/dist/bridge.mjs` SHA-256：
+  `700d121c1450bcc914feb26cd708834fda929ec34fbb78121e19a317f61ad5b7`。
+- `npm ci` 仍报告 3 个 high severity advisories；与当前依赖基线一致，本发布
+  准备不修改依赖或宣称已修复。
+
 2026-11-23 隔离真实 Host E2E：
 
 - loaded/idle trusted-local 自动 Wake：`PASS — REAL`。
