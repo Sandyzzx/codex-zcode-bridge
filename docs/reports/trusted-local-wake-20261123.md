@@ -5,6 +5,7 @@
 > Wake implementation: `ca10518728c87b35c719b0293b48045946728932`
 > CI isolation commit: `eac515a1c8080235ba18a0fe2a164544ef4e5203`
 > CI timeout alignment: `99d034bf561dcc8845037cd43fb83cc1f060b58f`
+> CI stress-wait alignment: `17dd8d8ea4dd0798780ced3d48019e49a22da3f2`
 > PR: #131, open, base `preview`
 > Overall result: `PARTIAL — TARGETED PASS / REAL TURN BLOCKED_BY_AUTHORIZATION`
 > Preview recommendation: `NO-GO until isolated real Wake and Master Result readback pass`
@@ -152,8 +153,11 @@ npm run validate:plugin                PASS
 npm run check:generated                14/14 fresh
 ```
 
-本地 Cost Lab 进程所有权 E2E 用时 14.9 秒。最终 PR CI 结果必须在 exact head
-上重新采集。
+本地 Cost Lab 进程所有权 E2E 用时 14.9 秒。后续 run `45099743834`
+在代码提交 `17dd8d8e` 上全部通过：Fast PR gate、Ubuntu Verify、
+Windows Verify 两分片与聚合、Windows/Ubuntu SQLite resource matrix、
+Cost Lab 和 impact selection 均为 success；Integration gate 按配置 skipped。
+该门禁同时验证了 32,000-event Windows stream stress 与 Cost Lab 进程所有权。
 
 ## 真实 E2E 边界
 
