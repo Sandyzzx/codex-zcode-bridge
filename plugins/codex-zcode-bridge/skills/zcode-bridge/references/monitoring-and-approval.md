@@ -1,11 +1,23 @@
 # 执行监控、互动与审批
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-22（Async Handoff）
-> Last verified: 2026-11-22，核对 `zcode_events` 默认 32 KiB 页预算、显式 `max_bytes`、`scan_incomplete`/cursor、Attention、Attempt 归属与 SQLite interaction 读取；真实模型 Async Handoff 遵循率 NOT RUN。
-> Verified against: `450c18afc0c8af2700734399c5aebd87a36df795` + bounded-default-events integration candidate
+> Last updated: 2026-11-23（Async 默认受理核对）
+> Last verified: 2026-11-23，核对 `zcode_events` 默认 32 KiB 页预算、显式 `max_bytes`、`scan_incomplete`/cursor、Attention、Attempt 归属与 SQLite interaction 读取；真实模型 Async Handoff 遵循率 NOT RUN。
+> Verified against: `origin/preview@89ca334802f6e5c1e88b8284863f8151bf4be134`（审计基线；本候选待验收）
 
-## 跟进
+## Async 受理核对
+
+默认采用 [Async Handoff](async-handoff.md)。`zcode_task` 返回可靠受理回执后，只做一次有界受理核对：
+
+1. 调用 `zcode_events(after_seq: 0, view: "summary", include_attempt: true, wait_ms: 0)`，核对 Task/Attempt 归属、queued/running、`attention.pending_requests`、已有启动失败或终态，以及可得的 `workspace_ready`/`session_ready` 路径。只有派发时的路径时标“请求”，实际路径缺失时标“未确认”。不要为等待 `turn_started` 继续调用 `wait_for` 或 Thin Waiter。
+2. 省略 `max_bytes` 时 Manager 使用 32 KiB 页预算；`has_more` 或 `scan_incomplete` 为真时用 `scan_cursor`（否则用 `next_seq`）只补读当前页，不重复查询未变化的状态。不要把连续 `model_output`/summary 转发给用户或作为新的模型输入。
+3. 无已知 Pending、启动失败或未决清理事实时，记录可核实的身份、路径和当前状态，向用户报告并结束 Turn。回执未知、出现 Pending、启动失败或终态时留在当前 Turn：回执按 [async-handoff.md](async-handoff.md) 对账，Pending 转入互动，终态转入独立验收。
+
+仅 Thread/Wake 绑定不可用时，使用 Web Notify 回退并结束 Turn；不得把回执未知、启动错误、清理未决或 Authority/授权边界无法确认当作可结束的 Async 交接。
+
+## Foreground 跟进
+
+仅在存在已知 Pending Interaction、必须即时处理的审批或用户明确要求时使用 foreground。以下长等待与 Thin Waiter 不属于 Async Handoff。
 
 1. `zcode_task` 返回后立即调用 `zcode_events`（`after_seq: 0, view: "summary"`），报告 queued/running 和工作路径。用 `workspace_ready`（若有）或 `session_ready` 核实项目根目录、实际执行目录和 worktree。只有派发时的路径时标“请求”，实际路径缺失时标“未确认”。启动阶段用普通事件等待（`wait_ms` 最大 25000），直到当前 Attempt 的 `turn_started`、启动失败或终态。省略 `max_bytes` 时 Manager 使用 32 KiB 页预算；`has_more` 或 `scan_incomplete` 为真时用 `scan_cursor`（否则用 `next_seq`）增量续读，不重复查询未变化的状态。
 2. `turn_started` 后向用户报告项目根目录、实际执行目录、session ID、runtime 报告的 provider/model/reasoning 和执行模式。模型和档位只读 `session_ready` 或 `model_selected` 的 runtime details。只有请求值时标“请求”，缺失写“未报告”。生产受信任本机 profile 当前映射 `yolo`，普通工具可自动执行并使用当前 OS 账户，不提供 OS 沙箱。
@@ -15,12 +27,6 @@
 6. 安装、运行时或 provider 配置异常先调用只读 `zcode_doctor`；`unknown` 不是通过。诊断不得读取或写入凭据。
 
 工具支持时，读取启动、等待与验收事件均传 `include_attempt: true`。用 Status 或 Attention 核对当前 Attempt，再选择逐条 `event.attempt` 相符的启动、授权与结果事件。页内可以包含多个 Attempt。旧 schema 下仅使用已知归属的事件，多个 Attempt 且无可靠归属时将启动或释放标为未验证。
-
-本节的长等待与 Thin Waiter 只适用于 `foreground` 交接。采用
-[Async Handoff](async-handoff.md) 时，只做有界启动核对；确认可靠受理、无已知
-Pending Interaction 并记录身份后结束 Turn，不把 `wait_for` 或 Waiter 改成长轮询。
-若启动失败、回执未知、出现 Pending Interaction 或无法确认安全边界，则停留在当前
-Turn 按本文件处理，不宣称异步交接完成。
 
 ## 有界等待
 

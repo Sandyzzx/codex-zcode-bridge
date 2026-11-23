@@ -32,10 +32,13 @@ test("all Skill Markdown reference targets exist", () => {
   }
 });
 
-test("auto chooses whole-task or a bounded stage without adding a tool field", () => {
+test("whole-task is the default and staged is reserved for a real gate", () => {
   const policy = reference("delegation-policy.md");
-  for (const phrase of ["whole_task", "staged", "auto", "不是", "授权", "审批", "zcode_continue"]) assert.ok(policy.includes(phrase), phrase);
-  assert.match(reference("task-dispatch.md"), /auto.*不是额外字段/);
+  for (const phrase of ["whole_task", "staged", "默认", "例外", "不是", "授权", "审批", "zcode_continue"]) assert.ok(policy.includes(phrase), phrase);
+  assert.match(policy, /whole_task.*默认/);
+  assert.match(policy, /staged.*例外/);
+  assert.doesNotMatch(policy, /只读 `auto`|\bauto\b/u);
+  assert.match(reference("task-dispatch.md"), /whole_task.*staged.*不是额外字段/);
   assert.match(reference("task-dispatch.md"), /provider_id.*可选/);
   assert.match(reference("task-dispatch.md"), /相同 ID、相同内容[\s\S]*不产生第二次执行/);
   assert.match(reference("task-dispatch.md"), /TASK_ID_CONFLICT[\s\S]*查询原任务/);
@@ -63,7 +66,8 @@ test("Master proactively reports known cleanup Holds and gates Recovery on autho
   assert.match(skill, /不决定是否需要额外用户资格/);
   assert.match(recovery, /failed \+ cleanup_unverified/);
   assert.match(recovery, /核心 MCP 没有 Bridge Task\/Attempt 全局枚举工具/);
-  assert.match(recovery, /可选 Ledger 只能枚举其管理的 ProjectTask/);
+  assert.doesNotMatch(recovery, /可选 Ledger|ProjectTask/);
+  assert.match(recovery, /不得猜 workspace 或扫描其他任务/);
   assert.match(recovery, /`zcode_status` 不返回 workspace/);
   assert.match(recovery, /明确授权/);
   assert.match(recovery, /当前明确 Recovery 操作，不是无限期终止权限/);
@@ -84,10 +88,29 @@ test("Skill does not claim SQLite or unmerged release-intent behavior is deploye
   }
 });
 
+test("Async Handoff is default, bounded, and uses Events for lifecycle proof", () => {
+  const handoff = reference("async-handoff.md");
+  const monitoring = reference("monitoring-and-approval.md");
+  const dispatch = reference("task-dispatch.md");
+  assert.match(handoff, /async_wake.*默认/);
+  assert.match(handoff, /不要等待\s*`turn_started`/);
+  assert.match(handoff, /仅 Codex Thread 或一次性 Wake 绑定不可用[\s\S]*Web Notify[\s\S]*结束\s*Turn/);
+  assert.match(handoff, /Executor Authority 无法核实[\s\S]*保持未决/);
+  assert.match(skill, /仅 Thread\/Wake 绑定不可用[\s\S]*Web Notify[\s\S]*结束 Turn/);
+  assert.match(skill, /回执未知、启动错误、清理未决或 Authority\/授权边界无法确认[\s\S]*保持未决/);
+  assert.match(handoff, /result_committed[\s\S]*cleanup_verified[\s\S]*released/);
+  assert.match(handoff, /Result 摘要只提供 Worker 交付内容，不证明 digest、Cleanup 或\s*Release/);
+  assert.match(monitoring, /## Async 受理核对/);
+  assert.match(monitoring, /不要为等待 `turn_started`/);
+  assert.doesNotMatch(monitoring, /2,000|2000/);
+  assert.doesNotMatch(dispatch, /2,000|2000/);
+  assert.match(dispatch, /不等待 `turn_started`/);
+});
+
 type HandoffScenario = {
   readonly name: string;
   readonly authorized: boolean;
-  readonly scope: "whole_task" | "staged" | "auto";
+  readonly scope: "whole_task" | "staged";
   readonly receipt: "accepted" | "unknown" | "none";
   readonly authorityKnown: boolean;
   readonly threadKnown: boolean;
@@ -100,6 +123,7 @@ type HandoffScenario = {
     readonly action:
       | "request_authorization"
       | "reconcile_same_task"
+      | "hold_unresolved"
       | "foreground_pending"
       | "async_wake"
       | "async_web_notify"
@@ -149,7 +173,10 @@ function decideHandoff(input: HandoffScenario): HandoffScenario["expected"] {
   if (input.pendingInteraction) {
     return { action: "foreground_pending", endTurn: false, continuePolling: false, cancel: false, accepted: false };
   }
-  return input.authorityKnown && input.threadKnown
+  if (!input.authorityKnown) {
+    return { action: "hold_unresolved", endTurn: false, continuePolling: false, cancel: false, accepted: false };
+  }
+  return input.threadKnown
     ? { action: "async_wake", endTurn: true, continuePolling: false, cancel: false, accepted: false }
     : { action: "async_web_notify", endTurn: true, continuePolling: false, cancel: false, accepted: false };
 }
@@ -179,8 +206,8 @@ test("deterministic Async Handoff workflow separates scope, handoff, Wake and ac
     base,
     { ...base, name: "unauthorized", authorized: false, expected: { action: "request_authorization", endTurn: false, continuePolling: false, cancel: false, accepted: false } },
     { ...base, name: "staged", scope: "staged" },
-    { ...base, name: "readonly-auto", scope: "auto" },
-    { ...base, name: "web-fallback-authority-unknown", authorityKnown: false, expected: { action: "async_web_notify", endTurn: true, continuePolling: false, cancel: false, accepted: false } },
+    { ...base, name: "readonly-whole-task", scope: "whole_task" },
+    { ...base, name: "authority-unknown-holds", authorityKnown: false, expected: { action: "hold_unresolved", endTurn: false, continuePolling: false, cancel: false, accepted: false } },
     { ...base, name: "web-fallback", threadKnown: false, expected: { action: "async_web_notify", endTurn: true, continuePolling: false, cancel: false, accepted: false } },
     { ...base, name: "unknown-receipt", receipt: "unknown", expected: { action: "reconcile_same_task", endTurn: false, continuePolling: false, cancel: false, accepted: false } },
     { ...base, name: "pending-before-handoff", pendingInteraction: true, expected: { action: "foreground_pending", endTurn: false, continuePolling: false, cancel: false, accepted: false } },
@@ -265,7 +292,7 @@ test("Master Skill offline evaluation is paired and covers the required scenario
   assert.equal(evaluation.automated_model_execution, false);
   assert.equal(evaluation.scoring_source, "human reviewer");
   const forbidden = evaluation.pass_rule.forbidden.join("\n");
-  for (const phrase of ["unauthorized dispatch", "usage exhaustion", "Worker report", "auto as an MCP field", "meaningless stage gate"]) {
+  for (const phrase of ["unauthorized dispatch", "usage exhaustion", "Worker report", "Auto as a dispatch mode", "meaningless stage gate"]) {
     assert.ok(forbidden.includes(phrase), phrase);
   }
   const requiredIds = new Set([
@@ -280,7 +307,7 @@ test("Master Skill offline evaluation is paired and covers the required scenario
     "bridge-unauthorized",
     "user-selected-executor",
     "session-level-authorization",
-    "auto-read-only",
+    "readonly-whole-task",
     "same-task-rework",
     "sqlite-hold-recovery",
     "usage-exhausted",

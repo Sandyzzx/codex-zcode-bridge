@@ -3,7 +3,7 @@
 > Status: IMPLEMENTED — PREVIEW.14 RELEASE CANDIDATE；loaded/idle trusted-local Wake 为 `PASS — REAL`，严格 C/D、Desktop fully exited、Official Runtime provenance 与非空工程交付为 `NOT_RUN`
 > Decision status: [ADR-045](../decisions/ADR-045-async-executor-ownership.md) = ACCEPTED；[ADR-051](../decisions/ADR-051-executor-wake-delivery.md) = ACCEPTED；[ADR-052](../decisions/ADR-052-async-master-handoff.md) = ACCEPTED；本文档记录目标合同与当前实现边界
 > Date: 2026-11-23（Asia/Shanghai）
-> Baseline: `origin/preview` `c7bfc28b1112dead95ae4179a00962de76051920`（PR #131 merge）；historical full-matrix candidate `c75c34330287266702cab5949662bf897b74ed5a`；PR 2 base `f330b511270934fa40014006333aa7747dad684c`
+> Baseline: `origin/preview` `89ca334802f6e5c1e88b8284863f8151bf4be134`（ADR-055 审计基线）；historical full-matrix candidate `c75c34330287266702cab5949662bf897b74ed5a`；PR 2 base `f330b511270934fa40014006333aa7747dad684c`
 > Evidence classification: 文中逐项标注 `VERIFIED`、`INFERRED`、`UNVERIFIED`；证据见 [PR 2 report](../reports/async-executor-pr2-20261122.md)、[PR 2.5 report](../reports/async-executor-pr2.5-20261122.md)、[PR 5 report](../reports/async-executor-pr5-20261122.md)、[PR 6 report](../reports/async-executor-pr6-20261122.md)、[统一 RC report](../reports/async-executor-release-candidate-20261122.md)、[Web real-process E2E](../reports/async-executor-web-real-host-e2e-20261122.md) 与 [trusted-local Wake evidence](../reports/trusted-local-wake-20261123.md)
 
 ## 1. 目标与非目标
@@ -206,14 +206,15 @@ Adapter，不取消 Task，也不构造新的通知权威。
 Master 的授权、Task Scope 与 Handoff Mechanism 是三个独立维度：
 
 - 授权决定是否可以使用 Bridge，以及可执行的写入/外部操作范围；
-- `whole_task`、`staged` 和只读 `auto` 决定交付与验收边界；
+- `whole_task`（默认）与 `staged`（真实阶段门）决定交付与验收边界；只读是权限范围；
 - `async_wake` 与 `foreground` 决定当前 Master Turn 是否结束。
 
 这些名称都不进入 MCP/TaskPackage schema，也不是 Task 状态。Async Handoff
-只可在原 `task_id` 的受理回执可靠、Executor/Thread 绑定可核实、没有已知
-Pending Interaction 时使用；缺失条件保持 foreground 或明确 Web Notify
-回退。Master 在受理后记录 Task/Attempt、Authority 和 Thread，简洁报告，
-结束 Turn 并停止轮询。
+只可在原 `task_id` 的受理回执可靠、Executor Authority 可核实、没有已知
+Pending Interaction、启动错误或未决清理事实时使用。仅 Thread/Wake 绑定不可用时
+使用 Web Notify 回退并结束 Turn；回执未知、Authority/授权边界无法确认或启动/清理
+未决时留在当前 Turn 或保持未决。Master 在受理后记录 Task/Attempt、Authority
+和已知 Thread 绑定，简洁报告，结束 Turn 并停止轮询。
 
 Turn end、Host 断连、MCP Stop 或请求超时只结束等待，不取消已受理 Task。
 回执未知时必须用原 `task_id` 对账，不能生成第二 ID/Attempt。Wake 到达后，
@@ -222,7 +223,8 @@ Cleanup/Release 和实际执行目录证据；Wake 本身不表示接收或验�
 
 Pending Interaction 始终是阻塞事实。结束 Turn 前发现 Pending 必须先处理；
 Async Handoff 不新增 Pending Wake，之后的审批仍经 Web/CLI 或下一次用户
-Turn 进入。决策与 Skill 合同见 [ADR-052](../decisions/ADR-052-async-master-handoff.md)。
+Turn 进入。决策与 Skill 合同见 [ADR-052](../decisions/ADR-052-async-master-handoff.md)
+与 [ADR-055](../decisions/ADR-055-whole-task-staged-dispatch-and-prompt-contract.md)。
 
 ### 3.4 交付事实
 

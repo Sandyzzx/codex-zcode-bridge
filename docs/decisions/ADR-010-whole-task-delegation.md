@@ -3,7 +3,7 @@
 > Status: DECISION
 > Decision: Accepted（用户于 2026-10-18 提议以整任务委派替代微任务默认）
 > Date: 2026-10-18
-> Applicability: Whole-task delegation remains active. The optional Project Ledger mode in the historical decision was retired by ADR-038; it is not a current dispatch path.
+> Applicability: Whole-task delegation remains active. The optional Project Ledger mode in the historical decision was retired by ADR-038; the read-only `auto` dispatch mode is superseded by ADR-055. Only `whole_task` and `staged` remain current.
 
 ## Context
 
