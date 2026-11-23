@@ -4,7 +4,7 @@
 > Date: 2026-11-23
 > Decision: Accepted for the next Preview candidate
 > Related architecture: [BRIDGE_ASYNC_EXECUTION_V1.md](../architecture/BRIDGE_ASYNC_EXECUTION_V1.md)
-> Related decisions: [ADR-042](ADR-042-unknown-runtime-experimental-authorization.md)、[ADR-050](ADR-050-local-task-web-console.md)
+> Related decisions: [ADR-042](ADR-042-unknown-runtime-experimental-authorization.md)、[ADR-050](ADR-050-local-task-web-console.md)、[ADR-054](ADR-054-safe-installed-runtime-without-static-version-gate.md)
 
 ## 决定
 
@@ -39,15 +39,15 @@ Runtime 页面首次打开或用户显式执行检查时，读取当前安装并
 静态检查不创建模型 Session、不读取凭据内容、不调用 Billing API，也不发送
 模型请求。安装不安全时始终 hard block。
 
-### Level B：授权零模型协议探针
+### Level B：显式零模型协议探针
 
-只有 `OFFICIAL_RUNTIME_VERIFIED`，或当前精确指纹已按 ADR-042 获得实验授权
-的安全安装，才允许显式启动既有 AppServer 协议 Smoke。探针只检查启动、
-Protocol Initialization 和只读 `runtime/capabilities`，并要求 bounded
-Cleanup；不创建 Session，不发送模型请求。
+安装安全通过后，用户可以显式启动既有 AppServer 协议 Smoke。探针只检查
+启动、Protocol Initialization 和只读 `runtime/capabilities`，并要求
+bounded Cleanup；不创建 Session，不发送模型请求。Manifest 命中、精确指纹
+授权和签名状态不是额外执行门槛，只作为观察证据记录。
 
-用户必须显式触发探针。无授权、指纹不匹配、安装不安全或不支持的平台均
-fail closed；不通过环境变量或 UI 默认值扩大实验授权。
+用户必须显式触发探针。安装不安全、不支持的平台或实际进程/协议失败均
+fail closed；页面加载、环境变量或 UI 默认值不得隐式触发探针。
 
 ### Level C：真实 Provider E2E
 
@@ -84,8 +84,8 @@ CSRF、same-site 和 bounded JSON 校验。真实 Provider 操作不得由页面
 
 ## 验证边界
 
-当前定向测试覆盖静态证据指纹绑定与去重、授权/未授权协议探针、Fingerprint
-切换、Provider scope 隔离、Billing INCONCLUSIVE、损坏证据 fail closed、
-Manifest 不变和浏览器零模型/零 Billing 页面加载。真实 Desktop 更新后的
-Provider、Billing 和折扣证据仍需独立授权；这些测试不能写成真实 Runtime
-E2E。
+当前定向测试覆盖静态证据指纹绑定与去重、安全安装上的显式零模型协议探针、
+Fingerprint 切换、Provider scope 隔离、Billing INCONCLUSIVE、损坏证据
+fail closed、Manifest 不变和浏览器零模型/零 Billing 页面加载。真实 Desktop
+更新后的 Provider、Billing 和折扣证据仍需独立授权；这些测试不能写成真实
+Runtime E2E。

@@ -14,7 +14,6 @@ import {
   type OfficialAppServerRuntimeDescriptor,
   type OfficialProviderRuntimeCapability,
 } from "../runtime/official-app-server-runtime.js";
-import type { OfficialRuntimeProbeScope } from "../runtime/official-runtime-authorization.js";
 import {
   type AdapterClientProcess,
   type AdapterCloseDiagnostic,
@@ -110,6 +109,10 @@ export interface OfficialHostSessionFactoryOptions {
     descriptor: OfficialAppServerRuntimeDescriptor,
     reason: string,
   ) => void;
+  readonly onDiagnostic?: (
+    descriptor: OfficialAppServerRuntimeDescriptor,
+    reason: string,
+  ) => void;
 }
 
 export interface OfficialHostSessionFactory {
@@ -163,19 +166,28 @@ export function createInstalledOfficialHostSessionFactory(
     readonly assets: OfficialHostAssets;
   }> => {
     resolved ??= Promise.all([resolver.inspect(), packagedAssets()]).then(([descriptor, packaged]) => {
-      const capabilityFailure = officialProviderCapabilityFailure(descriptor, providerCapability);
-      const missingRuntimeAsset = !descriptor.bundle_path
+      const missingRuntimeAsset = descriptor.installation_safety !== "OFFICIAL_INSTALLATION_SAFE"
+        || !descriptor.bundle_path
         || !descriptor.builtin_provider_config_path
         || !descriptor.runtime_host_path;
-      if (capabilityFailure || missingRuntimeAsset) {
-        const failure = capabilityFailure
-          ?? "OFFICIAL_RUNTIME_UNVERIFIED: installed runtime descriptor is missing required assets";
+      if (missingRuntimeAsset) {
+        const failure = descriptor.installation_safety === "OFFICIAL_INSTALLATION_UNSAFE"
+          ? `OFFICIAL_INSTALLATION_UNSAFE: ${descriptor.reason ?? "installed runtime failed safety validation"}`
+          : "OFFICIAL_RUNTIME_UNVERIFIED: installed runtime descriptor is incomplete";
         try {
           options.onUnverified?.(descriptor, failure);
         } catch {
           // Observation cannot alter the fail-closed decision.
         }
         throw new BridgeError("provider_config_invalid", failure);
+      }
+      const capabilityWarning = officialProviderCapabilityWarning(descriptor, providerCapability);
+      if (capabilityWarning) {
+        try {
+          options.onDiagnostic?.(descriptor, capabilityWarning);
+        } catch {
+          // Diagnostics cannot turn a safe runtime into a static gate.
+        }
       }
       return {
         descriptor,
@@ -185,7 +197,9 @@ export function createInstalledOfficialHostSessionFactory(
           appServerEntryPath: descriptor.bundle_path,
           builtinProviderConfigPath: descriptor.builtin_provider_config_path,
           runtimeHostPath: descriptor.runtime_host_path,
-          manifestDigest: descriptor.bundle_sha256!,
+          manifestDigest: descriptor.installation_fingerprint
+            ?? descriptor.bundle_sha256
+            ?? "unavailable",
         },
       };
     });
@@ -212,40 +226,29 @@ export function createInstalledOfficialHostSessionFactory(
   };
 }
 
-export function officialProviderCapabilityFailure(
+export function officialProviderCapabilityWarning(
   descriptor: OfficialAppServerRuntimeDescriptor,
   capability: OfficialProviderRuntimeCapability,
 ): string | null {
-  if (descriptor.status === "OFFICIAL_RUNTIME_EXPERIMENTAL") {
-    const requiredScope: OfficialRuntimeProbeScope = capability === "coding_plan_discount"
-      ? "coding_plan_probe"
-      : capability === "start_plan_static"
-        ? "start_plan_probe"
-        : "other_provider_probe";
-    const authorized = descriptor.experimental_authorization?.state === "authorized"
-      && descriptor.experimental_authorization.scopes.includes(requiredScope);
-    return authorized
-      ? null
-      : `OFFICIAL_RUNTIME_EXPERIMENTAL_AUTHORIZATION_MISSING: ${requiredScope}; ` +
-        "the Provider capability remains NOT_VERIFIED";
-  }
-  if (descriptor.status !== "OFFICIAL_RUNTIME_VERIFIED") {
-    return `OFFICIAL_RUNTIME_UNVERIFIED: ${descriptor.reason ?? "installed Official AppServer is unavailable"}`;
-  }
   if (capability === "coding_plan_discount") {
     return descriptor.discount_capability === "OFFICIAL_DISCOUNT_VERIFIED"
       ? null
-      : `OFFICIAL_RUNTIME_UNVERIFIED: ${descriptor.reason ?? "installed runtime has no verified Coding Plan discount capability"}; ` +
+      : `OFFICIAL_DISCOUNT_DIAGNOSTIC: ${descriptor.reason ?? "installed runtime has no reviewed Coding Plan discount evidence"}; ` +
         "OFFICIAL_DISCOUNT_NOT_VERIFIED";
   }
   if (capability === "start_plan_static") {
     return descriptor.start_plan_static_compatibility === "OFFLINE_COMPATIBLE"
       ? null
-      : `STARTPLAN_RUNTIME_INCOMPATIBLE: ${descriptor.reason ?? "installed runtime is not offline-compatible with Start Plan"}; ` +
+      : `STARTPLAN_STATIC_DIAGNOSTIC: ${descriptor.reason ?? "installed runtime has no reviewed Start Plan static evidence"}; ` +
         `START_PLAN_COMPATIBILITY_${descriptor.start_plan_static_compatibility ?? "UNVERIFIED"}`;
   }
-  return null;
+  return descriptor.status === "OFFICIAL_RUNTIME_UNVERIFIED"
+    ? `OFFICIAL_RUNTIME_MANIFEST_UNVERIFIED: ${descriptor.reason ?? "installed runtime is not in the reviewed compatibility manifest"}`
+    : null;
 }
+
+/** @deprecated Use officialProviderCapabilityWarning; this value is diagnostic, not an execution gate. */
+export const officialProviderCapabilityFailure = officialProviderCapabilityWarning;
 
 export type OfficialHostModuleSource =
   | OfficialHostModule

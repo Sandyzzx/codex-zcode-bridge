@@ -169,7 +169,6 @@ async function inspectInstalledRuntime(input: RuntimeInspectionInput = {}): Prom
     runtime_status: runtime.status,
     installation_safety: runtime.installation_safety ?? "OFFICIAL_INSTALLATION_INCOMPLETE",
     installation_fingerprint: runtime.installation_fingerprint ?? null,
-    experimental_authorization: runtime.experimental_authorization ?? null,
     discount_status: runtime.discount_capability,
     desktop_version: runtime.desktop_version,
     desktop_app_version: runtime.desktop_app_version ?? null,

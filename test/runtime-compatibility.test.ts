@@ -117,28 +117,28 @@ test("Runtime static evidence is fingerprint-bound, deduplicated, and never chan
   }
 });
 
-test("Unknown and unsafe Runtimes cannot run the protocol probe", async () => {
+test("A safe unverified Runtime can run the protocol probe while an unsafe Runtime remains blocked", async () => {
   let probes = 0;
-  let runtime = fixture("b".repeat(64), {
-    runtimeStatus: UNVERIFIED,
-    authorization: { state: "required", scopes: [] },
-  });
+  let runtime = fixture("b".repeat(64), { runtimeStatus: UNVERIFIED });
   const fixtureSet = tempService({
     inspect: async () => runtime,
     probe: async () => {
       probes += 1;
-      return runtime;
+      return {
+        ...runtime,
+        appserver_protocol_smoke: {
+          status: "PASS",
+          model_requests: 0,
+          evidence: { session_created: false },
+        },
+      };
     },
   });
   try {
     await fixtureSet.service.inspect();
-    await assert.rejects(
-      fixtureSet.service.runAuthorizedProtocolProbe(),
-      (error: unknown) =>
-        error instanceof RuntimeCompatibilityError
-        && error.code === "RUNTIME_PROBE_AUTHORIZATION_REQUIRED",
-    );
-    assert.equal(probes, 0);
+    const snapshot = await fixtureSet.service.runAuthorizedProtocolProbe();
+    assert.equal(probes, 1);
+    assert.equal(snapshot.capabilities.protocol?.status, "PASS");
 
     runtime = fixture("c".repeat(64), {
       runtimeStatus: UNVERIFIED,
@@ -150,18 +150,15 @@ test("Unknown and unsafe Runtimes cannot run the protocol probe", async () => {
       (error: unknown) =>
         error instanceof RuntimeCompatibilityError && error.code === "RUNTIME_UNSAFE",
     );
-    assert.equal(probes, 0);
+    assert.equal(probes, 1);
   } finally {
     fixtureSet.cleanup();
   }
 });
 
-test("Exact Fingerprint authorization permits a zero-model protocol probe without elevating providers", async () => {
+test("A safe installation permits a zero-model protocol probe without elevating providers", async () => {
   const fingerprint = "d".repeat(64);
-  const runtime = fixture(fingerprint, {
-    runtimeStatus: EXPERIMENTAL,
-    authorization: { state: "authorized", scopes: ["coding_plan_probe"] },
-  });
+  const runtime = fixture(fingerprint, { runtimeStatus: EXPERIMENTAL });
   let probes = 0;
   const fixtureSet = tempService({
     inspect: async () => runtime,

@@ -3,7 +3,7 @@
 > Status: DECISION
 > Date: 2026-11-20
 > Decision: Accepted by the `ZCODE_3_19_0_ADAPTATION_WITH_3_18_COMPATIBILITY` Owner goal and its UNKNOWN-version compatibility policy.
-> Applicability: ACTIVE CANDIDATE on `codex/zcode-3190-compat-20261120`.
+> Applicability: PARTIALLY SUPERSEDED by [ADR-054](ADR-054-safe-installed-runtime-without-static-version-gate.md) on 2026-11-23. Installation safety and manifest compatibility remain separate, but exact-fingerprint authorization is no longer an execution or zero-model-probe gate.
 > Verified against: implementation `15abe6becb13f383fee676a4ae20510d51f817fc`
 > (tree `654cda65168ece915251305522db6ce603e23ad7`), baseline
 > `aedeb2c2a1ea6f41ea3ac2d045f7ed0d75281552`
