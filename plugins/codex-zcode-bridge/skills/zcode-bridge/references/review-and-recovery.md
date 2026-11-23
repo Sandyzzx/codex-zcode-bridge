@@ -1,22 +1,27 @@
 # 独立验收、返工与恢复
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-22（terminal-result release + Async Wake 恢复）
-> Last verified: 2026-11-22，核对 opt-in Result 摘要、Event Attempt 归属、16 MiB 原证据回读边界、ADR-039 四种终态 Result 行政释放资格与 SQLite Hold 合同、ADR-051 Wake 与 ADR-052 Async Handoff；真实生产恢复 NOT RUN。
-> Verified against: Preview `c941f578ec00834ab0e93f235134d24bf14a827a` + PR #131 `codex/async-executor-rc-20261122`
+> Last updated: 2026-11-23（Async Wake 证据分工）
+> Last verified: 2026-11-23，核对 opt-in Result 摘要、Event Attempt 归属、16 MiB 原证据回读边界、ADR-039 四种终态 Result 行政释放资格与 SQLite Hold 合同、ADR-051 Wake 与 ADR-052 Async Handoff；真实生产恢复 NOT RUN。
+> Verified against: `origin/preview@89ca334802f6e5c1e88b8284863f8151bf4be134`（审计基线；本候选待验收）
 
 ## 验收与接收
 
 Wake、Queue ACK 或新 Turn 开始都只触发恢复检查。先核对 Wake 携带的
-Task/Attempt/Operation/Result digest 与已记录交接身份一致，再读取持久状态；
-不一致、消息缺字段或历史无法归属时不得验收。具体恢复顺序见
+Task/Attempt/Operation/Result digest 与已记录交接身份一致，再用同 Task 的
+Status/Events 核对持久事实；digest、commit ref、Cleanup 与 Release 不能从
+Result 摘要反推。不一致、消息缺字段或历史无法归属时不得验收。具体恢复顺序见
 [async-handoff.md](async-handoff.md)。
 
 1. 在事件报告的实际执行目录检查 Git 状态、完整 diff、实际文件和适用验证。`whole_task` 验收整个授权任务；`staged` 验收当前阶段及交接条件，明确后续目标未完成。验证命令和分层遵循当前项目自己的权威说明，不把 Worker 自报、工具成功或 `completed` 当作验收。
 2. 终态常规用 `zcode_result(view="summary")`，旧 schema 用原 `task_id` 调用。已知需要原文时直接用 `view: "full"`，已知 Attempt 时同时传 `expected_attempt`。用 Result 的 `attempt` 核对执行归属。`projection.omitted_fields` 中验收所需的证据在续作前按同一 Attempt 补读。原文超过宿主接收上限或读取失败时，记录具体缺项，必要的验收或报告修复保持未决。Master 独立核验 AgentReport 声明。
 3. 审查通过后，按用户授权接收所需改动；保留既有用户改动、检查冲突并复验。Bridge 不自动应用、合并、删除 worktree，也不自动提交、推送或创建 PR。
-4. 结果不达标时汇总全部失败证据，用 `zcode_continue` 做一次完整返工。保持原策略和授权，只收紧实际失败维度，不追加无关规则、不拆成微任务、不无限原样重派或自动换模型。
-5. `invalid_agent_report` 且执行已完成时，直接读全量核对 `report_candidate`、`zcode_output` 和实际 diff。续作只修复 JSON 报告。缺失决定只能基于证据补齐，无法确认则 `needs_master_decision=true`。
+4. 结果不达标时汇总当前验收缺口所需的失败、未运行证据和未决事项，用
+   `zcode_continue` 做一次完整返工。不要重贴历史完整输出；保持原策略和授权，
+   只收紧实际失败维度，不追加无关规则、不拆成微任务、不无限原样重派或自动换模型。
+5. `invalid_agent_report` 且执行已完成时，先读全量核对 `report_candidate`、
+   `zcode_output` 和实际 diff；续作只修复 JSON 报告，禁止工具、文件修改和测试重跑。
+   缺失决定只能基于已有证据补齐，无法确认则 `needs_master_decision=true`。
 
 异步恢复不是自动接收。Result 已提交、Cleanup 已验证、Operation 已 `released`
 仍只是后续动作的前置事实；Master 必须独立检查实际交付。需要返工、继续审批或
@@ -27,7 +32,7 @@ Task/Attempt/Operation/Result digest 与已记录交接身份一致，再读取�
 - `failed` 用 `zcode_result.error_code` 判断原因，不用 feedback 标签替代。`cleanup_failed` 或 `cleanup_unverified` 是清理事实，与代码验收分开；后续 `observation.cleanup=verified` 只说明取得退出证据，不改写历史失败。
 - Result 可先于 Cleanup 和 Release。终态后按原游标有界补读 Events，支持时用 `include_attempt: true`。用 Status 核对当前 Attempt 与 Hold。已提交 Result 的 Release 需要 `released` 和 `result_committed` 均属于受审 Attempt，且 `details.result_commit_ref` 相同。旧 schema 下须有独立的 Attempt 归属证据。无 Result 的取消和 `admin_abandoned` 分别按其现有取消、行政放弃证据核对。`admin_abandoned` 的占用已释放，Cleanup 仍未验证。归属或释放不明确时报告未验证，保留占用边界，暂缓续作和重叠工作区派发。
 - `zcode_status.execution_observation.state=interrupted_without_result` 只表示持久 Worker 身份已退出；当前生产 Adapter 缺少独立 Cleanup Proof 时 Recovery 仍以 `adapter_cleanup_unverified` 保持 Hold。Fake Adapter 的合成重派分支不是当前生产能力，不得据此承诺自动重派。
-- 对已知 `failed + cleanup_unverified` Task，先报告可确认的 workspace、Task、Attempt 和原因。核心 MCP 没有 Bridge Task/Attempt 全局枚举工具；可选 Ledger 只能枚举其管理的 ProjectTask，不能发现所有 Bridge 任务。`zcode_status` 不返回 workspace；缺失写未知，不猜测。
+- 对已知 `failed + cleanup_unverified` Task，先报告可确认的 workspace、Task、Attempt 和原因。核心 MCP 没有 Bridge Task/Attempt 全局枚举工具；只能使用用户给出的或已记录的原 `task_id`，不得猜 workspace 或扫描其他任务。`zcode_status` 不返回 workspace；缺失写未知，不猜测。
 - `zcode_cancel` 只接受 `{ task_id }`，可能按原 PID/start fingerprint 终止仍存活 Worker，没有 dry-run/authorize 参数。用户授权的是当前明确 Recovery 操作，不是无限期终止权限；必须先取得用户的明确授权。获准后同一 Operation 一次只发起一个 cancel，调用后读 `zcode_status`。已被取消且无持久 Spawn 证据的历史 `launch_intent` 需要用户再次显式取消；已有 `completed`/`failed`/`waiting_for_master`/`cancelled` 终态 Result、exact identity 已退出且 tree scan clean 但 Adapter closure 仍缺失的 `cleanup_unverified`，用户显式调用一次即可进入统一的行政释放流程。行政释放不是已验证 Cleanup；原 Result 和 Events 保持不变。带 Launch Receipt/Identity 的 Intent、live descendant、活动或终止失败 Worker、identity unknown 与脏树继续占用。
 - Recovery 只有原身份、recorded-tree claimant、interaction 状态和 Operation CAS 全部验证成功才释放；失败、未知或响应丢失保持 Hold。停止失败后先重新核对原 Worker 身份和状态，原授权范围内可再次尝试；目标身份或操作范围变化时重新取得用户授权。不得并发重复发出终止信号，也不得拼接底层清理命令、重放 Prompt、创建 Attempt 或手工改 SQLite 绕过。
 - Recovery 成功后先检查原 workspace Git diff/WIP，再讨论是否创建新 Attempt；不自动 reset、clean、覆盖 checkout 或删除用户源码。单路径 Hold 不阻塞其他独立 workspace。

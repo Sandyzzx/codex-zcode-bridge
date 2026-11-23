@@ -3,6 +3,7 @@
 > Status: DECISION
 > Decision: Accepted（用户于 2026-10-24 要求审查并合入 Master Skill P0 + 渐进式加载候选包）
 > Date: 2026-10-24
+> Applicability: Authorization and progressive loading remain active. Decision 2's `auto` strategy selector is superseded by ADR-054; `whole_task` is the default and `staged` is the exception.
 
 ## Context
 

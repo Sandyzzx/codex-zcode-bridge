@@ -1,17 +1,19 @@
 # Async Handoff 与 Wake 恢复
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-23
+> Last updated: 2026-11-23（Async 默认与 Wake 证据分工）
 > Last verified: 2026-11-23，核对 PR #131 合并后的 Preview.14、loaded/idle trusted-local Queue/Turn、Host 原生 MCP Result readback、Master 生命周期独立验收与 Desktop Visible；真实模型 Skill 遵循率、严格 C/D 与 Desktop fully exited 仍 `NOT_RUN`。
-> Verified against: `origin/preview@c7bfc28b1112dead95ae4179a00962de76051920`
+> Verified against: `origin/preview@89ca334802f6e5c1e88b8284863f8151bf4be134`（审计基线；运行时证据引用 c7bfc28）
 
 本文件只在入口已确认 Bridge 授权后使用。它不决定交付范围：
-`whole_task`、`staged` 和只读 `auto` 仍由
+`whole_task` 与 `staged` 仍由
 [delegation-policy.md](delegation-policy.md) 决定。Handoff Mechanism 只决定
 当前 Master Turn 是否结束：
 
-- `async_wake`：Task 已可靠受理后记录绑定，简洁报告并结束 Turn，停止轮询；
-- `foreground`：在当前 Turn 使用既有的有界事件/Attention 跟进。
+- `async_wake`：默认。Task 已可靠受理后记录绑定，简洁报告并结束 Turn，停止轮询；
+- `foreground`：仅用于已知 Pending Interaction、必须即时处理的审批，或用户明确要求。
+  回执未知、启动错误、清理未决或安全边界无法确认时，留在当前 Turn 处理或保持未决，
+  不得用 foreground 伪装成已完成受理。
 
 这两个机制都不是 MCP 字段、TaskPackage 字段、Task 状态或额外持久化权威。
 
@@ -29,16 +31,20 @@
 4. 当前 Attempt 无已知 Pending Interaction、执行启动错误或未决清理事实；
 5. 用户要求的是已授权交付，不把 Async Handoff 变成无人值守审批或无限取消权限。
 
-任一条件不成立时使用 `foreground`，或保持未决并报告具体缺项。不要在缺少
-Authority、Thread 或预算确认时自行执行 `codex queue`、附加 `--resume`、
-修改 Wake 策略或伪造一次性授权。`trusted-local` 是 Owner 对本地 Thread
-当前模型风险的显式接受，不是 Master 可自行选择的绕过模式。
+条件 1 或 5 不成立时停止交接并保持未决；条件 2 或 4 不成立时留在当前 Turn
+核对或报告，Pending 才使用 `foreground`；条件 3 的 Executor Authority 无法核实时
+保持未决。仅 Codex Thread 或一次性 Wake 绑定不可用时，使用 Web Notify 回退并结束
+Turn，同时在报告中说明回退。不要在缺少 Authority、Thread 或预算确认时自行执行
+`codex queue`、附加 `--resume`、修改 Wake 策略或伪造一次性授权。`trusted-local`
+是 Owner 对本地 Thread 当前模型风险的显式接受，不是 Master 可自行选择的绕过模式。
 
 ## 受理与交接
 
 1. 完成 Ready Gate 后提交原 `task_id`。
-2. 核对回执属于该 Task，并做一次有界启动检查，记录可核实的 Task、Attempt、
-   Authority Root、Codex Thread、接入方式和当前执行事实。
+2. 核对回执属于该 Task，并调用一次
+   `zcode_events(include_attempt: true, wait_ms: 0)` 做有界受理检查，记录可核实的
+   Task、Attempt、Authority Root、Codex Thread、接入方式和当前执行事实。不要等待
+   `turn_started`；不得把这一次检查扩展成后续轮询。
 3. 若 Task Console 可用，取得经 `task console-url`/Executor 验证的原
    `task_id` 当前链接；只报告真实可访问的 `web_url`，不得拼接、猜测或伪造
    地址。链接只携带 `task_id`，不得包含 CSRF 或凭据；Console 不可用时报告
@@ -69,13 +75,16 @@ Wake 消息到达表示 Executor 已完成自身 post-Release 通知流程，不
 
 1. 从消息核对 `task_id`、Attempt、Operation、Result digest 与已记录交接绑定。
    任一不一致或缺失时保持未验收，查询原 Task 并报告冲突。
-2. 直接使用 Host 已注册的原生 MCP 工具。用 `zcode_status`/Attention/Events
-   核对返回的当前 Attempt、Pending Interaction、Result、Cleanup Hold 与
-   Operation Release。
+2. 直接使用 Host 已注册的原生 MCP 工具。用 `zcode_status` 核对当前 Attempt、
+   Pending Interaction、错误和 Hold；再用同一 Task 的
+   `zcode_events(include_attempt: true, wait_ms: 0)` 从已知游标核对属于受审
+   Attempt/Operation 的 `result_committed`、`cleanup_verified` 与 `released`。
+   Result digest 与 commit ref 从 `result_committed` 的事件证据读取；Cleanup 与
+   Release 分别从对应事件读取，不能由 Result 摘要代替。
 3. 直接调用原生 `zcode_result(view="summary", expected_attempt=<Attempt>)`
-   读取持久 Result，并核对消息中的 Result digest；已知需要原文或摘要缺项时，
-   按同一 Attempt 读取 `view="full"`。
-   Result 存在不等于 Cleanup 或 Release 完成。
+   读取持久 Result；已知需要原文或摘要缺项时，按同一 Attempt 读取
+   `view="full"`。Result 摘要只提供 Worker 交付内容，不证明 digest、Cleanup 或
+   Release。
 4. 在实际执行目录独立检查 Git 状态、diff、文件与适用测试；分别记录
    Result committed、Cleanup verified、Operation released 和 Master acceptance。
 5. 验收失败时按原范围做一次 `zcode_continue`；新目标、扩大写入/外部操作或无法

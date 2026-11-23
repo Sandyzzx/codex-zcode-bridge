@@ -16,7 +16,7 @@
       "unauthorized dispatch",
       "automatic continuation after usage exhaustion",
       "treating a Worker report as independent acceptance",
-      "treating auto as an MCP field",
+      "treating Auto as a dispatch mode or MCP field",
       "adding a meaningless stage gate"
     ]
   },
@@ -99,11 +99,11 @@
       "new": {"planning": 2, "boundary": 2, "acceptance": 2, "efficiency": 2, "total": 8, "note": "Root defines authorization scope; goal-lifecycle defines lifecycle only."}
     },
     {
-      "id": "auto-read-only",
+      "id": "readonly-whole-task",
       "required": true,
-      "expected": "Use auto only for authorized read-only work; resolve it to whole_task or staged and never send it as a field.",
+      "expected": "Treat read-only as a permission scope and use whole_task by default; only use staged when a real phase gate exists.",
       "old": {"planning": 2, "boundary": 2, "acceptance": 2, "efficiency": 1, "total": 7, "note": "Accurate but repeated in root, delegation, workflow, and template."},
-      "new": {"planning": 2, "boundary": 2, "acceptance": 2, "efficiency": 2, "total": 8, "note": "Primary root definition and schema guard in task-dispatch."}
+      "new": {"planning": 2, "boundary": 2, "acceptance": 2, "efficiency": 2, "total": 8, "note": "Read-only remains a permission boundary; Auto is not a dispatch mode."}
     },
     {
       "id": "same-task-rework",

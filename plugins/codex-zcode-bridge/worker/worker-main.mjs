@@ -3901,13 +3901,70 @@ var init_agent_report = __esm({
 // src/prompts/task-prompt.ts
 function buildTaskPrompt(task) {
   const sections = [
+    DELIVERY_OWNERSHIP,
+    DECISION_RULE,
+    ...renderTaskPackage(task)
+  ];
+  const context = renderContext(task.context);
+  if (context) sections.push(context);
+  sections.push(OUTPUT_CONTRACT);
+  return joinBoundedPrompt(sections);
+}
+function buildContinuePrompt(input2) {
+  const { task, feedback, additionalRequirements, previousSessionId, previousResult } = input2;
+  if (previousResult?.error_code === "invalid_agent_report") {
+    return buildReportRepairPrompt(input2);
+  }
+  const sections = [
+    DELIVERY_OWNERSHIP,
+    DECISION_RULE,
+    CONTINUATION_CONTEXT,
+    ...previousSessionId ? [`PERSISTED SESSION: ${previousSessionId}`] : [],
+    ...renderTaskPackage(task)
+  ];
+  const context = renderContext(task.context);
+  if (context) sections.push(context);
+  if (previousResult) {
+    sections.push(renderPreviousResultEvidence(previousResult));
+  }
+  sections.push(`MASTER FEEDBACK (address every point)
+${feedback}`);
+  if (additionalRequirements.length > 0) {
+    sections.push(renderList("ADDITIONAL REQUIREMENTS", [...additionalRequirements]));
+  }
+  sections.push(OUTPUT_CONTRACT);
+  return joinBoundedPrompt(sections);
+}
+function buildReportRepairPrompt(input2) {
+  const { task, feedback, additionalRequirements, previousResult } = input2;
+  if (!previousResult || previousResult.error_code !== "invalid_agent_report") {
+    throw new Error("report repair prompt requires an invalid_agent_report result");
+  }
+  const sections = [
+    REPORT_REPAIR_MODE,
     `TASK ID: ${task.task_id}`,
-    "You are the Coding Worker executing one complete task inside the current working directory. Own its delivery end to end. Stay inside the workspace; do not touch files outside it.",
+    `PROJECT WORKSPACE: ${task.workspace}`,
+    ...task.worktree_path ? [`HOST-SELECTED EXECUTION WORKTREE: ${task.worktree_path}`] : [],
+    `PREVIOUS REPORT ERROR
+${boundedEvidenceText(previousResult.summary)}`,
+    `REPORT CANDIDATE CLAIMS (not independently verified)
+${JSON.stringify(projectReportCandidate(previousResult.report_candidate ?? {}))}`,
+    `PREVIOUS RESPONSE EXCERPT
+${excerptEvidence(previousResult.zcode_output, MAX_REPAIR_RESPONSE_CHARS)}`,
+    `MASTER FEEDBACK (report repair only)
+${feedback}`,
+    ...additionalRequirements.length ? [renderList("ADDITIONAL REPORT REQUIREMENTS", [...additionalRequirements])] : [],
+    OUTPUT_CONTRACT
+  ];
+  return joinBoundedPrompt(sections);
+}
+function renderTaskPackage(task) {
+  return [
+    `TASK ID: ${task.task_id}`,
     `PROJECT WORKSPACE: ${task.workspace}`,
     ...task.worktree_path ? [`HOST-SELECTED EXECUTION WORKTREE: ${task.worktree_path}. Make task changes in the current working directory, which is this worktree; the project workspace above identifies its parent project.`] : [],
     ...task.model ? [`REQUESTED ZCODE MODEL: ${task.model.provider_id}/${task.model.model_id}${task.model.reasoning_level ? ` (reasoning level: ${task.model.reasoning_level})` : ""}. The Bridge configures this model for the session.`] : [],
     ...task.timeout_ms ? [`EXECUTION TIME LIMIT: ${task.timeout_ms} ms for this attempt.`] : [],
-    DELIVERY_OWNERSHIP,
     `OBJECTIVE
 ${task.objective}`,
     renderList("REQUIREMENTS", task.requirements),
@@ -3920,63 +3977,71 @@ ${task.objective}`,
     renderList(
       "TEST COMMANDS (run the applicable ones and report a status for each)",
       task.test_commands
-    ),
-    DECISION_RULE
+    )
   ];
-  if (task.context && task.context.trim().length > 0) {
-    sections.push(`CONTEXT
-${task.context}`);
-  }
-  return joinBoundedPreservingTail([...sections, OUTPUT_CONTRACT], OUTPUT_CONTRACT);
 }
-function buildContinuePrompt(input2) {
-  const { task, feedback, additionalRequirements, previousSessionId, previousResult } = input2;
-  const sections = [
-    `TASK ID: ${task.task_id}`,
-    "You are a subordinate coding agent continuing a previous task in the same workspace. Own the remaining delivery end to end. Stay inside the workspace.",
-    DELIVERY_OWNERSHIP,
-    ...task.model ? [`REQUESTED ZCODE MODEL: ${task.model.provider_id}/${task.model.model_id}${task.model.reasoning_level ? ` (reasoning level: ${task.model.reasoning_level})` : ""}. The Bridge configures this model for the session.`] : []
-  ];
-  if (previousSessionId) {
-    sections.push(
-      `This run resumes persisted session ${previousSessionId}; earlier conversation context may be available.`
-    );
+function renderContext(context) {
+  return context && context.trim().length > 0 ? `CONTEXT
+${context}` : null;
+}
+function renderPreviousResultEvidence(result) {
+  return `PREVIOUS ATTEMPT EVIDENCE (structured; not independently verified)
+${JSON.stringify(projectPreviousResult(result))}`;
+}
+function projectPreviousResult(result) {
+  const failedTests = result.tests.filter((test) => test.status === "failed").map(projectTest);
+  const notRunTests = result.tests.filter((test) => test.status === "not_run").map(projectTest);
+  const counts = { passed: 0, failed: failedTests.length, not_run: notRunTests.length };
+  for (const test of result.tests) {
+    if (test.status === "passed") counts.passed += 1;
   }
-  if (previousResult?.error_code === "invalid_agent_report") {
-    sections.push(
-      "REPORT REPAIR MODE: The previous execution has ended. Only its final report failed validation. Do not use tools, edit files, rerun tests, or repeat task work. Return the corrected JSON report from the evidence below. Preserve claims as claims, including not_run and failures. Do not invent tests or missing facts. If needs_master_decision cannot be established, explicitly set it to true and record the uncertainty in issues.",
-      `PROJECT WORKSPACE: ${task.workspace}`,
-      ...task.worktree_path ? [`HOST-SELECTED EXECUTION WORKTREE: ${task.worktree_path}`] : [],
-      `PREVIOUS REPORT ERROR
-${previousResult.summary}`,
-      `REPORT CANDIDATE CLAIMS (not independently verified)
-${JSON.stringify(previousResult.report_candidate ?? {}, null, 2)}`,
-      `PREVIOUS RESPONSE
-${bounded(previousResult.zcode_output, MAX_SECTION_CHARS)}`,
-      `MASTER FEEDBACK (report repair only)
-${feedback}`,
-      ...additionalRequirements.length ? [renderList("ADDITIONAL REPORT REQUIREMENTS", [...additionalRequirements])] : [],
-      OUTPUT_CONTRACT
-    );
-    return joinBoundedPreservingTail(sections, OUTPUT_CONTRACT);
+  return {
+    task_id: result.task_id,
+    attempt: result.attempt,
+    status: result.status,
+    ...result.error_code ? { error_code: result.error_code } : {},
+    summary: boundedEvidenceText(result.summary),
+    files_changed: result.files_changed.map((file2) => boundedEvidenceText(file2)),
+    failed_tests: failedTests,
+    not_run_tests: notRunTests,
+    test_counts: counts,
+    issues: result.issues.map((issue2) => boundedEvidenceText(issue2)),
+    needs_master_decision: result.needs_master_decision
+  };
+}
+function projectReportCandidate(candidate) {
+  const projected = {};
+  if (typeof candidate.summary === "string") projected.summary = boundedEvidenceText(candidate.summary);
+  if (Array.isArray(candidate.files_changed)) {
+    projected.files_changed = candidate.files_changed.map((file2) => boundedEvidenceText(file2));
   }
-  if (previousResult) {
-    sections.push(
-      `PREVIOUS RESULT (normalized claims from the previous attempt)
-${bounded(
-        JSON.stringify(previousResult, null, 2),
-        MAX_SECTION_CHARS
-      )}`
-    );
+  if (Array.isArray(candidate.tests)) projected.tests = candidate.tests.map(projectTest);
+  if (Array.isArray(candidate.issues)) {
+    projected.issues = candidate.issues.map((issue2) => boundedEvidenceText(issue2));
   }
-  sections.push(`MASTER FEEDBACK (address every point)
-${feedback}`);
-  if (additionalRequirements.length > 0) {
-    sections.push(renderList("ADDITIONAL REQUIREMENTS", [...additionalRequirements]));
+  if (typeof candidate.needs_master_decision === "boolean") {
+    projected.needs_master_decision = candidate.needs_master_decision;
   }
-  sections.push(`ORIGINAL TASK
-${buildTaskPrompt(task)}`);
-  return joinBoundedPreservingTail(sections, OUTPUT_CONTRACT);
+  return projected;
+}
+function projectTest(test) {
+  return {
+    command: boundedEvidenceText(test.command),
+    status: test.status,
+    ...test.details === void 0 ? {} : { details: boundedEvidenceText(test.details) }
+  };
+}
+function boundedEvidenceText(text2, maxChars = MAX_EVIDENCE_ITEM_CHARS) {
+  return excerptEvidence(text2, maxChars);
+}
+function excerptEvidence(text2, maxChars) {
+  if (text2.length <= maxChars) return text2;
+  const marker = (omitted) => `...[${omitted} characters omitted]...`;
+  const markerLength = marker(text2.length).length;
+  const available = Math.max(0, maxChars - markerLength);
+  const headChars = Math.ceil(available * 0.6);
+  const tailChars = available - headChars;
+  return `${text2.slice(0, headChars)}${marker(text2.length - headChars - tailChars)}${text2.slice(-tailChars)}`;
 }
 function renderList(title, items) {
   if (items.length === 0) {
@@ -3989,27 +4054,23 @@ ${items.map((item) => `- ${item}`).join("\n")}`;
 function renderPaths(title, paths) {
   if (paths.length === 0) {
     return `${title}
-- (unspecified; still write only within the workspace)`;
+- (unspecified; still write only within the current working directory)`;
   }
   return `${title}
 ${paths.map((item) => `- ${item}`).join("\n")}`;
 }
-function bounded(text2, maxChars) {
-  if (text2.length <= maxChars) return text2;
-  return `${text2.slice(0, maxChars)}\u2026[truncated]`;
-}
-function joinBoundedPreservingTail(sections, requiredTail) {
+function joinBoundedPrompt(sections) {
   const joined = sections.join("\n\n");
   if (joined.length <= MAX_PROMPT_CHARS) return joined;
-  void requiredTail;
   throw new TaskPromptCapacityError(joined.length);
 }
-var MAX_PROMPT_CHARS, MAX_SECTION_CHARS, TaskPromptCapacityError, OUTPUT_CONTRACT, DECISION_RULE, DELIVERY_OWNERSHIP;
+var MAX_PROMPT_CHARS, MAX_EVIDENCE_ITEM_CHARS, MAX_REPAIR_RESPONSE_CHARS, TaskPromptCapacityError, OUTPUT_CONTRACT, DECISION_RULE, DELIVERY_OWNERSHIP, CONTINUATION_CONTEXT, REPORT_REPAIR_MODE;
 var init_task_prompt = __esm({
   "src/prompts/task-prompt.ts"() {
     "use strict";
     MAX_PROMPT_CHARS = 6e4;
-    MAX_SECTION_CHARS = 4e3;
+    MAX_EVIDENCE_ITEM_CHARS = 2e3;
+    MAX_REPAIR_RESPONSE_CHARS = 5e3;
     TaskPromptCapacityError = class extends Error {
       code = "task_prompt_exceeds_capacity";
       actualChars;
@@ -4032,13 +4093,25 @@ var init_task_prompt = __esm({
     DECISION_RULE = [
       "DECISION RULE",
       "Use only this task package, this prompt, repository files you inspect, and available tools; do not assume access to the calling host's conversation.",
-      "Do not choose unresolved items explicitly listed under OPEN DECISIONS; a later explicit Master Feedback decision resolves that item. Also escalate conflicting requirements or missing decisions that would materially change externally visible behavior, even when the calling host did not list them. Record the exact question in issues and set needs_master_decision=true. Continue independent work that does not depend on the decision. For low-impact implementation choices, use the simplest consistent option and state the assumption in issues."
+      "Do not choose unresolved items explicitly listed under OPEN DECISIONS; a later explicit Master feedback or additional requirement resolves that item. Also escalate conflicting requirements or missing decisions that would materially change externally visible behavior, even when the calling host did not list them. Record the exact question in issues and set needs_master_decision=true. Continue independent work that does not depend on the decision. For low-impact implementation choices, use the simplest consistent option and state the assumption in issues."
     ].join("\n");
     DELIVERY_OWNERSHIP = [
       "DELIVERY OWNERSHIP",
-      "You own this task's complete delivery, not a single step of it. Inspect the repository, plan the work internally, implement every required change, run the applicable tests, fix failures you can resolve within the stated boundaries, and repeat until the acceptance criteria are met or a genuine blocker requires the master.",
+      "You are the Coding Worker for one complete task in the current working directory. Own this task's complete delivery, not a single step of it.",
+      "Inspect the repository, plan the work internally, implement every required change, run the applicable tests, fix failures you can resolve within the stated boundaries, and repeat until the acceptance criteria are met or a genuine blocker requires the master.",
       "Do not stop after a partial step to ask what to do next, and do not wait for the master to list files or functions. Make low-impact implementation choices yourself and record assumptions in issues.",
-      "The master independently verifies the final result; your report is evidence of what you did, not a substitute for that review."
+      "The master independently verifies the final result; your report is evidence of what you did, not a substitute for that review.",
+      "Work only in the current working directory, which is the selected execution root; do not touch files outside it."
+    ].join("\n");
+    CONTINUATION_CONTEXT = [
+      "CONTINUATION CONTEXT",
+      "This is a continuation of the same task. The original task package below remains authoritative even when a persisted session is available.",
+      "A persisted session may provide earlier context, but it is not assumed complete. Use the original objective and constraints below, the current feedback, and the previous-attempt evidence."
+    ].join("\n");
+    REPORT_REPAIR_MODE = [
+      "REPORT REPAIR MODE",
+      "The previous execution has ended. Only its final report failed validation. Do not use tools, edit files, rerun tests, or repeat task work.",
+      "Return the corrected five-field JSON report using only the evidence below. Preserve claims as claims, including not_run and failures. Do not invent tests or missing facts. If needs_master_decision cannot be established, set it to true and record the uncertainty in issues."
     ].join("\n");
   }
 });
@@ -29950,10 +30023,10 @@ function boundedSignal(parent, timeoutMs) {
   } };
 }
 async function servePrivateCredential(options) {
-  const bounded2 = boundedSignal(options.signal, options.timeoutMs);
+  const bounded = boundedSignal(options.signal, options.timeoutMs);
   let lease;
   try {
-    const request = record2(await readPrivateFrame(options.request, maximum, bounded2.signal));
+    const request = record2(await readPrivateFrame(options.request, maximum, bounded.signal));
     exactKeys(request, ["protocol", "requestId", "binding"]);
     if (request.protocol !== "start-plan-private-request-v1" || typeof request.requestId !== "string" || !request.requestId) throw new Error("private_auth_invalid");
     const resolved = await new Promise((resolve, reject) => {
@@ -29961,14 +30034,14 @@ async function servePrivateCredential(options) {
         cleanup();
         reject(new Error("private_auth_cancelled"));
       };
-      const cleanup = () => bounded2.signal.removeEventListener("abort", abort);
-      bounded2.signal.addEventListener("abort", abort, { once: true });
-      if (bounded2.signal.aborted) {
+      const cleanup = () => bounded.signal.removeEventListener("abort", abort);
+      bounded.signal.addEventListener("abort", abort, { once: true });
+      if (bounded.signal.aborted) {
         abort();
         return;
       }
-      void Promise.resolve().then(() => options.resolveLease(Object.freeze({ ...request }), bounded2.signal)).then((value) => {
-        if (bounded2.signal.aborted) {
+      void Promise.resolve().then(() => options.resolveLease(Object.freeze({ ...request }), bounded.signal)).then((value) => {
+        if (bounded.signal.aborted) {
           value.lease.revoke();
           return;
         }
@@ -29991,43 +30064,43 @@ async function servePrivateCredential(options) {
         binding: resolved.binding,
         jwt: jwt2,
         expiresAt
-      }, maximum, bounded2.signal);
-      const ack = record2(await readPrivateFrame(options.acknowledgement, maximum, bounded2.signal));
+      }, maximum, bounded.signal);
+      const ack = record2(await readPrivateFrame(options.acknowledgement, maximum, bounded.signal));
       exactKeys(ack, ["protocol", "requestId"]);
       if (ack.protocol !== "start-plan-private-ack-v1" || ack.requestId !== request.requestId) throw new Error("private_auth_ack_invalid");
-    }, bounded2.signal);
+    }, bounded.signal);
     return "acknowledged";
   } catch {
     lease?.revoke();
     throw new Error("private_auth_delivery_failed");
   } finally {
-    bounded2.close();
+    bounded.close();
     options.request.destroy();
     options.response.destroy();
     options.acknowledgement.destroy();
   }
 }
 async function receivePrivateCredential(options) {
-  const bounded2 = boundedSignal(options.signal, options.timeoutMs);
+  const bounded = boundedSignal(options.signal, options.timeoutMs);
   const requestId = randomUUID2();
   let responseStream;
   try {
-    await writePrivateFrame(options.request, { protocol: "start-plan-private-request-v1", requestId, binding: options.binding }, maximum, bounded2.signal);
+    await writePrivateFrame(options.request, { protocol: "start-plan-private-request-v1", requestId, binding: options.binding }, maximum, bounded.signal);
     responseStream = typeof options.response === "function" ? options.response() : options.response;
-    const response = record2(await readPrivateFrame(responseStream, maximum, bounded2.signal));
+    const response = record2(await readPrivateFrame(responseStream, maximum, bounded.signal));
     exactKeys(response, ["protocol", "requestId", "binding", "jwt", "expiresAt"]);
     const binding = record2(response.binding);
     const keys = ["account", "provider", "model", "task", "attempt", "operation", "generation", "claim", "session", "turn", "pid", "creation"];
     exactKeys(binding, keys);
     const now = (options.now ?? Date.now)();
-    if (response.protocol !== "start-plan-private-response-v1" || response.requestId !== requestId || keys.some((key) => binding[key] !== options.binding[key]) || typeof response.jwt !== "string" || !response.jwt || typeof response.expiresAt !== "number" || !Number.isFinite(response.expiresAt) || !Number.isFinite(now) || response.expiresAt <= now || bounded2.signal.aborted) throw new Error("private_auth_invalid");
-    await writePrivateFrame(options.acknowledgement, { protocol: "start-plan-private-ack-v1", requestId }, maximum, bounded2.signal);
-    if (bounded2.signal.aborted) throw new Error("private_auth_invalid");
+    if (response.protocol !== "start-plan-private-response-v1" || response.requestId !== requestId || keys.some((key) => binding[key] !== options.binding[key]) || typeof response.jwt !== "string" || !response.jwt || typeof response.expiresAt !== "number" || !Number.isFinite(response.expiresAt) || !Number.isFinite(now) || response.expiresAt <= now || bounded.signal.aborted) throw new Error("private_auth_invalid");
+    await writePrivateFrame(options.acknowledgement, { protocol: "start-plan-private-ack-v1", requestId }, maximum, bounded.signal);
+    if (bounded.signal.aborted) throw new Error("private_auth_invalid");
     return { jwt: response.jwt, expiresAt: response.expiresAt };
   } catch {
     throw new Error("private_auth_receive_failed");
   } finally {
-    bounded2.close();
+    bounded.close();
     options.request.destroy();
     responseStream?.destroy();
     options.acknowledgement.destroy();
