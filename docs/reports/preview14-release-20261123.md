@@ -4,7 +4,7 @@
 > Date: 2026-11-23
 > Preview base: `c7bfc28b1112dead95ae4179a00962de76051920`
 > Source PR: #131
-> Release PR: pending
+> Release PR: #133
 
 ## Release Scope
 
@@ -48,6 +48,17 @@ Release Prep 本地验证：
 - `npm ci` 仍报告 3 个 high severity advisories；与当前依赖基线一致，本发布
   准备不修改依赖或宣称已修复。
 
+Release Prep PR #133 CI [run 45129786440](https://github.com/Sandyzzx/codex-zcode-bridge/actions/runs/45129786440)：
+
+- Impact selection、Fast PR gate、Integration gate、Ubuntu Verify、Windows
+  两 shard、Windows 聚合 Verify 与两平台 SQLite resource matrix PASS。
+- Cost Lab 按 impact selector skipped。
+
+合并后 Preview push CI [run 45130689135](https://github.com/Sandyzzx/codex-zcode-bridge/actions/runs/45130689135)：
+
+- Cost Lab、Ubuntu Verify、Windows 两 shard、Windows 聚合 Verify 与两平台
+  SQLite resource matrix PASS。
+
 2026-11-23 隔离真实 Host E2E：
 
 - loaded/idle trusted-local 自动 Wake：`PASS — REAL`。
@@ -73,17 +84,37 @@ Release Prep 本地验证：
 ## Release Identity
 
 ```text
+PREVIEW_RELEASED: YES
 PREVIEW_VERSION: 2.0.0-preview.14
 PREVIEW_BASE: c7bfc28b1112dead95ae4179a00962de76051920
-RELEASE_COMMIT: PENDING
-RELEASE_TREE: PENDING
+RELEASE_COMMIT: 8d58e9e377a0c47d2523cd179e9c814139308e4e
+RELEASE_TREE: e758a0b160e73dd92ddcc9c5eb9f307d794d94fc
 TAG: codex-zcode-bridge-preview-v2.0.0-preview.14
-RELEASE_URL: PENDING
-ZIP_SHA256: PENDING
+TAG_OBJECT: 813dd563cfdf909a4e28a015a87910e7b8806874
+RELEASE_URL: https://github.com/Sandyzzx/codex-zcode-bridge/releases/tag/codex-zcode-bridge-preview-v2.0.0-preview.14
+ZIP_BYTES: 4531996
+ZIP_SHA256: ca9aa4c813dfd52b7840fe70f10621dce5426701d3e6fbc78c1282a1ccf97ae3
+POST_MERGE_CI: PASS, run 45130689135
+LATEST_RELEASE: codex-zcode-bridge-v1.7.2 (Stable, unchanged)
 ```
+
+## Release Asset Verification
+
+- Annotated Tag peeled commit 与 `RELEASE_COMMIT` 一致；Release 为
+  `draft=false`、`prerelease=true`，未设为 Latest。
+- GitHub asset digest、回下载 ZIP、`.sha256` 资产和本地构建 ZIP 的 SHA-256
+  四方一致；ZIP 可完整解压。
+- ZIP 根目录是插件结构，包含 56 个文件；两份 Manifest 与 MCP server version
+  均为 `2.0.0-preview.14`。
+- 回解压后的 `dist/bridge.mjs` SHA-256 为
+  `700d121c1450bcc914feb26cd708834fda929ec34fbb78121e19a317f61ad5b7`；
+  隔离 stdio `initialize` 与 `tools/list` PASS，注册 13 个工具。
+- ZIP 不包含 `.run`、本地数据库、凭据命名文件、高置信度凭据模式或个人绝对
+  路径。
 
 ## Repository Boundary
 
 发布准备不修改 `master`，不删除历史 Worktree/分支，不接触生产 SQLite、Executor
 Lease 或正在运行的 Bridge Task。历史归档与清理只能在 `PREVIEW_RELEASED=YES`
-之后开始。
+之后开始。发布后文档回填只记录已发生事实，不移动 Release Tag，也不改变
+Stable。

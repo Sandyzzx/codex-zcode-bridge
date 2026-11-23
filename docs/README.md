@@ -1,9 +1,9 @@
 # 文档路由 / Documentation
 
 > Status: AUTHORITATIVE（仅指本索引）
-> Last updated: 2026-11-23（Preview.14 release preparation）
-> Last verified: 2026-11-23，核对 PR #131 合并后的 Preview、合并后 CI `45124466655`、隔离 loaded/idle trusted-local Wake、Native MCP Result readback、Master 生命周期独立验收与 Desktop Visible。严格 Wake C/D、Desktop fully exited、Official Runtime provenance 和非空工程交付仍为 `NOT_RUN`。
-> Verified against: `origin/preview@c7bfc28b1112dead95ae4179a00962de76051920`。
+> Last updated: 2026-11-23（Preview.14 released）
+> Last verified: 2026-11-23，核对 Preview.14 Release Prep PR #133、合并后 CI `45130689135`、Tag、GitHub prerelease、回下载 ZIP/SHA256 与隔离 Thin MCP 启动；隔离 loaded/idle trusted-local Wake、Native MCP Result readback、Master 生命周期独立验收与 Desktop Visible 为 `PASS — REAL`。严格 Wake C/D、Desktop fully exited、Official Runtime provenance 和非空工程交付仍为 `NOT_RUN`。
+> Verified against: `origin/preview@8d58e9e377a0c47d2523cd179e9c814139308e4e`。
 
 English users start at [README.md](../README.md). 技术文档为中文。先读当前事实，按问题加载合同；研究或历史材料不作为当前实现或发布证明。
 
@@ -31,7 +31,7 @@ English users start at [README.md](../README.md). 技术文档为中文。先读
 | Preview.11 发布与已知边界 | [发布报告](reports/preview11-release-20261122.md) | 默认完整 Result、opt-in 摘要、Event 分页、用户授权阻塞释放与真实 A/B `BLOCKED` |
 | Preview.12 发布与 Recovery 兼容 | [发布报告](reports/preview12-release-20261122.md) | 无固定观察次数、重复材料事实去重、超过 8 条 Hold 消解、旧 v14 Trigger 兼容与真实 A/B `BLOCKED` |
 | Preview.13 发布与统一取消释放 | [GitHub Release](https://github.com/Sandyzzx/codex-zcode-bridge/releases/tag/codex-zcode-bridge-preview-v2.0.0-preview.13) | 完整捕获响应 AgentReport 解析、四种终态 Result 统一 `zcode_cancel`、安全证明保留与真实 A/B `BLOCKED` |
-| Preview.14 发布准备 | [发布报告](reports/preview14-release-20261123.md) | PR #131 已合并；独立 Executor、Thin MCP、CLI/Web/Wake 进入 Preview；发布 Tag/Release 待完成 |
+| Preview.14 发布 | [GitHub Release](https://github.com/Sandyzzx/codex-zcode-bridge/releases/tag/codex-zcode-bridge-preview-v2.0.0-preview.14)、[发布报告](reports/preview14-release-20261123.md) | 独立 Executor、Thin MCP、CLI/Web/Wake 已发布为 prerelease；ZIP 与 SHA256 可下载，Latest 仍为 Stable |
 | Async Executor PR 2–6 | [架构合同](architecture/BRIDGE_ASYNC_EXECUTION_V1.md)、[ADR-045](decisions/ADR-045-async-executor-ownership.md)、[PR 2 证据](reports/async-executor-pr2-20261122.md)、[PR 2.5 证据](reports/async-executor-pr2.5-20261122.md)、[统一 RC 证据](reports/async-executor-release-candidate-20261122.md)、[Web real-process E2E](reports/async-executor-web-real-host-e2e-20261122.md) | `PASS — REAL LOADED/IDLE TRUSTED-LOCAL WAKE`：Lease、IPC、Thin MCP、CLI/Web、Host 退出与 synthetic-Worker Result/Cleanup/Release PASS；loaded/idle Queue、Turn、Native MCP Result readback、Master 生命周期独立验收与 Desktop visible PASS REAL；严格 C/D、Desktop fully exited、Official Runtime provenance 和非空工程交付为 `NOT_RUN` |
 | Task CLI candidate | [ADR-049](decisions/ADR-049-task-cli-control-surface.md) | `IMPLEMENTED / PARTIAL`：同一 Executor Control Client、bounded Task list、Result 摘要/文件预算与已运行 Executor 检测；不拥有 SQLite |
 | Task CLI evidence | [PR 3 report](reports/async-executor-pr3-20261122.md)、[实机验收](reports/async-executor-real-host-acceptance-20261122.md) | `PASS — TARGETED`：9/9；Owner `wake-authorize` 校验当前 Attempt、安全 effort、最长 24 小时并排他写入 policy；bounded list/Result 与 start/stop 合同保持 |
@@ -59,9 +59,9 @@ AUTHORITATIVE 描述当前事实或合同；DECISION 记录已批准取舍；RES
 
 [ADR 索引](decisions/README.md) 区分当前有效、部分被替代和完全被替代。历史文件保持原路径，避免破坏引用。不要默认加载 `docs/archive`、`docs/research`、旧审计日志或生成 bundle。
 
-当前 Preview 发布候选身份为 `2.0.0-preview.14`。`package.json`、`package-lock.json`、插件 manifest、MCP server version、官方签名 Runtime Host 与固定官方 Host/BOM 必须来自同一提交、Tag 和 Release。发布支持范围仍限定为 Windows x64、Node.js `24.16.0` 与 ZCode Desktop `3.18.2.10443`。Preview.14 在 Preview.13 的 Result、Event、用户授权释放与 Recovery 去重合同上加入独立 Executor、Thin MCP、Task CLI/Web Console、trusted-local loaded/idle Queue Wake 与 Async Master Handoff；SQLite v14 仍是唯一当前 Schema。ADR-042 允许其他安全但未知的精确安装指纹在用户授权后进入 `OFFICIAL_RUNTIME_EXPERIMENTAL`，但不把该版本加入发布支持范围，也不提升 Provider、折扣或 Start Plan 能力。ADR-041 implementation 为 `a676c6cd14573f2620339f992a345ed0715541ff`；Final Closure implementation 为 `f19ab1d75dcced7613bfe6e12c84d780d01f7127`。旧 JSON/CLI 生产链退役决策见 [ADR-029](decisions/ADR-029-legacy-runtime-retirement.md)。ADR-041 后插件不再分发 `app-server/zcode.cjs` 或随附 builtin Provider 配置，所有 Provider 使用安装版 AppServer。
+当前 Preview 发布身份为 `2.0.0-preview.14`。`package.json`、`package-lock.json`、插件 manifest、MCP server version、官方签名 Runtime Host 与固定官方 Host/BOM 来自同一提交、Tag 和 Release。发布支持范围仍限定为 Windows x64、Node.js `24.16.0` 与 ZCode Desktop `3.18.2.10443`。Preview.14 在 Preview.13 的 Result、Event、用户授权释放与 Recovery 去重合同上加入独立 Executor、Thin MCP、Task CLI/Web Console、trusted-local loaded/idle Queue Wake 与 Async Master Handoff；SQLite v14 仍是唯一当前 Schema。ADR-042 允许其他安全但未知的精确安装指纹在用户授权后进入 `OFFICIAL_RUNTIME_EXPERIMENTAL`，但不把该版本加入发布支持范围，也不提升 Provider、折扣或 Start Plan 能力。ADR-041 implementation 为 `a676c6cd14573f2620339f992a345ed0715541ff`；Final Closure implementation 为 `f19ab1d75dcced7613bfe6e12c84d780d01f7127`。旧 JSON/CLI 生产链退役决策见 [ADR-029](decisions/ADR-029-legacy-runtime-retirement.md)。ADR-041 后插件不再分发 `app-server/zcode.cjs` 或随附 builtin Provider 配置，所有 Provider 使用安装版 AppServer。
 
-Async Executor PR 2–6 已通过 PR #131 合并至 `origin/preview@c7bfc28b`，合并后 CI `45124466655` 通过。历史候选 `c75c3433` 的 1060 项本地完整回归、4/4 注册压力矩阵、生成物与插件校验仍只属于该提交。隔离 Host 真实完成 loaded/idle trusted-local Queue、新 Turn、Native MCP Result readback、Result digest、Cleanup/Release、Master 生命周期独立验收与 Desktop Visible；严格 C/D、Desktop fully exited、Official Runtime provenance 和非空工程交付仍为 `NOT_RUN`。历史失败与 readback 诊断保留在 [trusted-local evidence](reports/trusted-local-wake-20261123.md)。
+Async Executor PR 2–6 已通过 PR #131 合并至 Preview，并由 PR #133 发布为 Preview.14 Release commit `8d58e9e3`；合并后 CI `45130689135` 通过。历史候选 `c75c3433` 的 1060 项本地完整回归、4/4 注册压力矩阵、生成物与插件校验仍只属于该提交。隔离 Host 真实完成 loaded/idle trusted-local Queue、新 Turn、Native MCP Result readback、Result digest、Cleanup/Release、Master 生命周期独立验收与 Desktop Visible；严格 C/D、Desktop fully exited、Official Runtime provenance 和非空工程交付仍为 `NOT_RUN`。历史失败与 readback 诊断保留在 [trusted-local evidence](reports/trusted-local-wake-20261123.md)。
 
 ADR-032 已接受且已在 Preview.5 实现“现有 Worker 内官方 Host”。ADR-033 的账户 refresh 协调、ADR-034 的正常 Cleanup 复用和 ADR-035 的平台选择由固定上游 patch 与同一 Worker 实现。ADR-037 已接受“官方 Host 拥有认证、Bridge 不维护第二套凭据/身份系统”的目标；Preview.6 已实现该接线。Preview.6/Preview.7 历史路径上的真实 Coding Plan 完整 E2E 和 Start Plan 核心功能路径曾通过；但 2026-11-19 统一安装版 Runtime 的 Start Plan 真实 Entitlement/E2E/Billing Observation 尚未运行。历史 Start Plan 完整 E2E 因 Workspace 内 PowerShell cache 保持 FAIL。Desktop 3.18.0/3.18.1 保持 `NOT_VERIFIED`，不得写成 PASS 或不兼容。
 

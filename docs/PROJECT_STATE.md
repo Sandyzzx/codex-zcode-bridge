@@ -1,9 +1,9 @@
 # Project State
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-23（Preview.14 release preparation）
-> Last verified: 2026-11-23，核对 PR #131 合并后的 `origin/preview@c7bfc28b1112dead95ae4179a00962de76051920`、合并后 CI `45124466655`，以及隔离真实 loaded/idle trusted-local Wake。Native MCP Result readback、Master 生命周期独立验收和 Desktop visible 均为 `PASS — REAL`；严格 C/D、Desktop fully exited、Official Runtime provenance 和非空工程交付验收仍为 `NOT_RUN`。
-> Verified against: `origin/preview@c7bfc28b1112dead95ae4179a00962de76051920`。
+> Last updated: 2026-11-23（Preview.14 released）
+> Last verified: 2026-11-23，核对 Preview.14 Release Prep PR #133、合并后 Preview push CI `45130689135`、annotated Tag、GitHub prerelease、回下载 ZIP/SHA256 与隔离 Thin MCP 启动。隔离真实 loaded/idle trusted-local Wake、Native MCP Result readback、Master 生命周期独立验收和 Desktop visible 均为 `PASS — REAL`；严格 C/D、Desktop fully exited、Official Runtime provenance 和非空工程交付验收仍为 `NOT_RUN`。
+> Verified against: `origin/preview@8d58e9e377a0c47d2523cd179e9c814139308e4e`。
 
 当前发布状态：
 
@@ -20,7 +20,7 @@
 - Preview.12 对超过 8 条历史 Hold 的 Cleanup/Cancel 消解使用完整事件集合的 count/root 承诺，旧 digest 数组继续可校验；既有 v14 的精确旧 Trigger 可只读打开，并在可写打开时事务内精确升级，`user_version` 仍为 14。隔离 Task89 快照已验证第 9 次观察和重复去重，生产 Task89 未取消、未写入。
 - Preview.13 通过 PR #129 移除 AgentReport 的 400,000 字符固定前缀扫描上限，改用有界内存覆盖完整已捕获响应；通过 PR #130 把 ADR-039 行政释放的终态 Result 范围扩展到 `completed`/`failed`/`waiting_for_master`/`cancelled`，并统一使用一个 `zcode_cancel` 用户流程。新释放证据统一绑定原 Result digest/commit、Claim、Worker identity 与 Recovery evidence；旧 `cancelled` 取消证明只作历史读取兼容。
 - ZCode Desktop `3.19.0.10774`：仅通过 ADR-042 的 `OFFICIAL_RUNTIME_EXPERIMENTAL` 精确指纹授权完成兼容性探测；不是 Preview.14 的发布支持版本，Coding Plan 倍率仍 `INCONCLUSIVE`，Start Plan 因无 active plan 为 `BLOCKED`。
-- Preview `2.0.0-preview.14` 发布候选：PR #131 已合并为 `origin/preview@c7bfc28b1112dead95ae4179a00962de76051920`，合并后 CI `45124466655` 的 Windows、Ubuntu、SQLite 资源矩阵和 Cost Lab 均通过。候选包含独立 Executor、Lifetime Lease、Named Pipe IPC、Thin MCP、Task CLI、Operations Console 与 trusted-local Wake。真实 loaded/idle trusted-local 自动 Wake、Native MCP Result readback、Master 生命周期独立验收和 Desktop visible 为 `PASS — REAL`；严格 C/D、Desktop fully exited、Official Runtime provenance 与非空工程交付验收为 `NOT_RUN`。
+- 已发布 Preview `2.0.0-preview.14`：Tag `codex-zcode-bridge-preview-v2.0.0-preview.14`，Release commit `8d58e9e377a0c47d2523cd179e9c814139308e4e`，GitHub Prerelease `draft=false` / `prerelease=true`，Latest 仍为 Stable `v1.7.2`。PR #131 的代码基线 `c7bfc28b1112dead95ae4179a00962de76051920` 已合入；Release Prep PR #133 合并后 Preview push CI `45130689135` 的 Windows、Ubuntu、SQLite 资源矩阵和 Cost Lab 均通过。该版本包含独立 Executor、Lifetime Lease、Named Pipe IPC、Thin MCP、Task CLI、Operations Console 与 trusted-local Wake。真实 loaded/idle trusted-local 自动 Wake、Native MCP Result readback、Master 生命周期独立验收和 Desktop visible 为 `PASS — REAL`；严格 C/D、Desktop fully exited、Official Runtime provenance 与非空工程交付验收为 `NOT_RUN`。
 - Operations Console 与 Cost Lab 已随 PR #131 合并到 Preview：Task Web Console 扩展为 Dashboard/Tasks/Cost Lab/Runtime/Settings 的单一 loopback Origin，Cost Lab 仅通过 same-origin API 复用既有服务，Runtime Auto-Learn 按 exact fingerprint 保存兼容性证据。Cost Lab Runner 使用隔离 Authority Root 和独立 Executor 进程；当前通过的是 synthetic Worker/合成账单证据，不能提升为真实 Provider、真实 Desktop 关闭或最终发布结论。
 
 ## 当前生产架构
