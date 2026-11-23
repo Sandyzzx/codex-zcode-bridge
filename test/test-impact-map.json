@@ -45,6 +45,7 @@
         "test/windows-test-shard-plan.json",
         "test/helpers.ts",
         "test/runtime-fixture.ts",
+        "test/fixtures/stdio-lifecycle-host.ts",
         "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter-harness.ts",
         "test/runtime/bootstrap-lock-worker.mjs",
         "test/sqlite-candidate/wp6b2b1/lifecycle-process.mjs",
@@ -57,6 +58,8 @@
       "paths": [
         "src/core.ts",
         "src/interfaces.ts",
+        "src/api-schemas.ts",
+        "src/task-errors.ts",
         "src/mcp/schemas.ts",
         "src/result-contract.mjs"
       ]
@@ -70,7 +73,8 @@
         "src/runtime/model-settings.ts",
         "src/runtime/official-provider-runtime-auth.ts",
         "src/runtime/session-preferences.ts",
-        "src/runtime/start-plan-production-auth.ts"
+        "src/runtime/start-plan-production-auth.ts",
+        "src/executor/production-composition.ts"
       ]
     },
     {
@@ -135,7 +139,15 @@
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
-        "src/manager/sqlite-lifecycle-mcp-authority.ts"
+        "src/manager/sqlite-lifecycle-mcp-authority.ts",
+        "src/executor/**",
+        "src/cli/main.ts",
+        "src/web/**",
+        "src/runtime/cost-lab-official-dependencies.ts",
+        "src/task-list.ts",
+        "src/result-summary.ts",
+        "src/runtime/host-profile.ts",
+        "src/task-errors.ts"
       ]
     },
     {
@@ -178,6 +190,8 @@
         "src/cli/admin-abandon-held-operation.ts",
         "src/host/profile.ts",
         "src/host/stdio.ts",
+        "src/executor/production-composition.ts",
+        "src/runtime/host-profile.ts",
         "src/runtime/doctor.ts",
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
@@ -211,8 +225,15 @@
         "src/mcp/main.ts",
         "src/mcp/server.ts",
         "src/mcp/schemas.ts",
+        "src/mcp/contracts.ts",
         "src/mcp/result-summary.ts",
-        "src/host/stdio.ts"
+        "src/host/stdio.ts",
+        "src/api-schemas.ts",
+        "src/executor/control-client.ts",
+        "src/executor/pipe.ts",
+        "src/executor/remote-model-settings.ts",
+        "src/executor/remote-task-manager.ts",
+        "src/task-errors.ts"
       ]
     },
     {
@@ -322,6 +343,92 @@
         "manager-lifecycle",
         "interface-contract",
         "mcp-host"
+      ]
+    },
+    {
+      "file": "test/architecture-boundaries.test.ts",
+      "type": "Unit",
+      "gate": "T1",
+      "domains": [
+        "test-execution-contract",
+        "manager-lifecycle",
+        "mcp-host"
+      ]
+    },
+    {
+      "file": "test/task-cli.test.ts",
+      "type": "Integration",
+      "gate": "T2",
+      "domains": [
+        "manager-lifecycle",
+        "mcp-host",
+        "test-execution-contract"
+      ]
+    },
+    {
+      "file": "test/web-console.test.ts",
+      "type": "Integration",
+      "gate": "T2",
+      "domains": [
+        "manager-lifecycle",
+        "test-execution-contract"
+      ]
+    },
+    {
+      "file": "test/web-console-browser.test.ts",
+      "type": "Integration",
+      "gate": "T2",
+      "domains": [
+        "manager-lifecycle",
+        "test-execution-contract"
+      ]
+    },
+    {
+      "file": "test/runtime-compatibility.test.ts",
+      "type": "Integration",
+      "gate": "T2",
+      "domains": [
+        "manager-lifecycle",
+        "zcode-path-discovery"
+      ]
+    },
+    {
+      "file": "test/executor-ipc.test.ts",
+      "type": "Integration",
+      "gate": "T2",
+      "domains": [
+        "manager-lifecycle"
+      ]
+    },
+    {
+      "file": "test/executor-lease.test.ts",
+      "type": "Unit",
+      "gate": "T1",
+      "domains": [
+        "manager-lifecycle",
+        "process-cleanup-and-locks"
+      ]
+    },
+    {
+      "file": "test/executor-process.test.ts",
+      "type": "Integration",
+      "gate": "T2",
+      "domains": [
+        "manager-lifecycle",
+        "mcp-host",
+        "worker-launch",
+        "process-cleanup-and-locks",
+        "sqlite-persistence"
+      ]
+    },
+    {
+      "file": "test/executor-wake.test.ts",
+      "type": "Unit",
+      "gate": "T1",
+      "domains": [
+        "manager-lifecycle",
+        "mcp-host",
+        "sqlite-persistence"
       ]
     },
     {
@@ -687,6 +794,24 @@
       ]
     },
     {
+      "file": "test/fixtures/stdio-lifecycle-host.ts",
+      "type": "Fixture",
+      "gate": "T2",
+      "domains": [
+        "test-execution-contract",
+        "mcp-host"
+      ]
+    },
+    {
+      "file": "test/fixtures/fake-app-server-proxy.mjs",
+      "type": "Fixture",
+      "gate": "T1",
+      "domains": [
+        "test-execution-contract",
+        "manager-lifecycle"
+      ]
+    },
+    {
       "file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter-official-host.test.ts",
       "type": "Integration",
       "gate": "T2",
@@ -871,6 +996,15 @@
         "sqlite-persistence",
         "manager-lifecycle",
         "process-cleanup-and-locks"
+      ]
+    },
+    {
+      "file": "test/sqlite-candidate/wp6c/executor-wake.test.mjs",
+      "type": "Integration",
+      "gate": "T2",
+      "domains": [
+        "sqlite-persistence",
+        "manager-lifecycle"
       ]
     },
     {
@@ -1203,7 +1337,9 @@
   "full_suite_paths": [
     "src/result-contract.mjs",
     "src/interfaces.ts",
+    "src/api-schemas.ts",
     "src/mcp/schemas.ts",
+    "src/task-errors.ts",
     "src/runtime/errors.ts",
     "scripts/test-isolated.mjs",
     "scripts/test-clean-entrypoints.mjs",

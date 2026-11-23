@@ -34,7 +34,7 @@ function windowsPowerShellExecutable() {
 }
 function windowsBatchQuery(pids, timeoutMs, onFailure) {
   return new Promise((resolve) => {
-    const script = `$ErrorActionPreference = 'Stop'; foreach ($id in @(${pids.join(",")})) { try { $target = [System.Diagnostics.Process]::GetProcessById($id); try { [Console]::Out.WriteLine(("{0}|{1}" -f $id, $target.StartTime.Ticks)) } finally { $target.Dispose() } } catch [System.ArgumentException] { } }; [Console]::Out.WriteLine('bridge_probe_complete_v1')`;
+    const script = `$ErrorActionPreference = 'Stop'; foreach ($id in @(${pids.join(",")})) { $target = $null; try { try { $target = [System.Diagnostics.Process]::GetProcessById($id) } catch [System.ArgumentException] { continue }; try { [Console]::Out.WriteLine(("{0}|{1}" -f $id, $target.StartTime.Ticks)) } catch [System.InvalidOperationException] { continue } } finally { if ($null -ne $target) { $target.Dispose() } } }; [Console]::Out.WriteLine('bridge_probe_complete_v1')`;
     const child = spawn(windowsPowerShellExecutable(), ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script], {
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
@@ -513,6 +513,7 @@ var TRANSPORT_MAX_BUFFERED_BYTES = 8388608;
 var TRANSPORT_MAX_BUFFERED_LINES = 65536;
 var TRANSPORT_MAX_ENUM_ROWS = 4096;
 var TRANSPORT_TOTAL_SESSION_MS_DEFAULT = 12e4;
+var TRANSPORT_ENUM_RESPONSE_MS = 6e4;
 var TRANSPORT_HELPER_STARTUP_MS_DEFAULT = 6e4;
 var PowerShellTreeTransaction = class _PowerShellTreeTransaction {
   #child;
@@ -667,11 +668,11 @@ var PowerShellTreeTransaction = class _PowerShellTreeTransaction {
   }
   async enumerate() {
     this.#child.stdin.write("enum\n");
-    const begin = await this.#nextLine(2e4, "enum begin");
+    const begin = await this.#nextLine(TRANSPORT_ENUM_RESPONSE_MS, "enum begin");
     if (begin !== "ENUM_BEGIN") throw new Error("process_tree_snapshot_invalid: protocol missing");
     const rows = [];
     for (; ; ) {
-      const line = await this.#nextLine(2e4, "enum row");
+      const line = await this.#nextLine(TRANSPORT_ENUM_RESPONSE_MS, "enum row");
       if (line === "ENUM_END") break;
       const match = /^R (\d{1,12}) (\d{1,12}) (\d{1,25}|unknown) (\d{1,25}|unknown)$/u.exec(line);
       if (!match) throw new Error("process_tree_snapshot_invalid: malformed identity");
@@ -1435,6 +1436,25 @@ var RECOVERY_REASON_CODES = /* @__PURE__ */ new Set(["worker_identity_unknown", 
 var RECOVERY_QUARANTINE_CODES = /* @__PURE__ */ new Set(["claim_identity_conflict", "operation_projection_conflict"]);
 var RECOVERY_EVIDENCE_KEYS = Object.freeze(["attempt", "claim_id", "classification", "envelope_digest", "evidence_digest", "evidence_source", "expected_revision", "reason", "reason_code", "task_id", "worker_identity_digest"]);
 var RECOVERY_RELEASE_EVIDENCE_KEYS = Object.freeze([...RECOVERY_EVIDENCE_KEYS, "process_tree_root_observed", "process_tree_scan_clean", "process_tree_scan_digest", "recovery_disposition"]);
+var EXECUTOR_WAKE_BASE_EVIDENCE_KEYS = Object.freeze([
+  "attempt",
+  "authorization_digest",
+  "delivery_id",
+  "evidence_digest",
+  "generation",
+  "operation_id",
+  "policy_digest",
+  "reason",
+  "reason_code",
+  "result_commit_ref",
+  "result_digest",
+  "state",
+  "task_id",
+  "thread_id"
+]);
+var EXECUTOR_WAKE_EVIDENCE_KEYS = Object.freeze([...EXECUTOR_WAKE_BASE_EVIDENCE_KEYS, "queue_message_id"].sort());
+var EXECUTOR_WAKE_STATES = /* @__PURE__ */ new Set(["intent", "queued", "submission_unknown", "turn_started", "web_notify"]);
+var EXECUTOR_WAKE_LIMIT = 5;
 var RECOVERY_MATERIAL_BINDING_KEYS = Object.freeze(["attempt", "claim_id", "classification", "evidence_source", "reason_code", "task_id", "worker_identity_digest"]);
 var RECOVERY_MATERIAL_DETAIL_KEYS = Object.freeze([
   "complete_cleanup_closure",
@@ -1589,8 +1609,9 @@ function validateEvidence(eventType, value) {
   for (const key of ["launch_id", "claim_id"]) if (key in value && !validText2(value[key], 128)) fail2("invalid_evidence");
   if ("launch_epoch" in value && (!Number.isInteger(value.launch_epoch) || value.launch_epoch < 1)) fail2("invalid_evidence");
   const recoveryObservation = eventType === "observation_recorded" && (value.reason === "recovery_hold" || value.reason === "recovery_quarantine");
+  const executorWake = eventType === "observation_recorded" && value.reason === "executor_wake";
   const json = canonical3(value);
-  const maxBytes = ["cleanup_verified", "cleanup_reverified"].includes(eventType) || recoveryObservation ? 2048 : 1024;
+  const maxBytes = ["cleanup_verified", "cleanup_reverified"].includes(eventType) || recoveryObservation || executorWake ? 2048 : 1024;
   if (Buffer.byteLength(json, "utf8") > maxBytes) fail2("invalid_evidence");
   return value;
 }
@@ -1605,6 +1626,11 @@ function validateInteractionEvidence(eventType, value) {
 }
 function validateObservationEventEvidence(value) {
   const own = Object.keys(value).sort().join("|");
+  if (own === EXECUTOR_WAKE_BASE_EVIDENCE_KEYS.join("|") || own === EXECUTOR_WAKE_EVIDENCE_KEYS.join("|")) {
+    const { evidence_digest, ...unsigned } = value;
+    if (value.reason !== "executor_wake" || !EXECUTOR_WAKE_STATES.has(value.state) || !validId(value.task_id) || !validId(value.operation_id) || !Number.isSafeInteger(value.attempt) || value.attempt < 1 || !Number.isSafeInteger(value.generation) || value.generation < 1 || ![value.result_digest, value.policy_digest, value.authorization_digest, value.delivery_id].every((item) => typeof item === "string" && /^[0-9a-f]{64}$/u.test(item)) || !validId(value.result_commit_ref) || !validText2(value.reason_code, 128) || value.thread_id !== null && !validId(value.thread_id) || value.state !== "web_notify" && value.thread_id === null || "queue_message_id" in value && (!validId(value.queue_message_id) || value.state !== "queued") || evidence_digest !== digest(unsigned) || [value.task_id, value.operation_id, value.result_commit_ref].some((item) => item !== item.normalize("NFC"))) fail2("invalid_executor_wake_evidence");
+    return;
+  }
   if (own === "cancel_id|evidence_digest|launch_id|reason|request_digest|token_digest") {
     const { evidence_digest, ...unsigned } = value;
     if (value.reason !== "cancelled_before_claim" || ![value.cancel_id, value.launch_id].every(validId) || ![value.request_digest, value.token_digest].every((v) => typeof v === "string" && /^[0-9a-f]{64}$/u.test(v)) || evidence_digest !== digest(unsigned)) fail2("invalid_queued_cancel");
@@ -1739,7 +1765,7 @@ function recoveryEventsFor(events, operationId) {
     } catch {
       fail2("invalid_evidence");
     }
-    const recoveryMarker = typeof evidence?.reason === "string" && evidence.reason.startsWith("recovery_") || evidence && ["classification", "envelope_digest", "expected_revision", "reason_code"].some((key) => Object.hasOwn(evidence, key));
+    const recoveryMarker = typeof evidence?.reason === "string" && (evidence.reason.startsWith("recovery_") || Object.hasOwn(evidence, "classification"));
     if (!recoveryMarker) continue;
     validateObservationEventEvidence(evidence);
     if (!operation) fail2("recovery_operation_binding_required");
@@ -1885,9 +1911,17 @@ var ADMIN_ABANDONMENT_INPUT_KEYS = "attempt|claim_id|claim_worker_identity_diges
 var ADMIN_ABANDONMENT_EVIDENCE_KEYS = "boot_time|claimant_scan_clean|claimant_scan_digest|failed_at|hosts_closed|observed_at|platform_probe_digest|process_inventory_digest|worker_exited|worker_process_id|worker_start_fingerprint|writer_closed";
 var USER_AUTHORIZED_RELEASE_INPUT_KEYS = "attempt|cancel_id|generation|operation_id|release_reason|revision|task_id";
 var USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS = "attempt|cancel_id|cancellation_verification_digest|generation|operation_id|recovery_evidence_digest|release_reason|revision|task_id";
+var EXECUTOR_WAKE_BASE_INPUT_KEYS = "attempt|authorization_digest|delivery_id|generation|operation_id|policy_digest|reason_code|state|task_id|thread_id";
+var EXECUTOR_WAKE_INPUT_KEYS = "attempt|authorization_digest|delivery_id|generation|operation_id|policy_digest|queue_message_id|reason_code|state|task_id|thread_id";
 var USER_AUTHORIZED_TERMINAL_RELEASE_INPUT_KEYS = "attempt|claim_id|generation|operation_id|recovery_evidence_digest|release_reason|result_commit_ref|result_digest|revision|task_id|worker_identity_digest";
 function validIsoInstant(value) {
   return typeof value === "string" && Number.isFinite(Date.parse(value));
+}
+function validateExecutorWakeInput(input) {
+  const inputKeys = input && Object.getPrototypeOf(input) === Object.prototype ? Object.keys(input).sort().join("|") : "";
+  if (!input || inputKeys !== EXECUTOR_WAKE_BASE_INPUT_KEYS && inputKeys !== EXECUTOR_WAKE_INPUT_KEYS || !validId(input.operation_id) || !validId(input.task_id) || !Number.isSafeInteger(input.attempt) || input.attempt < 1 || !Number.isSafeInteger(input.generation) || input.generation < 1 || !EXECUTOR_WAKE_STATES.has(input.state) || !validText2(input.reason_code, 128) || ![input.policy_digest, input.authorization_digest, input.delivery_id].every((item) => typeof item === "string" && /^[0-9a-f]{64}$/u.test(item)) || input.thread_id !== null && !validId(input.thread_id) || input.state !== "web_notify" && input.thread_id === null || "queue_message_id" in input && (!validId(input.queue_message_id) || input.state !== "queued") || [input.operation_id, input.task_id, input.reason_code].some((item) => item !== item.normalize("NFC")))
+    fail2("invalid_executor_wake_request");
+  return input;
 }
 function validateAdminAbandonmentInput(input) {
   if (!input || Object.getPrototypeOf(input) !== Object.prototype || Object.keys(input).sort().join("|") !== ADMIN_ABANDONMENT_INPUT_KEYS || !validId(input.operation_id) || !validId(input.task_id) || !Number.isSafeInteger(input.attempt) || input.attempt < 1 || !Number.isSafeInteger(input.generation) || input.generation < 1 || !Number.isSafeInteger(input.revision) || input.revision < 1 || !validId(input.claim_id) || typeof input.claim_worker_identity_digest !== "string" || !/^[0-9a-f]{64}$/u.test(input.claim_worker_identity_digest))
@@ -2266,6 +2300,61 @@ var IsolatedAdmissionStore = class _IsolatedAdmissionStore {
   }
   readTaskProjection(taskId) {
     return this.#readConsistent(() => this.#db.prepare("SELECT task_id,status,current_attempt,created_at FROM tasks WHERE task_id=?").get(taskId) ?? null);
+  }
+  /** Stable, bounded, read-only task enumeration for the Executor Control API. */
+  readTaskProjections({ afterTaskId = null, limit = 50, status = null } = {}) {
+    if (afterTaskId !== null && !validId(afterTaskId) || !Number.isSafeInteger(limit) || limit < 1 || limit > 100 || status !== null && !["queued", "running", "completed", "failed", "cancelled", "waiting_for_master"].includes(status)) {
+      fail2("invalid_task_list_query");
+    }
+    return this.#readConsistent(() => {
+      const rows = this.#db.prepare(`SELECT t.task_id,t.status,t.current_attempt,t.created_at,t.task_json,
+          (SELECT e.evidence_json
+             FROM manager_operation_events e
+             JOIN manager_operations o ON o.operation_id=e.operation_id
+            WHERE o.task_id=t.task_id
+              AND o.attempt=t.current_attempt
+              AND e.event_type='observation_recorded'
+              AND json_extract(e.evidence_json,'$.reason')='executor_wake'
+            ORDER BY e.sequence DESC LIMIT 1) AS wake_evidence_json,
+          (SELECT e.at
+             FROM manager_operation_events e
+             JOIN manager_operations o ON o.operation_id=e.operation_id
+            WHERE o.task_id=t.task_id
+              AND o.attempt=t.current_attempt
+              AND e.event_type='observation_recorded'
+              AND json_extract(e.evidence_json,'$.reason')='executor_wake'
+            ORDER BY e.sequence DESC LIMIT 1) AS wake_at
+        FROM tasks t
+        WHERE t.task_id>? AND (? IS NULL OR t.status=?)
+        ORDER BY t.task_id
+        LIMIT ?`).all(afterTaskId ?? "", status, status, limit + 1);
+      const hasMore = rows.length > limit;
+      const visible = rows.slice(0, limit).map((row) => {
+        let task;
+        try {
+          task = JSON.parse(row.task_json);
+        } catch {
+          fail2("task_projection_invalid");
+        }
+        validateTaskPackage(task);
+        if (task.task_id !== row.task_id) fail2("task_projection_identity_mismatch");
+        return {
+          task_id: row.task_id,
+          status: row.status,
+          attempt: row.current_attempt,
+          created_at: row.created_at,
+          workspace: task.workspace,
+          objective: task.objective,
+          wake_evidence_json: row.wake_evidence_json,
+          wake_at: row.wake_at
+        };
+      });
+      return {
+        tasks: visible,
+        next_task_id: hasMore ? visible.at(-1)?.task_id ?? null : null,
+        has_more: hasMore
+      };
+    });
   }
   /** Return only the current queued Attempt for each queued Task, with an explicit safe-to-dispatch classification. */
   readRecoverableQueuedAttempts() {
@@ -2864,12 +2953,12 @@ var IsolatedAdmissionStore = class _IsolatedAdmissionStore {
       const taskRow = this.#db.prepare("SELECT task_id,status,current_attempt FROM tasks WHERE task_id=?").get(input.task_id);
       const previousAttempt = this.#db.prepare("SELECT task_id,attempt,generation,status FROM attempts WHERE task_id=? AND attempt=?").get(input.task_id, input.previous_attempt);
       const previous = this.#db.prepare("SELECT * FROM manager_operations WHERE operation_id=? AND operation_kind='attempt_lifecycle'").get(input.previous_operation_id);
-      if (!taskRow || !previousAttempt || !previous || previous.task_id !== input.task_id || previous.attempt !== input.previous_attempt || taskRow.current_attempt !== input.previous_attempt || previousAttempt.generation !== input.expected_generation || previous.revision !== input.expected_revision || previous.claim_id !== input.claim_id || previous.claim_generation !== input.expected_generation || previous.claim_worker_identity_digest !== input.claim_worker_identity_digest)
+      if (!taskRow || !previousAttempt || !previous || previous.task_id !== input.task_id || previous.attempt !== input.previous_attempt || taskRow.current_attempt !== input.previous_attempt || previousAttempt.generation !== input.expected_generation || previous.revision < input.expected_revision || previous.claim_id !== input.claim_id || previous.revision > input.expected_revision && !this.#db.prepare("SELECT 1 FROM manager_operation_events WHERE operation_id=? AND event_type='released' AND sequence=?").get(previous.operation_id, input.expected_revision) || previous.claim_generation !== input.expected_generation || previous.claim_worker_identity_digest !== input.claim_worker_identity_digest)
         fail2("stale_continue_cas");
       const eligible = /* @__PURE__ */ new Set(["completed", "failed", "waiting_for_master"]);
       if (!eligible.has(taskRow.status) || taskRow.status !== previousAttempt.status || taskRow.status !== previous.result_status)
         fail2(taskRow.status === "cancelled" ? "continue_cancelled_not_supported" : "continue_status_not_eligible");
-      if (previous.phase !== "released" || !previous.result_digest || !previous.result_commit_ref || !previous.claim_id || !this.#db.prepare("SELECT 1 FROM manager_operation_events WHERE operation_id=? AND event_type='released'").get(previous.operation_id))
+      if (previous.phase !== "released" || !previous.result_digest || !previous.result_commit_ref || !previous.claim_id || !this.#db.prepare("SELECT 1 FROM manager_operation_events WHERE operation_id=? AND event_type='released' AND sequence=?").get(previous.operation_id, input.expected_revision))
         fail2("continue_prior_not_released");
       this.#assertRecoveryNotLatched(previous.operation_id);
       const nextAttempt = input.previous_attempt + 1;
@@ -2978,7 +3067,8 @@ var IsolatedAdmissionStore = class _IsolatedAdmissionStore {
         }
         const issue = Array.isArray(priorResult?.issues) ? priorResult.issues.find((value) => typeof value === "string" && value.startsWith("interruption_evidence:")) : null;
         const storedEvidenceDigest = issue?.slice("interruption_evidence:".length);
-        if (existing.task_id !== input.task_id || existing.attempt !== nextAttemptNumber || existing.continuation_digest !== digest(existing.continuation_json) || stored?.operation_id !== input.continuation_operation_id || stored?.previous_operation_id !== input.operation_id || stored?.previous_attempt !== input.attempt || stored?.previous_generation !== input.generation || stored?.previous_claim_id !== input.claim_id || stored?.previous_worker_identity_digest !== input.claim_worker_identity_digest || !prior || prior.phase !== "released" || prior.result_status !== "failed" || prior.result_digest === null || prior.result_json === null || priorResult?.error_code !== input.reason || typeof storedEvidenceDigest !== "string" || !/^[0-9a-f]{64}$/u.test(storedEvidenceDigest) || !this.#db.prepare("SELECT 1 FROM manager_operation_events WHERE operation_id=? AND event_type='observation_recorded' AND json_extract(evidence_json,'$.reason')=? AND json_extract(evidence_json,'$.evidence_digest')=?").get(input.operation_id, input.reason, storedEvidenceDigest) || stored?.previous_revision !== prior.revision) fail2("interruption_requeue_conflict");
+        if (existing.task_id !== input.task_id || existing.attempt !== nextAttemptNumber || existing.continuation_digest !== digest(existing.continuation_json) || stored?.operation_id !== input.continuation_operation_id || stored?.previous_operation_id !== input.operation_id || stored?.previous_attempt !== input.attempt || stored?.previous_generation !== input.generation || stored?.previous_claim_id !== input.claim_id || stored?.previous_worker_identity_digest !== input.claim_worker_identity_digest || !prior || prior.phase !== "released" || prior.result_status !== "failed" || prior.result_digest === null || prior.result_json === null || priorResult?.error_code !== input.reason || typeof storedEvidenceDigest !== "string" || !/^[0-9a-f]{64}$/u.test(storedEvidenceDigest) || !this.#db.prepare("SELECT 1 FROM manager_operation_events WHERE operation_id=? AND event_type='observation_recorded' AND json_extract(evidence_json,'$.reason')=? AND json_extract(evidence_json,'$.evidence_digest')=?").get(input.operation_id, input.reason, storedEvidenceDigest) || !Number.isSafeInteger(stored?.previous_revision) || prior.revision < stored.previous_revision || !this.#db.prepare("SELECT 1 FROM manager_operation_events WHERE operation_id=? AND event_type='released' AND sequence=?").get(input.operation_id, stored.previous_revision))
+          fail2("interruption_requeue_conflict");
         const cleanupEvent = this.#db.prepare("SELECT evidence_json FROM manager_operation_events WHERE operation_id=? AND event_type='cleanup_verified'").get(input.operation_id);
         let cleanupEvidence2;
         try {
@@ -3522,14 +3612,14 @@ var IsolatedAdmissionStore = class _IsolatedAdmissionStore {
       };
       const evidence = { ...unsignedEvidence, evidence_digest: digest(unsignedEvidence) };
       if (o.phase === "released") {
-        const released = this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? AND event_type='observation_recorded' ORDER BY sequence DESC LIMIT 1").get(input.operation_id);
+        const released = this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? AND event_type='observation_recorded' AND json_extract(evidence_json,'$.reason')='user_authorized_release_unverified' ORDER BY sequence DESC LIMIT 1").get(input.operation_id);
         let parsed;
         try {
           parsed = JSON.parse(released?.evidence_json);
         } catch {
           parsed = null;
         }
-        if (released && released.sequence === o.revision && parsed?.reason === "user_authorized_release_unverified" && parsed?.cancel_id === input.cancel_id && parsed?.cancellation_verification_digest === input.cancellation_verification_digest && parsed?.recovery_evidence_digest === input.recovery_evidence_digest && parsed?.claim_id === input.claim_id && parsed?.result_commit_ref === input.result_commit_ref && parsed?.result_digest === input.result_digest && parsed?.worker_identity_digest === input.worker_identity_digest && parsed?.evidence_digest === evidence.evidence_digest)
+        if (released && parsed?.reason === "user_authorized_release_unverified" && parsed?.cancel_id === input.cancel_id && parsed?.cancellation_verification_digest === input.cancellation_verification_digest && parsed?.recovery_evidence_digest === input.recovery_evidence_digest && parsed?.claim_id === input.claim_id && parsed?.result_commit_ref === input.result_commit_ref && parsed?.result_digest === input.result_digest && parsed?.worker_identity_digest === input.worker_identity_digest && parsed?.evidence_digest === evidence.evidence_digest)
           return {
             duplicate: true,
             operation_id: o.operation_id,
@@ -4191,6 +4281,103 @@ var IsolatedAdmissionStore = class _IsolatedAdmissionStore {
       return { revision: revision + 1, phase: "reserved" };
     });
   }
+  /**
+   * Append a bounded, release-bound Wake fact to the existing SQLite Authority.
+   * A deterministic delivery id may advance only through one terminal Queue
+   * acknowledgement and one observed Turn start. Wake facts never change Task,
+   * Result, Cleanup, Release, capacity, or Recovery state.
+   */
+  recordExecutorWakeObservation(input) {
+    validateExecutorWakeInput(input);
+    this.#assertWritable();
+    return this.#transaction(() => {
+      const o = this.#attemptOperation(input);
+      if (o.phase !== "released" || o.result_digest === null || o.result_commit_ref === null)
+        fail2("executor_wake_operation_not_released");
+      const releaseEvent = this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? AND event_type='released'").get(input.operation_id);
+      if (!releaseEvent) fail2("executor_wake_cleanup_release_required");
+      const wake = [];
+      for (const row of this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? AND event_type='observation_recorded' ORDER BY sequence").all(input.operation_id)) {
+        let evidence2;
+        try {
+          evidence2 = JSON.parse(row.evidence_json);
+        } catch {
+          fail2("invalid_executor_wake_evidence");
+        }
+        if (evidence2.reason !== "executor_wake") continue;
+        validateObservationEventEvidence(evidence2);
+        wake.push({ row, evidence: evidence2 });
+      }
+      const unsigned = {
+        reason: "executor_wake",
+        state: input.state,
+        task_id: input.task_id,
+        attempt: input.attempt,
+        operation_id: input.operation_id,
+        generation: input.generation,
+        result_digest: o.result_digest,
+        result_commit_ref: o.result_commit_ref,
+        thread_id: input.thread_id,
+        delivery_id: input.delivery_id,
+        policy_digest: input.policy_digest,
+        authorization_digest: input.authorization_digest,
+        reason_code: input.reason_code,
+        ..."queue_message_id" in input ? { queue_message_id: input.queue_message_id } : {}
+      };
+      const evidence = { ...unsigned, evidence_digest: digest(unsigned) };
+      validateObservationEventEvidence(evidence);
+      const same = wake.find((item) => item.evidence.delivery_id === input.delivery_id && item.evidence.state === input.state);
+      if (same) {
+        if (same.evidence.evidence_digest === evidence.evidence_digest && canonical3(same.evidence) === canonical3(evidence))
+          return {
+            duplicate: true,
+            operation_id: o.operation_id,
+            task_id: o.task_id,
+            attempt: o.attempt,
+            generation: o.generation,
+            revision: o.revision,
+            event_sequence: same.row.sequence,
+            state: input.state,
+            delivery_id: input.delivery_id,
+            desktop_visible: "UNKNOWN"
+          };
+        fail2("executor_wake_observation_conflict");
+      }
+      if (wake.length >= EXECUTOR_WAKE_LIMIT) fail2("executor_wake_observation_limit");
+      if (wake.some((item) => item.evidence.delivery_id !== input.delivery_id))
+        fail2("executor_wake_delivery_conflict");
+      if (wake.some((item) => item.evidence.result_digest !== o.result_digest || item.evidence.result_commit_ref !== o.result_commit_ref || item.evidence.task_id !== o.task_id || item.evidence.attempt !== o.attempt || item.evidence.generation !== o.generation))
+        fail2("executor_wake_operation_binding_conflict");
+      const states = new Set(wake.map((item) => item.evidence.state));
+      if (input.state === "intent" && wake.length !== 0) fail2("executor_wake_intent_not_first");
+      if (["queued", "submission_unknown"].includes(input.state) && (!states.has("intent") || states.has("queued") || states.has("submission_unknown") || states.has("web_notify")))
+        fail2("executor_wake_ack_transition_invalid");
+      if (input.state === "turn_started" && (!states.has("intent") || !states.has("queued") && !states.has("submission_unknown") || states.has("turn_started") || states.has("web_notify")))
+        fail2("executor_wake_turn_transition_invalid");
+      if (input.state === "web_notify" && states.has("turn_started")) fail2("executor_wake_turn_transition_invalid");
+      if (wake.length) {
+        const binding = wake[0].evidence;
+        if (binding.thread_id !== input.thread_id || binding.policy_digest !== input.policy_digest || binding.authorization_digest !== input.authorization_digest)
+          fail2("executor_wake_binding_conflict");
+      }
+      const changed = this.#db.prepare("UPDATE manager_operations SET revision=revision+1 WHERE operation_id=? AND task_id=? AND attempt=? AND generation=? AND phase='released' AND revision=? AND result_digest=? AND result_commit_ref=?").run(o.operation_id, o.task_id, o.attempt, o.generation, o.revision, o.result_digest, o.result_commit_ref);
+      if (changed.changes !== 1) fail2("stale_executor_wake_cas");
+      this.#faultPoint("after_projection");
+      this.#event(o.operation_id, o.revision + 1, "observation_recorded", "released", "released", o.generation, evidence, (/* @__PURE__ */ new Date()).toISOString());
+      return {
+        duplicate: false,
+        operation_id: o.operation_id,
+        task_id: o.task_id,
+        attempt: o.attempt,
+        generation: o.generation,
+        revision: o.revision + 1,
+        event_sequence: o.revision + 1,
+        state: input.state,
+        delivery_id: input.delivery_id,
+        desktop_visible: "UNKNOWN"
+      };
+    });
+  }
   /** Diagnostic only: no Result, phase transition, cleanup proof or Release. */
   recordResultSubmissionFailure(input, reason) {
     if (!validText2(reason, 128)) fail2("invalid_result_failure_reason");
@@ -4845,7 +5032,7 @@ var IsolatedAdmissionStore = class _IsolatedAdmissionStore {
       const release = this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? AND event_type='released'").get(input.operation_id);
       if (o.phase === "released") {
         const e = release && JSON.parse(release.evidence_json);
-        if (release && release.sequence === input.revision + 1 && e.claim_id === input.claim_id && e.cleanup_digest === input.cleanup_digest && e.worker_identity_digest === input.claim_worker_identity_digest) return {
+        if (release && (release.sequence === input.revision + 1 || input.revision === o.revision) && e.claim_id === input.claim_id && e.cleanup_digest === input.cleanup_digest && e.worker_identity_digest === input.claim_worker_identity_digest) return {
           duplicate: true,
           operation_id: o.operation_id,
           generation: o.generation,
@@ -5236,13 +5423,14 @@ var IsolatedAdmissionStore = class _IsolatedAdmissionStore {
           const preclaim = e?.event_type === "observation_recorded" && evidence?.reason === "cancelled_before_claim";
           const o = this.#db.prepare("SELECT * FROM manager_operations WHERE operation_id=? AND operation_kind='attempt_lifecycle'").get(a.queued_cancel_operation_id);
           const operationEvents = this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? ORDER BY sequence").all(a.queued_cancel_operation_id);
-          let terminalEvidence;
-          try {
-            terminalEvidence = operationEvents.at(-1) ? JSON.parse(operationEvents.at(-1)?.evidence_json) : null;
-          } catch {
-            terminalEvidence = null;
-          }
-          const administrativeRelease = o?.phase === "released" && operationEvents.at(-1)?.event_type === "observation_recorded" && terminalEvidence?.reason === "user_authorized_release_unverified";
+          const administrativeRelease = o?.phase === "released" && operationEvents.some((row) => {
+            if (row.event_type !== "observation_recorded") return false;
+            try {
+              return JSON.parse(row.evidence_json).reason === "user_authorized_release_unverified";
+            } catch {
+              return false;
+            }
+          });
           if (!o || o.task_id !== a.task_id || o.attempt !== a.attempt || o.generation !== a.generation || (preclaim ? o.phase !== "launch_intent" && o.phase !== "released" || e.from_phase !== "launch_intent" || e.to_phase !== "launch_intent" || evidence.launch_id !== o.launch_id || evidence.token_digest !== o.launch_token_digest : !(o.phase === "cancelled_before_launch" && o.launch_id === null && e?.event_type === "cancelled_before_launch" || o.phase === "released" && administrativeRelease && e?.event_type === "observation_recorded" && evidence?.reason === "cancelled_before_claim")) || o.claim_id !== null || o.result_digest !== null || !e || evidence.cancel_id !== a.queued_cancel_id || evidence.request_digest !== requestDigest) fail2("queued_cancel_operation_mismatch");
         }
       }
@@ -5274,7 +5462,7 @@ var IsolatedAdmissionStore = class _IsolatedAdmissionStore {
         const prior = this.#db.prepare("SELECT * FROM manager_operations WHERE operation_id=? AND operation_kind='attempt_lifecycle'").get(c.previous_operation_id);
         const op = this.#db.prepare("SELECT * FROM manager_operations WHERE operation_kind='attempt_lifecycle' AND task_id=? AND attempt=?").get(a.task_id, a.attempt);
         const priorAttempt = this.#db.prepare("SELECT status,generation FROM attempts WHERE task_id=? AND attempt=?").get(a.task_id, c.previous_attempt);
-        if (!prior || prior.task_id !== a.task_id || prior.attempt !== c.previous_attempt || prior.generation !== c.previous_generation || prior.revision !== c.previous_revision || prior.claim_id !== c.previous_claim_id || prior.claim_worker_identity_digest !== c.previous_worker_identity_digest || prior.phase !== "released" || !["completed", "failed", "waiting_for_master"].includes(prior.result_status) || priorAttempt?.status !== prior.result_status) fail2("continue_history_mismatch");
+        if (!prior || prior.task_id !== a.task_id || prior.attempt !== c.previous_attempt || prior.generation !== c.previous_generation || prior.revision < c.previous_revision || prior.claim_id !== c.previous_claim_id || prior.claim_worker_identity_digest !== c.previous_worker_identity_digest || prior.phase !== "released" || !["completed", "failed", "waiting_for_master"].includes(prior.result_status) || !this.#db.prepare("SELECT 1 FROM manager_operation_events WHERE operation_id=? AND event_type='released' AND sequence=?").get(prior.operation_id, c.previous_revision) || priorAttempt?.status !== prior.result_status) fail2("continue_history_mismatch");
         const current = this.#db.prepare("SELECT current_attempt,status FROM tasks WHERE task_id=?").get(a.task_id);
         const cancelledCurrent = current?.status === "cancelled" && a.status === "cancelled" && a.queued_cancel_id !== null;
         if (op ? op.generation !== a.generation || a.generation === null : a.generation !== null || current?.current_attempt !== a.attempt || !(current.status === "queued" && a.status === "queued") && !cancelledCurrent) fail2("continue_history_mismatch");
@@ -5314,7 +5502,7 @@ var IsolatedAdmissionStore = class _IsolatedAdmissionStore {
         const launchEvents = { launch_intent: [], launch_receipt: [], claim_committed: [] };
         const cleanupEvents = { cleanup_pending: [], cleanup_verified: [], cleanup_unverified: [], cleanup_reverified: [], released: [] };
         const resultEvents = [];
-        const recoveryEvents = [], cancellationIntents = [], cancellationVerifications = [];
+        const recoveryEvents = [], cancellationIntents = [], cancellationVerifications = [], executorWakeEvents = [];
         for (let i = 0; i < es.length; i++) {
           const e = es[i];
           if (e.sequence !== i + 1 || e.evidence_digest !== digest(e.evidence_json) || (i === 0 ? e.from_phase !== null : e.from_phase !== es[i - 1].to_phase)) fail2("projection_event_mismatch");
@@ -5331,6 +5519,7 @@ var IsolatedAdmissionStore = class _IsolatedAdmissionStore {
           if (e.event_type === "observation_recorded" && (parsed.reason === "recovery_hold" || parsed.reason === "recovery_quarantine")) recoveryEvents.push({ event: e, evidence: parsed });
           if (e.event_type === "observation_recorded" && parsed.reason === "cancel_requested") cancellationIntents.push({ event: e, evidence: parsed });
           if (e.event_type === "observation_recorded" && parsed.reason === "cancel_tree_verified") cancellationVerifications.push({ event: e, evidence: parsed });
+          if (e.event_type === "observation_recorded" && parsed.reason === "executor_wake") executorWakeEvents.push({ event: e, evidence: parsed });
           if (i > 0 && e.from_phase !== es[i - 1].to_phase) fail2("projection_event_mismatch");
           if (e.event_type === "launch_receipt" && (e.from_phase !== "launch_intent" || e.to_phase !== "launch_intent")) fail2("invalid_event_phase");
           if (e.event_type === "claim_committed" && (e.from_phase !== "launch_intent" || e.to_phase !== "running")) fail2("invalid_event_phase");
@@ -5342,10 +5531,42 @@ var IsolatedAdmissionStore = class _IsolatedAdmissionStore {
           if (e.event_type === "released" && (e.from_phase !== "cleanup_verified" || e.to_phase !== "released")) fail2("invalid_event_phase");
           if (e.event_type === "launch_intent" && (e.from_phase !== "reserved" || e.to_phase !== "launch_intent")) fail2("invalid_event_phase");
           if (e.event_type === "observation_recorded" && e.from_phase !== e.to_phase && !(parsed.reason === "admin_abandoned" && e.from_phase === "running" && e.to_phase === "released") && !(parsed.reason === "user_authorized_release_unverified" && (e.from_phase === "launch_intent" && o.claim_id === null && o.result_digest === null || e.from_phase === "cleanup_unverified" && o.result_digest !== null && ["completed", "failed", "waiting_for_master", "cancelled"].includes(o.result_status)) && e.to_phase === "released")) fail2("invalid_event_phase");
+          if (parsed.reason === "executor_wake" && (e.from_phase !== "released" || e.to_phase !== "released"))
+            fail2("invalid_executor_wake_phase");
           if (e.event_type !== "launch_receipt" && e.event_type !== "claim_committed" && e.event_type !== "launch_intent" && e.event_type !== "observation_recorded" && !e.event_type.startsWith("interaction_") && EVENT_PHASE[e.event_type] !== e.to_phase) fail2("invalid_event_phase");
           if (e.event_type.startsWith("interaction_") && (e.from_phase !== "running" || e.to_phase !== "running")) fail2("invalid_event_phase");
           if (o.operation_kind === "attempt_lifecycle" && e.generation !== o.generation) fail2("invalid_event_phase");
           if (o.operation_kind === "capacity_policy_change" && (e.generation !== null || e.event_type !== "capacity_policy_committed" || e.to_phase !== "policy_change_committed")) fail2("invalid_event_phase");
+        }
+        if (executorWakeEvents.length) {
+          if (o.phase !== "released" || o.result_digest === null || o.result_commit_ref === null)
+            fail2("executor_wake_operation_not_released");
+          const releaseEvent = es.find((event) => event.event_type === "released");
+          if (!releaseEvent || executorWakeEvents[0].event.sequence <= releaseEvent.sequence || executorWakeEvents.length > EXECUTOR_WAKE_LIMIT)
+            fail2("executor_wake_history_invalid");
+          const releaseSequence = releaseEvent.sequence;
+          if (es.some((event) => event.sequence > releaseSequence && (event.event_type !== "observation_recorded" || JSON.parse(event.evidence_json).reason !== "executor_wake")))
+            fail2("executor_wake_terminal_history_invalid");
+          const deliveryId = executorWakeEvents[0].evidence.delivery_id;
+          const binding = executorWakeEvents[0].evidence;
+          let stage = "start";
+          for (const { event, evidence } of executorWakeEvents) {
+            if (evidence.delivery_id !== deliveryId || evidence.operation_id !== o.operation_id || evidence.task_id !== o.task_id || evidence.attempt !== o.attempt || evidence.generation !== o.generation || evidence.result_digest !== o.result_digest || evidence.result_commit_ref !== o.result_commit_ref || evidence.thread_id !== binding.thread_id || evidence.policy_digest !== binding.policy_digest || evidence.authorization_digest !== binding.authorization_digest || event.generation !== o.generation || event.sequence <= releaseSequence)
+              fail2("executor_wake_history_binding_mismatch");
+            if (stage === "start") {
+              if (evidence.state === "intent") stage = "intent";
+              else if (evidence.state === "web_notify") stage = "web_notify";
+              else fail2("executor_wake_history_transition_invalid");
+            } else if (stage === "intent") {
+              if (evidence.state === "queued" || evidence.state === "submission_unknown") stage = "ack";
+              else if (evidence.state === "web_notify") stage = "web_notify";
+              else fail2("executor_wake_history_transition_invalid");
+            } else if (stage === "ack") {
+              if (evidence.state === "turn_started") stage = "turn_started";
+              else if (evidence.state === "web_notify") stage = "web_notify";
+              else fail2("executor_wake_history_transition_invalid");
+            } else fail2("executor_wake_history_transition_invalid");
+          }
         }
         if (o.operation_kind === "attempt_lifecycle") {
           const intents = launchEvents.launch_intent, receipts = launchEvents.launch_receipt, claims = launchEvents.claim_committed;
@@ -5529,8 +5750,15 @@ var IsolatedAdmissionStore = class _IsolatedAdmissionStore {
             }
             const expected = o.phase === "quarantined" ? "quarantined" : released.length ? "released" : verified.length ? "cleanup_verified" : unverified.length ? "cleanup_unverified" : "cleanup_pending";
             let administrativeRelease = false;
-            const terminal = es.at(-1);
-            if (terminal?.event_type === "observation_recorded" && terminal.from_phase === "cleanup_unverified" && terminal.to_phase === "released" && terminal.sequence === o.revision) {
+            const terminal = [...es].reverse().find((event) => {
+              if (event.event_type !== "observation_recorded") return false;
+              try {
+                return JSON.parse(event.evidence_json).reason === "user_authorized_release_unverified";
+              } catch {
+                return false;
+              }
+            });
+            if (terminal?.event_type === "observation_recorded" && terminal.from_phase === "cleanup_unverified" && terminal.to_phase === "released") {
               let terminalEvidence;
               try {
                 terminalEvidence = JSON.parse(terminal.evidence_json);
@@ -5556,7 +5784,14 @@ var IsolatedAdmissionStore = class _IsolatedAdmissionStore {
             }
             if (o.phase !== expected && !(o.phase === "released" && administrativeRelease)) fail2("cleanup_projection_mismatch");
           } else if (["cleanup_pending", "cleanup_verified", "cleanup_unverified", "cleanup_reverified", "released"].includes(o.phase) && !adminAbandonments.has(o.operation_id)) {
-            const administrativeRelease = es.at(-1)?.event_type === "observation_recorded" && JSON.parse(es.at(-1)?.evidence_json).reason === "user_authorized_release_unverified";
+            const administrativeRelease = es.some((event) => {
+              if (event.event_type !== "observation_recorded") return false;
+              try {
+                return JSON.parse(event.evidence_json).reason === "user_authorized_release_unverified";
+              } catch {
+                return false;
+              }
+            });
             if (!administrativeRelease) fail2("cleanup_projection_mismatch");
           }
           const adminAbandonment = adminAbandonments.get(o.operation_id);
@@ -5581,7 +5816,7 @@ var IsolatedAdmissionStore = class _IsolatedAdmissionStore {
               audit_digest: adminAbandonment.audit_digest
             });
             if (adminAbandonment.operation_kind !== "attempt_lifecycle" || adminAbandonment.task_id !== o.task_id || adminAbandonment.attempt !== o.attempt || adminAbandonment.generation !== o.generation || adminAbandonment.claim_id !== o.claim_id || adminAbandonment.worker_identity_digest !== o.claim_worker_identity_digest || adminAbandonment.original_revision + 1 !== o.revision || adminAbandonment.event_sequence !== o.revision || adminAbandonment.outcome !== "admin_abandoned" || adminAbandonment.result_absent !== 1 || adminAbandonment.cleanup_verified !== 0 || adminAbandonment.release_reason !== "cleanup_incomplete" || adminAbandonment.audit_digest !== digest(adminAbandonment.audit_json) || adminAbandonment.request_digest !== expectedRouteDigest || o.phase !== "released" || o.result_digest !== null || o.result_json !== null || o.result_commit_ref !== null || !Number.isFinite(Date.parse(adminAbandonment.abandoned_at))) fail2("admin_abandonment_projection_mismatch");
-            const terminalEvent = es.at(-1);
+            const terminalEvent = es.find((event) => event.sequence === adminAbandonment.event_sequence);
             let terminalEvidence;
             try {
               terminalEvidence = JSON.parse(terminalEvent.evidence_json);

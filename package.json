@@ -39,12 +39,16 @@
     "test:clean-entrypoints": "npm run build:test && node scripts/test-clean-entrypoints.mjs",
     "validate:plugin": "node scripts/validate-plugin.mjs",
     "check:generated": "node scripts/check-generated-artifacts.mjs",
+    "bridge:cli": "node dist/src/cli/main.js",
+    "web:console": "node dist/src/web/main.js",
     "cost-lab:web": "node tools/cost-lab/web-server.mjs",
-    "cost-lab:test": "node --test tools/cost-lab/test/*.test.mjs",
+    "cost-lab:test": "node --test --test-concurrency=1 tools/cost-lab/test/*.test.mjs",
     "admin:abandon-held-operation": "node plugins/codex-zcode-bridge/dist/admin-abandon-held-operation.mjs",
     "bridge:mcp": "node dist/src/mcp/main.js"
   },
   "bin": {
+    "zcode-bridge": "dist/src/cli/main.js",
+    "zcode-bridge-console": "dist/src/web/main.js",
     "zcode-bridge-mcp": "dist/src/mcp/main.js"
   },
   "devDependencies": {

@@ -175,22 +175,35 @@ var init_result_contract = __esm({
   }
 });
 
-// src/host/profile.ts
+// src/runtime/host-profile.ts
 import { homedir } from "node:os";
 import path2 from "node:path";
 function codexHostProfile(homeDirectory = homedir()) {
-  return { name: "codex-zcode-bridge", settingsDirectory: path2.join(homeDirectory, ".codex", "codex-zcode-bridge") };
+  return {
+    name: "codex-zcode-bridge",
+    settingsDirectory: path2.join(homeDirectory, ".codex", "codex-zcode-bridge")
+  };
 }
 function validateHostProfile(host) {
-  if (!host || typeof host.name !== "string" || !host.name.trim() || typeof host.settingsDirectory !== "string" || !path2.isAbsolute(host.settingsDirectory)) throw new Error("invalid Bridge host profile");
-  if (host.legacySettingsDirectories !== void 0 && (!Array.isArray(host.legacySettingsDirectories) || host.legacySettingsDirectories.some((directory) => typeof directory !== "string" || !path2.isAbsolute(directory)))) throw new Error("host migration directories must be absolute");
-  if (host.workerEntryPath !== void 0 && (typeof host.workerEntryPath !== "string" || !path2.isAbsolute(host.workerEntryPath))) throw new Error("host worker entry must be absolute");
-  if (host.instructions !== void 0 && typeof host.instructions !== "string") throw new Error("host instructions must be text");
-  if (host.defaultDataRoot !== void 0 && (typeof host.defaultDataRoot !== "string" || !path2.isAbsolute(host.defaultDataRoot))) throw new Error("host default data root must be absolute");
+  if (!host || typeof host.name !== "string" || !host.name.trim() || typeof host.settingsDirectory !== "string" || !path2.isAbsolute(host.settingsDirectory)) {
+    throw new Error("invalid Bridge host profile");
+  }
+  if (host.legacySettingsDirectories !== void 0 && (!Array.isArray(host.legacySettingsDirectories) || host.legacySettingsDirectories.some((directory) => typeof directory !== "string" || !path2.isAbsolute(directory)))) {
+    throw new Error("host migration directories must be absolute");
+  }
+  if (host.workerEntryPath !== void 0 && (typeof host.workerEntryPath !== "string" || !path2.isAbsolute(host.workerEntryPath))) {
+    throw new Error("host worker entry must be absolute");
+  }
+  if (host.instructions !== void 0 && typeof host.instructions !== "string") {
+    throw new Error("host instructions must be text");
+  }
+  if (host.defaultDataRoot !== void 0 && (typeof host.defaultDataRoot !== "string" || !path2.isAbsolute(host.defaultDataRoot))) {
+    throw new Error("host default data root must be absolute");
+  }
   return host;
 }
-var init_profile = __esm({
-  "src/host/profile.ts"() {
+var init_host_profile = __esm({
+  "src/runtime/host-profile.ts"() {
     "use strict";
   }
 });
@@ -1109,7 +1122,7 @@ var init_resolver = __esm({
     "use strict";
     init_errors();
     init_paths();
-    init_profile();
+    init_host_profile();
     PERSISTED_RUNTIME_KEYS = [
       "ZCODE_BRIDGE_NODE",
       "ZCODE_BRIDGE_ZCODE_CJS",
@@ -1591,7 +1604,7 @@ var execFileAsync, OFFICIAL_CODING_PLAN_PROVIDER_ID, OFFICIAL_APPSERVER_COMPATIB
 var init_official_app_server_runtime = __esm({
   "src/runtime/official-app-server-runtime.ts"() {
     "use strict";
-    init_profile();
+    init_host_profile();
     init_desktop_host_launch();
     init_errors();
     init_node_runtime();
@@ -2758,7 +2771,7 @@ function windowsPowerShellExecutable() {
 }
 function windowsBatchQuery(pids, timeoutMs, onFailure) {
   return new Promise((resolve) => {
-    const script = `$ErrorActionPreference = 'Stop'; foreach ($id in @(${pids.join(",")})) { try { $target = [System.Diagnostics.Process]::GetProcessById($id); try { [Console]::Out.WriteLine(("{0}|{1}" -f $id, $target.StartTime.Ticks)) } finally { $target.Dispose() } } catch [System.ArgumentException] { } }; [Console]::Out.WriteLine('bridge_probe_complete_v1')`;
+    const script = `$ErrorActionPreference = 'Stop'; foreach ($id in @(${pids.join(",")})) { $target = $null; try { try { $target = [System.Diagnostics.Process]::GetProcessById($id) } catch [System.ArgumentException] { continue }; try { [Console]::Out.WriteLine(("{0}|{1}" -f $id, $target.StartTime.Ticks)) } catch [System.InvalidOperationException] { continue } } finally { if ($null -ne $target) { $target.Dispose() } } }; [Console]::Out.WriteLine('bridge_probe_complete_v1')`;
     const child = spawn(windowsPowerShellExecutable(), ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script], {
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
@@ -4666,7 +4679,7 @@ function windowsTreeTransactionScript() {
 async function openPowerShellTreeTransaction() {
   return PowerShellTreeTransaction.start();
 }
-var CIM_REPRESENTATION_INTERVAL_TICKS, WindowsTreeCleanupError, TRANSPORT_MAX_LINE_BYTES, TRANSPORT_MAX_BUFFERED_BYTES, TRANSPORT_MAX_BUFFERED_LINES, TRANSPORT_MAX_ENUM_ROWS, TRANSPORT_TOTAL_SESSION_MS_DEFAULT, TRANSPORT_HELPER_STARTUP_MS_DEFAULT, PowerShellTreeTransaction;
+var CIM_REPRESENTATION_INTERVAL_TICKS, WindowsTreeCleanupError, TRANSPORT_MAX_LINE_BYTES, TRANSPORT_MAX_BUFFERED_BYTES, TRANSPORT_MAX_BUFFERED_LINES, TRANSPORT_MAX_ENUM_ROWS, TRANSPORT_TOTAL_SESSION_MS_DEFAULT, TRANSPORT_ENUM_RESPONSE_MS, TRANSPORT_HELPER_STARTUP_MS_DEFAULT, PowerShellTreeTransaction;
 var init_windows_process_cleanup = __esm({
   "src/adapters/windows-process-cleanup.ts"() {
     "use strict";
@@ -4686,6 +4699,7 @@ var init_windows_process_cleanup = __esm({
     TRANSPORT_MAX_BUFFERED_LINES = 65536;
     TRANSPORT_MAX_ENUM_ROWS = 4096;
     TRANSPORT_TOTAL_SESSION_MS_DEFAULT = 12e4;
+    TRANSPORT_ENUM_RESPONSE_MS = 6e4;
     TRANSPORT_HELPER_STARTUP_MS_DEFAULT = 6e4;
     PowerShellTreeTransaction = class _PowerShellTreeTransaction {
       #child;
@@ -4840,11 +4854,11 @@ var init_windows_process_cleanup = __esm({
       }
       async enumerate() {
         this.#child.stdin.write("enum\n");
-        const begin = await this.#nextLine(2e4, "enum begin");
+        const begin = await this.#nextLine(TRANSPORT_ENUM_RESPONSE_MS, "enum begin");
         if (begin !== "ENUM_BEGIN") throw new Error("process_tree_snapshot_invalid: protocol missing");
         const rows = [];
         for (; ; ) {
-          const line = await this.#nextLine(2e4, "enum row");
+          const line = await this.#nextLine(TRANSPORT_ENUM_RESPONSE_MS, "enum row");
           if (line === "ENUM_END") break;
           const match = /^R (\d{1,12}) (\d{1,12}) (\d{1,25}|unknown) (\d{1,25}|unknown)$/u.exec(line);
           if (!match) throw new Error("process_tree_snapshot_invalid: malformed identity");
@@ -27299,7 +27313,7 @@ var init_zcode_app_server_adapter = __esm({
     init_account_provider();
     init_session_preferences();
     init_task_timeout();
-    init_profile();
+    init_host_profile();
     init_params();
     init_host();
     init_load_backend();
@@ -30133,7 +30147,7 @@ function fingerprintRuntimeArtifact(filePath) {
 }
 
 // src/worker/worker-main.ts
-init_profile();
+init_host_profile();
 
 // src/runtime/start-plan-secret-redactor.ts
 import { createHash as createHash2 } from "node:crypto";

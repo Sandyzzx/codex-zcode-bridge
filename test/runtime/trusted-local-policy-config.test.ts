@@ -3,8 +3,8 @@ import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { createTrustedLocalCandidateContext } from "../../src/host/stdio.js";
-import { codexHostProfile } from "../../src/host/profile.js";
+import { createTrustedLocalCandidateContext } from "../../src/executor/production-composition.js";
+import { codexHostProfile } from "../../src/runtime/host-profile.js";
 import { isTrustedLocalStdioContext } from "../../src/runtime/trusted-local-deployment.js";
 import { createHostTrustedLocalPolicyProvider, loadTrustedLocalPolicyConfig } from "../../src/runtime/trusted-local-policy-config.js";
 import { resolveTrustedLocalExecutionProfile } from "../../src/runtime/trusted-local-profile.js";

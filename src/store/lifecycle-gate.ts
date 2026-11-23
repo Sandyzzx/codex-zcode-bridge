@@ -1,4 +1,5 @@
 import { MAX_WORKER_RESULT_FRAME_BYTES, canonicalTaskResult, submissionFailure, assertWorkerResultEnvelope } from "../result-contract.mjs";
+import { EXECUTOR_LEASE_FILE } from "../executor/lease.js";
 /**
  * SQLite lifecycle composition shared by production startup and isolated tests.
  */
@@ -30,8 +31,8 @@ import type {
   CandidateWorkerResultFrame,
 } from "../sqlite-candidate/wp6c/fake-result-adapter.js";
 import { isTrustedLocalStdioContext, type TrustedLocalStdioContext } from "../runtime/trusted-local-deployment.js";
-import type { BridgeHostProfile } from "../host/profile.js";
-import { codexHostProfile, validateHostProfile } from "../host/profile.js";
+import type { BridgeHostProfile } from "../runtime/host-profile.js";
+import { codexHostProfile, validateHostProfile } from "../runtime/host-profile.js";
 import {
   currentSqliteRuntimeRosterDigest,
   SQLITE_CUTOVER_VERIFIER_VERSION,
@@ -50,7 +51,10 @@ import { WorkerHandleGate } from "../runtime/start-plan-handle-gate.js";
 import type { WindowsTreeTransactionLike } from "../adapters/windows-process-cleanup.js";
 
 const DEFAULT_PROCESS_PROBE_TIMEOUT_MS = 5_000;
-const DEFAULT_PROCESS_TREE_PROBE_TIMEOUT_MS = 30_000;
+// Hosted Windows runners can take substantially longer than an interactive
+// workstation to enumerate the process table. The timeout only bounds proof
+// collection; it never substitutes for a clean tree scan.
+const DEFAULT_PROCESS_TREE_PROBE_TIMEOUT_MS = 90_000;
 // Share a verified process-tree stop across Managers using the same local
 // SQLite Authority. Keep it until Release so an earlier alive probe cannot
 // trigger a second signal from a competing Recovery.
@@ -151,6 +155,11 @@ interface ClaimOnlyPort {
   commitPermanentClaim: Parameters<typeof verifyHandshakeAndCommitClaim>[0]["commitPermanentClaim"];
   readLifecycleEvents(operationId: string, options?: { readonly afterSequence?: number; readonly limit?: number }): readonly Readonly<Record<string, unknown>>[];
   readTaskProjection(taskId: string): unknown;
+  readTaskProjections(options?: {
+    readonly afterTaskId?: string | null;
+    readonly limit?: number;
+    readonly status?: string | null;
+  }): unknown;
   readAttempt(taskId: string, attempt: number): unknown;
   commitResult(input: CandidateResultCommitInput): CandidateResultCommitOutcome;
   recordResultSubmissionFailure?(input: Readonly<Record<string, unknown>>, reason: string): unknown;
@@ -189,6 +198,19 @@ interface ClaimOnlyPort {
     readonly result_commit_ref?: string;
     readonly result_digest?: string;
     readonly worker_identity_digest?: string;
+  }): Readonly<Record<string, unknown>>;
+  recordExecutorWakeObservation(input: {
+    readonly operation_id: string;
+    readonly task_id: string;
+    readonly attempt: number;
+    readonly generation: number;
+    readonly state: "intent" | "queued" | "submission_unknown" | "turn_started" | "web_notify";
+    readonly thread_id: string | null;
+    readonly delivery_id: string;
+    readonly policy_digest: string;
+    readonly authorization_digest: string;
+    readonly reason_code: string;
+    readonly queue_message_id?: string;
   }): Readonly<Record<string, unknown>>;
   requestCancellation(input: Readonly<Record<string, unknown>>, evidence: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>>;
   recordCancellationVerification(input: Readonly<Record<string, unknown>>, evidence: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>>;
@@ -429,6 +451,8 @@ export interface ClaimOnlyDriverOptions {
   readonly onWorkerDiagnosticLine?: (line: string) => void;
   /** Test-only seam for the explicit Recovery stop path; production always uses identity-bound OS termination. */
   readonly testStopWorkerForRecovery?: (pid: number, expectedFingerprint: string) => Promise<void>;
+  /** Test-only injection for the running-cancel termination boundary. */
+  readonly testTerminateWorkerTree?: (pid: number, expectedFingerprint: string) => Promise<unknown>;
   /** Test-only barrier immediately before evidence/CAS writes in a cleanup Recovery race. */
   readonly testBeforeRecoveryWrite?: (operationId: string, phase: string) => Promise<void>;
   /** Synthetic integration test only. Production host composition never enables this driver. */
@@ -1226,6 +1250,7 @@ function assertFreshBootstrapRootEmpty(root: string, databaseFileName: string): 
   const allowed = new Set([
     `${databaseFileName}.bootstrap-pending.json`,
     `${databaseFileName}.bootstrap.lock`,
+    EXECUTOR_LEASE_FILE,
   ]);
   for (const name of readdirSync(root)) {
     if (!allowed.has(name)) throw new LifecycleGateError("sqlite_existing_state_incomplete", `unexpected SQLite root entry: ${name}`);
@@ -1385,6 +1410,11 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
   provisionCapacity(input: unknown): unknown;
   createTask(task: CandidateTaskPackage): unknown;
   readTaskLifecycle(taskId: string): unknown;
+  readTaskProjections(options?: {
+    readonly afterTaskId?: string | null;
+    readonly limit?: number;
+    readonly status?: string | null;
+  }): unknown;
   readTaskAttention(taskId: string): unknown;
   readTaskEvents(taskId: string, options?: { readonly afterCursor?: number; readonly limit?: number }): LifecycleEventsPage;
   readCommittedResult(operationId: string): CandidateCommittedResult | null;
@@ -1413,6 +1443,19 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
     readonly result_commit_ref?: string;
     readonly result_digest?: string;
     readonly worker_identity_digest?: string;
+  }): Readonly<Record<string, unknown>>;
+  recordExecutorWakeObservation(input: {
+    readonly operation_id: string;
+    readonly task_id: string;
+    readonly attempt: number;
+    readonly generation: number;
+    readonly state: "intent" | "queued" | "submission_unknown" | "turn_started" | "web_notify";
+    readonly thread_id: string | null;
+    readonly delivery_id: string;
+    readonly policy_digest: string;
+    readonly authorization_digest: string;
+    readonly reason_code: string;
+    readonly queue_message_id?: string;
   }): Readonly<Record<string, unknown>>;
   requestCancellation(input: Readonly<Record<string, unknown>>, evidence: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>>;
   recordCancellationVerification(input: Readonly<Record<string, unknown>>, evidence: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>>;
@@ -2235,6 +2278,7 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
     },
     createTask: (task) => port.createTask(task),
     readTaskLifecycle: (taskId) => port.readTaskLifecycle(taskId),
+    readTaskProjections: (options) => port.readTaskProjections(options),
     readTaskAttention: (taskId) => port.readTaskAttention(taskId),
     readTaskEvents: (taskId, options) => port.readTaskEvents(taskId, options),
     readCommittedResult: (operationId) => port.readCommittedResult(operationId),
@@ -2249,6 +2293,7 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
     }),
     cancelQueuedAttempt: (input) => port.cancelQueuedAttempt(input),
     userAuthorizedReleaseUnverifiedOperation: (input) => port.userAuthorizedReleaseUnverifiedOperation(input),
+    recordExecutorWakeObservation: (input) => port.recordExecutorWakeObservation(input),
     requestCancellation: (input, evidence) => port.requestCancellation(input, evidence),
     recordCancellationVerification: (input, evidence) => port.recordCancellationVerification(input, evidence),
     async cancelRunning(taskId, attempt) {
@@ -2338,11 +2383,32 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
         return { duplicate: true, result_won: false, operation_id: operationId, cancel_id: cancelId,
           phase: operation.phase, cancellation_verification_digest: verificationDigest };
       }
-      const terminationState: "terminated" | "already_exited" = identityVerdict.state === "alive" ? "terminated" : "already_exited";
+      let terminationState: "terminated" | "already_exited" = identityVerdict.state === "alive" ? "terminated" : "already_exited";
       if (identityVerdict.state === "alive") {
-        const terminated = await terminateProcessTree(processIdentity.pid, { graceMs: 500, killWaitMs: 5_000,
-          expectedRootFingerprint: processIdentity.fingerprint });
-        if (terminated.verified !== true) throw new LifecycleGateError("cancellation_tree_termination_unverified");
+        try {
+          if (options.testTerminateWorkerTree) {
+            await options.testTerminateWorkerTree(processIdentity.pid, processIdentity.fingerprint);
+          } else {
+            const terminated = await terminateProcessTree(processIdentity.pid, { graceMs: 500, killWaitMs: 5_000,
+              expectedRootFingerprint: processIdentity.fingerprint });
+            if (terminated.verified !== true) throw new LifecycleGateError("cancellation_tree_termination_unverified");
+          }
+        } catch (error) {
+          // Windows may refuse a fresh tree transaction if the exact root exits
+          // between the identity probe and transaction setup. Only that known
+          // root-exit race can be resolved by a fresh exact probe; the durable
+          // recorded-tree scan below still has to prove every descendant gone.
+          if (errorCode(error) !== "process_tree_root_exited") throw error;
+          const exited = await probeWithDeadline(probe, {
+            pid: processIdentity.pid,
+            identity: processIdentity,
+          }, processProbeTimeoutMs);
+          if (exited.status !== "resolved" || exited.verdict?.state !== "exited") {
+            throw new LifecycleGateError("cancellation_tree_termination_unverified");
+          }
+          terminationState = "already_exited";
+          options.onStage?.("cancel_termination_root_exited", { pid: processIdentity.pid });
+        }
       }
       let workerExitCode: number | null = null;
       if (active?.child) {

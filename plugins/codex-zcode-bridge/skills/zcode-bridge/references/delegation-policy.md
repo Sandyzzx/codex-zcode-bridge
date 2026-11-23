@@ -1,11 +1,16 @@
 # 派发策略
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-11
-> Last verified: 2026-11-11，核对 ADR-010/015、当前 MCP schema 与 Skill 路由；真实模型遵循率 NOT RUN。
+> Last updated: 2026-11-22
+> Last verified: 2026-11-22，核对 ADR-010/015/052、当前 MCP schema 与 Skill 路由；真实模型遵循率 NOT RUN。
 > Verified against: 372e90622772b070357a278f1da3dea58fa42dee（基线；本候选离线证据见 docs/research/master-skill-simplification-20261111.md）
 
 本文件假设入口的 Bridge 调用授权已确认，只决定任务形态。授权不确定时回到入口，不先选策略。
+
+任务形态与交接机制是正交维度。本文件只选择交付范围；受理后是 Async Handoff
+还是当前 Turn 持续跟进，由 [async-handoff.md](async-handoff.md) 依运行证据决定。
+不得把 `async_wake`、`foreground` 或类似名称写入 MCP 字段、TaskPackage 或
+Task 状态。
 
 | 策略 | 适用边界 | 验收 |
 |---|---|---|

@@ -14,7 +14,7 @@ import test from "node:test";
 import { buildTaskResult } from "../src/manager/normalize.js";
 import { ZCodeAppServerTestAdapter } from "../src/adapters/zcode-app-server-adapter.js";
 import { type FailureFactsV1 } from "../src/diagnostics/failure-facts.js";
-import { formatWorkerFailureFactsLine } from "../src/host/stdio.js";
+import { formatWorkerFailureFactsLine } from "../src/executor/production-composition.js";
 import { BridgeError } from "../src/runtime/errors.js";
 import type { TaskPackage, ZCodeRuntimeConfig } from "../src/interfaces.js";
 import type { ZCodeRunOutcome } from "../src/adapters/run-outcome.js";

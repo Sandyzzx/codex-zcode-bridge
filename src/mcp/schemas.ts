@@ -5,43 +5,31 @@
 // Additive optional output fields (observation, scan cursor/metrics, usage)
 // keep old clients working: they may ignore unknown optional keys.
 import * as z from "zod/v4";
+import {
+  TASK_ID_PATTERN,
+  taskIdSchema,
+  zcodeContinueInputSchema,
+  zcodeDefaultModelInputSchema,
+  zcodeEventsInputSchema,
+  zcodeInteractionReplyInputSchema,
+  zcodeModelCatalogInputSchema,
+  zcodeTaskInputSchema,
+  taskIdOnlyInputSchema,
+} from "../api-schemas.js";
 
-export const TASK_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
-
-export const taskIdSchema = z
-  .string()
-  .regex(TASK_ID_PATTERN, `task_id must match ${TASK_ID_PATTERN.source}`);
+export {
+  TASK_ID_PATTERN,
+  taskIdSchema,
+  taskIdOnlyInputSchema,
+  zcodeTaskInputSchema,
+  zcodeContinueInputSchema,
+  zcodeEventsInputSchema,
+  zcodeInteractionReplyInputSchema,
+  zcodeModelCatalogInputSchema,
+  zcodeDefaultModelInputSchema,
+};
 
 const stringArray = z.array(z.string());
-
-export const zcodeTaskInputSchema = z
-  .strictObject({
-    task_id: taskIdSchema,
-    workspace: z.string().min(1),
-    worktree_path: z.string().min(1).optional(),
-    model: z.strictObject({
-      // ADR-031: provider_id is optional so a plain model (or a
-      // `<ModelId>-StartPlan` alias) is routed once at task creation via
-      // ZCODE_BRIDGE_PREFER_STARTPLAN; an explicit provider stays mandatory
-      // when supplied.
-      provider_id: z.string().trim().min(1).optional(),
-      model_id: z.string().trim().min(1),
-      reasoning_level: z.string().trim().min(1).optional(),
-    }).optional(),
-    timeout_ms: z.number().int().min(60_000).max(14_400_000).optional(),
-    objective: z.string().min(1),
-    requirements: stringArray,
-    allowed_paths: stringArray,
-    forbidden_paths: stringArray,
-    acceptance_criteria: stringArray,
-    test_commands: stringArray,
-    context: z.string().optional(),
-  })
-  .describe("Full TaskPackage; workspace is the the calling host project root. Optional worktree_path is an existing execution directory selected and prepared by the calling host; the Bridge never creates or selects worktrees. The five array fields must be present (empty allowed), context is optional.");
-
-export const taskIdOnlyInputSchema = z.strictObject({
-  task_id: z.string().min(1),
-});
 
 export const zcodeResultInputSchema = taskIdOnlyInputSchema.extend({
   view: z.enum(["summary", "full"]).optional(),
@@ -50,43 +38,6 @@ export const zcodeResultInputSchema = taskIdOnlyInputSchema.extend({
 
 export const zcodeFeedbackInputSchema = z.strictObject({
   task_id: taskIdSchema,
-});
-
-export const zcodeContinueInputSchema = z.strictObject({
-  task_id: z.string().min(1),
-  feedback: z.string().min(1),
-  additional_requirements: z.array(z.string()).optional(),
-  operation_id: z.string().trim().min(1).max(128).optional(),
-});
-
-export const zcodeEventsInputSchema = z.strictObject({
-  task_id: taskIdSchema,
-  after_seq: z.number().int().nonnegative().optional(),
-  limit: z.number().int().min(1).max(200).optional(),
-  wait_ms: z.number().int().min(0).max(25_000).optional(),
-  view: z.enum(["raw", "summary"]).optional(),
-  include_attempt: z.boolean().optional().describe("Include each event's persisted attempt number."),
-  scan_cursor: z.string().max(2_048).optional(),
-  max_bytes: z.number().int().min(1_024).max(33_554_432).optional(),
-  wait_for: z.literal("attention").optional(),
-});
-
-export const zcodeInteractionReplyInputSchema = z.strictObject({
-  task_id: taskIdSchema,
-  request_id: z.string().trim().min(1).max(512),
-  decision: z.enum(["allow", "deny", "accept", "decline"]),
-  answers: z.record(z.string(), z.string()).optional(),
-  reason: z.string().max(2_000).optional(),
-});
-
-export const zcodeModelCatalogInputSchema = z.strictObject({
-  workspace: z.string().trim().min(1),
-});
-
-export const zcodeDefaultModelInputSchema = z.strictObject({
-  provider_id: z.string().trim().min(1),
-  model_id: z.string().trim().min(1),
-  reasoning_level: z.string().trim().min(1).optional(),
 });
 
 // ---- output schemas (structured content validation) ----

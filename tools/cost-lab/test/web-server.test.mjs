@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import http from "node:http";
 import path from "node:path";
 import test from "node:test";
 
@@ -198,6 +199,49 @@ test("local server serves the real UI and performs no model request on page load
     assert.equal(runnerCalls, 0);
   } finally {
     await fixture.cleanup();
+  }
+});
+
+test("mounted Cost Lab APIs reuse the Console origin and Authority evidence root", async () => {
+  await mkdir(RUN_ROOT, { recursive: true });
+  const root = await mkdtemp(path.join(RUN_ROOT, "cost-lab-mounted-"));
+  const evidenceRoot = path.join(root, ".run");
+  const historyPath = path.join(evidenceRoot, "cost-lab-web", "history.json");
+  const startPlanHistoryPath = path.join(evidenceRoot, "cost-lab-web", "startplan-history.json");
+  const app = createCostLabWebServer({
+    projectRoot: path.join(root, "package"),
+    evidenceRoot,
+    historyPath,
+    startPlanHistoryPath,
+    apiMountPath: "/api/cost-lab",
+    inspectEnvironment: async () => environment(),
+  });
+  const host = http.createServer((request, response) => {
+    void app.handleRequest(request, response).catch((error) => {
+      response.writeHead(500, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ ok: false, error: { message: error.message } }));
+    });
+  });
+  try {
+    await new Promise((resolve, reject) => {
+      host.once("error", reject);
+      host.listen(0, "127.0.0.1", resolve);
+    });
+    const address = host.address();
+    assert.ok(address && typeof address !== "string");
+    const origin = `http://127.0.0.1:${address.port}`;
+    await app.mountEndpoints({ origin, port: address.port });
+
+    const result = await request(origin, "/api/cost-lab/session");
+    assert.equal(result.response.status, 200);
+    assert.equal(result.json.data.provider, "account:bigmodel-individual-coding-plan");
+    const environmentResult = await request(origin, "/api/cost-lab/environment");
+    assert.equal(environmentResult.response.status, 200);
+    assert.equal(environmentResult.json.data.zcode.runtime_status, "OFFICIAL_RUNTIME_VERIFIED");
+  } finally {
+    await app.close();
+    await new Promise((resolve) => host.close(() => resolve()));
+    await rm(root, { recursive: true, force: true });
   }
 });
 

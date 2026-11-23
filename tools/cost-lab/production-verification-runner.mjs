@@ -1,10 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
-import { lstatSync, readFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { access, lstat, mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { resolveBillingDataBaseDir } from "./path-discovery.mjs";
 import { inspectOfficialRuntimeAssets } from "./official-runtime-manifest.mjs";
@@ -89,14 +90,30 @@ export function createProductionCodingPlanVerificationRunner(options = {}) {
       "bridge.mjs",
     ),
   );
+  const executorEntryPath = path.resolve(
+    options.executorEntryPath ?? path.join(
+      projectRoot,
+      "plugins",
+      "codex-zcode-bridge",
+      "dist",
+      "executor.mjs",
+    ),
+  );
   const now = options.now ?? (() => new Date());
   const createId = options.createId ?? randomUUID;
   const connectClient = options.connectClient ?? connectBridgeMcpClient;
+  const manageExecutor = options.manageExecutor ?? options.connectClient === undefined;
+  const startExecutorProcess = options.startExecutorProcess ?? startIsolatedExecutor;
   const inspectRuntime = options.inspectRuntime ?? inspectOfficialRuntimeAssets;
   const pollIntervalMs = options.pollIntervalMs ?? 2_000;
   const taskTimeoutMs = options.taskTimeoutMs ?? 900_000;
   const bridgeShutdownTimeoutMs = options.bridgeShutdownTimeoutMs ?? 60_000;
-  const releaseTimeoutMs = options.releaseTimeoutMs ?? 15_000;
+  const executorReadyTimeoutMs = options.executorReadyTimeoutMs ?? 30_000;
+  const executorShutdownTimeoutMs = options.executorShutdownTimeoutMs ?? 120_000;
+  // Cleanup may legitimately spend the lifecycle gate's full 90 second
+  // process-tree probe budget before it can persist cleanup_verified and
+  // released. Keep observation strictly longer than that bounded work.
+  const releaseTimeoutMs = options.releaseTimeoutMs ?? 120_000;
 
   return async function runVerification(input) {
     validateVerificationInput(input);
@@ -156,12 +173,36 @@ export function createProductionCodingPlanVerificationRunner(options = {}) {
       await writeRuntimeConfig(layout, config);
       const env = buildIsolatedMcpEnvironment(layout, process.env);
       const stderr = createBoundedStderrCollector();
+      let executor;
       let connected;
+      let runtimeEvidence;
       let taskId = null;
       let released = false;
+      let status = null;
+      let events = null;
+      let executorStartAttempted = false;
+      let bridgeConnectAttempted = false;
       try {
-        phase = "bridge_connect";
+        phase = "executor_start";
         cleanupSafe = false;
+        if (manageExecutor) {
+          executorStartAttempted = true;
+          executor = await startExecutorProcess({
+            command: options.nodeExecutable ?? process.execPath,
+            executorEntryPath,
+            bridgeEntryPath,
+            dataRoot: layout.bridgeData,
+            settingsDirectory: layout.settings,
+            cwd: projectRoot,
+            env,
+            stderr,
+            readyTimeoutMs: executorReadyTimeoutMs,
+            shutdownTimeoutMs: executorShutdownTimeoutMs,
+          });
+          assertNotAborted(input.signal);
+        }
+        phase = "bridge_connect";
+        bridgeConnectAttempted = true;
         connected = await connectClient({
           command: options.nodeExecutable ?? process.execPath,
           args: [bridgeEntryPath],
@@ -181,7 +222,7 @@ export function createProductionCodingPlanVerificationRunner(options = {}) {
         if (receipt.task_id !== taskId) throw new Error("bridge_task_receipt_mismatch");
 
         phase = "task_poll";
-        const status = await waitForTerminalStatus(client, taskId, {
+        status = await waitForTerminalStatus(client, taskId, {
           signal: input.signal,
           timeoutMs: taskTimeoutMs,
           pollIntervalMs,
@@ -189,7 +230,7 @@ export function createProductionCodingPlanVerificationRunner(options = {}) {
         phase = "result_read";
         const result = await callBridgeTool(client, "zcode_result", { task_id: taskId });
         phase = "events_read";
-        const events = await collectTaskEvents(client, taskId);
+        events = await collectTaskEvents(client, taskId);
         phase = "release_wait";
         released = await waitForRelease(client, taskId, status, events, releaseTimeoutMs, pollIntervalMs);
         if (!released) throw new Error("bridge_release_unverified");
@@ -210,13 +251,26 @@ export function createProductionCodingPlanVerificationRunner(options = {}) {
         const installedRuntimeObserved = typeof candidateDigest === "string" &&
           /^[0-9a-f]{64}$/u.test(candidateDigest) &&
           stderr.markers().includes(`[bridge] worker installed-runtime ${taskId} ${status.attempt} ${candidateDigest}`);
-        const runtimeEvidence = {
+        runtimeEvidence = {
           status: installedRuntimeObserved
             ? runtime.runtime_status === "OFFICIAL_RUNTIME_EXPERIMENTAL"
               ? "EXPERIMENTAL"
               : "PASS"
             : "UNVERIFIED",
-          bridge_path: "BUILT_MCP_STDIO_PRODUCTION",
+          bridge_path: "BUILT_MCP_STDIO_WITH_INDEPENDENT_EXECUTOR",
+          executor: executor
+            ? {
+                pid: executor.pid,
+                lease_id: executor.ready?.lease_id ?? null,
+                ready_observed: true,
+                shutdown: "PENDING",
+              }
+            : {
+                pid: null,
+                lease_id: null,
+                ready_observed: false,
+                shutdown: "EXTERNAL_TEST_FIXTURE",
+              },
           isolated_host_profile: true,
           task_id: taskId,
           attempt: status.attempt,
@@ -303,6 +357,21 @@ export function createProductionCodingPlanVerificationRunner(options = {}) {
           },
         };
       } catch (error) {
+        if (error && typeof error === "object") {
+          error.executor_pid ??= executor?.pid ?? null;
+          if (executor) error.executor_lease_id = executor.ready?.lease_id ?? null;
+          if (!released && taskId && connected?.client) {
+            error.release_diagnostics = await captureReleaseDiagnostics({
+              client: connected.client,
+              taskId,
+              status,
+              events,
+              stderr,
+              executor,
+              releaseTimeoutMs,
+            });
+          }
+        }
         if (taskId && connected?.client && !released) {
           await withTimeout(
             callBridgeTool(connected.client, "zcode_cancel", { task_id: taskId }).catch(() => undefined),
@@ -317,18 +386,47 @@ export function createProductionCodingPlanVerificationRunner(options = {}) {
         if (markerCode && error && typeof error === "object") error.code = markerCode;
         throw error;
       } finally {
+        let mcpClosed = connected === undefined && !bridgeConnectAttempted;
         if (connected) {
           const closed = await withTimeout(
             connected.close(),
             bridgeShutdownTimeoutMs,
             "bridge_mcp_shutdown_timeout",
           ).then(() => true, () => false);
-          cleanupSafe = closed && (!taskId || released);
+          mcpClosed = closed;
           if (released && !closed) {
             phase = "bridge_shutdown";
             throw new Error("bridge_mcp_shutdown_unverified");
           }
         }
+        let executorClosed = executor === undefined && !executorStartAttempted;
+        if (executor) {
+          const shutdown = await withTimeout(
+            executor.stop(),
+            executorShutdownTimeoutMs,
+            "cost_lab_executor_shutdown_timeout",
+          ).catch((error) => ({
+            status: "release_unknown",
+            blockers: [error instanceof Error ? error.message : String(error)],
+          }));
+          executorClosed = shutdown?.status === "closed";
+          if (partialEvidence?.executor) {
+            partialEvidence.executor.shutdown = shutdown?.status ?? "UNKNOWN";
+          }
+          if (runtimeEvidence?.executor) {
+            runtimeEvidence.executor.shutdown = shutdown?.status ?? "UNKNOWN";
+          }
+          if (taskId && !released) {
+            // A blocked task must keep the Executor, Store, and ownership record
+            // available for diagnosis. Do not force process termination.
+            cleanupSafe = false;
+          } else if (!executorClosed) {
+            cleanupSafe = false;
+            phase = "executor_shutdown";
+            throw new Error(`cost_lab_executor_shutdown_${shutdown?.status ?? "unknown"}`);
+          }
+        }
+        cleanupSafe = mcpClosed && executorClosed && (!taskId || released);
       }
     } catch (error) {
       decorateVerificationError(error, phase);
@@ -365,6 +463,106 @@ async function waitForRelease(client, taskId, status, events, timeoutMs, pollInt
   return false;
 }
 
+async function captureReleaseDiagnostics(input) {
+  const diagnostics = {
+    stage: "release_wait",
+    release_timeout_ms: input.releaseTimeoutMs,
+    task_id: input.taskId,
+    initial: summarizeTaskEvents(input.status, input.events),
+    executor: {
+      pid: input.executor?.pid ?? null,
+      lease_id: input.executor?.ready?.lease_id ?? null,
+    },
+    stderr_markers: input.stderr?.markers?.() ?? [],
+    final: null,
+    final_read_error: null,
+  };
+  try {
+    const status = await callBridgeTool(input.client, "zcode_status", { task_id: input.taskId });
+    const events = await collectTaskEvents(input.client, input.taskId);
+    diagnostics.final = summarizeTaskEvents(status, events);
+  } catch (error) {
+    diagnostics.final_read_error = {
+      code: typeof error?.code === "string" ? error.code : null,
+      message: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500),
+    };
+  }
+  return diagnostics;
+}
+
+function summarizeTaskEvents(status, events) {
+  const rows = Array.isArray(events) ? events : [];
+  const eventTypeCounts = Object.fromEntries(
+    [...new Set(rows.map((event) => event?.type).filter((type) => typeof type === "string"))]
+      .sort()
+      .map((type) => [type, rows.filter((event) => event?.type === type).length]),
+  );
+  const lifecycleTypes = new Set([
+    "result_committed",
+    "cleanup_pending",
+    "cleanup_verified",
+    "cleanup_unverified",
+    "cleanup_reverified",
+    "released",
+  ]);
+  const lifecycleEvents = rows
+    .filter((event) => lifecycleTypes.has(event?.type))
+    .slice(-20)
+    .map((event) => ({
+      seq: Number.isSafeInteger(event?.seq) ? event.seq : null,
+      at: typeof event?.at === "string" ? event.at.slice(0, 64) : null,
+      type: typeof event?.type === "string" ? event.type : "unknown",
+      summary: typeof event?.summary === "string" ? event.summary.slice(0, 500) : "",
+      details: pickReleaseDetails(event?.details),
+    }));
+  return {
+    status: summarizeStatus(status),
+    event_count: rows.length,
+    event_type_counts: eventTypeCounts,
+    lifecycle_events: lifecycleEvents,
+  };
+}
+
+function summarizeStatus(status) {
+  if (!status || typeof status !== "object" || Array.isArray(status)) return null;
+  const execution = status.execution_observation;
+  return {
+    task_id: typeof status.task_id === "string" ? status.task_id : null,
+    status: typeof status.status === "string" ? status.status : null,
+    attempt: Number.isSafeInteger(status.attempt) ? status.attempt : null,
+    worker_pid: Number.isSafeInteger(status.worker_pid) ? status.worker_pid : null,
+    error_code: typeof status.error_code === "string" ? status.error_code.slice(0, 200) : null,
+    execution_observation: execution && typeof execution === "object"
+      ? {
+          state: typeof execution.state === "string" ? execution.state : null,
+          observed_at: typeof execution.observed_at === "string" ? execution.observed_at.slice(0, 64) : null,
+          evidence_ref: typeof execution.evidence_ref === "string" ? execution.evidence_ref : null,
+        }
+      : null,
+  };
+}
+
+function pickReleaseDetails(details) {
+  if (!details || typeof details !== "object" || Array.isArray(details)) return null;
+  const keys = [
+    "cleanup_digest",
+    "reason",
+    "probe_state",
+    "outcome",
+    "recovery_disposition",
+    "process_tree_scan_clean",
+    "process_tree_root_observed",
+    "process_tree_probe_status",
+  ];
+  const selected = {};
+  for (const key of keys) {
+    const value = details[key];
+    if (typeof value === "string") selected[key] = value.slice(0, 256);
+    else if (typeof value === "boolean" || Number.isSafeInteger(value)) selected[key] = value;
+  }
+  return Object.keys(selected).length > 0 ? selected : null;
+}
+
 function verificationHour(usage, fallbackTimestamp) {
   const observedAt = usage?.observed_at;
   const timestamp = typeof observedAt === "string" && !Number.isNaN(new Date(observedAt).getTime())
@@ -398,13 +596,42 @@ function verificationRoots(projectRoot, id, configuredStateRootParent) {
   const runRoot = path.join(projectRoot, ".run", "cost-lab-web", "verifications", id);
   assertInside(path.join(projectRoot, ".run"), runRoot);
   const stateRootParent = configuredStateRootParent
-    ? path.resolve(configuredStateRootParent)
+    ? canonicalExistingPath(configuredStateRootParent)
     : defaultVerificationStateRootParent(projectRoot);
-  const stateRoot = path.join(stateRootParent, "cost-lab-web", "verification-state", id);
+  // Keep the canonical SQLite root short enough for the bootstrap stage file
+  // on Windows hosts whose temporary directory is exposed through an 8.3 alias.
+  const stateRoot = path.join(stateRootParent, "runs", id);
   if (isWithin(projectRoot, stateRoot)) {
     throw new Error("cost_lab_verification_state_inside_package_root");
   }
+  assertVerificationPathBudget(stateRoot);
   return Object.freeze({ runRoot, stateRoot });
+}
+
+function canonicalExistingPath(candidate) {
+  const resolved = path.resolve(candidate);
+  try {
+    // Windows temporary roots can expose an 8.3 alias (RUNNER~1). The
+    // Authority compares this path with realpath(native), so seal the parent
+    // identity before appending the isolated state directory.
+    return realpathSync.native(resolved);
+  } catch (error) {
+    if (error?.code === "ENOENT") return resolved;
+    throw error;
+  }
+}
+
+function assertVerificationPathBudget(stateRoot) {
+  if (process.platform !== "win32") return;
+  const bootstrapStage = path.join(
+    stateRoot,
+    "bridge-data",
+    "state",
+    `bridge.sqlite.bootstrap-${"0".repeat(36)}.stage`,
+  );
+  if (bootstrapStage.length >= 260) {
+    throw new Error("cost_lab_verification_state_root_too_long");
+  }
 }
 
 function defaultVerificationStateRootParent(projectRoot) {
@@ -453,7 +680,8 @@ function verificationLayout(root, stateRoot) {
     appData: path.join(root, "app-data"),
     localAppData: path.join(stateRoot, "local-app-data"),
     temp: path.join(root, "temp"),
-    bridgeData: path.join(stateRoot, "bridge-data"),
+    bridgeDataRoot: path.join(stateRoot, "bridge-data"),
+    bridgeData: path.join(stateRoot, "bridge-data", "state"),
     settings: path.join(root, "home", ".codex", "codex-zcode-bridge"),
     workspace: path.join(root, "workspace"),
   });
@@ -492,6 +720,7 @@ async function createIsolatedLayout(layout, taskMode) {
     layout.appData,
     layout.localAppData,
     layout.temp,
+    layout.bridgeDataRoot,
     layout.bridgeData,
     layout.settings,
     layout.workspace,
@@ -516,7 +745,7 @@ async function createIsolatedLayout(layout, taskMode) {
 function buildRuntimeConfig(layout, official, timeoutMs, provider) {
   return Object.freeze({
     ZCODE_BRIDGE_ZCODE_CJS: official.bundle,
-    ZCODE_BRIDGE_DATA_DIR: layout.bridgeData,
+    ZCODE_BRIDGE_DATA_DIR: layout.bridgeDataRoot,
     ZCODE_BRIDGE_TIMEOUT_MS: String(timeoutMs),
     ZCODE_BRIDGE_MAX_CONCURRENT_WORKERS: "1",
     ZCODE_BRIDGE_MODE: "yolo",
@@ -535,6 +764,15 @@ function buildRuntimeConfig(layout, official, timeoutMs, provider) {
 async function writeRuntimeConfig(layout, config) {
   const pathValue = path.join(layout.settings, "runtime-config.json");
   await writeFile(pathValue, `${JSON.stringify(config, null, 2)}\n`, {
+    encoding: "utf8",
+    flag: "wx",
+  });
+  const authorityPath = path.join(layout.settings, "authority.json");
+  await writeFile(authorityPath, `${JSON.stringify({
+    schema_version: 1,
+    authority: "sqlite",
+    data_root: layout.bridgeDataRoot,
+  }, null, 2)}\n`, {
     encoding: "utf8",
     flag: "wx",
   });
@@ -573,6 +811,181 @@ function buildIsolatedMcpEnvironment(layout, source) {
     TMP: layout.temp,
     TMPDIR: layout.temp,
   };
+}
+
+async function startIsolatedExecutor(options) {
+  await assertFile(options.executorEntryPath, "executor_build_missing");
+  const child = spawn(options.command, [
+    options.executorEntryPath,
+    "--data-root",
+    options.dataRoot,
+    "--bridge-entry",
+    options.bridgeEntryPath,
+    "--settings-directory",
+    options.settingsDirectory,
+  ], {
+    cwd: options.cwd,
+    env: options.env,
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
+  });
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk) => options.stderr?.capture(chunk));
+
+  let ready;
+  try {
+    ready = await waitForExecutorReady(child, options.readyTimeoutMs);
+  } catch (error) {
+    if (error && typeof error === "object") error.executor_pid = child.pid ?? null;
+    await terminateStartupFailure(child);
+    throw error;
+  }
+  let stopPromise;
+  return {
+    pid: child.pid ?? null,
+    ready,
+    stop() {
+      stopPromise ??= stopExecutorProcess(child, ready.pipe_name, options);
+      return stopPromise;
+    },
+  };
+}
+
+function waitForExecutorReady(child, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    let stdout = "";
+    let stderr = "";
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error(
+        `cost_lab_executor_ready_timeout${stderr.trim() ? `\n${stderr.trim()}` : ""}`,
+      ));
+    }, timeoutMs);
+    const cleanup = () => {
+      clearTimeout(timer);
+      child.stdout.off("data", onStdout);
+      child.stderr.off("data", onStderr);
+      child.off("error", onError);
+      child.off("exit", onExit);
+    };
+    const onStdout = (chunk) => {
+      stdout = `${stdout}${chunk}`.slice(-32_768);
+      const line = stdout.split(/\r?\n/u).find((value) => value.startsWith("EXECUTOR_READY "));
+      if (!line) return;
+      let value;
+      try {
+        value = JSON.parse(line.slice("EXECUTOR_READY ".length));
+      } catch {
+        cleanup();
+        reject(new Error("cost_lab_executor_ready_invalid"));
+        return;
+      }
+      if (typeof value?.lease_id !== "string" || typeof value?.pipe_name !== "string") {
+        cleanup();
+        reject(new Error("cost_lab_executor_ready_invalid"));
+        return;
+      }
+      cleanup();
+      child.stdout.resume();
+      resolve(value);
+    };
+    const onStderr = (chunk) => {
+      stderr = `${stderr}${chunk}`.slice(-8_192);
+    };
+    const onError = () => {
+      cleanup();
+      reject(new Error("cost_lab_executor_spawn_failed"));
+    };
+    const onExit = () => {
+      cleanup();
+      const code = executorFailureCode(stderr);
+      reject(new Error(
+        `${code ? `cost_lab_executor_start_${code}` : "cost_lab_executor_exited_before_ready"}`
+        + `\n${stderr.trim()}`,
+      ));
+    };
+    child.stdout.on("data", onStdout);
+    child.stderr.on("data", onStderr);
+    child.once("error", onError);
+    child.once("exit", onExit);
+  });
+}
+
+async function terminateStartupFailure(child) {
+  if (child.exitCode !== null) return;
+  try {
+    child.kill();
+  } catch {
+    return;
+  }
+  await waitForChildExit(child, 5_000).catch(() => undefined);
+}
+
+async function stopExecutorProcess(child, pipeName, options) {
+  if (child.exitCode !== null) {
+    return { status: child.exitCode === 0 ? "closed" : "release_unknown", blockers: [] };
+  }
+  let client;
+  try {
+    const module = await import(pathToFileURL(options.executorEntryPath).href);
+    if (typeof module.ExecutorControlClient !== "function") {
+      return { status: "release_unknown", blockers: ["executor_control_client_unavailable"] };
+    }
+    client = new module.ExecutorControlClient({ pipeName, connectTimeoutMs: 5_000 });
+    await client.connect();
+    const response = await client.request("shutdown", {});
+    const decision = response?.result;
+    if (!response?.ok || !decision || typeof decision.status !== "string") {
+      return {
+        status: "release_unknown",
+        blockers: [response?.error?.code ?? "executor_shutdown_response_invalid"],
+      };
+    }
+    if (decision.status !== "accepted") {
+      return {
+        status: decision.status,
+        blockers: Array.isArray(decision.blockers) ? decision.blockers : [],
+      };
+    }
+    const exitCode = await waitForChildExit(child, options.shutdownTimeoutMs);
+    return exitCode === 0
+      ? { status: "closed", blockers: [] }
+      : { status: "release_unknown", blockers: ["executor_exit_nonzero_or_unknown"] };
+  } catch (error) {
+    const exitCode = child.exitCode === null
+      ? await waitForChildExit(child, Math.min(options.shutdownTimeoutMs, 5_000)).catch(() => null)
+      : child.exitCode;
+    if (exitCode === 0) return { status: "closed", blockers: [] };
+    return {
+      status: "release_unknown",
+      blockers: [error && typeof error === "object" && typeof error.code === "string"
+        ? error.code
+        : "executor_shutdown_unknown"],
+    };
+  } finally {
+    client?.close();
+  }
+}
+
+function waitForChildExit(child, timeoutMs) {
+  if (child.exitCode !== null) return Promise.resolve(child.exitCode);
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      child.off("exit", onExit);
+      reject(new Error("cost_lab_executor_exit_timeout"));
+    }, timeoutMs);
+    const onExit = (code) => {
+      clearTimeout(timer);
+      resolve(code);
+    };
+    child.once("exit", onExit);
+  });
+}
+
+function executorFailureCode(stderr) {
+  const match = /EXECUTOR_(?:START_FAILED|STARTUP_FAILED)\s+([a-z0-9_:.-]+)/iu.exec(stderr);
+  return match?.[1]?.slice(0, 80) ?? null;
 }
 
 function buildTask(taskId, workspace, input) {

@@ -6,7 +6,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { RuntimeResolver, ZCodeRuntimeConfig } from "../interfaces.js";
-import { codexHostProfile, type BridgeHostProfile } from "../host/profile.js";
+import { codexHostProfile, type BridgeHostProfile } from "./host-profile.js";
 import { buildZCodeAppServerLaunch } from "./desktop-host-launch.js";
 import { BridgeError } from "./errors.js";
 import { isSupportedNodeVersion, SUPPORTED_NODE_RANGE } from "./node-runtime.js";

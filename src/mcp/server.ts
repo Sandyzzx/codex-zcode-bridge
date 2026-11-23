@@ -21,14 +21,9 @@ import type {
   TaskFeedbackSnapshotV01,
   ZCodeInteractionReplyInput,
 } from "../interfaces.js";
-import { TaskManagerError } from "../manager/errors.js";
-import { summarizeTaskResult } from "./result-summary.js";
-
-/** Public zcode_task input (ADR-031): model.provider_id is optional and is
- * resolved by the Authority's routing hook before persistence. */
-type ZcodeTaskInput = Omit<TaskPackage, "model"> & {
-  model?: { provider_id?: string; model_id: string; reasoning_level?: string };
-};
+import { TaskManagerError } from "../task-errors.js";
+import { summarizeTaskResult } from "../result-summary.js";
+import type { ZcodeTaskInput } from "../api-schemas.js";
 import {
   taskReceiptSchema,
   zcodeResultInputSchema,
@@ -48,17 +43,15 @@ import {
   taskFeedbackSnapshotV01Schema,
   zcodeFeedbackInputSchema,
 } from "./schemas.js";
-import type { DoctorReport } from "../runtime/doctor.js";
-import { BridgeError } from "../runtime/errors.js";
-import type { ZCodeModelSettings } from "../runtime/model-settings.js";
+import type { McpDoctorReport, McpModelSettings } from "./contracts.js";
 
 export const SERVER_NAME = "codex-zcode-bridge";
 export const SERVER_VERSION = "2.0.0-preview.13"; // x-release-please-version
 
 export interface BridgeServerOptions {
   taskManager: TaskManager & Partial<Pick<ProgressTaskManager, "getEvents" | "getFeedback" | "getAttention" | "replyToInteraction">>;
-  doctor?: () => Promise<DoctorReport>;
-  modelSettings?: Pick<ZCodeModelSettings, "listModels" | "getDefaultModel" | "setDefaultModel" | "clearDefaultModel">;
+  doctor?: () => Promise<McpDoctorReport>;
+  modelSettings?: McpModelSettings;
   serverInfo?: { name: string; version: string };
   instructions?: string;
 }
@@ -109,7 +102,14 @@ async function runTool<T>(operation: () => Promise<T>): Promise<CallToolResult> 
     if (error instanceof TaskManagerError) {
       return errorResult(error.code, error.message);
     }
-    if (error instanceof BridgeError) return errorResult(error.code.toUpperCase(), error.message);
+    if (error instanceof Error && "code" in error && typeof error.code === "string"
+      && /^[A-Z][A-Z0-9_]{2,63}$/u.test(error.code)) {
+      return errorResult(error.code, error.message);
+    }
+    if (error instanceof Error && "code" in error && typeof error.code === "string"
+      && /^[a-z][a-z0-9_]{2,63}$/u.test(error.code)) {
+      return errorResult(error.code.toUpperCase(), error.message);
+    }
     throw error;
   }
 }
@@ -222,14 +222,10 @@ export function createBridgeServer(options: BridgeServerOptions): McpServer {
     async (args: { task_id: string }) => {
       const getFeedback = manager.getFeedback;
       if (!getFeedback) return errorResult("FEEDBACK_UNAVAILABLE", "task manager does not provide feedback snapshots");
-      try {
-        const snapshot = await getFeedback.call(manager, args.task_id);
-        return feedbackResult(snapshot);
-      } catch (error) {
-        if (error instanceof TaskManagerError) return errorResult(error.code, error.message);
-        if (error instanceof BridgeError) return errorResult(error.code.toUpperCase(), error.message);
-        throw error;
-      }
+      const result = await runTool(() => getFeedback.call(manager, args.task_id));
+      return result.isError === true ? result : feedbackResult(
+        result.structuredContent as unknown as TaskFeedbackSnapshotV01,
+      );
     },
   );
 

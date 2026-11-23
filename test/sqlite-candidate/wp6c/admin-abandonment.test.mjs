@@ -9,7 +9,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { AdmissionError, digest, IsolatedAdmissionStore } from '../../../src/sqlite-candidate/wp6b2b1/store.mjs';
 import { createSqliteLifecyclePort } from '../../../src/sqlite-candidate/wp6b2b1/lifecycle-port.mjs';
-import { createTrustedLocalCandidateContext } from '../../../dist-test/src/host/stdio.js';
+import { createTrustedLocalCandidateContext } from '../../../dist-test/src/executor/production-composition.js';
 import { SqliteLifecycleMcpAuthority } from '../../../dist-test/src/manager/sqlite-lifecycle-mcp-authority.js';
 import { createPlatformProbe } from '../../../dist-test/src/runtime/process-probe.js';
 import { executeCli, parseArgs, sqliteErrorDiagnostic } from '../../../plugins/codex-zcode-bridge/dist/admin-abandon-held-operation.mjs';

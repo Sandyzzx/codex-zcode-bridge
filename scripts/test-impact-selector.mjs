@@ -121,6 +121,29 @@ export function selectAffectedTests({
     if (stressInfo) record.stress = stressInfo;
     if (!record.reasons.includes(reason)) record.reasons.push(reason);
   };
+  const developmentSelected = new Map();
+  const addDevelopment = (entry, reason, { direct = false } = {}) => {
+    if (!entry || entry.stress || !isAutomaticTest(entry, platform)) return;
+    if (!developmentSelected.has(entry.file)) {
+      const deferredFullSuite = fullSuiteReasons.length > 0;
+      if (deferredFullSuite && !direct && entry.type !== "Unit") return;
+      developmentSelected.set(entry.file, { ...entry, reasons: [] });
+    }
+    const record = developmentSelected.get(entry.file);
+    if (!record.reasons.includes(reason)) record.reasons.push(reason);
+  };
+  for (const file of normalizedFiles) {
+    const direct = testByFile.get(file);
+    if (direct) addDevelopment(direct, `changed-test:${file}`, { direct: true });
+  }
+  for (const domain of domains) {
+    for (const entry of map.tests) {
+      if (!entry.domains.includes(domain)) continue;
+      addDevelopment(entry, `domain:${domain}`);
+    }
+  }
+  const developmentTests = [...developmentSelected.values()]
+    .sort((left, right) => left.file.localeCompare(right.file, "en"));
 
   if (fullSuiteReasons.length > 0) {
     for (const entry of map.tests) {
@@ -137,6 +160,7 @@ export function selectAffectedTests({
       domain_reasons: Object.fromEntries([...reasonsByDomain].map(([key, value]) => [key, value])),
       full_suite_reasons: fullSuiteReasons.sort(),
       selected_tests: [...selected.values()],
+      development_tests: developmentTests,
       stress_tests: [],
       stress_mode: "SEPARATE_STRESS_GATE",
     };
@@ -163,6 +187,7 @@ export function selectAffectedTests({
     domain_reasons: Object.fromEntries([...reasonsByDomain].map(([key, value]) => [key, value])),
     full_suite_reasons: [],
     selected_tests: selectedTests,
+    development_tests: developmentTests,
     stress_tests: includeStress ? selectedStress : [],
     stress_mode: selectedStress.length > 0 ? "STRESS_TEST_REQUIRED" : "STRESS_TESTS_NOT_APPLICABLE",
   };

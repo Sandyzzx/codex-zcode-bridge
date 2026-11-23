@@ -5,7 +5,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { openClaimOnlyDriver, initializeIsolatedCandidateRoot, loadLifecycleCandidateModules } from "../../../src/store/lifecycle-gate.js";
-import { createTrustedLocalCandidateContext } from "../../../src/host/stdio.js";
+import { createTrustedLocalCandidateContext } from "../../../src/executor/production-composition.js";
 import { deriveAdmissionPolicySnapshotDigest } from "../../../src/sqlite-candidate/wp6b2b1/launch-bootstrap.js";
 import type { CandidateTaskPackage } from "../../../src/store/lifecycle-gate.js";
 

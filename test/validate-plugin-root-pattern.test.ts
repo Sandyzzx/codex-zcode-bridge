@@ -281,6 +281,7 @@ test("the real validator rejects injected development-path references and keeps 
       path.join(root, "scripts", "lib"),
       path.join(pluginRoot, ".codex-plugin"),
       path.join(pluginRoot, "dist"),
+      path.join(pluginRoot, "dist", "vendor"),
       path.join(pluginRoot, "worker", "vendor", "pkg"),
       path.join(pluginRoot, "hooks"),
       path.join(pluginRoot, "skills", "zcode-bridge"),
@@ -313,6 +314,16 @@ test("the real validator rejects injected development-path references and keeps 
     writeFileSync(path.join(pluginRoot, "dist", "admin-abandonment.sql"), adminSchema);
     writeFileSync(path.join(root, "src", "sqlite-candidate", "wp6b2b1", "store.mjs"), "const SCHEMA_VERSION = 14;\n");
     writeFileSync(path.join(pluginRoot, "dist", "admin-abandon-held-operation.mjs"), "const SCHEMA_VERSION = 14;\n");
+    for (const bundle of ["executor.mjs", "task-cli.mjs", "web-console.mjs"]) {
+      copyFileSync(
+        path.join(repositoryRoot, "plugins", "codex-zcode-bridge", "dist", bundle),
+        path.join(pluginRoot, "dist", bundle),
+      );
+    }
+    copyFileSync(
+      path.join(repositoryRoot, "plugins", "codex-zcode-bridge", "dist", "vendor", "official-billing-runtime.mjs"),
+      path.join(pluginRoot, "dist", "vendor", "official-billing-runtime.mjs"),
+    );
     for (const file of [
       "hooks/hooks.json",
       "hooks/session-start.mjs",
@@ -330,10 +341,9 @@ test("the real validator rejects injected development-path references and keeps 
       `const sibling = ${JSON.stringify(`${root} Backup${path.sep}src${path.sep}main.ts`)};`,
       `const encodedSibling = ${JSON.stringify(pathToFileURL(path.join(`${root} Backup`, "src", "main.ts")).href)};`,
       "// vendor loader keeps worker/vendor/pkg/browser-host.cjs self-contained",
-      "const workerModuleUrl = pathToFileURL3(workerEntryPath());",
-      "loadOfficialHostProductVersion2(workerModuleUrl);",
-      "loadOfficialStartPlanAuthenticationResolverFactory2(workerModuleUrl);",
-      "const modelSettings = new ZCodeModelSettings(process.env, { host, workerModuleUrl: workerModuleUrl });",
+      "const client = new ExecutorControlClient({ pipeName: executorPipeName(root) });",
+      "const taskManager = new RemoteTaskManager(client);",
+      'console.error("no local SQLite Manager is constructed");',
     ].join("\n");
     const bundlePath = path.join(pluginRoot, "dist", "bridge.mjs");
     const waiterPath = path.join(pluginRoot, "dist", "wait-task.mjs");

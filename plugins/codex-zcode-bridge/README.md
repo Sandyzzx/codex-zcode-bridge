@@ -110,3 +110,44 @@ ADR-018 的管理性放弃命令随插件交付为 `dist/admin-abandon-held-oper
 ## 可选后台等待器
 
 支持后台命令完成通知的 Host 可运行插件包内的只读 `dist/wait-task.mjs`。它观察同一 SQLite Attention Core，不批准、取消或修改任务状态；通知仍取决于 Host 的生命周期。
+
+## Executor 与 Task CLI
+
+候选版本的插件包同时包含 `dist/executor.mjs` 和 `dist/task-cli.mjs`。Executor 是
+SQLite Authority、Worker、Official Runtime 和 Recovery 的唯一持有者；Task CLI
+只通过同用户 Named Pipe 调用 Executor，不直接打开 SQLite。
+
+在插件安装目录运行：
+
+```powershell
+node dist/task-cli.mjs executor start
+node dist/task-cli.mjs executor status
+node dist/task-cli.mjs task list --limit 20
+node dist/task-cli.mjs task status <task_id>
+node dist/task-cli.mjs executor stop
+```
+
+`executor start` 检测到已有活动 Executor 时不会再次 Spawn。无 Lease history 的
+既有 SQLite Root 必须由用户先停止并核对旧 MCP Host，再显式附加
+`--accept-unleased-transition`；该参数不绕过已记录的精确活动 owner。`executor stop`
+只执行 Idle-only Shutdown，活动任务或未知关闭状态会以非零退出，不会自动取消任务。
+
+## Task Web Console
+
+插件同时包含只读优先的 `dist/web-console.mjs`。它只绑定 `127.0.0.1`，通过同一
+Executor Control Pipe 读取 Task/Status/Event/Result，并允许显式 Cancel 和
+Interaction Reply。它不创建 Task、不打开 SQLite、不控制 Executor 生命周期，也不
+在页面加载时调用模型。
+
+```powershell
+node dist/web-console.mjs --data-root <absolute-state-dir>
+```
+
+所有状态变更请求要求同源 Host、Origin 和会话 CSRF 头。页面刷新或浏览器关闭只会
+关闭本地 HTTP 请求，不会取消已受理 Task。
+
+Console 使用运行时分配的实际端口，并在 Authority Root 内以
+`task-console.json` 发布非秘密发现记录；同一 Root 的第二个 Console 会复用安全
+存活的 Owner。可用 `node dist/task-cli.mjs task console-url <task_id>` 取得经过
+`/api/session` 校验的 `http://127.0.0.1:<actual-port>/?task_id=<task_id>` 链接；
+不可用时命令失败，不拼接虚假地址。Deep Link 只携带 Task ID，不包含 CSRF 或凭据。

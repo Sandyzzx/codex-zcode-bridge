@@ -47,13 +47,15 @@ const STATIC_FILES = Object.freeze({
 export function createCostLabWebServer(options = {}) {
   const projectRoot = path.resolve(options.projectRoot ?? PROJECT_ROOT);
   const uiRoot = path.join(SCRIPT_ROOT, "web");
+  const apiMountPath = options.apiMountPath ? normalizeApiMountPath(options.apiMountPath) : null;
+  const evidenceRoot = path.resolve(options.evidenceRoot ?? path.join(projectRoot, ".run"));
   const historyPath = path.resolve(options.historyPath ?? path.join(projectRoot, ".run", "cost-lab-web", "history.json"));
   const startPlanHistoryPath = path.resolve(
     options.startPlanHistoryPath
       ?? path.join(projectRoot, ".run", "cost-lab-web", "startplan-history.json"),
   );
-  assertInside(path.join(projectRoot, ".run"), historyPath);
-  assertInside(path.join(projectRoot, ".run"), startPlanHistoryPath);
+  assertInside(evidenceRoot, historyPath);
+  assertInside(evidenceRoot, startPlanHistoryPath);
   const dependencies = {
     captureSnapshot: options.captureSnapshot ?? captureSnapshot,
     inspectEnvironment: options.inspectEnvironment ?? inspectCostLabEnvironment,
@@ -159,6 +161,18 @@ export function createCostLabWebServer(options = {}) {
     return publicAddress();
   }
 
+  async function mountEndpoints({ origin, port }) {
+    if (!apiMountPath) throw new Error("cost_lab_api_mount_path_required");
+    if (!Number.isInteger(port) || port < 1 || port > 65_535) throw new Error("cost_lab_mount_port_invalid");
+    const parsed = new URL(origin);
+    if (parsed.protocol !== "http:" || parsed.hostname !== LOOPBACK_HOST || parsed.port !== String(port)) {
+      throw new Error("cost_lab_mount_origin_invalid");
+    }
+    state.origin = parsed.origin;
+    state.port = port;
+    await ensureHistoryLoaded();
+  }
+
   async function close({ abortActive = true, timeoutMs = 150_000 } = {}) {
     state.closed = true;
     const listenerClosed = new Promise((resolve) => {
@@ -217,6 +231,17 @@ export function createCostLabWebServer(options = {}) {
       return;
     }
     const url = new URL(request.url ?? "/", state.origin ?? `http://${LOOPBACK_HOST}`);
+    if (apiMountPath) {
+      const mountedPrefix = `${apiMountPath}/`;
+      if (!url.pathname.startsWith(mountedPrefix)) {
+        sendJson(response, 404, {
+          ok: false,
+          error: { code: "COST_LAB_NOT_FOUND", message: "Unknown mounted Cost Lab route." },
+        });
+        return;
+      }
+      url.pathname = `/api/${url.pathname.slice(mountedPrefix.length)}`;
+    }
     if (request.method === "GET" || request.method === "HEAD") {
       const staticFile = STATIC_FILES[url.pathname];
       if (staticFile) {
@@ -688,7 +713,25 @@ export function createCostLabWebServer(options = {}) {
     close,
     address: publicAddress,
     server,
+    mountEndpoints,
+    handleRequest,
+    async inspectEnvironment() {
+      return redactValue(await dependencies.inspectEnvironment({ deep: false }));
+    },
+    async runProtocolProbe() {
+      return redactValue(await dependencies.inspectEnvironment({
+        deep: true,
+        protocolSmoke: dependencies.protocolSmoke,
+      }));
+    },
   };
+}
+
+function normalizeApiMountPath(value) {
+  if (typeof value !== "string" || !/^\/api\/[a-z0-9][a-z0-9-]*$/u.test(value)) {
+    throw new Error("cost_lab_api_mount_path_invalid");
+  }
+  return value;
 }
 
 async function serveStatic(root, definition, method, response) {

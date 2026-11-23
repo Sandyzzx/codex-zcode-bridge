@@ -53,7 +53,7 @@ import {
 } from "../runtime/account-provider.js";
 import { resolveSessionPreferences, type ResolvedSessionPreferences } from "../runtime/session-preferences.js";
 import { ADAPTER_CLEANUP_TIMEOUT_MS, resolveTaskTimeout } from "../runtime/task-timeout.js";
-import { codexHostProfile, validateHostProfile, type BridgeHostProfile } from "../host/profile.js";
+import { codexHostProfile, validateHostProfile, type BridgeHostProfile } from "../runtime/host-profile.js";
 import { browserListParamsSchema, browserExecuteParamsSchema, type BrowserListParams, type BrowserExecuteParams } from "../browser/params.js";
 import { createBrowserHost, type BrowserHost, type BrowserHostMode, type BrowserHostOptions } from "../browser/host.js";
 import { createDefaultBrowserBackendFactory } from "../browser/load-backend.js";

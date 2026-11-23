@@ -2,6 +2,10 @@
 // Add or remove an entry here in the same change as its producer and validator.
 export const GENERATED_ARTIFACTS = Object.freeze([
   "plugins/codex-zcode-bridge/dist/bridge.mjs",
+  "plugins/codex-zcode-bridge/dist/task-cli.mjs",
+  "plugins/codex-zcode-bridge/dist/executor.mjs",
+  "plugins/codex-zcode-bridge/dist/web-console.mjs",
+  "plugins/codex-zcode-bridge/dist/vendor/official-billing-runtime.mjs",
   "plugins/codex-zcode-bridge/dist/wait-task.mjs",
   "plugins/codex-zcode-bridge/dist/admin-abandon-held-operation.mjs",
   "plugins/codex-zcode-bridge/dist/schema.sql",

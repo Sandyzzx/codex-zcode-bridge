@@ -1,8 +1,12 @@
 # ADR-045：独立 Async Executor 所有权
 
-> Status: ACCEPTED（Owner 条件批准；架构方向已接受，实现与发布仍按本 ADR 验收门执行）
-> Date: 2026-11-21
-> Baseline: `origin/preview` `1f9ff9ef37528205e76156e13fe06ed2b1fd3711`
+> Status: ACCEPTED（Owner 条件批准；架构方向已接受）
+> Implementation status: PARTIAL / BLOCKED — historical PR 2–6 local RC passed; current integration candidate `7ab652ba` has targeted Host-process evidence; real Desktop gates pending; not merged or released
+> Date: 2026-11-22
+> Baseline: `origin/preview` `ac1e8396f25a1a1d3ff373def84726d28c1f4193`
+> Historical full-matrix candidate: `c75c34330287266702cab5949662bf897b74ed5a`
+> PR #131 baseline / acceptance implementation: `a1bc911ec1b03cd22bbf13e717fc2233284e6183` / `7f54531acba0844937bc134609dae840090294ec`
+> Current integration candidate: `origin/preview@8ee7ec93a82c2093dce74707a9d1937c1c567887` + `7ab652baac606fedfa3e86c6db08e7892df122f7` (Web implementation/evidence `02a9e81198cffc5b90077eaba00b5abbfd40f640`)
 > Related architecture: [BRIDGE_ASYNC_EXECUTION_V1.md](../architecture/BRIDGE_ASYNC_EXECUTION_V1.md)
 
 ## Context
@@ -34,3 +38,152 @@ Preview.10 的 `SqliteLifecycleMcpAuthority` 在 MCP stdio Host 进程内运行�
 ## Validation Gate
 
 实施首阶段必须证明：真实 Codex Host 关闭后，已受理 Attempt 继续执行并提交原 Result，随后按现有合同完成 Cleanup 与 Release。若失败，停止 CLI/Web/Wake 功能迁移，先修复执行所有权。
+
+## PR 2 Implementation Record
+
+PR 2 candidate 已实现 lifetime lease、精确 PID/start fingerprint、legacy Host
+互斥、Idle-only Shutdown、Named Pipe IPC、Thin MCP control transport，以及
+fake Worker 跨进程 Result/Cleanup/Release E2E。确定性 IPC、Lease、单实例、
+32 MiB Result 和 reconnect 测试通过。PR #120 remediation 进一步让 legacy Host
+与 Executor 共用生产 Authority/Start Plan/model-routing/diagnostics composition，
+把模型工具和完整 Doctor 经 Executor IPC 代理，并关闭生产 Executor 的测试参数
+入口；启动失败按精确 Lease 与 Store close 证据回滚或 fail closed。
+
+开发门禁采用 `Local Verification During Development, Full CI Before Release`：
+普通功能提交只跑 typecheck、构建所需产物、受影响测试和关键 E2E；延期
+`FULL_SUITE` 必须先执行直接变更与受影响域的安全测试，且不得报告为完整回归
+PASS。统一 RC 已在冻结候选上执行 Windows 本地完整回归与注册压力矩阵；
+Ubuntu、Windows shards 与 GitHub Required Checks 仍必须由同提交的 Release
+Gate 完成。
+
+后续验收已证明 shipped MCP Host 被真实终止后，隔离 Executor 仍以 synthetic
+Worker 完成原 Attempt Result/Cleanup/Release，且新 Host 可读取同一 Result。
+真实 Codex Desktop 关闭后的 E2E 仍未运行，原因是不得关闭 Owner 当前正在使用的
+Desktop；真实 Official Runtime 也没有新的付费模型授权。因此 ADR-045 的
+`Validation Gate` 尚未满足，当前验收只能以 `PARTIAL / BLOCKED` 提交评审，
+不得据此合入 Preview、发布或宣称 CLI/Web/Wake 已获真实 Host 全量验收。
+
+## PR 2.5 Implementation Record
+
+PR 2.5 把 shipped `bridge.mjs` 收敛为单一 Thin MCP：
+
+- `src/host/stdio.ts` 只注册 MCP 工具并通过 `ExecutorControlClient` 调用
+  Executor；不构造 Manager、Store、Worker、Adapter、Official Runtime 或
+  本地 SQLite Authority。
+- `in_process` MCP transport 已删除，`ZCODE_BRIDGE_MCP_TRANSPORT` 只接受
+  `control`；Executor 未启动时返回 `EXECUTOR_UNAVAILABLE`。
+- `src/executor/production-composition.ts` 是唯一生产 Authority composition，
+  负责现有 Manager、Start Plan private auth、动态 model routing、Worker
+  diagnostics、Doctor 和 model settings。
+- MCP 输入 Schema、TaskManager 错误、Host profile、MCP-facing Doctor/model
+  契约和 pipe 名为共享模块；MCP、Executor、Adapter、Worker 的静态依赖边界
+  由测试锁定。
+- 测试专用 legacy lifecycle Host harness 保留在 `test/fixtures/`，不进入
+  shipped plugin，也不是生产回退路径。
+
+四层 fake Official Runtime E2E（Thin MCP → Executor → Worker → Official
+Adapter）、Thin MCP disconnect/reconnect、完整 MCP schema snapshot、Lease、
+IPC、单实例、Result/Cleanup/Release 与 32 MiB Result 回读均通过。真实 Codex
+Desktop 关闭后的 E2E、真实 Official ZCode Runtime/provider E2E 和严格 Wake
+C/D 仍未运行；PR 2.5 因此保持 `IMPLEMENTED — PARTIAL / BLOCKED`，不得合入
+Preview 或发布。公共 MCP 工具面、SQLite v14、Worker 私有 IPC、Result/
+Cleanup/Recovery 合同保持不变；正常插件不得通过嵌入式 Manager 绕过
+Executor。
+
+## PR 3 Implementation Record
+
+PR 3 增加 [ADR-049](ADR-049-task-cli-control-surface.md) 定义的 Task CLI：
+`executor start/status/stop`、Lease 只读/显式清理，以及
+`task list/status/events/result/cancel/reply` 全部经 `ExecutorControlClient`
+调用同一 Executor。CLI 不打开 SQLite、不创建 Manager，也不实现第二套恢复。
+插件生成 `dist/task-cli.mjs` 与 `dist/executor.mjs`，二者通过同一 Named Pipe
+合同通信。定向测试覆盖已有 Executor 不重复 Spawn、一次性未 Lease 过渡、
+Shutdown unknown 非零、bounded list、Result 输出预算和 MCP/CLI 并发。
+
+该实现仍是 stacked candidate。完整回归、真实 Desktop 关闭和真实 Official
+Runtime 未因 PR 3 自动获得通过，不能据此合入 Preview 或发布。
+
+## PR 4 Implementation Record
+
+PR 4 按 [ADR-050](ADR-050-local-task-web-console.md) 增加 loopback-only Task
+Web Console。它通过同一 `ExecutorControlClient`/`RemoteTaskManager` 读取
+Task、Event 和 Result，并仅转发显式 Cancel/Interaction Reply；不提供 Task
+创建、模型设置、SQLite、Shell、文件或 Executor Shutdown API。HTTP 层要求
+精确 Host、同源 Origin、会话 CSRF 和有界 JSON body。关闭页面或 Console
+进程只关闭本地 Adapter，不影响 Executor 或已受理 Task。
+
+插件生成 `dist/web-console.mjs`。定向 HTTP、安全、Architecture Boundary 和
+打包校验通过；真实多用户隔离、Desktop 关闭和付费 Runtime 仍未验证。
+
+## PR 5 Implementation Record
+
+PR 5 按 [ADR-051](ADR-051-executor-wake-delivery.md) 在 Executor 内增加
+post-Release、一次性 Wake Adapter。Queue 仅用于已经由 App Server 确认
+loaded、idle、可接收 direct input，且 workspace、model、provider、reasoning
+effort 与 Owner 单 Turn 授权完全一致的 Thread。任何不确定条件转
+`web_notify`。Queue 不附加 `--resume`，不重试；非零/信号/timeout 记为
+`submission_unknown`，只有观察到 baseline 之外的新 `inProgress` Turn 才记
+`turn_started`。
+
+Wake Intent/Delivery 复用 SQLite v14 terminal Operation 的 bounded
+`observation_recorded` evidence，不新增表或 schema。Wake 事实不改变
+Task/Result/Cleanup/Release/Capacity/Recovery，只追加 `released -> released`
+observation。跨进程 fake Worker Result/Cleanup/Release -> Wake -> Web fallback
+E2E 与 coordinator fail-closed 矩阵通过。
+
+真实 App Server control socket、真实 Queue、严格 notLoaded C、Desktop 全退 D
+和真实付费模型均未在候选验证中运行；这些门禁保持 `NOT_RUN / BLOCKED`。
+Queue Wake 仍不得扩展为发布承诺，持久化结果与安全回退也不能以 F5 代替。
+
+## Unified Release Candidate Record
+
+PR 2–6 已整合为候选 `c75c34330287266702cab5949662bf897b74ed5a`，基线为
+`origin/preview@ac1e8396f25a1a1d3ff373def84726d28c1f4193`。Windows 本地完整
+回归为 1060 项：1058 pass、0 fail、2 个既有 skip；注册压力矩阵 4/4；13 个
+生成物 Freshness 与插件结构校验通过。统一证据见
+[Async Executor RC report](../reports/async-executor-release-candidate-20261122.md)。
+
+完整回归曾出现一次 Windows `process_tree_root_exited` 竞态：root 在精确身份
+probe 与进程树事务之间退出，导致 stdio shutdown 的 Cleanup/Release 测试失败。
+修复只允许该精确错误进入 reconciliation，并要求 fresh exact-root probe 与原
+recorded-tree clean proof 同时成立；其他 termination error 继续 fail closed。
+定向 race 20/20、负载下 12/12、affected composition 67/67，最终完整回归通过。
+
+该本地候选仍不满足 ADR-045 的真实 Host Validation Gate。GitHub Release Gate、
+真实 Desktop 关闭、真实 Official Runtime、严格 Wake C/D 和真实模型 Skill
+遵循率均未完成前，不得合入 Preview 或发布。没有新增 Supervisor、第二任务
+数据库、第二状态机、第二 Worker 路径或额外持久化权威；SQLite 仍为 v14。
+
+## Post-RC Acceptance Record
+
+PR #131 基线 `a1bc911ec1b03cd22bbf13e717fc2233284e6183` 的后续验收实现
+`7f54531acba0844937bc134609dae840090294ec` 增加了最小可操作性：
+
+- `task wake-authorize` 从同一 Executor Control 面核对当前 Task/Attempt 与
+  workspace，并由 Owner 显式绑定的 Thread、model、provider、安全 effort 和
+  最长 24 小时一次性授权排他创建 `wake-policy.json`；
+- Task CLI 与 Web Console 从现有 SQLite v14 `executor_wake` Event 附加只读
+  `wake` 摘要，不新增通知数据库或轮询服务；
+- shipped MCP Host 在 Task 受理后被真实终止，Executor 继续完成 synthetic
+  Worker 的原 Attempt Result、Cleanup 与 Release，单次 Spawn，新 Host 重连
+  读取同一 Result。
+
+`7f54531a` 完成定向测试、构建、插件校验与生成物检查；其后的 CI 已核实 head
+`3a238ee8`（相对实现提交仅文档收尾）通过 [CI run 45024250578](https://github.com/Sandyzzx/codex-zcode-bridge/actions/runs/45024250578)：
+Ubuntu/Windows verification、Windows shards、聚合 Verify 与 SQLite resource
+matrix 均通过。`Cost Lab` 和 `Integration` 按影响选择跳过，不将该结果扩大为
+这些 job 的 PASS；历史 `c75c3433` 的本地 1060 项完整回归也不自动转移到
+`7f54531a/3a238ee8`。真实 Desktop 全退、严格 Wake C/D、真实 Queue
+ACK/Turn/Master、Desktop visible、真实 Official Runtime 和真实模型 Skill
+遵循率仍为 `NOT_RUN / BLOCKED`；PR #131 保持 open，不合入 Preview、不发布。
+
+随后 PR #131 安全整合 `origin/preview@c941f578`（统一终态 Result 行政释放），
+形成 Web implementation/evidence candidate
+`02a9e81198cffc5b90077eaba00b5abbfd40f640`。该候选重新通过 Executor/IPC/
+Lease/Thin MCP/Wake/Task CLI/Web/Skill 定向测试。PR #131 随后整合 Preview.13
+`origin/preview@8ee7ec93`，最终候选
+`7ab652baac606fedfa3e86c6db08e7892df122f7` 的同一代码树重新通过 92/92 项
+定向测试，并用真实 MCP Host、Executor、Console、Chromium 与 synthetic
+Worker 重跑 C1：原 Attempt Result/Cleanup/Release 各一次、Spawn 一次，Host
+退出后 Web 和 Executor 继续可用。此前 `3a238ee8` 的完整 CI 不转移给该新
+head；最终 Release Gate 仍待精确提交验证。

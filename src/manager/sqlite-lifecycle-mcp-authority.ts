@@ -26,14 +26,55 @@ import { createPlatformProbe, PROCESS_IDENTITY_VERSION, type ProcessIdentity, ty
 import { buildSqliteDoctorChecks } from "../runtime/sqlite-doctor.js";
 import type { DoctorCheck } from "../runtime/doctor.js";
 import type { TaskModelRouter } from "../runtime/model-routing.js";
+import {
+  DEFAULT_TASK_LIST_LIMIT,
+  type ListTasksInput,
+  type TaskListItem,
+  type TaskListPage,
+  type TaskListWakeSummary,
+} from "../task-list.js";
 
 const EXECUTION_OBSERVATION_PROBE_BUDGET_MS = 5_000;
 const DEFAULT_HOST_SHUTDOWN_WAIT_MS = 60_000;
 const PUMP_FAILURE_RECOVERY_RETRY_MS = 250;
+const EXECUTOR_IDLE_OPERATION_PHASES = new Set(["released", "cancelled_before_launch"]);
 /** Bound normal event pages while preserving cursor-based recovery for every persisted event. */
 export const DEFAULT_EVENT_PAGE_MAX_BYTES = 32 * 1024;
 
 type Driver = Awaited<ReturnType<typeof openClaimOnlyDriver>>;
+export interface ExecutorWakeReleaseFact {
+  readonly task_id: string;
+  readonly attempt: number;
+  readonly operation_id: string;
+  readonly generation: number;
+  readonly task_status: TaskStatus;
+  readonly result_status: TaskResult["status"];
+  readonly result_digest: string;
+  readonly result_commit_ref: string;
+  readonly workspace: string;
+}
+
+export interface AuthorityExecutorWakeObservationInput {
+  readonly operation_id: string;
+  readonly task_id: string;
+  readonly attempt: number;
+  readonly generation: number;
+  readonly state: "intent" | "queued" | "submission_unknown" | "turn_started" | "web_notify";
+  readonly thread_id: string | null;
+  readonly delivery_id: string;
+  readonly policy_digest: string;
+  readonly authorization_digest: string;
+  readonly reason_code: string;
+  readonly queue_message_id?: string;
+}
+
+export type AuthorityExecutorWakeRecorder = (
+  input: AuthorityExecutorWakeObservationInput,
+) => {
+  readonly duplicate: boolean;
+  readonly state: AuthorityExecutorWakeObservationInput["state"];
+};
+
 export type SqliteAuthorityOptions = ClaimOnlyDriverOptions & {
   readonly testBeforeDispatch?: () => Promise<void>;
   readonly testOnScheduler?: (stage: string, detail: Readonly<Record<string, unknown>>) => void;
@@ -44,6 +85,13 @@ export type SqliteAuthorityOptions = ClaimOnlyDriverOptions & {
    * after durable persistence, so a failure before the first persistence
    * leaves no routing-cache reservation. */
   readonly routeTaskModel?: TaskModelRouter;
+  /** Executor-only Wake hook. It runs after a terminal Result and durable
+   * Release, outside SQLite transactions; failure never rolls back the Result
+   * or changes Task/Result/Cleanup/Release facts. */
+  readonly onOperationReleased?: (
+    fact: ExecutorWakeReleaseFact,
+    recorder: AuthorityExecutorWakeRecorder,
+  ) => Promise<void>;
 };
 
 /** SQLite Lifecycle Manager. Owns scheduling; the bound driver owns durable facts. */
@@ -80,13 +128,15 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
   readonly #startPlanPrivateAuthFactory?: () => Promise<NonNullable<ClaimOnlyDriverOptions["startPlanPrivateAuth"]> | null>;
   readonly #testOnlyFakeAdapter: boolean;
   readonly #routeTaskModel?: TaskModelRouter;
+  readonly #onOperationReleased?: SqliteAuthorityOptions["onOperationReleased"];
 
   private constructor(driver: Driver, context: NonNullable<ClaimOnlyDriverOptions["trustedLocalContext"]>, processProbe: ProcessProbe,
     testBeforeDispatch?: () => Promise<void>, testOnScheduler?: SqliteAuthorityOptions["testOnScheduler"],
     shutdownWaitMs = DEFAULT_HOST_SHUTDOWN_WAIT_MS, startPlanAuthAvailable = false, testOnlyFakeAdapter = false,
     routeTaskModel?: TaskModelRouter,
     startPlanAuthInjected = false,
-    startPlanPrivateAuthFactory?: () => Promise<NonNullable<ClaimOnlyDriverOptions["startPlanPrivateAuth"]> | null>) {
+    startPlanPrivateAuthFactory?: () => Promise<NonNullable<ClaimOnlyDriverOptions["startPlanPrivateAuth"]> | null>,
+    onOperationReleased?: SqliteAuthorityOptions["onOperationReleased"]) {
     this.#driver = driver;
     this.#context = context;
     this.#processProbe = processProbe;
@@ -98,6 +148,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     this.#startPlanPrivateAuthFactory = startPlanPrivateAuthFactory;
     this.#testOnlyFakeAdapter = testOnlyFakeAdapter;
     this.#routeTaskModel = routeTaskModel;
+    this.#onOperationReleased = onOperationReleased;
   }
 
   async createTask(task: TaskPackage): Promise<TaskReceipt> {
@@ -218,6 +269,37 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     };
   }
 
+  async listTasks(input: ListTasksInput = {}): Promise<TaskListPage> {
+    this.#assertOpen();
+    const page = asRecord(this.#driver.readTaskProjections({
+      afterTaskId: input.after_task_id ?? null,
+      limit: input.limit ?? DEFAULT_TASK_LIST_LIMIT,
+      status: input.status ?? null,
+    }));
+    if (!Array.isArray(page.tasks)
+      || (page.next_task_id !== null && typeof page.next_task_id !== "string")
+      || typeof page.has_more !== "boolean") {
+      throw new TaskManagerError("TASK_STATE", "invalid SQLite task list projection");
+    }
+    const tasks = page.tasks.map((value): TaskListItem => {
+      const item = asRecord(value);
+      return {
+        task_id: string(item.task_id, "task_list_id_missing"),
+        status: taskStatus(item.status),
+        attempt: Number(item.attempt),
+        created_at: string(item.created_at, "task_list_created_at_missing"),
+        workspace: string(item.workspace, "task_list_workspace_missing"),
+        objective: string(item.objective, "task_list_objective_missing"),
+        ...(taskListWakeSummary(item.wake_evidence_json, item.wake_at) ?? {}),
+      };
+    });
+    return {
+      tasks,
+      next_task_id: page.next_task_id as string | null,
+      has_more: page.has_more,
+    };
+  }
+
   async getAttention(taskId: string): Promise<TaskAttentionSnapshot> {
     this.#assertOpen();
     let value: unknown;
@@ -241,6 +323,18 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     const snapshot = this.#readSnapshot(taskId);
     if (!snapshot.result) throw new TaskManagerError("TASK_NOT_FINISHED", `task ${taskId} has no committed SQLite Result${snapshot.result_submission_error ? `: ${String(snapshot.result_submission_error)}; Recovery required; no automatic retry` : ""}`);
     return snapshot.result as unknown as TaskResult;
+  }
+
+  recordExecutorWakeObservation(input: AuthorityExecutorWakeObservationInput): {
+    readonly duplicate: boolean;
+    readonly state: AuthorityExecutorWakeObservationInput["state"];
+  } {
+    this.#assertOpen();
+    const result = this.#driver.recordExecutorWakeObservation(input) as {
+      readonly duplicate: boolean;
+      readonly state: AuthorityExecutorWakeObservationInput["state"];
+    };
+    return result;
   }
 
   async getEvents(input: GetEventsInput): Promise<TaskProgressPage> {
@@ -684,6 +778,66 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     this.#driver.close();
   }
 
+  /** Read-only Executor shutdown evidence. A non-empty list means idle-only
+   * close must be refused without latching the legacy Host shutdown fence. */
+  getExecutorIdleState(): { readonly idle: boolean; readonly blockers: readonly string[] } {
+    this.#assertOpen();
+    const blockers: string[] = [];
+    if (this.#queue.length > 0) blockers.push("queued_attempt");
+    if (this.#queued.size > 0) blockers.push("queued_attempt");
+    if (this.#activeRuns.size > 0) blockers.push("active_run");
+    if (this.#active > 0) blockers.push("active_pump");
+    if (this.#pumpPending) blockers.push("pump_pending");
+    if (this.#dispatchingPaths.size > 0) blockers.push("dispatching_path");
+    if (this.#recoveryRuns.size > 0) blockers.push("recovery_run");
+    if (this.#awaitingDispatchPrerequisite) blockers.push("dispatch_prerequisite_pending");
+    if (this.#recoveryInProgress || !this.#recoveryComplete || this.#recoveryBlocked) {
+      blockers.push("recovery_pending");
+    }
+    if (this.#pumpFailure) blockers.push(`pump_failure:${this.#pumpFailure.reason}`);
+    try {
+      const snapshot = this.#validateRecoverySnapshot(this.#driver.readRecoverySnapshot());
+      const rootBlockers = Array.isArray((snapshot as unknown as { readonly root_blockers?: readonly unknown[] }).root_blockers)
+        ? (snapshot as unknown as { readonly root_blockers: readonly unknown[] }).root_blockers
+        : [];
+      blockers.push(...rootBlockers.map((blocker) => `root:${String(blocker)}`));
+      for (const value of snapshot.operations) {
+        const operation = asRecord(value);
+        const recoveryBlockers = Array.isArray(operation.recovery_blockers)
+          ? operation.recovery_blockers.map(String)
+          : [];
+        if (recoveryBlockers.includes("interaction_reply_outcome_unknown")) blockers.push("pending_interaction");
+        // A fresh SQLite root commits one capacity-policy fact at bootstrap.
+        // It is not executable work and must not block an idle-only shutdown.
+        if (String(operation.operation_kind) !== "capacity_policy_change"
+          && !EXECUTOR_IDLE_OPERATION_PHASES.has(String(operation.phase))) {
+          const operationId = typeof operation.operation_id === "string" ? operation.operation_id : "unknown";
+          blockers.push(`operation:${operationId}:${String(operation.phase)}`);
+        }
+      }
+    } catch (error) {
+      blockers.push(`recovery_snapshot:${errorCode(error) ?? "unknown"}`);
+    }
+    return { idle: blockers.length === 0, blockers: [...new Set(blockers)] };
+  }
+
+  /** Executor-only close. Unlike shutdown(), this never cancels or waits for
+   * work; the caller must keep the Lifetime Lease active whenever it rejects. */
+  async closeIfIdle(): Promise<{ readonly closed: boolean; readonly blockers: readonly string[] }> {
+    this.#assertOpen();
+    const { idle, blockers } = this.getExecutorIdleState();
+    if (!idle) return { closed: false, blockers };
+    this.#closed = true;
+    try {
+      this.#driver.close();
+    } catch (error) {
+      // Keep #closed true: the close result is unknown and a second Store
+      // owner must never be admitted. The executor lease remains active.
+      throw new TaskManagerError("EXECUTOR_STORE_CLOSE_UNKNOWN", error instanceof Error ? error.message : String(error));
+    }
+    return { closed: true, blockers: [] };
+  }
+
   /** Read the same SQLite root and Manager fence used by lifecycle mutations. */
   getDoctorChecks(): DoctorCheck[] {
     this.#assertOpen();
@@ -864,7 +1018,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
   static async create(options: SqliteAuthorityOptions): Promise<SqliteLifecycleMcpAuthority> {
     if (!options.trustedLocalContext) throw new TaskManagerError("TASK_STATE", "trusted local context is required");
     const {
-      testBeforeDispatch, testOnScheduler, testShutdownWaitMs, routeTaskModel, ...driverOptions
+      testBeforeDispatch, testOnScheduler, testShutdownWaitMs, routeTaskModel, onOperationReleased, ...driverOptions
     } = options;
     const shutdownWaitMs = testShutdownWaitMs ?? DEFAULT_HOST_SHUTDOWN_WAIT_MS;
     if (!Number.isSafeInteger(shutdownWaitMs) || shutdownWaitMs < 1 || shutdownWaitMs > DEFAULT_HOST_SHUTDOWN_WAIT_MS) {
@@ -875,7 +1029,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       processProbe, testBeforeDispatch, testOnScheduler, shutdownWaitMs,
       options.startPlanPrivateAuth !== undefined || options.startPlanPrivateAuthFactory !== undefined,
       options.testOnlyFakeAdapter === true, routeTaskModel,
-      options.startPlanPrivateAuth !== undefined, options.startPlanPrivateAuthFactory);
+      options.startPlanPrivateAuth !== undefined, options.startPlanPrivateAuthFactory, onOperationReleased);
     try {
       await authority.recoverTasks();
       return authority;
@@ -1070,6 +1224,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
         this.#acceptRunOutcome(run);
         await this.#recoverAfterRun(next, run);
         const after = this.#readSnapshot(next.taskId);
+        await this.#notifyOperationReleased(after);
         if (after.projection.status === "queued" && after.operation === null && run.reason === "capacity_exhausted") {
           // Capacity failure occurs before Operation creation or Spawn. Keep
           // the persisted Attempt queued and retry only with bounded backoff.
@@ -1174,6 +1329,38 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     }
   }
 
+  async #notifyOperationReleased(snapshot: TaskSnapshot): Promise<void> {
+    if (!this.#onOperationReleased) return;
+    const operation = snapshot.operation;
+    const result = snapshot.result;
+    if (!operation || !result || result.status === "cancelled" || String(operation.phase) !== "released"
+      || typeof operation.result_digest !== "string" || typeof operation.result_commit_ref !== "string") return;
+    const attempt = Number(snapshot.attempt.attempt);
+    const generation = Number(operation.generation);
+    if (!Number.isSafeInteger(attempt) || attempt < 1 || !Number.isSafeInteger(generation) || generation < 1) return;
+    const fact: ExecutorWakeReleaseFact = {
+      task_id: String(operation.task_id),
+      attempt,
+      operation_id: String(operation.operation_id),
+      generation,
+      task_status: taskStatus(snapshot.projection.status),
+      result_status: result.status,
+      result_digest: operation.result_digest,
+      result_commit_ref: operation.result_commit_ref,
+      workspace: snapshot.task.workspace,
+    };
+    try {
+      await this.#onOperationReleased(fact, (input) => this.recordExecutorWakeObservation(input));
+    } catch (error) {
+      this.#schedulerStage("post_release_wake_failed", {
+        task_id: fact.task_id,
+        attempt: fact.attempt,
+        operation_id: fact.operation_id,
+        reason: errorCode(error) ?? "executor_wake_failed",
+      });
+    }
+  }
+
   #assertOpen(): void {
     if (this.#closed) throw new TaskManagerError("TASK_STATE", "SQLite lifecycle authority is closed");
   }
@@ -1224,6 +1411,32 @@ function taskStatus(value: unknown): TaskStatus {
   return value as TaskStatus;
 }
 
+function taskListWakeSummary(
+  evidenceJson: unknown,
+  at: unknown,
+): { readonly wake: TaskListWakeSummary } | null {
+  if (typeof evidenceJson !== "string" || typeof at !== "string"
+    || !Number.isFinite(Date.parse(at))) return null;
+  try {
+    const evidence = asRecord(JSON.parse(evidenceJson));
+    if (evidence.reason !== "executor_wake"
+      || typeof evidence.state !== "string"
+      || !["intent", "queued", "submission_unknown", "turn_started", "web_notify"].includes(evidence.state)
+      || typeof evidence.reason_code !== "string"
+      || evidence.reason_code.length === 0
+      || evidence.reason_code.length > 256) return null;
+    return {
+      wake: {
+        state: evidence.state as TaskListWakeSummary["state"],
+        reason_code: evidence.reason_code,
+        at,
+      },
+    };
+  } catch {
+    return null;
+  }
+}
+
 function receipt(taskId: string, status: unknown, createdAt: unknown): TaskReceipt {
   return { task_id: taskId, status: status === "running" ? "running" : "queued", created_at: string(createdAt, "task_created_at_missing") };
 }
@@ -1235,13 +1448,16 @@ function toProgressEvent(value: Record<string, unknown>, includeAttempt: boolean
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) details = parsed as Record<string, unknown>;
   } catch { throw new TaskManagerError("TASK_STATE", "SQLite lifecycle event evidence is corrupt"); }
   const attempt = includeAttempt ? positiveOrNull(value.operation_attempt) : null;
+  const wakeSummary = details?.reason === "executor_wake" && typeof details.state === "string"
+    ? `Executor Wake: ${details.state}${typeof details.reason_code === "string" ? ` (${details.reason_code})` : ""}`
+    : null;
   return {
     seq: Number(value.cursor ?? value.sequence),
     at: string(value.at, "event_time_missing"),
     type: string(value.event_type, "event_type_missing"),
     summary: typeof value.summary === "string"
       ? value.summary
-      : `SQLite lifecycle: ${string(value.event_type, "event_type_missing")}`,
+      : wakeSummary ?? `SQLite lifecycle: ${string(value.event_type, "event_type_missing")}`,
     ...(attempt === null ? {} : { attempt }),
     ...(details ? { details } : {}),
   };

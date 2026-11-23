@@ -1081,6 +1081,7 @@ export const TRANSPORT_MAX_BUFFERED_BYTES = 8_388_608;
 export const TRANSPORT_MAX_BUFFERED_LINES = 65_536;
 export const TRANSPORT_MAX_ENUM_ROWS = 4_096;
 export const TRANSPORT_TOTAL_SESSION_MS_DEFAULT = 120_000;
+const TRANSPORT_ENUM_RESPONSE_MS = 60_000;
 /**
  * Compiling the Win32 helper through Add-Type is much slower on a loaded
  * hosted Windows runner than on an interactive workstation. Keep this separate
@@ -1275,11 +1276,11 @@ export class PowerShellTreeTransaction implements WindowsTreeTransactionLike {
 
   async enumerate(): Promise<readonly WindowsProcessRow[]> {
     this.#child.stdin.write("enum\n");
-    const begin = await this.#nextLine(20_000, "enum begin");
+    const begin = await this.#nextLine(TRANSPORT_ENUM_RESPONSE_MS, "enum begin");
     if (begin !== "ENUM_BEGIN") throw new Error("process_tree_snapshot_invalid: protocol missing");
     const rows: WindowsProcessRow[] = [];
     for (;;) {
-      const line = await this.#nextLine(20_000, "enum row");
+      const line = await this.#nextLine(TRANSPORT_ENUM_RESPONSE_MS, "enum row");
       if (line === "ENUM_END") break;
       const match = /^R (\d{1,12}) (\d{1,12}) (\d{1,25}|unknown) (\d{1,25}|unknown)$/u.exec(line);
       if (!match) throw new Error("process_tree_snapshot_invalid: malformed identity");

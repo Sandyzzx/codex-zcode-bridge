@@ -2,12 +2,12 @@
   "schema_version": 1,
   "platform": "win32",
   "runner": "windows-2022",
-  "measured_at": "2026-11-21",
-  "source": "PR #106 split-file estimates rebalanced from four local Windows shard-pair runs; estimates remain empirical, not a per-file benchmark",
+  "measured_at": "2026-11-22",
+  "source": "PR #106 split-file estimates plus PR 2 Executor lifecycle estimates; estimates remain empirical, not a per-file benchmark",
   "shards": [
     {
       "id": 1,
-      "estimated_ms": 714224,
+      "estimated_ms": 782724,
       "tests": [
         {
           "file": "test/agent-report.test.ts",
@@ -86,6 +86,22 @@
           "estimated_ms": 8938
         },
         {
+          "file": "test/executor-ipc.test.ts",
+          "estimated_ms": 5000
+        },
+        {
+          "file": "test/executor-lease.test.ts",
+          "estimated_ms": 7000
+        },
+        {
+          "file": "test/executor-process.test.ts",
+          "estimated_ms": 55000
+        },
+        {
+          "file": "test/executor-wake.test.ts",
+          "estimated_ms": 500
+        },
+        {
           "file": "test/runtime-preferences.test.ts",
           "estimated_ms": 377
         },
@@ -132,6 +148,10 @@
         {
           "file": "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
           "estimated_ms": 4257
+        },
+        {
+          "file": "test/sqlite-candidate/wp6c/executor-wake.test.mjs",
+          "estimated_ms": 1000
         },
         {
           "file": "test/sqlite-candidate/wp6c/interrupt-requeue.test.mjs",
@@ -201,11 +221,31 @@
     },
     {
       "id": 2,
-      "estimated_ms": 749419,
+      "estimated_ms": 767819,
       "tests": [
         {
           "file": "test/account-provider.test.ts",
           "estimated_ms": 480
+        },
+        {
+          "file": "test/architecture-boundaries.test.ts",
+          "estimated_ms": 400
+        },
+        {
+          "file": "test/task-cli.test.ts",
+          "estimated_ms": 4000
+        },
+        {
+          "file": "test/web-console.test.ts",
+          "estimated_ms": 3000
+        },
+        {
+          "file": "test/web-console-browser.test.ts",
+          "estimated_ms": 10000
+        },
+        {
+          "file": "test/runtime-compatibility.test.ts",
+          "estimated_ms": 1000
         },
         {
           "file": "test/attention-wait.test.ts",

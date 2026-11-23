@@ -33,10 +33,12 @@ export function selectCiImpact({ files, map, forceFull = false }) {
     }
   }
 
+  const developmentTests = selection.development_tests ?? [];
+  const developmentFiles = developmentTests.map((entry) => entry.file);
+  // A deferred FULL_SUITE still needs one Windows development pass over its
+  // safe direct/domain tests. The complete release matrix remains deferred.
   const integrationRequired = selection.mode === "FULL_SUITE"
-    || selection.selected_tests.some((entry) => (
-      entry.type === "Integration" || entry.type === "Stress" || entry.stress !== undefined
-    ));
+    || developmentTests.some((entry) => entry.type === "Integration");
   const stressRequired = selection.stress_mode === "STRESS_TEST_REQUIRED";
   // A forced-full selection has no trustworthy changed-file list. Cost Lab is
   // cheap and independent, so run it rather than silently skipping its gate.
@@ -47,6 +49,8 @@ export function selectCiImpact({ files, map, forceFull = false }) {
     changed_file_count: selection.changed_files.length,
     selected_test_count: selectedFiles.length,
     selected_test_files: selectedFiles,
+    development_test_count: developmentFiles.length,
+    development_test_files: developmentFiles,
     affected_domains: selection.affected_domains,
     force_full: forceFull,
     full_required: selection.mode === "FULL_SUITE",
@@ -95,6 +99,7 @@ async function main() {
       `affected_mode=${impact.affected_mode}`,
       `changed_file_count=${String(impact.changed_file_count)}`,
       `selected_test_count=${String(impact.selected_test_count)}`,
+      `development_test_count=${String(impact.development_test_count)}`,
       `full_required=${String(impact.full_required)}`,
       `force_full=${String(impact.force_full)}`,
       `integration_required=${String(impact.integration_required)}`,

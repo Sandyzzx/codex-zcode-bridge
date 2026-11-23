@@ -3,13 +3,28 @@
 > Status: AUTHORITATIVE
 
 > 2026-11-16 本地候选修订：[ADR-039](decisions/ADR-039-host-authorized-cancellation.md) 将取消授权与清理事实分离。queued + Launch Intent 无 Claim 时允许原子持久化取消并禁止迟到 Claim，未证明的进程/资源占用保留；Running 的 cleanup-only Hold 可经新鲜取消树证明追加消解记录，再继续原 CAS。此修复不增加 MCP 工具、Schema、重派或第二套恢复引擎。
-> Last updated: 2026-11-22（Preview.13：完整捕获响应解析与统一终态释放）
-> Last verified: 2026-11-22，核对 PR #116、PR #121、PR #129、PR #130、ADR-039 durable Spawn/active Worker/tree proof/终态 Result 统一绑定保护、ADR-048 默认 32 KiB Event 页及 cursor 续读，以及 Recovery 材料事实去重/超过 8 条消解承诺；真实计费与生产取消 NOT RUN。
-> Verified against: `origin/preview@c941f578ec00834ab0e93f235134d24bf14a827a` + Preview.13 release candidate
+> Last updated: 2026-11-23（Operations Console + Cost Lab + Runtime Auto-Learn candidate）
+> Last verified: 2026-11-23，核对 ADR-045/049/050/051/052 的候选边界，以及统一 Operations Console、Cost Lab same-origin Adapter、Runtime Auto-Learn exact-fingerprint 证据、跨进程 synthetic Worker Runner 与 trusted-local Wake 定向路径。真实自动 Wake Turn、Master Result readback、真实计费、Desktop 关闭、严格 C/D 仍 `NOT_RUN / BLOCKED`；完整 Release Gate 待最终候选冻结后执行。
+> Verified against: `origin/preview@8ee7ec93a82c2093dce74707a9d1937c1c567887` + trusted-local Wake candidate `ca10518728c87b35c719b0293b48045946728932`。
 
 本文件描述当前 Preview.13 发布候选的生产架构。Windows x64 已默认切换到官方 Host 路径，R7 Runtime Events/Usage 复用同一 SQLite Authority；候选保留 ZCode 3.18.2 Host 模块、官方 Start Plan 认证投影与官方签名 runtime host，并完成 ADR-041 的 Thin Official Host 收敛。PR #116 已在 `450c18af` 合入 opt-in Result 摘要/默认完整 Result 与 Event Attempt 归属；PR #121 已在 `f51e965e` 合入无固定次数的 Recovery 观察去重与历史 v14 Hold 兼容；PR #129 已合入完整已捕获响应的 AgentReport 扫描；PR #130 已合入四种终态 Result 的统一 `zcode_cancel` 行政释放。公开合同继续以 [INTERFACES.md](INTERFACES.md) 为准，宿主和运行配置分别见 [SHARED_CORE.md](SHARED_CORE.md) 与 [ZCODE_RUNTIME.md](ZCODE_RUNTIME.md)。
 
-> 2026-11-21 架构决策：Owner 条件批准 [BRIDGE_ASYNC_EXECUTION_V1.md](architecture/BRIDGE_ASYNC_EXECUTION_V1.md)，并接受 [ADR-045](decisions/ADR-045-async-executor-ownership.md)。该方向尚未实施，不是当前生产事实；本文件仍以现有 Preview.13 单 Host Manager 架构为准。PR 2 必须先验证 Executor 生存期、真实 Host 关闭和原 Attempt Result Durability。
+> 2026-11-23 架构状态：Owner 已接受 [ADR-045](decisions/ADR-045-async-executor-ownership.md) 与 Async Executor 总体架构。PR 2–6 candidate 已实现 Lifetime Lease、IPC、Thin MCP、Control-only CLI、loopback Web、strict/trusted-local Wake 与 Async Master Handoff。strict Wake 缺少同 Owner live preflight 时继续 Web Notify；显式 trusted-local policy 只用于本地单用户 Owner 接受当前 Thread 模型风险后的单次官方 Queue，并把 Queue ACK、Turn 未确认、Result/Cleanup/Release 与 Master 验收分开。当前 PR #131 已整合到 Preview.13 `8ee7ec93`，但真实自动 Wake Turn、Master Result readback、Desktop 关闭、严格 C/D、真实 Official Runtime 和真实模型 Skill 遵循率仍为 `NOT_RUN / BLOCKED`。
+
+2026-11-23 的候选把 Task Web Console 扩展为单一 loopback Operations
+Console，包含 Dashboard、Tasks、Cost Lab、Runtime 和 Settings。Cost Lab
+通过 same-origin `/api/cost-lab/*` 挂载并复用既有服务，不创建第二个长期
+Web 后端；Task 事实仍只经 `ExecutorControlClient`/`RemoteTaskManager`
+读取，Cancel/Reply 仍显式转发。语言与主题偏好只存在浏览器本地，页面加载、
+导航、主题/语言切换和历史读取不触发模型或官方 Billing 请求。
+
+Runtime Auto-Learn 是 Console 的只读证据 Adapter，而不是新的 Task
+Authority：它复用 `OfficialAppServerRuntimeResolver`、ADR-042 精确指纹
+授权和 Cost Lab Protocol Smoke，把 static、授权零模型、真实 Provider 与
+Billing 观察按 fingerprint 写入
+`<Authority Root>/.run/bridge-console/runtime-compatibility.json`。不同
+fingerprint 不继承能力结论，Candidate Report 不修改生产 Manifest，页面
+不会自动发起付费请求。完整合同见 [ADR-053](decisions/ADR-053-runtime-auto-learn-compatibility.md)。
 
 2026-11-19 的集成候选应用 [ADR-040](decisions/ADR-040-installed-official-appserver-runtime.md) 与 [ADR-041](decisions/ADR-041-thin-official-host-end-state.md)：所有受支持 Provider 在通过精确 Manifest 校验后，统一使用用户已安装的官方 AppServer Bundle、同根 builtin Provider 配置和 runtime host；Provider 只决定认证/权益能力，不再选择 AppServer 来源。未知安装版不再仅因不在 Manifest 中永久拒绝：[ADR-042](decisions/ADR-042-unknown-runtime-experimental-authorization.md) 先完成完整安装安全检查与指纹计算，只有精确指纹获得本地显式授权后才进入 `OFFICIAL_RUNTIME_EXPERIMENTAL`。授权按 `coding_plan_probe`、`start_plan_probe`、`other_provider_probe` 分 scope；不安全安装、无效签名、非 x64、混合根和不支持 Node 仍 hard block。实验态不自动提升 Manifest、Provider 能力或折扣状态，也不存在静默回退到打包 AppServer 的路径。Provider capability 在 `session/create` 后按 Runtime 实际报告的 Provider/Model 重新分类，并在 `session/subscribe`/`session/send` 前完成门禁；显式与隐式选择走同一检查点。
 
@@ -36,7 +51,7 @@ MCP tools                                      │ queue / cancel / read-only re
                               independent Cleanup proof -> Release
 ```
 
-`SqliteLifecycleMcpAuthority` 仍是唯一生产 Lifecycle Manager。`lifecycle-gate.ts` 负责 Bootstrap、进程身份、私有 Claim/Result/Interaction 管道、自动 Schema 升级和清理证明；SQLite Store 负责事务、Task/Attempt/Operation、Result digest、Capacity 和不可覆盖事件。
+当前 Preview 中 `SqliteLifecycleMcpAuthority` 仍由 MCP Host 进程持有。PR 2.5 candidate 不改变这个历史事实，但把候选分支的 shipped MCP 入口收窄为 Thin MCP：`ExecutorControlClient` 连接独立 Executor，生产 `SqliteLifecycleMcpAuthority`、SQLite writer、Worker IPC、Official Runtime 和 Recovery 均迁入 Executor；测试专用 legacy Host harness 不进入生产包。`lifecycle-gate.ts` 负责 Bootstrap、进程身份、私有 Claim/Result/Interaction 管道、Schema 校验和清理证明；SQLite Store 负责事务、Task/Attempt/Operation、Result digest、Capacity 和不可覆盖事件。
 
 R7 在同一 Authority 内增加 additive `runtime_task_events`，不新增 Event Broker、第二状态机或 Companion IPC。Worker 通过一次性 fd14 发送规范化 Runtime observation；Manager 只从持久 Task/Attempt/Generation/Claim 派生身份绑定，Worker 不能自报权威身份。Store 以 Worker sequence 幂等、拒绝 stale Attempt，并把 Runtime row 映射到既有单调 public cursor。`zcode_events`、`zcode_feedback` 和 `buildTaskResult()` 从同一持久事实读取 Usage、Model Profile、Timing、Tool Activity 与 Feedback；Lifecycle Event 与 Runtime Event 仍分属不同表。ADR-048 只把省略 `max_bytes` 的读取限制为默认 32 KiB 页，持久 Event 不裁剪，调用方按 `has_more`/`scan_incomplete` 与 cursor 读至结束。
 

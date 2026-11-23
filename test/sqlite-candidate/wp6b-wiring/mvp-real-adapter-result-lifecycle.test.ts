@@ -8,13 +8,41 @@ import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 
 import { SqliteLifecycleMcpAuthority } from "../../../src/manager/sqlite-lifecycle-mcp-authority.js";
+import { createPlatformProbe, PROCESS_IDENTITY_VERSION } from "../../../src/runtime/process-probe.js";
 
-import { createTrustedLocalCandidateContext } from "../../../src/host/stdio.js";
+import { createTrustedLocalCandidateContext } from "../../../src/executor/production-composition.js";
 
 import { loadLifecycleCandidateModules } from "../../../src/store/lifecycle-gate.js";
 
 import { projectRoot, workerEntryPath, fixtureRoot, contentObject, syntheticTask, waitForTerminal, waitForLifecycleEvent, waitForInteractionRequest, withRealAdapterMcp, deadlineWorker, operationFor } from "./mvp-real-adapter-harness.js";
 import type { FakeRuntimeFixture } from "./mvp-real-adapter-harness.js";
+
+async function waitForExactWorkerExit(operation: Record<string, unknown>, timeoutMs = 15_000): Promise<void> {
+  const worker = JSON.parse(String(operation.claim_worker_identity_json)) as Record<string, unknown>;
+  const pid = Number(worker.process_id);
+  assert.equal(typeof worker.start_fingerprint, "string");
+  const fingerprint = String(worker.start_fingerprint);
+  assert.ok(Number.isSafeInteger(pid) && pid > 0);
+  assert.equal(typeof worker.captured_at, "string");
+  const identity = {
+    pid,
+    fingerprint,
+    fingerprint_precision: "exact" as const,
+    identity_version: PROCESS_IDENTITY_VERSION,
+    platform: "win32",
+    captured_at: String(worker.captured_at),
+  };
+  const probe = createPlatformProbe({ timeoutMs: 5_000 });
+  const deadline = Date.now() + timeoutMs;
+  let lastState = "unknown";
+  while (Date.now() < deadline) {
+    const [verdict] = await probe.probe([{ pid, identity }]);
+    lastState = verdict?.state ?? "unknown";
+    if (lastState === "exited") return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.fail(`exact Worker ${pid} did not exit before user-authorized Recovery; last state=${lastState}`);
+}
 
 test("test-only fake adapter capability cannot be injected through MCP TaskPackage arguments", { timeout: 60_000 }, async () => {
   await withRealAdapterMcp(async (client, _manager, _dataRoot, workspace) => {
@@ -256,6 +284,7 @@ test('ADR-027 cleanup expiry preserves a failed Result while user-authorized Rec
     const result=contentObject(await client.callTool({name:'zcode_result',arguments:{task_id:taskId}}));
     assert.equal(result.error_code,'cleanup_failed');
     const operation=await operationFor(dataRoot,taskId);assert.equal(operation.phase,'cleanup_unverified');
+    await waitForExactWorkerExit(operation);
     // The adapter did not provide resource facts. Recovery must not invent a
     // Cleanup success from the late close alone. The explicit user cancel may
     // perform the separately audited administrative Release after a fresh tree

@@ -37,6 +37,9 @@ const waiterAttribution = [
 
 await Promise.all([
   build({ ...shared, format: "esm", entryPoints: [path.join(repoRoot, "src", "mcp", "main.ts")], outfile: path.join(distDir, "bridge.mjs") }),
+  build({ ...shared, format: "esm", entryPoints: [path.join(repoRoot, "src", "cli", "main.ts")], outfile: path.join(distDir, "task-cli.mjs") }),
+  build({ ...shared, format: "esm", entryPoints: [path.join(repoRoot, "src", "executor", "main.ts")], outfile: path.join(distDir, "executor.mjs") }),
+  build({ ...shared, format: "esm", entryPoints: [path.join(repoRoot, "src", "web", "main.ts")], outfile: path.join(distDir, "web-console.mjs") }),
   build({ ...shared, format: "esm", entryPoints: [path.join(repoRoot, "src", "cli", "admin-abandon-held-operation.ts")], outfile: path.join(distDir, "admin-abandon-held-operation.mjs") }),
   build({
     ...shared,
@@ -47,6 +50,11 @@ await Promise.all([
   }),
   build({ ...shared, format: "esm", entryPoints: [path.join(repoRoot, "src", "worker", "worker-main.ts")], outfile: path.join(workerDir, "worker-main.mjs") }),
 ]);
+await mkdir(path.join(distDir, "vendor"), { recursive: true });
+await copyFile(
+  path.join(repoRoot, "tools", "cost-lab", "vendor", "official-billing-runtime.mjs"),
+  path.join(distDir, "vendor", "official-billing-runtime.mjs"),
+);
 
 // The managed CDP browser backend ships as a CommonJS bundle next to the ESM
 // worker: playwright-core (pinned in package.json) keeps its CommonJS runtime

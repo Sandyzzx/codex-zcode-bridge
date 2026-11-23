@@ -10,7 +10,7 @@ import { Socket } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { BRIDGE_WORKER_LAUNCH_MARKER, fingerprintRuntimeArtifact, verifyWorkerProvenance } from "../runtime/build-provenance.js";
-import { validateHostProfile, type BridgeHostProfile } from "../host/profile.js";
+import { validateHostProfile, type BridgeHostProfile } from "../runtime/host-profile.js";
 import { createPlatformProbe } from "../runtime/process-probe.js";
 import { StartPlanSecretRedactor } from "../runtime/start-plan-secret-redactor.js";
 import type { TaskPackage, WorkspaceRef, ZCodeRuntimeConfig } from "../interfaces.js";

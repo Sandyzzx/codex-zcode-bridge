@@ -1,4 +1,4 @@
-import { validateHostProfile, type BridgeHostProfile } from "../host/profile.js";
+import { validateHostProfile, type BridgeHostProfile } from "./host-profile.js";
 import { createTrustedLocalPolicyProvider, type TrustedLocalPolicyConfig, type TrustedLocalPolicyProvider } from "../sqlite-candidate/wp6b2b1/trusted-local-policy.js";
 
 const BUILT_IN_POLICY: TrustedLocalPolicyConfig = Object.freeze({

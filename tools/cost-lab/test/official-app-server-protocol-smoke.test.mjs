@@ -32,8 +32,10 @@ test("zero-model protocol smoke starts, inspects, and releases the official runt
     let disposedWorkspace = 0;
     let disposedAll = 0;
     let environmentDuringConnect = null;
+    const runRootParent = path.join(root, "authority", ".run");
     const options = {
       projectRoot: root,
+      runRootParent,
       createId: () => FIXED_ID,
       timeoutMs: 5_000,
       inspectRuntime: async () => ({
@@ -104,7 +106,7 @@ test("zero-model protocol smoke starts, inspects, and releases the official runt
     assert.deepEqual(requested, [{ method: OFFICIAL_PROTOCOL_SMOKE_METHOD, params: {} }]);
     assert.equal(disposedWorkspace, 1);
     assert.equal(disposedAll, 1);
-    await assert.rejects(access(path.join(root, ".run", "cost-lab-web", `protocol-smoke-${FIXED_ID}`)));
+    await assert.rejects(access(path.join(runRootParent, "cost-lab-web", `protocol-smoke-${FIXED_ID}`)));
 
     const controller = new AbortController();
     const aborted = await runOfficialAppServerProtocolSmoke({
@@ -123,7 +125,7 @@ test("zero-model protocol smoke starts, inspects, and releases the official runt
     assert.equal(requested.length, 1);
     assert.equal(disposedWorkspace, 2);
     assert.equal(disposedAll, 2);
-    await assert.rejects(access(path.join(root, ".run", "cost-lab-web", `protocol-smoke-${FIXED_ID}`)));
+    await assert.rejects(access(path.join(runRootParent, "cost-lab-web", `protocol-smoke-${FIXED_ID}`)));
   } finally {
     await rm(root, { recursive: true, force: true });
   }

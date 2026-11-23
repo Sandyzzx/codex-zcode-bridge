@@ -6,8 +6,12 @@ plugins/codex-zcode-bridge/worker/vendor/pkg/browser-host.cjs linguist-generated
 plugins/codex-zcode-bridge/dist/admin-abandon-held-operation.mjs text eol=lf
 plugins/codex-zcode-bridge/dist/admin-abandonment.sql text eol=lf
 plugins/codex-zcode-bridge/dist/bridge.mjs text eol=lf
+plugins/codex-zcode-bridge/dist/executor.mjs text eol=lf
+plugins/codex-zcode-bridge/dist/web-console.mjs text eol=lf
 plugins/codex-zcode-bridge/dist/runtime-events.sql text eol=lf
 plugins/codex-zcode-bridge/dist/schema.sql text eol=lf
+plugins/codex-zcode-bridge/dist/task-cli.mjs text eol=lf
+plugins/codex-zcode-bridge/dist/vendor/official-billing-runtime.mjs text eol=lf
 plugins/codex-zcode-bridge/dist/wait-task.mjs text eol=lf
 plugins/codex-zcode-bridge/worker/worker-main.mjs text eol=lf
 plugins/codex-zcode-bridge/worker/vendor/browsers.json text eol=lf

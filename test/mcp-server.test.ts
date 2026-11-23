@@ -2,6 +2,7 @@
 // InMemoryTransport with an injected fake TaskManager. No real ZCode workers,
 // no model calls, no filesystem access.
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
@@ -11,7 +12,7 @@ import {
   SERVER_NAME,
   SERVER_VERSION,
 } from "../src/mcp/server.js";
-import { TaskManagerError } from "../src/manager/errors.js";
+import { TaskManagerError } from "../src/task-errors.js";
 import type {
   ContinueTaskInput,
   ProgressTaskManager,
@@ -28,6 +29,7 @@ import type {
 import { SESSION_ID, makeTask } from "./helpers.js";
 
 const CREATED_AT = "2026-09-27T00:00:00.000Z";
+const PUBLIC_SCHEMA_SNAPSHOT = path.join(import.meta.dirname, "..", "..", "test", "fixtures", "mcp-public-schema.json");
 
 class FakeTaskManager implements TaskManager {
   readonly calls: Array<{ method: string; args: unknown }> = [];
@@ -145,9 +147,10 @@ async function withServer(
   run: (client: Client, manager: FakeTaskManager) => Promise<void>,
   doctor?: () => Promise<{ checked_at: string; execution_mode: string; checks: Array<{ name: string; status: "ok" | "warning" | "error" | "unknown"; summary: string }> }>,
   supportedProtocolVersions?: string[],
+  modelSettings?: Parameters<typeof createBridgeServer>[0]["modelSettings"],
 ): Promise<void> {
   const manager = new FakeTaskManager();
-  const server = createBridgeServer({ taskManager: manager, doctor });
+  const server = createBridgeServer({ taskManager: manager, doctor, modelSettings });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "protocol-test-client", version: "0.0.1" }, { supportedProtocolVersions });
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
@@ -188,6 +191,21 @@ test("the frozen tools and additive progress, feedback, interaction, and doctor 
   });
 });
 
+test("the public MCP tool schemas match the frozen compatibility snapshot", async () => {
+  await withServer(async (client) => {
+    const { tools } = await client.listTools();
+    const publicSchema = tools
+      .map((tool) => ({
+        name: tool.name,
+        inputSchema: tool.inputSchema,
+        ...(tool.outputSchema ? { outputSchema: tool.outputSchema } : {}),
+      }))
+      .sort((left, right) => left.name.localeCompare(right.name));
+    const expected = JSON.parse(readFileSync(PUBLIC_SCHEMA_SNAPSHOT, "utf8")) as unknown;
+    assert.deepEqual(publicSchema, expected);
+  });
+});
+
 test("zcode_doctor returns read-only setup diagnostics", async () => {
   const report = {
     checked_at: CREATED_AT,
@@ -202,6 +220,44 @@ test("zcode_doctor returns read-only setup diagnostics", async () => {
     assert.equal(result.isError, undefined);
     assert.deepEqual(result.structuredContent, report);
   }, async () => report);
+});
+
+test("the four model tools delegate to the injected settings service", async () => {
+  const calls: string[] = [];
+  await withServer(async (client) => {
+    for (const [name, args] of [
+      ["zcode_model_catalog", { workspace: "C:\\work\\demo" }],
+      ["zcode_default_model", {}],
+      ["zcode_set_default_model", { provider_id: "provider-a", model_id: "model-a" }],
+      ["zcode_clear_default_model", {}],
+    ] as const) {
+      const result = (await client.callTool({ name, arguments: args })) as CallToolResult;
+      assert.notEqual(result.isError, true, `${name}: ${JSON.stringify(result)}`);
+    }
+  }, undefined, undefined, {
+    async listModels(workspace: string) {
+      calls.push(`list:${workspace}`);
+      return { workspace, current_model: null, models: [], account_provider_sync: "not_needed" };
+    },
+    async getDefaultModel() {
+      calls.push("get");
+      return { configured: false, model: null };
+    },
+    async setDefaultModel(selection: { provider_id: string; model_id: string; reasoning_level?: string }) {
+      calls.push(`set:${selection.provider_id}:${selection.model_id}`);
+      return { configured: true as const, model: selection };
+    },
+    async clearDefaultModel() {
+      calls.push("clear");
+      return { configured: false as const, model: null };
+    },
+  });
+  assert.deepEqual(calls, [
+    "list:C:\\work\\demo",
+    "get",
+    "set:provider-a:model-a",
+    "clear",
+  ]);
 });
 
 test("zcode_events maps the optional attention wait and returns the nested snapshot", async () => {

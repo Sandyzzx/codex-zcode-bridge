@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import type { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
@@ -127,5 +128,7 @@ export function workerEntryPath(): string {
   if (process.env["ZCODE_BRIDGE_PLUGIN_MODE"] === "1") {
     return fileURLToPath(new URL("../worker/worker-main.mjs", import.meta.url));
   }
+  const bundled = fileURLToPath(new URL("../worker/worker-main.mjs", import.meta.url));
+  if (existsSync(bundled)) return bundled;
   return fileURLToPath(new URL("../worker/worker-main.js", import.meta.url));
 }

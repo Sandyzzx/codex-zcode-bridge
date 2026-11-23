@@ -1,10 +1,10 @@
 # Bridge Async Execution Architecture v1
 
-> Status: PROPOSED ARCHITECTURE（Owner 条件批准；仍不是当前实现）
-> Decision status: [ADR-045](../decisions/ADR-045-async-executor-ownership.md) = ACCEPTED with implementation gates；本文档 = PROPOSED，待 PR 1 评审合入后作为实施输入
-> Date: 2026-11-21（Asia/Shanghai）
-> Baseline: `origin/preview` `1f9ff9ef37528205e76156e13fe06ed2b1fd3711`
-> Evidence classification: 文中逐项标注 `VERIFIED`、`INFERRED`、`UNVERIFIED`
+> Status: IMPLEMENTED — TARGETED / REAL WAKE BLOCKED（trusted-local Wake targeted tests passed；真实自动 Wake Turn 与 final Release Gate 未完成，未合入 Preview，不可发布）
+> Decision status: [ADR-045](../decisions/ADR-045-async-executor-ownership.md) = ACCEPTED；[ADR-051](../decisions/ADR-051-executor-wake-delivery.md) = ACCEPTED；[ADR-052](../decisions/ADR-052-async-master-handoff.md) = ACCEPTED；本文档记录目标合同与当前实现边界
+> Date: 2026-11-22（Asia/Shanghai）
+> Baseline: `origin/preview` `8ee7ec93a82c2093dce74707a9d1937c1c567887`；PR #131 final integration candidate `7ab652baac606fedfa3e86c6db08e7892df122f7`（Web implementation/evidence `02a9e81198cffc5b90077eaba00b5abbfd40f640`）；earlier C1 evidence candidate `8f83bd340f1d6f31ddac12360583257969bb5863`；historical full-matrix candidate `c75c34330287266702cab5949662bf897b74ed5a`；PR 2 base `f330b511270934fa40014006333aa7747dad684c`
+> Evidence classification: 文中逐项标注 `VERIFIED`、`INFERRED`、`UNVERIFIED`；证据见 [PR 2 report](../reports/async-executor-pr2-20261122.md)、[PR 2.5 report](../reports/async-executor-pr2.5-20261122.md)、[PR 5 report](../reports/async-executor-pr5-20261122.md)、[PR 6 report](../reports/async-executor-pr6-20261122.md)、[统一 RC report](../reports/async-executor-release-candidate-20261122.md) 与 [Web real-process E2E](../reports/async-executor-web-real-host-e2e-20261122.md)
 
 ## 1. 目标与非目标
 
@@ -28,7 +28,7 @@
 
 | 事实 | 状态 | 证据 |
 |---|---|---|
-| `startBridge()` 在当前进程创建 `SqliteLifecycleMcpAuthority`，MCP Server 直接调用该对象 | VERIFIED | `src/host/stdio.ts` |
+| PR 2 base 的 `startBridge()` 在当前进程创建 `SqliteLifecycleMcpAuthority`，MCP Server 直接调用该对象 | VERIFIED | PR 2 base `f330b511` 的 `src/host/stdio.ts` |
 | Manager 独占内存调度队列、active run、workspace fence 和 pump；SQLite 保存持久事实 | VERIFIED | `src/manager/sqlite-lifecycle-mcp-authority.ts` |
 | Worker 通过 private pipes 与 Driver 通信，不通过 MCP stdio 提交 Result | VERIFIED | `src/manager/spawn-worker.ts`、`src/store/lifecycle-gate.ts` |
 | stdin EOF 触发 Manager shutdown；已有 Worker 依赖 Manager 存续等待 Result/Release | VERIFIED | `src/host/stdio.ts` 与 2026-11-20 S2 审计 |
@@ -37,9 +37,62 @@
 | Desktop 运行且 owning backend loaded/idle 时，官方 Queue 能启动原 Thread 新 Turn | VERIFIED | 2026-11-21 B/C 实验 |
 | CLI queue 参数能覆盖原 Thread 当前模型/effort | REFUTED | A 实验：实际仍为 Sol/xhigh |
 | Queue 支持 notLoaded Thread 或 Desktop 全退 | UNVERIFIED | 严格 C/D 未执行 |
-| 独立 Executor 能在真实 Codex Desktop 关闭后保持运行 | UNVERIFIED | 需阶段 1 Host E2E |
+| Queue ACK 与 Turn 启动是不同事实 | VERIFIED | CLI help 说明 Queue 使用 Thread 当前 model；PR 5 coordinator 以新 `inProgress` Turn 记录 `TURN_STARTED` |
+| loaded/idle Thread + exact model/provider/effort preflight 可安全转成一次性 Queue 请求 | VERIFIED（合成客户端） | strict Wake 保持 fail closed；真实 App Server control socket 当前不存在 |
+| 显式 trusted-local Owner 策略可在无私有 control socket 时提交一次 Queue | VERIFIED（合成 Queue/Host） | 单次 Queue、message ID、Result/Cleanup/Release 绑定、timeout 不重试与 SQLite evidence 定向测试通过；真实自动 Turn 未获预算授权 |
+| shipped MCP Host 进程退出后，独立 Executor 仍完成原 Attempt Result/Cleanup/Release | VERIFIED（synthetic Worker） | `executor-process-targeted-final.log`：Host 真实进程退出、Executor `active`、单次 Spawn/Result、Cleanup/Release 各一次，新 Host 重连读取同一 Result |
+| 真实 Web Console + Chromium 观察动态 Deep Link，且 Host 退出后 Web/Executor 继续可用 | VERIFIED（real process / synthetic Worker） | [Web real-process E2E](../reports/async-executor-web-real-host-e2e-20261122.md)：running/completed 页面、真实 URL、Host 退出后 active、原 Attempt 单 Result/Cleanup/Release |
+| 独立 Executor 能在真实 Codex Desktop 关闭后保持运行 | UNVERIFIED | Owner 当前 Desktop 未关闭；synthetic Worker 证据不能替代 |
 
-Preview.10 当前基线为 Windows x64、Node `24.16.0`、ZCode Desktop `3.18.2.10443`、SQLite v14 ONLY。架构文档不得把实验性 ADR-042 安装或 Token Efficiency 未合并分支写成当前支持范围。
+当前集成基线为 `origin/preview@8ee7ec93a82c2093dce74707a9d1937c1c567887`
+（Preview.13）；发布支持范围仍按现有文档限定为 Windows x64、Node `24.16.0`、
+ZCode Desktop `3.18.2.10443`、SQLite v14 ONLY。PR 2 branch 不扩大该范围，也不把
+实验性 ADR-042 安装或 Token Efficiency 候选写成当前支持范围。
+
+历史统一候选 `c75c34330287266702cab5949662bf897b74ed5a` 已通过 Windows
+本地完整回归 1060 项（1058 pass / 0 fail / 2 existing skips）、注册压力矩阵
+4/4、13 个生成物 Freshness 与插件结构校验。PR #131 的 Web/real-process 证据
+已安全整合到包含终态 Result 行政释放的上游 Preview；Web
+implementation/evidence candidate `02a9e81198cffc5b90077eaba00b5abbfd40f640`
+随后继续合并 Preview.13，最终集成候选
+`7ab652baac606fedfa3e86c6db08e7892df122f7` 在相同树重新通过 92/92 项定向
+测试与 C1 real-process/synthetic-Worker E2E。旧提交的完整回归和 GitHub
+Release Gate 不能自动代表当前 head。当前结果仍不替代真实 Desktop 关闭、
+真实 Official Runtime、严格 Wake C/D 或真实模型 Skill 遵循率。
+
+### 2.1 PR 2 / PR 2.5 实施边界
+
+PR 2 candidate 已在独立分支实现并通过合成/确定性证据：Authority Root
+`executor-lease.json` lifetime lease、精确 PID/start fingerprint 仲裁、Idle-only
+Shutdown、Named Pipe Control Client/Server、`ZCODE_BRIDGE_MCP_TRANSPORT=control`
+Thin MCP、原 Attempt Result/Cleanup/Release 的跨进程 fake Worker E2E，以及
+32 MiB Result IPC 回读。
+
+PR 2.5 candidate 将 shipped MCP 入口收敛为单一 Thin MCP：`startBridge()` 只
+创建 `ExecutorControlClient`、Task/MCP 与模型/Doctor Adapter，不再构造
+Manager、Store、Worker 或 Official Runtime；`in_process` 控制模式已删除。
+生产 Authority/Start Plan/model-routing/diagnostic composition 位于
+`src/executor/production-composition.ts`，只由独立 Executor 持有。共享的
+Task 输入、错误、Host profile、MCP-facing Doctor/model 契约和 IPC 类型分别
+抽到无生命周期副作用的模块；静态边界测试锁定 MCP → Executor → Adapter →
+ZCode 的依赖方向。原公共 MCP 工具名、Schema、SQLite v14、Manager、Worker、
+Result/Cleanup/Recovery 合同未改变。生产 Executor 入口继续拒绝 Fake Adapter
+与任意 Worker entry 测试参数。
+
+测试专用 Host harness 仍可为了隔离合同测试保留 legacy Manager；它不是
+shipped `bridge.mjs` 路径，也不是生产回退。公共 Core 中嵌入
+`SqliteLifecycleMcpAuthority` 的能力仅为兼容调用方保留；正常插件与
+`startBridge()` 必须连接 Executor。
+
+当前验收已把 shipped MCP Host、Executor、Web Console 和 Chromium 作为真实
+独立进程启动，在 Task 受理和 `launch_intent` 后终止 Host；隔离 Executor 与
+Console 保持可用，浏览器继续观察同一 Deep Link，synthetic Worker 提交原
+Attempt Result，Cleanup 与 Release 各持久化一次，新 Host 可重连读取同一
+Result。该证据边界固定为 **REAL PROCESS + SYNTHETIC WORKER**。真实 Codex
+Desktop 关闭后原 Attempt 继续执行仍为
+`NOT_RUN / BLOCKED_BY_OWNER_ENVIRONMENT`；未关闭 Owner 当前正在使用的
+Desktop，未发起付费模型请求。不得把 Host 进程测试冒充 Desktop 关闭，也不得
+据此合入 Preview、声明发布通过或对外宣称真实 Desktop 场景已验证。
 
 ## 3. 目标架构
 
@@ -124,12 +177,54 @@ Named pipe 仍可作为客户端连接提示，但**不是所有权证据**。SQ
 | 客户端 | 职责 | 禁止 |
 |---|---|---|
 | MCP | 派发、查询、Continue、Cancel、交互回复的协议适配 | 不创建 Manager，不因连接断开取消 Task |
-| CLI | `list/status/events/result/cancel/reply` 管理客户端 | 不直接打开可写 Store，不实现恢复 |
-| Web | 本地任务可视化、取消、交互回复、状态通知 | 不调度任务、不写 SQLite、不暴露 Shell/文件接口 |
+| CLI | `list/status/events/result/cancel/reply/wake-authorize` 管理客户端，以及 `executor start/status/stop` | 不直接打开可写 Store，不实现恢复；`wake-authorize` 只写精确 Owner policy |
+| Web | 本地任务可视化、Deep Link、状态通知；经干净发现记录复用同一 Console；仅 loopback + Origin/CSRF | 不创建 Task、不调用模型、不写 SQLite、不暴露 Shell/SQLite/文件接口、不控制 Executor 生命周期 |
 
 公共 MCP 工具名和 Schema 保持不变；IPC 是 Bridge 内部协议，不新增公共 MCP 工具。
 
-### 3.3 交付事实
+#### 3.2.1 Task Console 发现与 Deep Link
+
+每个 Authority Root 至多有一个活动 Task Console。Console 使用动态 loopback
+端口启动，并在 Root 内写入非秘密 `task-console.json` 作为发现元数据；该文件
+绑定 Console PID/start fingerprint、Authority digest、实际 URL/port 和记录
+digest，不是第二套 Task/Result/Wake 数据库。第二个 Console 若发现安全存活的
+同 Root Owner，只复用其 URL；若 Owner 未知、URL/session 不匹配或绑定不同
+Executor lease，则 fail closed。发现记录以跨进程排除创建和 CAS 删除维护。
+
+Task CLI 的 `task console-url <task_id>` 只在 Executor 可连接、Task 可读、
+Console `/api/session` 与当前 Executor lease 一致时返回实际
+`http://127.0.0.1:<actual-port>/?task_id=<task-id>`；不能取得时返回错误，
+不输出猜测地址。页面按 `task_id` 自动选择，手动选择更新 URL，刷新保留选择，
+并对第一页之外的任务通过有界 `/summary` 读取。
+
+Task Status、Events、Result 和 Attention 独立读取。Result 尚未提交时，
+`TASK_NOT_FINISHED` 只显示 pending；其他真实错误仍可见。页面轮询只刷新本地
+Adapter，不取消 Task，也不构造新的通知权威。
+
+### 3.3 Async Master Handoff
+
+Master 的授权、Task Scope 与 Handoff Mechanism 是三个独立维度：
+
+- 授权决定是否可以使用 Bridge，以及可执行的写入/外部操作范围；
+- `whole_task`、`staged` 和只读 `auto` 决定交付与验收边界；
+- `async_wake` 与 `foreground` 决定当前 Master Turn 是否结束。
+
+这些名称都不进入 MCP/TaskPackage schema，也不是 Task 状态。Async Handoff
+只可在原 `task_id` 的受理回执可靠、Executor/Thread 绑定可核实、没有已知
+Pending Interaction 时使用；缺失条件保持 foreground 或明确 Web Notify
+回退。Master 在受理后记录 Task/Attempt、Authority 和 Thread，简洁报告，
+结束 Turn 并停止轮询。
+
+Turn end、Host 断连、MCP Stop 或请求超时只结束等待，不取消已受理 Task。
+回执未知时必须用原 `task_id` 对账，不能生成第二 ID/Attempt。Wake 到达后，
+Master 先核对 Task、Attempt、Operation 与 Result digest，再读取 Result、
+Cleanup/Release 和实际执行目录证据；Wake 本身不表示接收或验收。
+
+Pending Interaction 始终是阻塞事实。结束 Turn 前发现 Pending 必须先处理；
+Async Handoff 不新增 Pending Wake，之后的审批仍经 Web/CLI 或下一次用户
+Turn 进入。决策与 Skill 合同见 [ADR-052](../decisions/ADR-052-async-master-handoff.md)。
+
+### 3.4 交付事实
 
 这些事实必须独立展示，不能互相冒充：
 
@@ -151,9 +246,9 @@ Named pipe 仍可作为客户端连接提示，但**不是所有权证据**。SQ
 
 ### 4.1 启动和身份
 
-- Executor 由用户显式启动，例如 CLI `executor start --data-dir <absolute-state-dir>`；首版不提供自动守护。
+- Executor 由用户显式启动，例如 CLI `zcode-bridge executor start --data-root <absolute-state-dir>`；首版不提供自动守护。
 - 绑定规范化 Authority Root、Bridge/Worker build provenance、Node 版本、用户身份和当前 Windows 用户目录。
-- 同 Root 已有活动 Executor 时，新启动返回现有 endpoint 或稳定 `EXECUTOR_ALREADY_ACTIVE`，不创建第二个 owner。
+- 同 Root 已有活动 Executor 时，CLI 先连接现有 Control Pipe 并报告 `already_running`，不 Spawn；即使发生并发启动，Lifetime Lease 仍返回稳定 `EXECUTOR_ALREADY_ACTIVE`，不创建第二个 owner。
 - 不同 Root 允许各自一个 Executor；Capacity 与 workspace overlap 继续由 SQLite 全局仲裁。
 
 ### 4.2 IPC 选择
@@ -177,8 +272,14 @@ ControlResponse { protocol_version, request_id, ok, result | error, executor_sta
 
 - `protocol_version=1`；
 - request id 必须唯一，有界；
-- 每个 frame 有原始 UTF-8 byte 上限（建议先沿用 16 MiB 以内并单独定义更小控制消息上限）；
-- 控制方法只覆盖现有 MCP 生命周期操作和只读列表查询；
+- 每个 frame 有原始 UTF-8 byte 上限。PR 2 Control frame budget 为 33 MiB，
+  用于容纳既有 32 MiB canonical Result 和协议 envelope；普通控制消息仍受同一
+  上限保护，超限在 Manager dispatch 前 fail closed；
+- 控制方法只覆盖现有 MCP 生命周期操作、模型设置、Doctor 和只读列表查询；
+- 生产 composition 只能由 Executor 组装；Start Plan private auth、model
+  routing registry、Worker diagnostics 和 Doctor 不得因通信层变化而降级或
+  分叉。historical in-process Host 只保留在测试 harness，不是 shipped
+  fallback；
 - 幂等键复用 Task/Continue 现有规范化身份，不创建第二套幂等语义；
 - 客户端断开只取消该请求等待，不取消 Task；
 - 请求响应丢失返回 `SUBMISSION_UNKNOWN`，调用方必须按原 task/operation id 查询，不得换 id 重派；
@@ -198,7 +299,6 @@ ControlResponse { protocol_version, request_id, ok, result | error, executor_sta
   8. 现有 60 秒 bounded Host shutdown 仅保留给旧 MCP Host 模式；Async Executor 不把“等待 active Worker 完成”伪装成正常 idle 退出。
 - 空闲前用户可显式 `zcode_cancel` 单个任务；但这属于任务取消合同，不是 Executor 正常退出的自动动作。
 - 强制终止后的遗留 lease、Hold、`WRITER_INTENT` 均保持 fail closed，不得自动清除。
-现有 60 秒 bounded Host shutdown 仅保留给旧 MCP Host 模式；Async Executor 不把“等待 active Worker 完成”伪装成正常 idle 退出。
 - Executor 未运行时，MCP/CLI/Web 只能读只读 Attention/状态，或提示用户显式启动 Executor。
 - 升级前后必须正常 shutdown；强制结束后的恢复沿用现有 Hold/Recovery 合同。
 - 不用 `detached:true` 推断真实 Host 脱离；真实 Job Object/进程组行为是阶段 1 E2E 项。
@@ -213,27 +313,40 @@ ControlResponse { protocol_version, request_id, ok, result | error, executor_sta
 
 ### 5.1 Wake Intent / Delivery 持久化
 
-Wake 不新增第二套持久化权威。PR 5 前必须先完成一次 schema 裁决：
+PR 5 裁决采用 SQLite v14 事件记录，不新增 schema/表：
 
-1. **优先方案 A：SQLite v14 事件记录**。为已释放的 terminal Operation 追加一条 bounded `observation_recorded` 事件，把 Wake Intent/Delivery 的事实摘要写入受验证的 evidence JSON，并用 `evidence_digest` 绑定 Task、Attempt、Operation、Result digest、Thread ID、delivery ID、授权来源和状态。该方案需要扩展现有 evidence allowlist 与事件校验，属于受控 schema/校验变更，不新增表和第二状态机。
-2. **方案 B：Authority Root 下的私有 append-only journal**。只有方案 A 无法在 2 KiB evidence 限制内表达必要事实且无法安全修改校验时才评估。仍必须位于同一 Authority Root、绑定 Result digest、原子写入、无 schema 变更；不得变成任务调度事实源。
-3. **禁止**：独立 SQLite/JSON 任务库、Web 侧缓存权威、把 Wake 状态混入 Task 状态、或仅依赖 Web 进程内存。
-4. 若 PR 5 无法证明方案 A 的 evidence 结构、幂等和审核边界，Wake 持久化保持 `INCONCLUSIVE`，只允许 Web Notify，不开放自动 Queue。
+1. 已 `released` 的 terminal Operation 追加 bounded
+   `observation_recorded` evidence，`reason=executor_wake`。
+2. evidence 绑定 Task、Attempt、Operation、generation、Result digest、
+   Result commit ref、Thread ID、delivery ID、policy digest、authorization
+   digest、state、reason code、可选 Queue message ID 和 evidence digest；单条上限 2 KiB。
+3. 同一 Operation 最多 5 条 Wake evidence。相同 observation 幂等；
+   delivery/binding/transition 冲突、重复 Queue ACK、超过上限或非 `released`
+   Operation 均 fail closed。
+4. Wake 事件只允许 `released -> released`，不改变 Task、Result、Cleanup、
+   Release、Capacity、Writer 或 Recovery projection。Web Notify 只在首次
+   `web_notify` 事实持久化后触发；展示失败不回滚或重试 Queue。
+5. 没有第二 SQLite/JSON/journal、Web 缓存权威或内存状态 Authority。
 
-该问题不阻塞 PR 2/3/4。
+实现见 [ADR-051](../decisions/ADR-051-executor-wake-delivery.md)。持久化
+兼容性覆盖 Release retry、Continue history、Administrative Release 和
+Recovery；真实 Desktop UI acknowledgement 仍是 `UNKNOWN`。
 
 ## 6. 分阶段实施
 
 | 阶段 | 范围 | 硬门槛 |
 |---|---|---|
 | PR 1 | 本文档 + ADR + 接口/测试矩阵 | Owner 批准 |
-| PR 2 | Independent Executor + IPC + Thin MCP | 关闭 Codex 后原 Attempt 继续执行并提交 Result/Cleanup/Release |
-| PR 3 | Task CLI + shared Control Client | MCP/CLI 并发读写同一权威 |
-| PR 4 | Web Console | 本地安全、无模型调用、页面关闭不影响 Task |
-| PR 5 | Queue Wake Adapter | 已加载 idle Thread 交付确认；严格 C/D 独立验收 |
-| PR 6 | Full E2E / Preview integration | 五场景矩阵和发布门禁 |
+| PR 2 | Independent Executor + IPC + Thin MCP | 合成跨进程 Result/Cleanup/Release PASS；真实关闭 Codex 后原 Attempt 仍为 `NOT_RUN / BLOCKED` |
+| PR 2.5 | MCP → Executor → Adapter → ZCode 四层收敛 | Thin MCP 不再构造 Authority；静态依赖边界、MCP schema parity、Executor IPC 与四层 fake Official Runtime E2E PASS；不新增执行路径 |
+| PR 3 | Task CLI + shared Control Client | MCP/CLI 并发读写同一权威；CLI 分发不拥有 SQLite/Manager |
+| PR 4 | Web Console | 已实现 loopback/Origin/CSRF、只读 Task/Event/Result/Attention、显式 Cancel/Reply、Root 级发现、`task console-url` 与 Deep Link；真实 Chromium 在 Host 退出前后观察同一 Task，页面关闭不影响 Executor |
+| PR 5 | Queue Wake Adapter | 默认 strict loaded/idle exact-config；显式 trusted-local 允许无 control socket 单次 Queue，并保留 Turn 未确认的 Web fallback；严格 C/D 独立验收 |
+| PR 6 | Async Master Skill & Dispatch Workflow | 已实现可靠受理后 Turn 结束/停止轮询、未知回执原 ID 对账、Wake 身份核对与独立验收；真实模型遵循率和真实 Host Wake `NOT_RUN / BLOCKED` |
 
-允许按依赖合并 PR，但每阶段不得扩大到重构生产合同。
+允许按依赖合并 PR，但每阶段不得扩大到重构生产合同。统一 Release Candidate
+在 PR 2-6 功能链完成后集中执行完整本地与 CI 门禁，而不是在每个普通 PR
+更新时重复完整矩阵。
 
 ## 7. 测试矩阵
 
@@ -257,6 +370,23 @@ Wake 不新增第二套持久化权威。PR 5 前必须先完成一次 schema �
 | Executor 异常崩溃 | Recovery 不伪造 Result/Release |
 | IPC frame 超限/畸形 | fail closed，不破坏 Authority |
 | Interaction reply ACK unknown | 不重放，保留待确认 |
+| legacy Host/Executor 生产组装一致性 | Start Plan、动态 routing、Worker diagnostics、Doctor、模型设置同源 |
+| Thin MCP 模型与 Doctor | set/get/clear/list 经 IPC；Doctor 保留完整检查，不返回本地占位 |
+| Executor 启动失败 | pipe/Authority 启动失败按精确 Lease 与 Store close 证明回滚或 fail closed |
+| Task CLI 已运行检测 | 已有活动 Executor 不触发第二次 Spawn |
+| Task CLI 历史 Authority transition | 仅显式一次性标志；不能绕过已知活动旧 owner |
+| Task CLI bounded list/Result | Cursor/limit 与 Result stdout 文件预算生效，不直接打开 SQLite |
+| Web Console 本地边界 | 非 loopback/Host/Origin/CSRF 请求拒绝；完整 Result 超过 2 MiB 不截断 |
+| Web Console 生命周期 | 页面/HTTP 关闭不改 Task 或 Executor Lease；只关闭可视化 Adapter |
+| Web Console 发现 | 同 Authority Root 二进程复用同一实际 URL；异常/未知/lease mismatch fail closed；发现文件不是 Task/Result Authority |
+| Web Task Deep Link | `task_id` 自动选择、URL 同步、刷新保留、跨页 summary 可取、URL 不含 CSRF/凭据 |
+| Web 未完成 Result | Status/Events 独立显示；`TASK_NOT_FINISHED` 只显示 pending，不掩盖其他有效证据 |
+| Wake 授权入口 | 当前 Attempt 校验后排他创建 `wake-policy.json`；已有策略不覆盖 |
+| trusted-local Wake | 仅显式 Owner policy；精确 Task/Attempt/Workspace、Result/Cleanup/Release、一次性 intent 后单次 Queue；当前模型风险由 Owner 接受 |
+| trusted-local Turn 未知 | Queue ACK 后仍记录 `trusted_local_turn_start_unverified`，不把 Web fallback 当成 Queue 重试 |
+| Web Notify 可发现性 | CLI/Web 从现有 SQLite `executor_wake` Event 投影 state/reason/at，不新增通知权威 |
+| Async Handoff 决策合同 | 授权、Scope、Mechanism、受理、未知回执、Pending、Turn end、Wake 与验收分别判定 |
+| Async Handoff 负例 | 断连/Turn end 不取消；Wake identity mismatch 不验收；静默合同测试不能冒充真实模型遵循 |
 
 ### 7.2 五个生命周期 E2E
 
@@ -268,11 +398,48 @@ Wake 不新增第二套持久化权威。PR 5 前必须先完成一次 schema �
 
 ### 7.3 Wake 验收
 
-- loaded/idle：Queue 投递后必须有 `TURN_STARTED` 与终态证据。
+- strict：loaded/idle exact-config Queue 投递后必须区分 `QUEUED` 与 `TURN_STARTED`，`TURN_COMPLETED`
+  另行由 Thread 事件/后续验收观察，不能由 Queue ACK 推断。
+- trusted-local：无同 Owner 控制面时只允许 `QUEUED` 或
+  `trusted_local_turn_start_unverified`；不得声称 loaded/idle、当前模型匹配或
+  `TURN_STARTED`。Queue 只提交一次，失败/未知不自动重试。
 - notLoaded：严格 C，普通 Queue 与 `--resume` 分别验证。
 - Desktop 全退：D 场景验证是否持久排队或由独立 owner 消费。
 - 模型失控负例：当前 model/effort/budget 未确认时 fail-closed 转 Web Notify。
 - 多 writer、版本漂移、提交未知：不自动重发。
+- Desktop visible：没有显式 UI acknowledgement 时固定为 `UNKNOWN`。
+- Native Host readback：Queue 后必须由 Host 已注册的原生 `zcode_status` /
+  `zcode_result(view="summary", expected_attempt=...)` 读取原 Attempt；
+  `exec_command`/PowerShell/Node 启动的 Thin MCP 或 Task CLI 不是受支持的
+  readback 证据。安装版仍指向旧 in-process Manager 时，
+  `NATIVE_MCP_READBACK=BLOCKED_BY_INSTALLED_HOST_VERSION`。
+
+当前确定性证据：
+
+- `test/executor-wake.test.ts`：12/12，覆盖 strict 策略缺失/失效、disabled、
+  App Server 不可用、notLoaded/active/systemError/direct-input、workspace/model/
+  provider/effort 不匹配、trusted-local 显式授权、一次性 intent、message ID、
+  ACK lost、Turn observation 与 fallback。
+- `test/sqlite-candidate/wp6c/executor-wake.test.mjs`：5/5，覆盖 SQLite v14
+  evidence、Queue message ID、幂等/冲突、Web fallback、Release retry 与
+  Continue 兼容。
+- `test/executor-process.test.ts` 的 fake Worker E2E：Result -> Cleanup ->
+  Release -> Wake -> Web fallback 通过，原 Attempt Result 与 release 未被改写。
+- shipped MCP Host 进程在 `launch_intent` 后退出，Executor 保持 active；
+  synthetic Worker 只 Spawn 一次并提交原 Attempt Result，Cleanup/Release
+  各一次，新 Host 重连读取同一 Result。
+- 真实 Web Console、Chromium 与 `task console-url` 使用同一动态 URL；Host
+  退出后浏览器继续可见 `ACTIVE`，最终页面显示 `completed` 和 Result。
+- 当前真实环境无 App Server control socket；strict probe 保持
+  `web_notify / app_server_unavailable` 且 Queue 调用为 0；显式 trusted-local
+  已具备单次 Queue 路径，但真实自动 Turn、Master readback、Desktop visible
+  和付费模型：`BLOCKED_BY_AUTHORIZATION`。
+- 2026-11-23 的真实 Wake Turn 已证明 Queue ACK 与 Turn Started；该 Turn
+  的 readback 由测试包装器明确要求在受限 Thread 中启动 Thin MCP 子进程，
+  因而只构成 `SANDBOX_READBACK=FAIL`。当前 Desktop 注册的插件仍是
+  `2.0.0-preview.13` in-process Manager，不是本候选 Thin MCP；原生工具
+  虽可调用，但不能读取隔离 Executor Authority，故
+  `NATIVE_MCP_READBACK=BLOCKED_BY_INSTALLED_HOST_VERSION`。
 
 ## 8. 发布门槛
 
@@ -291,32 +458,54 @@ Wake 不新增第二套持久化权威。PR 5 前必须先完成一次 schema �
 
 ### Wake
 
-- 仅 loaded/idle 实验版可先开放；正式版必须补严格 C/D、多 writer 和版本漂移。
-- A 类模型失控必须有负例测试；未确认 model/effort/budget 一律 Web Notify。
+- strict 仅 loaded/idle 实验版可先开放；trusted-local 只用于显式单用户本地
+  Owner policy，且必须记录 Turn/模型未证明。正式版仍须补严格 C/D、多 writer
+  和版本漂移。
+- strict 在未确认 model/effort/budget 时一律 Web Notify；trusted-local 的模型
+  风险必须由 Owner 在 policy 中显式接受，不能由代码自动升级。
+- Queue 失败/未知不得影响 Result/Cleanup/Release；Desktop visible 不得由
+  Queue ACK 推断。
+
+### Async Master Skill
+
+- 可靠 Task 受理后才可结束 Master Turn；`SUBMISSION_UNKNOWN` 必须用原
+  `task_id` 对账，不得换 ID。
+- Turn end、MCP Stop、客户端断开或请求超时不得触发 Task Cancel。
+- Wake 后必须核对身份并独立检查 Result、Cleanup、Release、diff 与测试。
+- Pending Interaction 不得自动批准，也不得被报告为完成。
+- 当前确定性 Skill policy 测试只证明 Markdown 决策合同；真实 Host 的模型
+  遵循率属于单独发布风险，`NOT_RUN` 时不得宣称 Async Master 已验收。
 
 ### Preview integration
 
-- `test:affected` 按变更范围通过；发布门禁保持 Windows/Ubuntu CI。
+- Executor 开发期使用 T0、受影响测试和关键 E2E；`FULL_SUITE` 在开发门禁明确延期，不得当作通过。完整 Ubuntu/Windows/Stress 只在 Preview Release Candidate、Owner 明确要求或重大跨模块不确定性时运行；整合 terminal-result Preview 后的最终候选仍须执行一次 exact-head Release Gate。
 - 真实模型测试须单独授权，使用隔离 Thread 和低成本模型；费用不可观察时报告不可观察。
 - Token Efficiency 试点与 Async 架构实验分开记账。
 
 ## 9. 已知风险与未验证项
 
-1. 独立 Executor 在真实 Codex Desktop 关闭后的 Windows 进程存活：UNVERIFIED。
+1. 真实 Codex Desktop 关闭后的 Windows 进程存活：`NOT_RUN / BLOCKED_BY_OWNER_ENVIRONMENT`。已通过的真实边界是 shipped MCP Host 进程被终止后，隔离 Executor 与 synthetic Worker 继续完成原 Attempt Result/Cleanup/Release；这不是 Desktop 全退证据。
 2. SDK 强制终止导致原 Worker Result 丢失：VERIFIED；S2 必须先解决 owner，再考虑持久化交接。
-3. Executor IPC 的同用户安全边界在 Windows named pipe 上仍需实现和测试：INFERRED，合同已冻结，实现 UNVERIFIED。
-4. MCP 等待请求与 Executor 控制请求的生命周期解耦仍需 PR 2 详细设计。
-5. Web 列表投影的扫描规模与 Token 输出仍需基准，不得无界读取全部事件。
-6. Queue 只证明 loaded/idle；notLoaded 与 Desktop 全退 UNVERIFIED。
-7. A 实验 Sol/xhigh 费用/额度变化不可观察，不估算。
-8. 并行 Token Efficiency 分支尚未合入 Preview；本架构不得预设其结果。
+3. Executor IPC 的同用户安全边界使用 Windows named pipe；确定性单实例/断连/帧边界测试已通过，真实多用户隔离仍未验证。
+4. MCP 等待请求与 Executor 控制请求的生命周期已在 PR 2/2.5 candidate 中实现并覆盖 `REQUEST_CANCELLED`、`TASK_CANCEL_REQUESTED`、`SUBMISSION_UNKNOWN`、`EXECUTOR_UNAVAILABLE`；真实 Host 行为仍待 E2E。
+5. Thin MCP 已删除 `in_process` 分支；仍依赖客户端在 Executor 未启动时明确得到 `EXECUTOR_UNAVAILABLE`，而不是自动拉起 Executor。
+6. Web 列表投影的扫描规模与 Token 输出仍需基准，不得无界读取全部事件。
+7. strict Queue 只证明 loaded/idle；notLoaded 与 Desktop 全退 UNVERIFIED。
+   trusted-local 可在无 control socket 时提交单次 Queue，但不证明 loaded、
+   当前模型或 Turn 启动；Queue ACK、Turn Started、Master Result readback 与
+   Desktop Visible 必须分开报告。真实自动 Wake Turn 尚无本轮模型预算授权。
+8. A 实验 Sol/xhigh 费用/额度变化不可观察，不估算。
+9. Token Efficiency 架构敏感候选保持冻结；本架构不得预设其结果。
+10. Async Handoff 目前由 Skill 行为约束，不是服务端强制鉴权。模型可能不遵循
+    Turn-end、Pending 或 Wake 核对规则；统一 Release Candidate 需要记录该
+    未验证风险，真实 Host A/B 未运行前不得宣称可靠。
 
-## 10. Owner 待批准事项
+## 10. Owner 批准记录
 
-1. 是否批准独立用户级 Executor、Authority Root lifetime lease 和 Windows named pipe IPC 作为 S2 首版。
-2. 是否批准 MCP/CLI/Web 共用 Executor Control Client，并冻结公共 MCP 工具面不变。
-3. 是否批准 Queue Wake 作为可选阶段 5，且仅支持已授权 loaded/idle Thread。
-4. 是否批准本验收矩阵作为实施和发布门槛。
+1. `ACCEPTED`：独立用户级 Executor、Authority Root lifetime lease 和 Windows named pipe IPC 作为 S2 首版。
+2. `ACCEPTED`：MCP/CLI/Web 共用 Executor Control Client，公共 MCP 工具面保持不变。
+3. `ACCEPTED`：Queue Wake 作为可选阶段 5；strict 仅支持已授权 loaded/idle Thread，显式 trusted-local 允许本地单用户 Owner 接受当前模型风险后单次 Queue，Web Notify 是默认安全回退。
+4. `ACCEPTED`：本验收矩阵作为实施和发布门槛。真实 Desktop 关闭和严格 C/D 分别作为独立门禁。
 
 ## 11. 外部实验证据
 

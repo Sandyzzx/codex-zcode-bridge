@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { pathToFileURL } from "node:url";
 
 import {
   CODE_EDIT_EXPECTED_CONTENT,
@@ -96,14 +98,30 @@ async function fixtureFiles(root) {
   const userHome = path.join(root, "user-home");
   const install = path.join(root, "install");
   const files = [
-    path.join(userHome, ".zcode", "v2", "provider_config.json"),
-    path.join(install, "resources", "glm", "zcode.cjs"),
-    path.join(install, "resources", "tools", "runtime-host", "zcode-runtime-host.exe"),
-    path.join(install, "resources", "config", "provider", "zcode-builtin.json"),
+    [
+      path.join(userHome, ".zcode", "v2", "provider_config.json"),
+      JSON.stringify({
+        config: {
+          providerConfigRules: {
+            providerRules: {
+              [PRODUCTION_VERIFICATION_CONTRACT.provider]: {
+                models: [PRODUCTION_VERIFICATION_CONTRACT.model],
+              },
+            },
+          },
+        },
+      }),
+    ],
+    [path.join(install, "resources", "glm", "zcode.cjs"), "synthetic\n"],
+    [path.join(install, "resources", "tools", "runtime-host", "zcode-runtime-host.exe"), "synthetic\n"],
+    [
+      path.join(install, "resources", "config", "provider", "zcode-builtin.json"),
+      JSON.stringify({ config: {} }),
+    ],
   ];
-  for (const file of files) {
+  for (const [file, content] of files) {
     await mkdir(path.dirname(file), { recursive: true });
-    await writeFile(file, "synthetic\n", "utf8");
+    await writeFile(file, content, "utf8");
   }
   const bridgeEntryPath = path.join(root, "dist", "src", "mcp", "main.js");
   await mkdir(path.dirname(bridgeEntryPath), { recursive: true });
@@ -116,11 +134,13 @@ test("production runner drives the built MCP task and returns runtime/usage evid
   const root = await mkdtemp(path.join(RUN_ROOT, "production-runner-test-"));
   const synthetic = await fixtureFiles(root);
   const stateRootParent = path.join(RUN_ROOT, "production-runner-state");
-  const stateRoot = path.join(stateRootParent, "cost-lab-web", "verification-state", FIXED_ID);
+  const stateRoot = path.join(stateRootParent, "runs", FIXED_ID);
   const calls = [];
   let closed = 0;
   let statusCalls = 0;
   let reportInstalledRuntime = true;
+  let executorStarted = 0;
+  let executorStopped = 0;
   try {
     const runner = createProductionCodingPlanVerificationRunner({
       projectRoot: root,
@@ -136,9 +156,29 @@ test("production runner drives the built MCP task and returns runtime/usage evid
         ProgramFiles: "C:\\Program Files",
       },
       inspectRuntime: async () => verifiedRuntime(synthetic.install),
+      manageExecutor: true,
+      startExecutorProcess: async (options) => {
+        executorStarted += 1;
+        assert.equal(options.dataRoot.endsWith(path.join("bridge-data", "state")), true);
+        assert.equal(options.executorEntryPath.endsWith("executor.mjs"), true);
+        assert.equal(options.bridgeEntryPath, synthetic.bridgeEntryPath);
+        return {
+          pid: 4242,
+          ready: { lease_id: "lease-cost-lab", pipe_name: "\\\\.\\pipe\\synthetic" },
+          stop: async () => {
+            executorStopped += 1;
+            return { status: "closed", blockers: [] };
+          },
+        };
+      },
       connectClient: async (options) => {
+        assert.equal(executorStarted, executorStopped + 1);
         const runtimeConfig = JSON.parse(await readFile(
           path.join(root, ".run", "cost-lab-web", "verifications", FIXED_ID, "home", ".codex", "codex-zcode-bridge", "runtime-config.json"),
+          "utf8",
+        ));
+        const authorityConfig = JSON.parse(await readFile(
+          path.join(root, ".run", "cost-lab-web", "verifications", FIXED_ID, "home", ".codex", "codex-zcode-bridge", "authority.json"),
           "utf8",
         ));
         assert.equal(options.args[0], synthetic.bridgeEntryPath);
@@ -146,6 +186,11 @@ test("production runner drives the built MCP task and returns runtime/usage evid
         assert.equal(options.env.ZCODE_BRIDGE_PLUGIN_MODE, "1");
         assert.equal(isWithin(root, options.env.LOCALAPPDATA), false);
         assert.equal(isWithin(root, runtimeConfig.ZCODE_BRIDGE_DATA_DIR), false);
+        assert.deepEqual(authorityConfig, {
+          schema_version: 1,
+          authority: "sqlite",
+          data_root: runtimeConfig.ZCODE_BRIDGE_DATA_DIR,
+        });
         assert.equal(runtimeConfig.ZCODE_BRIDGE_PREFER_STARTPLAN, "false");
         return {
           client: {
@@ -250,6 +295,8 @@ test("production runner drives the built MCP task and returns runtime/usage evid
     assert.equal(result.hour, 10);
     assert.equal(result.runtime_evidence.runtime.bundle_sha256, "a".repeat(64));
     assert.equal(result.runtime_evidence.status, "PASS");
+    assert.equal(result.runtime_evidence.executor.lease_id, "lease-cost-lab");
+    assert.equal(result.runtime_evidence.executor.shutdown, "closed");
     assert.equal(result.runtime_evidence.request_security.installed_bundle_verified, true);
     assert.equal(result.runtime_evidence.provider, PRODUCTION_VERIFICATION_CONTRACT.provider);
     assert.equal(result.runtime_evidence.request_security.expected, "OfficialRequestSecurity");
@@ -265,10 +312,13 @@ test("production runner drives the built MCP task and returns runtime/usage evid
       "zcode_events",
     ]);
     assert.equal(closed, 1);
+    assert.equal(executorStopped, 1);
     await assert.rejects(lstat(stateRoot), { code: "ENOENT" });
     reportInstalledRuntime = false;
     const mismatch = await runner(input);
     assert.equal(mismatch.runtime_evidence.status, "UNVERIFIED");
+    assert.equal(executorStarted, 2);
+    assert.equal(executorStopped, 2);
     assert.equal(mismatch.runtime_evidence.request_security.installed_bundle_verified, null);
   } finally {
     await Promise.all([
@@ -595,6 +645,122 @@ test("production runner supports a real code-edit task through the Start Plan pr
   }
 });
 
+test("production runner reports bounded release diagnostics and executor ownership on release timeout", async () => {
+  await mkdir(RUN_ROOT, { recursive: true });
+  const root = await mkdtemp(path.join(RUN_ROOT, "production-runner-release-diagnostics-"));
+  const synthetic = await fixtureFiles(root);
+  const stateRootParent = await mkdtemp(path.join(tmpdir(), "bridge-costlab-release-state-"));
+  const calls = [];
+  let statusCalls = 0;
+  try {
+    const lifecycleEvent = {
+      seq: 4,
+      at: "2026-11-17T02:03:00.000Z",
+      type: "cleanup_pending",
+      summary: "SQLite lifecycle: cleanup_pending",
+      details: { reason: "adapter_cleanup_pending" },
+    };
+    const runner = createProductionCodingPlanVerificationRunner({
+      projectRoot: root,
+      bridgeEntryPath: synthetic.bridgeEntryPath,
+      createId: () => FIXED_ID,
+      pollIntervalMs: 5,
+      releaseTimeoutMs: 40,
+      manageExecutor: true,
+      stateRootParent,
+      env: {
+        HOME: synthetic.userHome,
+        USERPROFILE: synthetic.userHome,
+        ZCODE_WINDOWS_APP_INSTALL_DIR: synthetic.install,
+        ProgramFiles: "C:\\Program Files",
+      },
+      inspectRuntime: async () => verifiedRuntime(synthetic.install),
+      startExecutorProcess: async () => ({
+        pid: 4242,
+        ready: { lease_id: "lease-diagnostics", pipe_name: "\\\\.\\pipe\\synthetic" },
+        stop: async () => ({ status: "not_idle", blockers: ["operation:cleanup_pending"] }),
+      }),
+      connectClient: async () => ({
+        client: {
+          callTool: async ({ name, arguments: args }) => {
+            calls.push({ name, args });
+            if (name === "zcode_task") return { structuredContent: { task_id: args.task_id, status: "queued" } };
+            if (name === "zcode_status") {
+              statusCalls += 1;
+              return {
+                structuredContent: {
+                  task_id: args.task_id,
+                  attempt: 1,
+                  status: statusCalls === 1 ? "running" : "completed",
+                  execution_observation: statusCalls === 1
+                    ? undefined
+                    : { state: "cleanup_held", observed_at: "2026-11-17T02:03:01.000Z", evidence_ref: "a".repeat(64) },
+                },
+              };
+            }
+            if (name === "zcode_result") {
+              return {
+                structuredContent: {
+                  task_id: args.task_id,
+                  status: "completed",
+                  exit_code: 0,
+                  model: {
+                    provider_id: PRODUCTION_VERIFICATION_CONTRACT.provider,
+                    model_id: PRODUCTION_VERIFICATION_CONTRACT.model,
+                    effective_reasoning_level: "low",
+                  },
+                },
+              };
+            }
+            if (name === "zcode_events") {
+              return {
+                structuredContent: {
+                  task_id: args.task_id,
+                  status: "completed",
+                  events: [lifecycleEvent],
+                  next_seq: lifecycleEvent.seq,
+                  has_more: false,
+                },
+              };
+            }
+            if (name === "zcode_cancel") {
+              return { structuredContent: { task_id: args.task_id, attempt: 1, status: "completed" } };
+            }
+            throw new Error(`unexpected tool ${name}`);
+          },
+        },
+        close: async () => undefined,
+      }),
+    });
+    await assert.rejects(
+      runner({
+        provider: PRODUCTION_VERIFICATION_CONTRACT.provider,
+        model: PRODUCTION_VERIFICATION_CONTRACT.model,
+        reasoning: "low",
+        beforeSnapshot: beforeSnapshot(),
+      }),
+      (error) => {
+        assert.equal(error.code, "COST_LAB_RELEASE_WAIT_FAILED");
+        assert.equal(error.executor_pid, 4242);
+        assert.equal(error.executor_lease_id, "lease-diagnostics");
+        assert.equal(error.release_diagnostics.release_timeout_ms, 40);
+        assert.equal(error.release_diagnostics.initial.event_type_counts.cleanup_pending, 1);
+        assert.equal(error.release_diagnostics.final.status.attempt, 1);
+        assert.equal(error.release_diagnostics.final.status.status, "completed");
+        assert.equal(error.release_diagnostics.final.status.execution_observation.state, "cleanup_held");
+        assert.equal(error.release_diagnostics.final.lifecycle_events[0].details.reason, "adapter_cleanup_pending");
+        return true;
+      },
+    );
+    assert.ok(calls.some((call) => call.name === "zcode_cancel"));
+  } finally {
+    await Promise.all([
+      rm(root, { recursive: true, force: true }),
+      rm(stateRootParent, { recursive: true, force: true }),
+    ]);
+  }
+});
+
 test("production runner rejects unsupported model input before creating a bridge client", async () => {
   let connected = 0;
   const runner = createProductionCodingPlanVerificationRunner({
@@ -616,12 +782,31 @@ test("production runner rejects unsupported model input before creating a bridge
   assert.equal(connected, 0);
 });
 
+test("production runner rejects a Windows verification root beyond the SQLite bootstrap path budget", {
+  skip: process.platform !== "win32",
+}, async () => {
+  const runner = createProductionCodingPlanVerificationRunner({
+    projectRoot: PROJECT_ROOT,
+    createId: () => FIXED_ID,
+    stateRootParent: path.join(tmpdir(), "x".repeat(180)),
+  });
+  await assert.rejects(
+    runner({
+      provider: PRODUCTION_VERIFICATION_CONTRACT.provider,
+      model: PRODUCTION_VERIFICATION_CONTRACT.model,
+      reasoning: "low",
+      beforeSnapshot: beforeSnapshot(),
+    }),
+    /cost_lab_verification_state_root_too_long/u,
+  );
+});
+
 test("production runner fails before model dispatch when the installed runtime is unverified", async () => {
   await mkdir(RUN_ROOT, { recursive: true });
   const root = await mkdtemp(path.join(RUN_ROOT, "production-runner-unverified-"));
   const synthetic = await fixtureFiles(root);
   const stateRootParent = path.join(RUN_ROOT, "production-runner-unverified-state");
-  const stateRoot = path.join(stateRootParent, "cost-lab-web", "verification-state", FIXED_ID);
+  const stateRoot = path.join(stateRootParent, "runs", FIXED_ID);
   let connected = 0;
   try {
     const runner = createProductionCodingPlanVerificationRunner({
@@ -667,7 +852,7 @@ test("production runner preserves the Bridge SQLite marker and roots when startu
   const root = await mkdtemp(path.join(RUN_ROOT, "production-runner-marker-"));
   const synthetic = await fixtureFiles(root);
   const stateRootParent = path.join(RUN_ROOT, "production-runner-marker-state");
-  const stateRoot = path.join(stateRootParent, "cost-lab-web", "verification-state", FIXED_ID);
+  const stateRoot = path.join(stateRootParent, "runs", FIXED_ID);
   try {
     const runner = createProductionCodingPlanVerificationRunner({
       projectRoot: root,
@@ -876,6 +1061,136 @@ test("production runner retains result evidence when a code-edit task makes no c
     ]);
   }
 });
+
+test("production runner keeps Executor and MCP process ownership across a synthetic Worker", {
+  timeout: 150_000,
+}, async () => {
+  await mkdir(RUN_ROOT, { recursive: true });
+  const root = await mkdtemp(path.join(RUN_ROOT, "production-runner-process-"));
+  const synthetic = await fixtureFiles(root);
+  const stateRootParent = await mkdtemp(path.join(tmpdir(), "bridge-costlab-state-"));
+  const executorBundle = path.join(
+    PROJECT_ROOT,
+    "plugins",
+    "codex-zcode-bridge",
+    "dist",
+    "executor.mjs",
+  );
+  const bridgeBundle = path.join(
+    PROJECT_ROOT,
+    "plugins",
+    "codex-zcode-bridge",
+    "dist",
+    "bridge.mjs",
+  );
+  const executorWrapper = path.join(root, "test-executor-entry.mjs");
+  await writeFile(executorWrapper, [
+    `import path from "node:path";`,
+    `import { fileURLToPath } from "node:url";`,
+    `import { runExecutorMain, ExecutorControlClient } from ${JSON.stringify(pathToFileURL(executorBundle).href)};`,
+    `export { ExecutorControlClient };`,
+    `const isEntry = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));`,
+    `if (isEntry) {`,
+    `  void runExecutorMain([...process.argv.slice(2), "--test-only-fake-adapter"], { testOnly: true });`,
+    `}`,
+    "",
+  ].join("\n"), "utf8");
+  let succeeded = false;
+  let result;
+  let stage = "runner";
+  try {
+    const runner = createProductionCodingPlanVerificationRunner({
+      projectRoot: root,
+      bridgeEntryPath: bridgeBundle,
+      executorEntryPath: executorWrapper,
+      createId: () => FIXED_ID,
+      pollIntervalMs: 10,
+      taskTimeoutMs: 60_000,
+      stateRootParent,
+      executorReadyTimeoutMs: 30_000,
+      executorShutdownTimeoutMs: 30_000,
+      env: {
+        HOME: synthetic.userHome,
+        USERPROFILE: synthetic.userHome,
+        ZCODE_WINDOWS_APP_INSTALL_DIR: synthetic.install,
+        ProgramFiles: "C:\\Program Files",
+      },
+      inspectRuntime: async () => verifiedRuntime(synthetic.install),
+    });
+    result = await runner({
+      provider: PRODUCTION_VERIFICATION_CONTRACT.provider,
+      model: PRODUCTION_VERIFICATION_CONTRACT.model,
+      reasoning: "low",
+      beforeSnapshot: beforeSnapshot(),
+    });
+    stage = "result_assertions";
+    assert.equal(result.model_requests, null);
+    assert.equal(result.usage, null);
+    assert.equal(result.runtime_evidence.bridge_path, "BUILT_MCP_STDIO_WITH_INDEPENDENT_EXECUTOR");
+    assert.equal(result.runtime_evidence.executor.ready_observed, true);
+    assert.equal(result.runtime_evidence.executor.shutdown, "closed");
+    assert.equal(Number.isSafeInteger(result.runtime_evidence.executor.pid), true);
+    assert.equal(result.runtime_evidence.task_id, `costlab-${FIXED_ID}`);
+    assert.equal(result.runtime_evidence.attempt, 1);
+    assert.equal(result.runtime_evidence.terminal_status, "completed");
+    assert.equal(result.runtime_evidence.operation_release_observed, true);
+    assert.equal(result.runtime_evidence.result_evidence.status, "completed");
+    stage = "executor_exit";
+    await waitForPidExit(result.runtime_evidence.executor.pid, 10_000);
+    stage = "cleanup_assertions";
+    await assert.rejects(
+      lstat(path.join(
+        stateRootParent,
+        "runs",
+        FIXED_ID,
+      )),
+      { code: "ENOENT" },
+    );
+    await assert.rejects(
+      lstat(path.join(root, ".run", "cost-lab-web", "verifications", FIXED_ID)),
+      { code: "ENOENT" },
+    );
+    succeeded = true;
+  } catch (error) {
+    const executorPid = result?.runtime_evidence?.executor?.pid ?? error?.executor_pid ?? null;
+    console.error(`cost-lab runner process failure ${JSON.stringify({
+      stage,
+      executor_pid: executorPid,
+      executor_lease_id: error?.executor_lease_id ?? null,
+      error_code: error?.code ?? null,
+      error_message: error instanceof Error ? error.message.slice(0, 4_096) : String(error).slice(0, 4_096),
+      release_diagnostics: error?.release_diagnostics ?? null,
+    })}`);
+    if (Number.isSafeInteger(executorPid) && executorPid > 0) {
+      try { process.kill(executorPid, "SIGKILL"); } catch { /* already exited */ }
+      await waitForPidExit(executorPid, 5_000).catch(() => undefined);
+    }
+    throw error;
+  } finally {
+    if (succeeded) {
+      await Promise.all([
+        rm(root, { recursive: true, force: true }),
+        rm(stateRootParent, { recursive: true, force: true }),
+      ]);
+    } else {
+      console.error(`cost-lab runner process fixture retained:\n${root}\n${stateRootParent}`);
+    }
+  }
+});
+
+async function waitForPidExit(pid, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      if (error?.code === "ESRCH") return;
+      throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`executor process ${pid} did not exit`);
+}
 
 function isWithin(root, candidate) {
   const relative = path.relative(path.resolve(root), path.resolve(candidate));

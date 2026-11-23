@@ -12,7 +12,8 @@ import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { build } from "esbuild";
 import { SqliteLifecycleMcpAuthority } from "../../../src/manager/sqlite-lifecycle-mcp-authority.js";
 import { createBridgeServer } from "../../../src/mcp/server.js";
-import { createTrustedLocalCandidateContext, serveStdioLifecycleHost, type StdioLifecycleHost } from "../../../src/host/stdio.js";
+import { createTrustedLocalCandidateContext } from "../../../src/executor/production-composition.js";
+import { serveStdioLifecycleHost, type StdioLifecycleHost } from "../../fixtures/stdio-lifecycle-host.js";
 import { initializeFreshInstallSqliteRoot, initializeIsolatedCandidateRoot, loadLifecycleCandidateModules, openClaimOnlyDriver, readAllLifecycleEventsForRecovery } from "../../../src/store/lifecycle-gate.js";
 import { DirectWorkspaceProvider } from "../../../src/workspace/direct-provider.js";
 import { createPlatformProbe, PROCESS_IDENTITY_VERSION, type ProcessProbe, type ProbeRequest, type ProbeVerdict } from "../../../src/runtime/process-probe.js";
@@ -487,15 +488,24 @@ function redactTestDiagnostic(value: unknown): unknown {
   return redacted;
 }
 
-test("production Host composition initializes the bound SQLite Authority and exposes no test Fake adapter", () => {
+test("Executor exclusively owns the production Authority, routing, auth, diagnostics, and model composition", () => {
   const host = source("host/stdio.ts");
-  assert.match(host, /initializeFreshInstallSqliteRoot\(\s*dataRoot,\s*FRESH_SQLITE_DATABASE_FILE/u);
-  assert.match(host, /const \{ SqliteLifecycleMcpAuthority \} = await import\("\.\.\/manager\/sqlite-lifecycle-mcp-authority\.js"\)/u);
-  assert.match(host, /manager = authority/u);
-  assert.match(host, /lifecycleChecks = \(\) => authority\.getDoctorChecks\(\)/u);
-  assert.match(host, /lifecycleChecks\s*\}/u);
+  const executor = source("executor/service.ts");
+  const composition = source("executor/production-composition.ts");
+  assert.doesNotMatch(host, /createProductionAuthorityComposition|SqliteAuthority\.create|LeaseGuardedTaskManager/u);
+  assert.match(executor, /createProductionAuthorityComposition\(/u);
+  assert.match(executor, /createWorkerDiagnosticSink\("\[executor\]"\)/u);
+  assert.match(composition, /initializeFreshInstallSqliteRoot\(/u);
+  assert.match(composition, /SqliteAuthority\.create\(/u);
+  assert.match(composition, /startPlanPrivateAuthFactory:\s*\(\)\s*=>\s*createHostStartPlanIssuer\(/u);
+  assert.match(composition, /routeTaskModel,\s*onOperationReleased:[\s\S]*?onWorkerDiagnosticLine:/u);
+  assert.match(composition, /settings:\s*\(\)\s*=>\s*\{[\s\S]*?loadPersistedRuntimeEnvironment\(env, homeDir, options\.host\)/u);
+  assert.match(composition, /registry:\s*async\s*\(\)\s*=>\s*\{[\s\S]*?loadPersistedRuntimeEnvironment\(env, homeDir, options\.host\)/u);
+  assert.match(composition, /new ZCodeModelSettings\(env,/u);
+  assert.match(composition, /doctor:\s*\(\)\s*=>\s*runBridgeDoctor\(/u);
   assert.doesNotMatch(host, /testOnlyFakeAdapter|executeFakeResultAdapter|adapter_mode\s*:\s*"test_fake"/u,
-    "the formal Host entry must not expose the explicit Fake test capability");
+    "the formal MCP Host must not expose the explicit Fake test capability");
+  assert.match(host, /no local SQLite Manager is constructed/u);
 });
 
 test("claim-only lifecycle composition has no JSON TaskStore or real Adapter dependency", () => {
@@ -2121,7 +2131,7 @@ class RawStdioMcpTestClient {
 
 async function withSqliteMcp(
   run: (client: Client, manager: SqliteLifecycleMcpAuthority, dataRoot: string, workspace: string) => Promise<void>,
-  options: { readonly testBeforeDispatch?: () => Promise<void>; readonly testOnScheduler?: (stage: string, detail: Readonly<Record<string, unknown>>) => void; readonly onStage?: (stage: string, detail?: Readonly<Record<string, unknown>>) => void; readonly onChildSpawn?: (child: { readonly pid?: number; readonly stderr?: NodeJS.ReadableStream | null; readonly resultChannel?: NodeJS.ReadableStream | null }) => void; readonly beforeAuthority?: (dataRoot: string, modules: Awaited<ReturnType<typeof loadLifecycleCandidateModules>>, workspace: string) => void; readonly prepareDataRoot?: (dataRoot: string, fixture: string) => Promise<void>; readonly databaseFileName?: string; readonly workerEntryPath?: string; readonly enableSyntheticInteractionChannel?: boolean; readonly processProbe?: ProcessProbe; readonly testProcessProbeTimeoutMs?: number; readonly testVerifyProcessTreeClaimantsClean?: typeof verifyProcessTreeClaimantsClean; readonly testProcessTreeProbeTimeoutMs?: number; readonly testShutdownWaitMs?: number; readonly testStopWorkerForRecovery?: (pid: number, expectedFingerprint: string) => Promise<void>; readonly testBeforeRecoveryWrite?: (operationId: string, phase: string) => Promise<void>; readonly testOnlyFakeAdapter?: boolean; readonly stdio?: boolean; readonly preserveFixtureOnFailure?: boolean; readonly onStdioHost?: (host: StdioLifecycleHost) => void; readonly onStdioShutdownComplete?: (reason: string) => void; readonly onStdioShutdownFailure?: (reason: string, error: unknown) => void } = {},
+  options: { readonly testBeforeDispatch?: () => Promise<void>; readonly testOnScheduler?: (stage: string, detail: Readonly<Record<string, unknown>>) => void; readonly onStage?: (stage: string, detail?: Readonly<Record<string, unknown>>) => void; readonly onChildSpawn?: (child: { readonly pid?: number; readonly stderr?: NodeJS.ReadableStream | null; readonly resultChannel?: NodeJS.ReadableStream | null }) => void; readonly beforeAuthority?: (dataRoot: string, modules: Awaited<ReturnType<typeof loadLifecycleCandidateModules>>, workspace: string) => void; readonly prepareDataRoot?: (dataRoot: string, fixture: string) => Promise<void>; readonly databaseFileName?: string; readonly workerEntryPath?: string; readonly enableSyntheticInteractionChannel?: boolean; readonly processProbe?: ProcessProbe; readonly testProcessProbeTimeoutMs?: number; readonly testVerifyProcessTreeClaimantsClean?: typeof verifyProcessTreeClaimantsClean; readonly testProcessTreeProbeTimeoutMs?: number; readonly testShutdownWaitMs?: number; readonly testStopWorkerForRecovery?: (pid: number, expectedFingerprint: string) => Promise<void>; readonly testTerminateWorkerTree?: (pid: number, expectedFingerprint: string) => Promise<unknown>; readonly testBeforeRecoveryWrite?: (operationId: string, phase: string) => Promise<void>; readonly testOnlyFakeAdapter?: boolean; readonly stdio?: boolean; readonly preserveFixtureOnFailure?: boolean; readonly onStdioHost?: (host: StdioLifecycleHost) => void; readonly onStdioShutdownComplete?: (reason: string) => void; readonly onStdioShutdownFailure?: (reason: string, error: unknown) => void } = {},
 ): Promise<void> {
   const fixture = path.join(integrationRoot, randomUUID());
   const dataRoot = path.join(fixture, "sqlite-root");
@@ -2165,6 +2175,7 @@ async function withSqliteMcp(
     ...(options.testVerifyProcessTreeClaimantsClean ? { testVerifyProcessTreeClaimantsClean: options.testVerifyProcessTreeClaimantsClean } : {}),
     ...(options.testProcessTreeProbeTimeoutMs !== undefined ? { testProcessTreeProbeTimeoutMs: options.testProcessTreeProbeTimeoutMs } : {}),
     ...(options.testStopWorkerForRecovery ? { testStopWorkerForRecovery: options.testStopWorkerForRecovery } : {}),
+    ...(options.testTerminateWorkerTree ? { testTerminateWorkerTree: options.testTerminateWorkerTree } : {}),
     ...(options.testBeforeRecoveryWrite ? { testBeforeRecoveryWrite: options.testBeforeRecoveryWrite } : {}),
     ...(options.testShutdownWaitMs !== undefined ? { testShutdownWaitMs: options.testShutdownWaitMs } : {}),
     ...(options.testBeforeDispatch ? { testBeforeDispatch: options.testBeforeDispatch } : {}),
@@ -2640,8 +2651,8 @@ test("Manager Recovery after restart releases exact exited Workers only after a 
           import { pathToFileURL } from 'node:url';
           const [dataRoot, settingsDirectory, workspace, taskJson, operationId, launchId, launchToken, workerEntryPath, bridgeEntryPath, interruptAt] = process.argv.slice(1);
           const gateModule = await import(pathToFileURL(path.join(process.cwd(), 'dist-test/src/store/lifecycle-gate.js')).href);
-          const hostModule = await import(pathToFileURL(path.join(process.cwd(), 'dist-test/src/host/stdio.js')).href);
-          const trustedLocalContext = hostModule.createTrustedLocalCandidateContext({ name: 'g4-recovery-subprocess', settingsDirectory });
+          const compositionModule = await import(pathToFileURL(path.join(process.cwd(), 'dist-test/src/executor/production-composition.js')).href);
+          const trustedLocalContext = compositionModule.createTrustedLocalCandidateContext({ name: 'g4-recovery-subprocess', settingsDirectory });
           const driver = await gateModule.openClaimOnlyDriver({
             dataRoot, workerEntryPath, bridgeEntryPath, trustedLocalContext,
             testOnlyFakeAdapter: true,
@@ -2839,10 +2850,10 @@ test("ADR-024 six lifecycle crash boundaries use hard Manager-process exits and 
       import { pathToFileURL } from 'node:url';
       const [dataRoot, settingsDirectory, workspace, taskJson, operationId, launchId, launchToken, workerEntryPath, bridgeEntryPath, interruptAt] = process.argv.slice(1);
       const gate = await import(pathToFileURL(path.join(process.cwd(), 'dist-test/src/store/lifecycle-gate.js')).href);
-      const host = await import(pathToFileURL(path.join(process.cwd(), 'dist-test/src/host/stdio.js')).href);
+      const composition = await import(pathToFileURL(path.join(process.cwd(), 'dist-test/src/executor/production-composition.js')).href);
       const driver = await gate.openClaimOnlyDriver({
         dataRoot, workerEntryPath, bridgeEntryPath,
-        trustedLocalContext: host.createTrustedLocalCandidateContext({ name: 'adr024-hard-crash', settingsDirectory }),
+        trustedLocalContext: composition.createTrustedLocalCandidateContext({ name: 'adr024-hard-crash', settingsDirectory }),
         testOnlyFakeAdapter: true,
         onStage(stage, detail) {
           if (stage !== interruptAt) return;
@@ -3034,10 +3045,10 @@ test("R5 explicit cancel closes claimed Result-absent Workers after Manager hard
       import { pathToFileURL } from 'node:url';
       const [dataRoot, settingsDirectory, workspace, taskJson, operationId, launchId, launchToken, workerEntryPath, bridgeEntryPath, interruptAt] = process.argv.slice(1);
       const gate = await import(pathToFileURL(path.join(process.cwd(), 'dist-test/src/store/lifecycle-gate.js')).href);
-      const host = await import(pathToFileURL(path.join(process.cwd(), 'dist-test/src/host/stdio.js')).href);
+      const composition = await import(pathToFileURL(path.join(process.cwd(), 'dist-test/src/executor/production-composition.js')).href);
       const driver = await gate.openClaimOnlyDriver({
         dataRoot, workerEntryPath, bridgeEntryPath,
-        trustedLocalContext: host.createTrustedLocalCandidateContext({ name: 'r5-result-absent-crash', settingsDirectory }),
+        trustedLocalContext: composition.createTrustedLocalCandidateContext({ name: 'r5-result-absent-crash', settingsDirectory }),
         testOnlyFakeAdapter: true,
         onStage(stage, detail) {
           if (stage !== interruptAt) return;
@@ -4506,6 +4517,50 @@ test("formal MCP running Cancel persists intent, verifies the Worker tree, and r
   });
 });
 
+test("running Cancel resolves a root-exited termination race only after an exact exit probe and clean tree scan", {
+  timeout: 60_000,
+  skip: process.platform !== "win32",
+}, async () => {
+  let terminationAttempted = false;
+  let rootExitRaceObserved = false;
+  await withSqliteMcp(async (client, _manager, dataRoot, workspace) => {
+    const taskId = `mcp-root-exit-${randomUUID()}`;
+    const created = contentObject(await client.callTool({ name: "zcode_task", arguments: syntheticTask(workspace, taskId) }));
+    assert.equal(created.status, "queued");
+    await waitForInteractionRequest(client, taskId);
+
+    const cancelled = contentObject(await client.callTool({ name: "zcode_cancel", arguments: { task_id: taskId } }));
+    assert.equal(cancelled.status, "cancelled");
+    assert.equal(terminationAttempted, true);
+    assert.equal(rootExitRaceObserved, true, "the injected root-exit refusal must be reconciled by a fresh probe");
+
+    const events = contentObject(await client.callTool({ name: "zcode_events", arguments: { task_id: taskId, after_seq: 0, limit: 200 } }));
+    const lifecycle = events.events as Array<Record<string, unknown>>;
+    const proofs = lifecycle.filter((event) => event.type === "observation_recorded"
+      && (event.details as Record<string, unknown> | undefined)?.reason === "cancel_tree_verified");
+    assert.equal(proofs.length, 1, "the reconciled race must persist exactly one tree proof");
+    const proof = proofs[0];
+    assert.ok(proof);
+    assert.ok(lifecycle.findIndex((event) => event.type === "result_committed") > lifecycle.indexOf(proof));
+    assert.ok(lifecycle.findIndex((event) => event.type === "cleanup_verified") > lifecycle.findIndex((event) => event.type === "result_committed"));
+    assert.ok(lifecycle.findIndex((event) => event.type === "released") > lifecycle.findIndex((event) => event.type === "cleanup_verified"));
+    assert.equal(existsSync(path.join(dataRoot, ".tasks")), false);
+  }, {
+    enableSyntheticInteractionChannel: true,
+    preserveFixtureOnFailure: true,
+    testTerminateWorkerTree: async (pid, fingerprint) => {
+      terminationAttempted = true;
+      await terminateProcessTree(pid, { expectedRootFingerprint: fingerprint, killWaitMs: 5_000 });
+      const error = new Error("controlled root exit before the fresh tree transaction") as Error & { code: string };
+      error.code = "process_tree_root_exited";
+      throw error;
+    },
+    onStage: (stage) => {
+      if (stage === "cancel_termination_root_exited") rootExitRaceObserved = true;
+    },
+  });
+});
+
 test("formal MCP concurrent zcode_cancel calls recover one held Task with one verified termination and Release", { timeout: 90_000, skip: process.platform !== "win32" }, async () => {
   const child = spawn(process.execPath, ["-e", "process.stdout.write('ready\\n'); setInterval(() => undefined, 1000)"], {
     stdio: ["ignore", "pipe", "ignore"], windowsHide: true,
@@ -4861,13 +4916,18 @@ test("formal MCP Host shutdown is bounded on unknown cancellation and can be ret
 test("formal SQLite MCP stdio shutdown closes only after verified Cleanup and Release", { timeout: 90_000, skip: process.platform !== "win32" }, async () => {
   let host: StdioLifecycleHost | undefined;
   let spawned = 0;
+  let shutdownFailure: unknown;
   await withSqliteMcp(async (client, _manager, dataRoot, workspace) => {
     const taskId = `mcp-stdio-shutdown-${randomUUID()}`;
     const created = contentObject(await client.callTool({ name: "zcode_task", arguments: syntheticTask(workspace, taskId) }));
     assert.equal(created.status, "queued");
     await waitForInteractionRequest(client, taskId);
     assert.ok(host);
-    assert.equal(await host.shutdown("SIGTERM"), true, "successful Cleanup/Release must complete before transport close");
+    assert.equal(
+      await host.shutdown("SIGTERM"),
+      true,
+      `successful Cleanup/Release must complete before transport close: ${shutdownFailure instanceof Error ? shutdownFailure.stack ?? shutdownFailure.message : String(shutdownFailure)}`,
+    );
 
     const modules = await loadLifecycleCandidateModules();
     const recovery = modules.Store.openForRecovery(dataRoot);
@@ -4891,6 +4951,7 @@ test("formal SQLite MCP stdio shutdown closes only after verified Cleanup and Re
     stdio: true,
     preserveFixtureOnFailure: true,
     onStdioHost: (value) => { host = value; },
+    onStdioShutdownFailure: (_reason, error) => { shutdownFailure = error; },
     enableSyntheticInteractionChannel: true,
     onChildSpawn: () => { spawned += 1; },
   });

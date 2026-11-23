@@ -1,11 +1,16 @@
 # TaskPackage 与派发
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-21
-> Last verified: 2026-11-21，仅核对 TaskPackage、实际执行根与 Prompt Builder 的 AgentReport 合同。真实 Worker 派发 NOT RUN。
+> Last updated: 2026-11-22
+> Last verified: 2026-11-22，核对 TaskPackage、实际执行根、AgentReport 与 Async Handoff 提交边界。真实 Worker 派发 NOT RUN。
 > Verified against: `1f9ff9ef37528205e76156e13fe06ed2b1fd3711`
 
 本文件假设入口授权已确认。提交前先完成 Ready Gate：确认目标、Codex 项目根目录、实际执行目录、修改边界、必要输入、验收标准、适用测试要求和预算是否充分；不适用项可为空或说明原因，不强行虚构。提交前另读 [监控与审批](monitoring-and-approval.md)，任务返回后立即跟踪事件。
+
+提交后先判定回执是否可靠。只有收到可归属的原 `task_id` 受理回执，且 Task 状态
+为 `queued`/`running` 等已受理事实时，才可选择 Async Handoff；回执未知先按下方
+幂等规则对账。受理后的记录、Turn 结束、Wake 恢复和交互边界见
+[async-handoff.md](async-handoff.md)。
 
 ## 公开字段
 

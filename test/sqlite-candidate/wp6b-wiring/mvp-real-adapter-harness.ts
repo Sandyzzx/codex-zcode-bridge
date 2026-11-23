@@ -22,9 +22,9 @@ import { SqliteLifecycleMcpAuthority } from "../../../src/manager/sqlite-lifecyc
 
 import { createBridgeServer } from "../../../src/mcp/server.js";
 
-import { createTrustedLocalCandidateContext, createHostStartPlanIssuer } from "../../../src/host/stdio.js";
+import { createTrustedLocalCandidateContext, createHostStartPlanIssuer } from "../../../src/executor/production-composition.js";
 
-import type { BridgeHostProfile } from "../../../src/host/profile.js";
+import type { BridgeHostProfile } from "../../../src/runtime/host-profile.js";
 
 import type {
   OfficialStartPlanAuthenticationResolver,
@@ -372,9 +372,9 @@ async function waitForEvent(client: Client, taskId: string, predicate: (event: R
 
 async function waitForLifecycleEvent(client: Client, taskId: string, eventType: string): Promise<void> {
   // Release follows the production bounded close/probe/tree-scan sequence
-  // (15s + 5s + 30s) plus persistence. A 45s test wait was shorter than the
+  // (15s + 5s + 90s) plus persistence. A 75s test wait was shorter than the
   // contract it was observing and could fail even when cleanup was progressing.
-  const deadline = Date.now() + 75_000;
+  const deadline = Date.now() + 120_000;
   let observed: Array<Record<string, unknown>> = [];
   while (Date.now() < deadline) {
     const { events } = await readAllPublicEvents(client, taskId);
