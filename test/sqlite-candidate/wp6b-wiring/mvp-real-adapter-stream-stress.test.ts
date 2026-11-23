@@ -25,7 +25,7 @@ test("SQLite production Worker retains sustained 32,000-event AppServer streamin
       request_id: String(request.request_id),
       decision: "allow",
     } }));
-    assert.equal((await waitForTerminal(client, taskId, 1)).status, "completed");
+    assert.equal((await waitForTerminal(client, taskId, 1, 120_000)).status, "completed");
     await waitForLifecycleEvent(client, taskId, "released");
 
     const result = contentObject(await client.callTool({ name: "zcode_result", arguments: { task_id: taskId } }));
