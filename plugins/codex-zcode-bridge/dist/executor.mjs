@@ -4781,6 +4781,33 @@ var init_store = __esm({
           };
         });
       }
+      /** P2 §4.5: latest persisted event time for a Task. Reads one row per event
+       * source (operation events, queued cancels, runtime events), so the cost
+       * never scales with the full history the way a cursor-0 page read did. */
+      readTaskLatestEventAt(taskId) {
+        if (!validId3(taskId)) fail2("invalid_task_id");
+        return this.#readConsistent(() => {
+          if (!this.#db.prepare("SELECT task_id FROM tasks WHERE task_id=?").get(taskId) || this.#isRetiredHistoricalTask(taskId)) fail2("task_not_found");
+          const candidates = [];
+          const operationRow = this.#db.prepare(`SELECT e.at AS at FROM manager_operation_events e
+          JOIN manager_operations o ON o.operation_id=e.operation_id
+          WHERE o.operation_kind='attempt_lifecycle' AND o.task_id=?
+          ORDER BY e.event_cursor DESC LIMIT 1`).get(taskId);
+          if (operationRow) candidates.push(operationRow.at);
+          const cancelRow = this.#db.prepare(`SELECT queued_cancelled_at AS at FROM attempts
+          WHERE task_id=? AND queued_cancel_event_cursor IS NOT NULL
+          ORDER BY queued_cancel_event_cursor DESC LIMIT 1`).get(taskId);
+          if (cancelRow) candidates.push(cancelRow.at);
+          if (this.#db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='runtime_task_events'").get()) {
+            const runtimeRow = this.#db.prepare(`SELECT at FROM runtime_task_events WHERE task_id=?
+          ORDER BY event_cursor DESC LIMIT 1`).get(taskId);
+            if (runtimeRow) candidates.push(runtimeRow.at);
+          }
+          if (candidates.length === 0) return null;
+          candidates.sort();
+          return { at: candidates[candidates.length - 1] };
+        });
+      }
       /** Project Feedback only from this Attempt's persisted runtime observations
        * and a committed Result. */
       readTaskFeedback(taskId) {
@@ -8614,6 +8641,7 @@ var init_lifecycle_port = __esm({
       "readTaskEvents",
       "readTaskFeedback",
       "readTaskResultPage",
+      "readTaskLatestEventAt",
       "provisionCapacity",
       "assertCapacityPolicy",
       "admitOperation",
@@ -14494,6 +14522,7 @@ async function openClaimOnlyDriver(options) {
     readTaskAttention: (taskId) => port.readTaskAttention(taskId),
     readTaskEvents: (taskId, options2) => port.readTaskEvents(taskId, options2),
     readTaskResultPage: (taskId, offsetBytes, maxBytes) => port.readTaskResultPage(taskId, offsetBytes, maxBytes),
+    readTaskLatestEventAt: (taskId) => port.readTaskLatestEventAt(taskId),
     readCommittedResult: (operationId) => port.readCommittedResult(operationId),
     readTaskFeedback: (taskId) => port.readTaskFeedback(taskId),
     createNextAttempt: (input) => port.createNextAttempt(input, {
@@ -22681,8 +22710,14 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
     const attempt = asRecord6(snapshot.attempt);
     const operation = snapshot.operation ? asRecord6(snapshot.operation) : null;
     const result = snapshot.result ? asRecord6(snapshot.result) : null;
-    const events = this.#driver.readTaskEvents(taskId, { afterCursor: 0, limit: 200 });
-    const lastAt = events.events?.at(-1)?.at;
+    let lastAt;
+    try {
+      const latest = asRecord6(this.#driver.readTaskLatestEventAt(taskId));
+      lastAt = latest?.at;
+    } catch {
+      const events = this.#driver.readTaskEvents(taskId, { afterCursor: 0, limit: 200 });
+      lastAt = events.events?.at(-1)?.at;
+    }
     const createdAt = string3(projection.created_at, "task_created_at_missing");
     const status = taskStatus(projection.status);
     const dispatchBlocker = status === "queued" ? await this.#dispatchBlocker(taskId, snapshot) : void 0;
@@ -22783,10 +22818,23 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
       if (code === "invalid_result_page_offset") throw new TaskManagerError("TASK_INVALID", "offset_bytes is beyond the stored Result");
       throw error2;
     }
+    const committed = snapshot.result;
     return {
-      task_id: taskId,
-      attempt: Number(snapshot.attempt.attempt),
-      status: taskStatus(snapshot.projection.status),
+      // Core committed-Result identity fields (bounded by the storage
+      // contract; the large zcode_output stays behind the page cursor).
+      task_id: committed.task_id,
+      attempt: committed.attempt,
+      status: committed.status,
+      summary: committed.summary,
+      files_changed: committed.files_changed,
+      tests: committed.tests,
+      issues: committed.issues,
+      needs_master_decision: committed.needs_master_decision,
+      exit_code: committed.exit_code,
+      session_id: committed.session_id,
+      started_at: committed.started_at,
+      finished_at: committed.finished_at,
+      ...committed.error_code ? { error_code: committed.error_code } : {},
       result_status: page.result_status,
       result_digest: page.result_digest,
       result_commit_ref: page.result_commit_ref,
@@ -23641,7 +23689,6 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
           this.#dispatchingPaths.delete(dispatchPathKey);
         }
         this.#schedulerStage("driver_run_returned", { task_id: next.taskId, attempt: next.attempt, state: run.state, queue_depth: this.#queue.length });
-        this.#acceptRunOutcome(run);
         await this.#recoverAfterRun(next, run);
         const after = this.#readSnapshot(next.taskId);
         await this.#notifyOperationReleased(after);
@@ -23682,8 +23729,6 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
         this.#scheduleWorkspaceRetry();
       } else this.#schedulePump();
     }
-  }
-  #acceptRunOutcome(_run) {
   }
   async #recoverAfterRun(item, run) {
     let snapshot;

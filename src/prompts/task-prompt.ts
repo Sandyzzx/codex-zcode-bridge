@@ -46,7 +46,7 @@ export function buildContinuePrompt(input: ContinuePromptInput): string {
     return buildReportRepairPrompt(input);
   }
 
-  const sections: string[] = [
+  const core: string[] = [
     DELIVERY_OWNERSHIP,
     DECISION_RULE,
     CONTINUATION_CONTEXT,
@@ -56,15 +56,28 @@ export function buildContinuePrompt(input: ContinuePromptInput): string {
     ...renderTaskPackage(task),
   ];
   const context = renderContext(task.context);
-  if (context) sections.push(context);
+  if (context) core.push(context);
   if (previousResult) {
-    sections.push(renderPreviousResultEvidence(previousResult));
+    core.push(renderPreviousResultEvidence(previousResult));
   }
-  sections.push(`MASTER FEEDBACK (address every point)\n${feedback}`);
-  if (additionalRequirements.length > 0) {
-    sections.push(renderList("ADDITIONAL REQUIREMENTS", [...additionalRequirements]));
-  }
-  sections.push(OUTPUT_CONTRACT);
+  // P2 §4.4: the first dispatch and the continuation share one capacity
+  // contract. The core (identical to the accepted first dispatch) keeps its
+  // bytes; the continuation-only feedback and requirements are projected into
+  // the remaining budget with an explicit omission marker instead of letting a
+  // bounded task drift over the limit after acceptance.
+  const feedbackHeader = "MASTER FEEDBACK (address every point";
+  const requirementsSection = additionalRequirements.length > 0
+    ? renderList("ADDITIONAL REQUIREMENTS", [...additionalRequirements])
+    : null;
+  const baseSections = [...core, OUTPUT_CONTRACT, ...(requirementsSection ? [requirementsSection] : [])];
+  const baseLength = baseSections.join("\n\n").length + "\n\n".length;
+  const excerptNotice = "; excerpted to fit the prompt capacity";
+  const headerOverhead = `${feedbackHeader}${excerptNotice})\n`.length + "\n\n".length;
+  const feedbackBudget = MAX_PROMPT_CHARS - baseLength - headerOverhead;
+  const feedbackSection = feedbackBudget <= 0
+    ? `${feedbackHeader})\n[feedback omitted: the task package alone exceeds the prompt capacity]`
+    : `${feedbackHeader}${feedback.length > feedbackBudget ? excerptNotice : ""})\n${excerptEvidence(feedback, feedbackBudget)}`;
+  const sections = [...core, feedbackSection, ...(requirementsSection ? [requirementsSection] : []), OUTPUT_CONTRACT];
   return joinBoundedPrompt(sections);
 }
 
@@ -131,6 +144,14 @@ function projectPreviousResult(result: TaskResult): Record<string, unknown> {
   for (const test of result.tests) {
     if (test.status === "passed") counts.passed += 1;
   }
+  // P2 §4.4: when the normalized failure fields carry nothing diagnosable, a
+  // bounded raw-output excerpt (with an error-signal scan of the omitted
+  // middle) keeps the unique root cause recoverable instead of silently lost.
+  const normalizedFailureEmpty = result.status === "failed"
+    && !result.error_code
+    && result.summary.trim().length === 0
+    && result.issues.length === 0
+    && result.zcode_output.trim().length > 0;
   return {
     task_id: result.task_id,
     attempt: result.attempt,
@@ -143,6 +164,7 @@ function projectPreviousResult(result: TaskResult): Record<string, unknown> {
     test_counts: counts,
     issues: result.issues.map((issue) => boundedEvidenceText(issue)),
     needs_master_decision: result.needs_master_decision,
+    ...(normalizedFailureEmpty ? { raw_output_excerpt: failureEvidenceExcerpt(result.zcode_output, 4_000) } : {}),
   };
 }
 
@@ -163,10 +185,14 @@ function projectReportCandidate(candidate: Partial<AgentReport>): Record<string,
 }
 
 function projectTest(test: TestReport): TestReport {
+  const details = test.details === undefined ? undefined
+    : test.status === "failed" || test.status === "not_run"
+      ? failureEvidenceExcerpt(test.details, MAX_EVIDENCE_ITEM_CHARS)
+      : boundedEvidenceText(test.details);
   return {
     command: boundedEvidenceText(test.command),
     status: test.status,
-    ...(test.details === undefined ? {} : { details: boundedEvidenceText(test.details) }),
+    ...(details === undefined ? {} : { details }),
   };
 }
 
@@ -182,6 +208,42 @@ function excerptEvidence(text: string, maxChars: number): string {
   const headChars = Math.ceil(available * 0.6);
   const tailChars = available - headChars;
   return `${text.slice(0, headChars)}${marker(text.length - headChars - tailChars)}${text.slice(-tailChars)}`;
+}
+
+const ERROR_SIGNAL_PATTERN = /(?:error|failed|failure|exception|cannot|denied|refused|timeout|timed out|not ok|fatal|panic|errno|exit code [1-9])/iu;
+
+/** P2 §4.4: head/tail excerpt plus a bounded scan of the omitted middle for
+ * error-signal lines. A unique root cause sitting in the middle of a long log
+ * stays recoverable; every selected line is labelled with its line number and
+ * the omission itself stays explicit. */
+function failureEvidenceExcerpt(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  const excerpt = excerptEvidence(text, Math.max(256, Math.floor(maxChars * 0.7)));
+  const omittedStart = excerpt.indexOf("...[");
+  if (omittedStart < 0) return excerpt;
+  // Recover the omitted middle from the marker's position: the head is
+  // everything before the marker, so the middle is the region the marker
+  // replaced. Re-derive it from the original text bounds.
+  const markerMatch = /\.\.\.\[(\d+) characters omitted\]\.\.\./u.exec(excerpt);
+  if (!markerMatch) return excerpt;
+  const omitted = Number(markerMatch[1]);
+  const headChars = omittedStart;
+  const middleStart = headChars;
+  const middleEnd = middleStart + omitted;
+  const middle = text.slice(middleStart, middleEnd);
+  const lines = middle.split(/\r?\n/u);
+  const selected: string[] = [];
+  let used = 0;
+  const budget = Math.max(256, Math.floor(maxChars * 0.3));
+  for (let index = 0; index < lines.length && selected.length < 12; index += 1) {
+    const line = lines[index]!.slice(0, 300);
+    if (ERROR_SIGNAL_PATTERN.test(line) && used + line.length <= budget) {
+      selected.push(`[line ${index + 1} of omitted region] ${line}`);
+      used += line.length + 8;
+    }
+  }
+  if (selected.length === 0) return excerpt;
+  return `${excerpt}\nMIDDLE ERROR SIGNALS (bounded scan of the omitted region)\n${selected.join("\n")}`;
 }
 
 const OUTPUT_CONTRACT = [

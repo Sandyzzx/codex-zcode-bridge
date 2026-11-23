@@ -3680,7 +3680,7 @@ function buildContinuePrompt(input2) {
   if (previousResult?.error_code === "invalid_agent_report") {
     return buildReportRepairPrompt(input2);
   }
-  const sections = [
+  const core = [
     DELIVERY_OWNERSHIP,
     DECISION_RULE,
     CONTINUATION_CONTEXT,
@@ -3688,16 +3688,22 @@ function buildContinuePrompt(input2) {
     ...renderTaskPackage(task)
   ];
   const context = renderContext(task.context);
-  if (context) sections.push(context);
+  if (context) core.push(context);
   if (previousResult) {
-    sections.push(renderPreviousResultEvidence(previousResult));
+    core.push(renderPreviousResultEvidence(previousResult));
   }
-  sections.push(`MASTER FEEDBACK (address every point)
-${feedback}`);
-  if (additionalRequirements.length > 0) {
-    sections.push(renderList("ADDITIONAL REQUIREMENTS", [...additionalRequirements]));
-  }
-  sections.push(OUTPUT_CONTRACT);
+  const feedbackHeader = "MASTER FEEDBACK (address every point";
+  const requirementsSection = additionalRequirements.length > 0 ? renderList("ADDITIONAL REQUIREMENTS", [...additionalRequirements]) : null;
+  const baseSections = [...core, OUTPUT_CONTRACT, ...requirementsSection ? [requirementsSection] : []];
+  const baseLength = baseSections.join("\n\n").length + "\n\n".length;
+  const excerptNotice = "; excerpted to fit the prompt capacity";
+  const headerOverhead = `${feedbackHeader}${excerptNotice})
+`.length + "\n\n".length;
+  const feedbackBudget = MAX_PROMPT_CHARS - baseLength - headerOverhead;
+  const feedbackSection = feedbackBudget <= 0 ? `${feedbackHeader})
+[feedback omitted: the task package alone exceeds the prompt capacity]` : `${feedbackHeader}${feedback.length > feedbackBudget ? excerptNotice : ""})
+${excerptEvidence(feedback, feedbackBudget)}`;
+  const sections = [...core, feedbackSection, ...requirementsSection ? [requirementsSection] : [], OUTPUT_CONTRACT];
   return joinBoundedPrompt(sections);
 }
 function buildReportRepairPrompt(input2) {
@@ -3760,6 +3766,7 @@ function projectPreviousResult(result) {
   for (const test of result.tests) {
     if (test.status === "passed") counts.passed += 1;
   }
+  const normalizedFailureEmpty = result.status === "failed" && !result.error_code && result.summary.trim().length === 0 && result.issues.length === 0 && result.zcode_output.trim().length > 0;
   return {
     task_id: result.task_id,
     attempt: result.attempt,
@@ -3771,7 +3778,8 @@ function projectPreviousResult(result) {
     not_run_tests: notRunTests,
     test_counts: counts,
     issues: result.issues.map((issue2) => boundedEvidenceText(issue2)),
-    needs_master_decision: result.needs_master_decision
+    needs_master_decision: result.needs_master_decision,
+    ...normalizedFailureEmpty ? { raw_output_excerpt: failureEvidenceExcerpt(result.zcode_output, 4e3) } : {}
   };
 }
 function projectReportCandidate(candidate) {
@@ -3790,10 +3798,11 @@ function projectReportCandidate(candidate) {
   return projected;
 }
 function projectTest(test) {
+  const details = test.details === void 0 ? void 0 : test.status === "failed" || test.status === "not_run" ? failureEvidenceExcerpt(test.details, MAX_EVIDENCE_ITEM_CHARS) : boundedEvidenceText(test.details);
   return {
     command: boundedEvidenceText(test.command),
     status: test.status,
-    ...test.details === void 0 ? {} : { details: boundedEvidenceText(test.details) }
+    ...details === void 0 ? {} : { details }
   };
 }
 function boundedEvidenceText(text, maxChars = MAX_EVIDENCE_ITEM_CHARS) {
@@ -3807,6 +3816,34 @@ function excerptEvidence(text, maxChars) {
   const headChars = Math.ceil(available * 0.6);
   const tailChars = available - headChars;
   return `${text.slice(0, headChars)}${marker(text.length - headChars - tailChars)}${text.slice(-tailChars)}`;
+}
+function failureEvidenceExcerpt(text, maxChars) {
+  if (text.length <= maxChars) return text;
+  const excerpt = excerptEvidence(text, Math.max(256, Math.floor(maxChars * 0.7)));
+  const omittedStart = excerpt.indexOf("...[");
+  if (omittedStart < 0) return excerpt;
+  const markerMatch = /\.\.\.\[(\d+) characters omitted\]\.\.\./u.exec(excerpt);
+  if (!markerMatch) return excerpt;
+  const omitted = Number(markerMatch[1]);
+  const headChars = omittedStart;
+  const middleStart = headChars;
+  const middleEnd = middleStart + omitted;
+  const middle = text.slice(middleStart, middleEnd);
+  const lines = middle.split(/\r?\n/u);
+  const selected = [];
+  let used = 0;
+  const budget = Math.max(256, Math.floor(maxChars * 0.3));
+  for (let index = 0; index < lines.length && selected.length < 12; index += 1) {
+    const line = lines[index].slice(0, 300);
+    if (ERROR_SIGNAL_PATTERN.test(line) && used + line.length <= budget) {
+      selected.push(`[line ${index + 1} of omitted region] ${line}`);
+      used += line.length + 8;
+    }
+  }
+  if (selected.length === 0) return excerpt;
+  return `${excerpt}
+MIDDLE ERROR SIGNALS (bounded scan of the omitted region)
+${selected.join("\n")}`;
 }
 function renderList(title, items) {
   if (items.length === 0) {
@@ -3829,7 +3866,7 @@ function joinBoundedPrompt(sections) {
   if (joined.length <= MAX_PROMPT_CHARS) return joined;
   throw new TaskPromptCapacityError(joined.length);
 }
-var MAX_PROMPT_CHARS, MAX_EVIDENCE_ITEM_CHARS, MAX_REPAIR_RESPONSE_CHARS, TaskPromptCapacityError, OUTPUT_CONTRACT, DECISION_RULE, DELIVERY_OWNERSHIP, CONTINUATION_CONTEXT, REPORT_REPAIR_MODE;
+var MAX_PROMPT_CHARS, MAX_EVIDENCE_ITEM_CHARS, MAX_REPAIR_RESPONSE_CHARS, TaskPromptCapacityError, ERROR_SIGNAL_PATTERN, OUTPUT_CONTRACT, DECISION_RULE, DELIVERY_OWNERSHIP, CONTINUATION_CONTEXT, REPORT_REPAIR_MODE;
 var init_task_prompt = __esm({
   "src/prompts/task-prompt.ts"() {
     "use strict";
@@ -3847,6 +3884,7 @@ var init_task_prompt = __esm({
         this.maxChars = MAX_PROMPT_CHARS;
       }
     };
+    ERROR_SIGNAL_PATTERN = /(?:error|failed|failure|exception|cannot|denied|refused|timeout|timed out|not ok|fatal|panic|errno|exit code [1-9])/iu;
     OUTPUT_CONTRACT = [
       "OUTPUT CONTRACT (mandatory)",
       "Your final response must be exactly one JSON object with no markdown fences and no text before or after it.",
@@ -30203,14 +30241,10 @@ function asRecord3(value) {
 }
 
 // src/worker/production-adapter-selection.ts
-var OFFICIAL_CODING_PLAN_PROVIDER_IDS = /* @__PURE__ */ new Set([
-  "account:bigmodel-individual-coding-plan",
-  "bigmodel-individual-coding-plan",
-  "builtin:bigmodel-coding-plan"
-]);
+init_official_app_server_runtime();
 var OFFICIAL_START_PLAN_PROVIDER_ID = "account:bigmodel-start-plan";
 function selectOfficialProviderRuntime(providerId) {
-  if (providerId && OFFICIAL_CODING_PLAN_PROVIDER_IDS.has(providerId)) {
+  if (isOfficialCodingPlanProvider(providerId)) {
     return "coding_plan_discount";
   }
   if (providerId === OFFICIAL_START_PLAN_PROVIDER_ID) return "start_plan_static";
@@ -31051,7 +31085,6 @@ function createBoundedRuntimeEventPublisher(sender) {
   const allowed = /* @__PURE__ */ new Set([
     "session_ready",
     "model_selected",
-    "turn_accepted",
     "turn_started",
     "model_tool_call",
     "tool_status",

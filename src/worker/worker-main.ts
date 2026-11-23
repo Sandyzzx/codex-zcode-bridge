@@ -1001,7 +1001,7 @@ export function createBoundedRuntimeEventPublisher(
   sender: Readonly<{ send(event: CandidateRuntimeObservedEvent): number; close(): Promise<void> }>,
 ): CandidateRuntimeEventPublisher {
   const allowed = new Set([
-    "session_ready", "model_selected", "turn_accepted", "turn_started", "model_tool_call",
+    "session_ready", "model_selected", "turn_started", "model_tool_call",
     "tool_status", "model_output", "turn_completed", "turn_failed", "report_ready",
   ]);
   let pendingOutput = "";

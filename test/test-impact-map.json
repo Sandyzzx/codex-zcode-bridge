@@ -273,14 +273,6 @@
   ],
   "tests": [
     {
-      "file": "test/model-routing.test.ts",
-      "type": "Unit",
-      "gate": "T1",
-      "domains": [
-        "provider-catalog"
-      ]
-    },
-    {
       "file": "test/account-provider.test.ts",
       "type": "Unit",
       "gate": "T1",
@@ -297,55 +289,6 @@
       ]
     },
     {
-      "file": "test/spawn-worker-stderr.test.ts",
-      "type": "Integration",
-      "gate": "T2",
-      "domains": [
-        "worker-launch"
-      ]
-    },
-    {
-      "file": "test/attention-wait.test.ts",
-      "type": "Unit",
-      "gate": "T1",
-      "domains": [
-        "attention-waiting",
-        "interface-contract",
-        "mcp-host"
-      ]
-    },
-    {
-      "file": "test/wait-task.test.ts",
-      "type": "Integration",
-      "gate": "T2",
-      "domains": [
-        "attention-waiting",
-        "interface-contract",
-        "mcp-host"
-      ]
-    },
-    {
-      "file": "test/usage-contract-chain.test.ts",
-      "type": "Integration",
-      "gate": "T2",
-      "domains": [
-        "interface-contract",
-        "sqlite-persistence",
-        "appserver-adapter",
-        "mcp-host"
-      ]
-    },
-    {
-      "file": "test/events-summary.test.ts",
-      "type": "Unit",
-      "gate": "T1",
-      "domains": [
-        "manager-lifecycle",
-        "interface-contract",
-        "mcp-host"
-      ]
-    },
-    {
       "file": "test/architecture-boundaries.test.ts",
       "type": "Unit",
       "gate": "T1",
@@ -356,79 +299,13 @@
       ]
     },
     {
-      "file": "test/task-cli.test.ts",
-      "type": "Integration",
-      "gate": "T2",
-      "domains": [
-        "manager-lifecycle",
-        "mcp-host",
-        "test-execution-contract"
-      ]
-    },
-    {
-      "file": "test/web-console.test.ts",
-      "type": "Integration",
-      "gate": "T2",
-      "domains": [
-        "manager-lifecycle",
-        "test-execution-contract"
-      ]
-    },
-    {
-      "file": "test/web-console-browser.test.ts",
-      "type": "Integration",
-      "gate": "T2",
-      "domains": [
-        "manager-lifecycle",
-        "test-execution-contract"
-      ]
-    },
-    {
-      "file": "test/runtime-compatibility.test.ts",
-      "type": "Integration",
-      "gate": "T2",
-      "domains": [
-        "manager-lifecycle",
-        "zcode-path-discovery"
-      ]
-    },
-    {
-      "file": "test/executor-ipc.test.ts",
-      "type": "Integration",
-      "gate": "T2",
-      "domains": [
-        "manager-lifecycle"
-      ]
-    },
-    {
-      "file": "test/executor-lease.test.ts",
+      "file": "test/attention-wait.test.ts",
       "type": "Unit",
       "gate": "T1",
       "domains": [
-        "manager-lifecycle",
-        "process-cleanup-and-locks"
-      ]
-    },
-    {
-      "file": "test/executor-process.test.ts",
-      "type": "Integration",
-      "gate": "T2",
-      "domains": [
-        "manager-lifecycle",
-        "mcp-host",
-        "worker-launch",
-        "process-cleanup-and-locks",
-        "sqlite-persistence"
-      ]
-    },
-    {
-      "file": "test/executor-wake.test.ts",
-      "type": "Unit",
-      "gate": "T1",
-      "domains": [
-        "manager-lifecycle",
-        "mcp-host",
-        "sqlite-persistence"
+        "attention-waiting",
+        "interface-contract",
+        "mcp-host"
       ]
     },
     {
@@ -513,6 +390,64 @@
       ]
     },
     {
+      "file": "test/events-summary.test.ts",
+      "type": "Unit",
+      "gate": "T1",
+      "domains": [
+        "manager-lifecycle",
+        "interface-contract",
+        "mcp-host"
+      ]
+    },
+    {
+      "file": "test/executor-ipc.test.ts",
+      "type": "Integration",
+      "gate": "T2",
+      "domains": [
+        "manager-lifecycle"
+      ]
+    },
+    {
+      "file": "test/executor-lease-spawn-fence.test.ts",
+      "type": "Unit",
+      "gate": "T1",
+      "domains": [
+        "manager-lifecycle",
+        "sqlite-persistence"
+      ]
+    },
+    {
+      "file": "test/executor-lease.test.ts",
+      "type": "Unit",
+      "gate": "T1",
+      "domains": [
+        "manager-lifecycle",
+        "process-cleanup-and-locks"
+      ]
+    },
+    {
+      "file": "test/executor-process.test.ts",
+      "type": "Integration",
+      "gate": "T2",
+      "domains": [
+        "manager-lifecycle",
+        "mcp-host",
+        "worker-launch",
+        "process-cleanup-and-locks",
+        "sqlite-persistence"
+      ]
+    },
+    {
+      "file": "test/executor-wake.test.ts",
+      "type": "Unit",
+      "gate": "T1",
+      "domains": [
+        "manager-lifecycle",
+        "mcp-host",
+        "sqlite-persistence"
+      ]
+    },
+    {
       "file": "test/failure-facts-integration.test.ts",
       "type": "Integration",
       "gate": "T2",
@@ -521,6 +456,32 @@
         "manager-lifecycle",
         "mcp-host",
         "task-prompt-and-report"
+      ]
+    },
+    {
+      "file": "test/fixtures/fake-app-server-proxy.mjs",
+      "type": "Fixture",
+      "gate": "T1",
+      "domains": [
+        "test-execution-contract",
+        "manager-lifecycle"
+      ]
+    },
+    {
+      "file": "test/fixtures/stdio-lifecycle-host.ts",
+      "type": "Fixture",
+      "gate": "T2",
+      "domains": [
+        "test-execution-contract",
+        "mcp-host"
+      ]
+    },
+    {
+      "file": "test/generated-artifacts.test.ts",
+      "type": "Unit",
+      "gate": "T1",
+      "domains": [
+        "ci-release-contract"
       ]
     },
     {
@@ -539,6 +500,16 @@
       "gate": "T1",
       "domains": [
         "sqlite-persistence"
+      ]
+    },
+    {
+      "file": "test/mcp-result-v14.test.mjs",
+      "type": "Integration",
+      "gate": "T2",
+      "domains": [
+        "sqlite-persistence",
+        "mcp-host",
+        "interface-contract"
       ]
     },
     {
@@ -561,12 +532,101 @@
       ]
     },
     {
+      "file": "test/model-routing.test.ts",
+      "type": "Unit",
+      "gate": "T1",
+      "domains": [
+        "provider-catalog"
+      ]
+    },
+    {
+      "file": "test/model-settings-official-auth.test.ts",
+      "type": "Unit",
+      "gate": "T1",
+      "domains": [
+        "provider-catalog",
+        "appserver-adapter"
+      ]
+    },
+    {
       "file": "test/node-runtime.test.ts",
       "type": "Integration",
       "gate": "T1",
       "domains": [
         "zcode-path-discovery",
         "worker-launch"
+      ]
+    },
+    {
+      "file": "test/normalize-result.test.ts",
+      "type": "Unit",
+      "gate": "T1",
+      "domains": [
+        "task-prompt-and-report",
+        "task-feedback"
+      ]
+    },
+    {
+      "file": "test/observation-lifecycle.test.ts",
+      "type": "Integration",
+      "gate": "T2",
+      "domains": [
+        "process-cleanup-and-locks",
+        "task-feedback"
+      ]
+    },
+    {
+      "file": "test/official-app-server-adapter.test.ts",
+      "type": "Integration",
+      "gate": "T2",
+      "domains": [
+        "appserver-adapter",
+        "process-cleanup-and-locks",
+        "provider-catalog",
+        "worker-launch",
+        "zcode-path-discovery"
+      ]
+    },
+    {
+      "file": "test/official-app-server-provider-capability.test.ts",
+      "type": "Unit",
+      "gate": "T1",
+      "domains": [
+        "appserver-adapter",
+        "provider-catalog",
+        "worker-launch",
+        "zcode-path-discovery"
+      ]
+    },
+    {
+      "file": "test/official-app-server-runtime.test.ts",
+      "type": "Integration",
+      "gate": "T1",
+      "domains": [
+        "zcode-path-discovery",
+        "worker-launch"
+      ]
+    },
+    {
+      "file": "test/official-host-adapter.test.ts",
+      "type": "Integration",
+      "gate": "T2",
+      "domains": [
+        "appserver-adapter",
+        "process-cleanup-and-locks",
+        "provider-catalog",
+        "worker-launch",
+        "zcode-path-discovery",
+        "browser-host"
+      ]
+    },
+    {
+      "file": "test/official-provider-runtime-auth-diagnostics.test.ts",
+      "type": "Unit",
+      "gate": "T1",
+      "domains": [
+        "provider-catalog",
+        "appserver-adapter"
       ]
     },
     {
@@ -594,6 +654,33 @@
       ]
     },
     {
+      "file": "test/production-adapter-selection.test.ts",
+      "type": "Unit",
+      "gate": "T1",
+      "domains": [
+        "worker-launch",
+        "appserver-adapter"
+      ]
+    },
+    {
+      "file": "test/release-wake-recovery.test.ts",
+      "type": "Unit",
+      "gate": "T1",
+      "domains": [
+        "manager-lifecycle",
+        "sqlite-persistence"
+      ]
+    },
+    {
+      "file": "test/result-readback-integrity.test.mjs",
+      "type": "Integration",
+      "gate": "T2",
+      "domains": [
+        "sqlite-persistence",
+        "manager-lifecycle"
+      ]
+    },
+    {
       "file": "test/run-worker-task.test.ts",
       "type": "Integration",
       "gate": "T2",
@@ -603,30 +690,21 @@
       ]
     },
     {
+      "file": "test/runtime-compatibility.test.ts",
+      "type": "Integration",
+      "gate": "T2",
+      "domains": [
+        "manager-lifecycle",
+        "zcode-path-discovery"
+      ]
+    },
+    {
       "file": "test/runtime-preferences.test.ts",
       "type": "Unit",
       "gate": "T1",
       "domains": [
         "provider-catalog",
         "zcode-path-discovery"
-      ]
-    },
-    {
-      "file": "test/model-settings-official-auth.test.ts",
-      "type": "Unit",
-      "gate": "T1",
-      "domains": [
-        "provider-catalog",
-        "appserver-adapter"
-      ]
-    },
-    {
-      "file": "test/official-provider-runtime-auth-diagnostics.test.ts",
-      "type": "Unit",
-      "gate": "T1",
-      "domains": [
-        "provider-catalog",
-        "appserver-adapter"
       ]
     },
     {
@@ -727,6 +805,14 @@
       ]
     },
     {
+      "file": "test/spawn-worker-stderr.test.ts",
+      "type": "Integration",
+      "gate": "T2",
+      "domains": [
+        "worker-launch"
+      ]
+    },
+    {
       "file": "test/sqlite-candidate/wp6b-wiring/admission-to-claim.test.ts",
       "type": "Integration",
       "gate": "T2",
@@ -759,25 +845,6 @@
       ]
     },
     {
-      "file": "test/sqlite-scoped-hold-scheduler.test.ts",
-      "type": "Integration",
-      "gate": "T2",
-      "domains": [
-        "sqlite-persistence",
-        "manager-lifecycle"
-      ]
-    },
-    {
-      "file": "test/sqlite-doctor.test.ts",
-      "type": "Integration",
-      "gate": "T2",
-      "domains": [
-        "sqlite-persistence",
-        "manager-lifecycle",
-        "mcp-host"
-      ]
-    },
-    {
       "file": "test/sqlite-candidate/wp6b-wiring/lifecycle-gate.test.ts",
       "type": "Unit",
       "gate": "T1",
@@ -791,24 +858,6 @@
       "gate": "T1",
       "domains": [
         "test-execution-contract"
-      ]
-    },
-    {
-      "file": "test/fixtures/stdio-lifecycle-host.ts",
-      "type": "Fixture",
-      "gate": "T2",
-      "domains": [
-        "test-execution-contract",
-        "mcp-host"
-      ]
-    },
-    {
-      "file": "test/fixtures/fake-app-server-proxy.mjs",
-      "type": "Fixture",
-      "gate": "T1",
-      "domains": [
-        "test-execution-contract",
-        "manager-lifecycle"
       ]
     },
     {
@@ -978,6 +1027,15 @@
       ]
     },
     {
+      "file": "test/sqlite-candidate/wp6c/executor-wake.test.mjs",
+      "type": "Integration",
+      "gate": "T2",
+      "domains": [
+        "sqlite-persistence",
+        "manager-lifecycle"
+      ]
+    },
+    {
       "file": "test/sqlite-candidate/wp6c/interrupt-requeue.test.mjs",
       "type": "Integration",
       "gate": "T2",
@@ -999,13 +1057,23 @@
       ]
     },
     {
-      "file": "test/sqlite-candidate/wp6c/executor-wake.test.mjs",
+      "file": "test/sqlite-doctor.test.ts",
       "type": "Integration",
       "gate": "T2",
       "domains": [
         "sqlite-persistence",
-        "manager-lifecycle"
+        "manager-lifecycle",
+        "mcp-host"
       ]
+    },
+    {
+      "file": "test/sqlite-resource-stress.test.mjs",
+      "type": "Stress",
+      "gate": "T3",
+      "domains": [
+        "sqlite-persistence"
+      ],
+      "stress": true
     },
     {
       "file": "test/sqlite-result-v14.test.mjs",
@@ -1018,13 +1086,83 @@
       ]
     },
     {
-      "file": "test/mcp-result-v14.test.mjs",
+      "file": "test/sqlite-scoped-hold-scheduler.test.ts",
       "type": "Integration",
       "gate": "T2",
       "domains": [
         "sqlite-persistence",
+        "manager-lifecycle"
+      ]
+    },
+    {
+      "file": "test/start-plan-official-appserver-offline.test.ts",
+      "type": "Unit",
+      "gate": "T1",
+      "domains": [
+        "provider-catalog"
+      ]
+    },
+    {
+      "file": "test/start-plan-private-channel.test.ts",
+      "type": "Integration",
+      "gate": "T2",
+      "domains": [
+        "worker-launch"
+      ]
+    },
+    {
+      "file": "test/start-plan-private-frame.test.ts",
+      "type": "Unit",
+      "gate": "T1",
+      "domains": [
+        "worker-launch"
+      ]
+    },
+    {
+      "file": "test/start-plan-private-lease.test.ts",
+      "type": "Unit",
+      "gate": "T1",
+      "domains": [
+        "worker-launch"
+      ]
+    },
+    {
+      "file": "test/start-plan-production-auth.test.ts",
+      "type": "Integration",
+      "gate": "T2",
+      "domains": [
+        "provider-catalog",
+        "appserver-adapter",
+        "zcode-path-discovery",
+        "worker-launch",
+        "sqlite-persistence"
+      ]
+    },
+    {
+      "file": "test/start-plan-secret-redactor.test.ts",
+      "type": "Unit",
+      "gate": "T1",
+      "domains": [
+        "appserver-adapter"
+      ]
+    },
+    {
+      "file": "test/status-updated-at.test.mjs",
+      "type": "Integration",
+      "gate": "T2",
+      "domains": [
+        "sqlite-persistence",
+        "manager-lifecycle"
+      ]
+    },
+    {
+      "file": "test/task-cli.test.ts",
+      "type": "Integration",
+      "gate": "T2",
+      "domains": [
+        "manager-lifecycle",
         "mcp-host",
-        "interface-contract"
+        "test-execution-contract"
       ]
     },
     {
@@ -1054,6 +1192,14 @@
       ]
     },
     {
+      "file": "test/teardown-retry.test.ts",
+      "type": "Unit",
+      "gate": "T1",
+      "domains": [
+        "test-execution-contract"
+      ]
+    },
+    {
       "file": "test/test-impact-selector.test.ts",
       "type": "Unit",
       "gate": "T1",
@@ -1070,19 +1216,23 @@
       ]
     },
     {
-      "file": "test/windows-test-shard-plan.json",
-      "type": "Fixture",
-      "gate": "T1",
+      "file": "test/turn-lifecycle-truthfulness.test.ts",
+      "type": "Integration",
+      "gate": "T2",
       "domains": [
-        "test-execution-contract"
+        "appserver-adapter",
+        "manager-lifecycle"
       ]
     },
     {
-      "file": "test/teardown-retry.test.ts",
-      "type": "Unit",
-      "gate": "T1",
+      "file": "test/usage-contract-chain.test.ts",
+      "type": "Integration",
+      "gate": "T2",
       "domains": [
-        "test-execution-contract"
+        "interface-contract",
+        "sqlite-persistence",
+        "appserver-adapter",
+        "mcp-host"
       ]
     },
     {
@@ -1094,11 +1244,31 @@
       ]
     },
     {
-      "file": "test/generated-artifacts.test.ts",
-      "type": "Unit",
-      "gate": "T1",
+      "file": "test/wait-task.test.ts",
+      "type": "Integration",
+      "gate": "T2",
       "domains": [
-        "ci-release-contract"
+        "attention-waiting",
+        "interface-contract",
+        "mcp-host"
+      ]
+    },
+    {
+      "file": "test/web-console-browser.test.ts",
+      "type": "Integration",
+      "gate": "T2",
+      "domains": [
+        "manager-lifecycle",
+        "test-execution-contract"
+      ]
+    },
+    {
+      "file": "test/web-console.test.ts",
+      "type": "Integration",
+      "gate": "T2",
+      "domains": [
+        "manager-lifecycle",
+        "test-execution-contract"
       ]
     },
     {
@@ -1127,11 +1297,28 @@
       ]
     },
     {
+      "file": "test/windows-test-shard-plan.json",
+      "type": "Fixture",
+      "gate": "T1",
+      "domains": [
+        "test-execution-contract"
+      ]
+    },
+    {
       "file": "test/windows-transport-bounds.test.ts",
       "type": "Integration",
       "gate": "T2",
       "domains": [
         "process-cleanup-and-locks"
+      ]
+    },
+    {
+      "file": "test/worker-env-portability.test.ts",
+      "type": "Integration",
+      "gate": "T2",
+      "domains": [
+        "worker-launch",
+        "zcode-path-discovery"
       ]
     },
     {
@@ -1142,68 +1329,6 @@
         "appserver-adapter",
         "process-cleanup-and-locks",
         "provider-catalog"
-      ]
-    },
-    {
-      "file": "test/official-host-adapter.test.ts",
-      "type": "Integration",
-      "gate": "T2",
-      "domains": [
-        "appserver-adapter",
-        "process-cleanup-and-locks",
-        "provider-catalog",
-        "worker-launch",
-        "zcode-path-discovery",
-        "browser-host"
-      ]
-    },
-    {
-      "file": "test/official-app-server-runtime.test.ts",
-      "type": "Integration",
-      "gate": "T1",
-      "domains": [
-        "zcode-path-discovery",
-        "worker-launch"
-      ]
-    },
-    {
-      "file": "test/official-app-server-adapter.test.ts",
-      "type": "Integration",
-      "gate": "T2",
-      "domains": [
-        "appserver-adapter",
-        "process-cleanup-and-locks",
-        "provider-catalog",
-        "worker-launch",
-        "zcode-path-discovery"
-      ]
-    },
-    {
-      "file": "test/official-app-server-provider-capability.test.ts",
-      "type": "Unit",
-      "gate": "T1",
-      "domains": [
-        "appserver-adapter",
-        "provider-catalog",
-        "worker-launch",
-        "zcode-path-discovery"
-      ]
-    },
-    {
-      "file": "test/start-plan-official-appserver-offline.test.ts",
-      "type": "Unit",
-      "gate": "T1",
-      "domains": [
-        "provider-catalog"
-      ]
-    },
-    {
-      "file": "test/production-adapter-selection.test.ts",
-      "type": "Unit",
-      "gate": "T1",
-      "domains": [
-        "worker-launch",
-        "appserver-adapter"
       ]
     },
     {
@@ -1221,86 +1346,6 @@
       "domains": [
         "zcode-path-discovery",
         "worker-launch"
-      ]
-    },
-    {
-      "file": "test/sqlite-resource-stress.test.mjs",
-      "type": "Stress",
-      "gate": "T3",
-      "domains": [
-        "sqlite-persistence"
-      ],
-      "stress": true
-    },
-    {
-      "file": "test/worker-env-portability.test.ts",
-      "type": "Integration",
-      "gate": "T2",
-      "domains": [
-        "worker-launch",
-        "zcode-path-discovery"
-      ]
-    },
-    {
-      "file": "test/observation-lifecycle.test.ts",
-      "type": "Integration",
-      "gate": "T2",
-      "domains": [
-        "process-cleanup-and-locks",
-        "task-feedback"
-      ]
-    },
-    {
-      "file": "test/normalize-result.test.ts",
-      "type": "Unit",
-      "gate": "T1",
-      "domains": [
-        "task-prompt-and-report",
-        "task-feedback"
-      ]
-    },
-    {
-      "file": "test/start-plan-production-auth.test.ts",
-      "type": "Integration",
-      "gate": "T2",
-      "domains": [
-        "provider-catalog",
-        "appserver-adapter",
-        "zcode-path-discovery",
-        "worker-launch",
-        "sqlite-persistence"
-      ]
-    },
-    {
-      "file": "test/start-plan-private-channel.test.ts",
-      "type": "Integration",
-      "gate": "T2",
-      "domains": [
-        "worker-launch"
-      ]
-    },
-    {
-      "file": "test/start-plan-private-frame.test.ts",
-      "type": "Unit",
-      "gate": "T1",
-      "domains": [
-        "worker-launch"
-      ]
-    },
-    {
-      "file": "test/start-plan-private-lease.test.ts",
-      "type": "Unit",
-      "gate": "T1",
-      "domains": [
-        "worker-launch"
-      ]
-    },
-    {
-      "file": "test/start-plan-secret-redactor.test.ts",
-      "type": "Unit",
-      "gate": "T1",
-      "domains": [
-        "appserver-adapter"
       ]
     }
   ],

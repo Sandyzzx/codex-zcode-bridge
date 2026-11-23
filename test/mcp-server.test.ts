@@ -6,6 +6,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
+import { summarizeTaskResult } from "../src/result-summary.js";
 import type { CallToolResult } from "@modelcontextprotocol/server";
 import {
   createBridgeServer,
@@ -103,7 +104,9 @@ class FakeTaskManager implements TaskManager {
   async getResult(taskId: string, view?: "summary" | "full"): Promise<TaskResult> {
     this.calls.push({ method: "getResult", args: view === undefined ? taskId : `${taskId}:${view}` });
     if (this.error) throw this.error;
-    return { ...this.result, task_id: taskId };
+    const full = { ...this.result, task_id: taskId };
+    // Mirror the Executor-side projection so summary assertions hold.
+    return view === "summary" ? summarizeTaskResult(full) as unknown as TaskResult : full;
   }
 
   async getResultPage(taskId: string, offsetBytes: number, maxBytes: number): Promise<Record<string, unknown>> {
@@ -113,6 +116,15 @@ class FakeTaskManager implements TaskManager {
       task_id: taskId,
       attempt: 1,
       status: "completed",
+      summary: "paged result",
+      files_changed: [],
+      tests: [],
+      issues: [],
+      needs_master_decision: false,
+      exit_code: 0,
+      session_id: null,
+      started_at: null,
+      finished_at: null,
       result_status: "completed",
       result_digest: "a".repeat(64),
       result_commit_ref: "result-" + "a".repeat(64),

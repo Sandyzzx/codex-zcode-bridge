@@ -22101,7 +22101,13 @@ var taskResultSchema = object({
   model: executionProfileSchema.nullable().optional(),
   timing: attemptTimingSchema.nullable().optional()
 });
-var zcodeResultFullOrSummarySchema = taskResultSchema.extend({
+var zcodeResultPageSchema = object({
+  offset_bytes: number2().int().nonnegative(),
+  next_offset: number2().int().positive().nullable(),
+  total_bytes: number2().int().nonnegative(),
+  data: string2()
+});
+var zcodeResultOutputSchema = taskResultSchema.extend({
   zcode_output: taskResultSchema.shape.zcode_output.optional(),
   projection: object({
     omitted_fields: array(string2()),
@@ -22110,26 +22116,15 @@ var zcodeResultFullOrSummarySchema = taskResultSchema.extend({
       failed: number2().int().nonnegative(),
       not_run: number2().int().nonnegative()
     })
-  }).optional()
+  }).optional(),
+  page: zcodeResultPageSchema.optional(),
+  result_status: string2().optional(),
+  result_digest: string2().optional(),
+  result_commit_ref: string2().optional()
 }).refine(
-  (result) => result.zcode_output !== void 0 !== (result.projection !== void 0),
-  "Result must contain either zcode_output or projection"
-);
-var zcodeResultPageSchema = object({
-  task_id: string2(),
-  attempt: number2().int().positive(),
-  status: _enum(["queued", "running", "completed", "failed", "cancelled", "waiting_for_master"]),
-  result_status: string2(),
-  result_digest: string2(),
-  result_commit_ref: string2(),
-  page: object({
-    offset_bytes: number2().int().nonnegative(),
-    next_offset: number2().int().positive().nullable(),
-    total_bytes: number2().int().nonnegative(),
-    data: string2()
-  })
-});
-var zcodeResultOutputSchema = union([zcodeResultFullOrSummarySchema, zcodeResultPageSchema]).meta({
+  (result) => (result.zcode_output !== void 0 ? 1 : 0) + (result.projection !== void 0 ? 1 : 0) + (result.page !== void 0 ? 1 : 0) === 1,
+  "Result must contain exactly one of zcode_output, projection, or page"
+).meta({
   oneOf: [{ required: ["zcode_output"] }, { required: ["projection"] }, { required: ["page"] }]
 });
 var taskProgressEventSchema = object({

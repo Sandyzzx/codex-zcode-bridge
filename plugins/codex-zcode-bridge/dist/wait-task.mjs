@@ -1976,6 +1976,33 @@ var init_store = __esm({
           };
         });
       }
+      /** P2 §4.5: latest persisted event time for a Task. Reads one row per event
+       * source (operation events, queued cancels, runtime events), so the cost
+       * never scales with the full history the way a cursor-0 page read did. */
+      readTaskLatestEventAt(taskId) {
+        if (!validId(taskId)) fail2("invalid_task_id");
+        return this.#readConsistent(() => {
+          if (!this.#db.prepare("SELECT task_id FROM tasks WHERE task_id=?").get(taskId) || this.#isRetiredHistoricalTask(taskId)) fail2("task_not_found");
+          const candidates = [];
+          const operationRow = this.#db.prepare(`SELECT e.at AS at FROM manager_operation_events e
+          JOIN manager_operations o ON o.operation_id=e.operation_id
+          WHERE o.operation_kind='attempt_lifecycle' AND o.task_id=?
+          ORDER BY e.event_cursor DESC LIMIT 1`).get(taskId);
+          if (operationRow) candidates.push(operationRow.at);
+          const cancelRow = this.#db.prepare(`SELECT queued_cancelled_at AS at FROM attempts
+          WHERE task_id=? AND queued_cancel_event_cursor IS NOT NULL
+          ORDER BY queued_cancel_event_cursor DESC LIMIT 1`).get(taskId);
+          if (cancelRow) candidates.push(cancelRow.at);
+          if (this.#db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='runtime_task_events'").get()) {
+            const runtimeRow = this.#db.prepare(`SELECT at FROM runtime_task_events WHERE task_id=?
+          ORDER BY event_cursor DESC LIMIT 1`).get(taskId);
+            if (runtimeRow) candidates.push(runtimeRow.at);
+          }
+          if (candidates.length === 0) return null;
+          candidates.sort();
+          return { at: candidates[candidates.length - 1] };
+        });
+      }
       /** Project Feedback only from this Attempt's persisted runtime observations
        * and a committed Result. */
       readTaskFeedback(taskId) {

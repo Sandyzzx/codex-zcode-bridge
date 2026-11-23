@@ -1441,6 +1441,16 @@
           "type": "integer",
           "exclusiveMinimum": 0,
           "maximum": 9007199254740991
+        },
+        "offset_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "max_bytes": {
+          "type": "integer",
+          "minimum": 1024,
+          "maximum": 4194304
         }
       },
       "required": [
@@ -1958,6 +1968,52 @@
             "test_counts"
           ],
           "additionalProperties": false
+        },
+        "page": {
+          "type": "object",
+          "properties": {
+            "offset_bytes": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "next_offset": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "total_bytes": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "data": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "offset_bytes",
+            "next_offset",
+            "total_bytes",
+            "data"
+          ],
+          "additionalProperties": false
+        },
+        "result_status": {
+          "type": "string"
+        },
+        "result_digest": {
+          "type": "string"
+        },
+        "result_commit_ref": {
+          "type": "string"
         }
       },
       "required": [
@@ -1985,6 +2041,11 @@
         {
           "required": [
             "projection"
+          ]
+        },
+        {
+          "required": [
+            "page"
           ]
         }
       ]

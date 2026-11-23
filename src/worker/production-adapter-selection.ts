@@ -1,12 +1,7 @@
-import type { OfficialProviderRuntimeCapability } from "../runtime/official-app-server-runtime.js";
+import { isOfficialCodingPlanProvider, type OfficialProviderRuntimeCapability } from "../runtime/official-app-server-runtime.js";
 
 export type ProductionAdapterKind = "official_host";
 
-const OFFICIAL_CODING_PLAN_PROVIDER_IDS = new Set<string>([
-  "account:bigmodel-individual-coding-plan",
-  "bigmodel-individual-coding-plan",
-  "builtin:bigmodel-coding-plan",
-]);
 const OFFICIAL_START_PLAN_PROVIDER_ID = "account:bigmodel-start-plan" as const;
 
 /**
@@ -17,7 +12,10 @@ const OFFICIAL_START_PLAN_PROVIDER_ID = "account:bigmodel-start-plan" as const;
 export function selectOfficialProviderRuntime(
   providerId: string | undefined,
 ): OfficialProviderRuntimeCapability {
-  if (providerId && OFFICIAL_CODING_PLAN_PROVIDER_IDS.has(providerId)) {
+  // Single source of truth for the Coding Plan provider aliases (P2 §4.1):
+  // the runtime's isOfficialCodingPlanProvider decides both preference
+  // upgrades and worker capability selection.
+  if (isOfficialCodingPlanProvider(providerId)) {
     return "coding_plan_discount";
   }
   if (providerId === OFFICIAL_START_PLAN_PROVIDER_ID) return "start_plan_static";

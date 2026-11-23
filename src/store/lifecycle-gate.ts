@@ -173,6 +173,7 @@ interface ClaimOnlyPort {
   readRecoverableQueuedAttempts(): readonly Readonly<Record<string, unknown>>[];
   readTaskEvents(taskId: string, options?: { readonly afterCursor?: number; readonly limit?: number }): LifecycleEventsPage;
   readTaskResultPage(taskId: string, offsetBytes: number, maxBytes: number): unknown;
+  readTaskLatestEventAt(taskId: string): unknown;
   readTaskFeedback(taskId: string): unknown;
   readRecoverySnapshot(): unknown;
   recordRecoveryObservation(input: Readonly<Record<string, unknown>>, evidence: Readonly<Record<string, unknown>>): unknown;
@@ -408,6 +409,7 @@ export interface LifecycleCandidateStore {
     readonly limit?: number;
   }): LifecycleEventsPage;
   readTaskResultPage(taskId: string, offsetBytes: number, maxBytes: number): unknown;
+  readTaskLatestEventAt(taskId: string): unknown;
   readRecoverySnapshot(): unknown;
 }
 
@@ -1420,6 +1422,7 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
   readTaskAttention(taskId: string): unknown;
   readTaskEvents(taskId: string, options?: { readonly afterCursor?: number; readonly limit?: number }): LifecycleEventsPage;
   readTaskResultPage(taskId: string, offsetBytes: number, maxBytes: number): unknown;
+  readTaskLatestEventAt(taskId: string): unknown;
   readCommittedResult(operationId: string): CandidateCommittedResult | null;
   readTaskFeedback(taskId: string): unknown;
   readRecoverySnapshot(): unknown;
@@ -2285,6 +2288,7 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
     readTaskAttention: (taskId) => port.readTaskAttention(taskId),
     readTaskEvents: (taskId, options) => port.readTaskEvents(taskId, options),
     readTaskResultPage: (taskId, offsetBytes, maxBytes) => port.readTaskResultPage(taskId, offsetBytes, maxBytes),
+    readTaskLatestEventAt: (taskId) => port.readTaskLatestEventAt(taskId),
     readCommittedResult: (operationId) => port.readCommittedResult(operationId),
     readTaskFeedback: (taskId) => port.readTaskFeedback(taskId),
     createNextAttempt: (input) => port.createNextAttempt(input, {

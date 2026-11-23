@@ -247,8 +247,17 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     const attempt = asRecord(snapshot.attempt);
     const operation = snapshot.operation ? asRecord(snapshot.operation) : null;
     const result = snapshot.result ? asRecord(snapshot.result) : null;
-    const events = this.#driver.readTaskEvents(taskId, { afterCursor: 0, limit: 200 }) as { events?: readonly Record<string, unknown>[] };
-    const lastAt = events.events?.at(-1)?.at;
+    // P2 §4.5: updated_at must reflect the latest persisted event, not the
+    // tail of an arbitrary first page. The dedicated read touches one row per
+    // event source and falls back to the page read only when unavailable.
+    let lastAt: unknown;
+    try {
+      const latest = asRecord(this.#driver.readTaskLatestEventAt(taskId));
+      lastAt = latest?.at;
+    } catch {
+      const events = this.#driver.readTaskEvents(taskId, { afterCursor: 0, limit: 200 }) as { events?: readonly Record<string, unknown>[] };
+      lastAt = events.events?.at(-1)?.at;
+    }
     const createdAt = string(projection.created_at, "task_created_at_missing");
     const status = taskStatus(projection.status);
     const dispatchBlocker = status === "queued"
@@ -362,10 +371,23 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       if (code === "invalid_result_page_offset") throw new TaskManagerError("TASK_INVALID", "offset_bytes is beyond the stored Result");
       throw error;
     }
+    const committed = snapshot.result as unknown as TaskResult;
     return {
-      task_id: taskId,
-      attempt: Number(snapshot.attempt.attempt),
-      status: taskStatus(snapshot.projection.status),
+      // Core committed-Result identity fields (bounded by the storage
+      // contract; the large zcode_output stays behind the page cursor).
+      task_id: committed.task_id,
+      attempt: committed.attempt,
+      status: committed.status,
+      summary: committed.summary,
+      files_changed: committed.files_changed,
+      tests: committed.tests,
+      issues: committed.issues,
+      needs_master_decision: committed.needs_master_decision,
+      exit_code: committed.exit_code,
+      session_id: committed.session_id,
+      started_at: committed.started_at,
+      finished_at: committed.finished_at,
+      ...(committed.error_code ? { error_code: committed.error_code } : {}),
       result_status: page.result_status,
       result_digest: page.result_digest,
       result_commit_ref: page.result_commit_ref,
@@ -1307,7 +1329,6 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
           this.#dispatchingPaths.delete(dispatchPathKey);
         }
         this.#schedulerStage("driver_run_returned", { task_id: next.taskId, attempt: next.attempt, state: run.state, queue_depth: this.#queue.length });
-        this.#acceptRunOutcome(run);
         await this.#recoverAfterRun(next, run);
         const after = this.#readSnapshot(next.taskId);
         await this.#notifyOperationReleased(after);
@@ -1352,11 +1373,6 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
         this.#scheduleWorkspaceRetry();
       } else this.#schedulePump();
     }
-  }
-
-  #acceptRunOutcome(_run: ClaimOnlyRunResult): void {
-    // Authority facts are read from the SQLite projection on every MCP call.
-    // The in-memory return value is never used to claim a Result commit.
   }
 
   async #recoverAfterRun(item: { readonly taskId: string; readonly attempt: number }, run: ClaimOnlyRunResult): Promise<void> {

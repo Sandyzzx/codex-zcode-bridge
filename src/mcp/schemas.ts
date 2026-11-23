@@ -205,7 +205,17 @@ export const taskResultSchema = z.object({
 });
 
 // A union at the root would cause older MCP protocol codecs to wrap the result.
-const zcodeResultFullOrSummarySchema = taskResultSchema.extend({
+/** P1 §3.4 / ADR-056: one bounded page of the stored canonical Result JSON.
+ * Concatenating every page's data (following next_offset) reproduces the
+ * stored bytes whose SHA-256 equals result_digest. */
+const zcodeResultPageSchema = z.object({
+  offset_bytes: z.number().int().nonnegative(),
+  next_offset: z.number().int().positive().nullable(),
+  total_bytes: z.number().int().nonnegative(),
+  data: z.string(),
+});
+
+export const zcodeResultOutputSchema = taskResultSchema.extend({
   zcode_output: taskResultSchema.shape.zcode_output.optional(),
   projection: z.object({
     omitted_fields: z.array(z.string()),
@@ -215,30 +225,14 @@ const zcodeResultFullOrSummarySchema = taskResultSchema.extend({
       not_run: z.number().int().nonnegative(),
     }),
   }).optional(),
+  page: zcodeResultPageSchema.optional(),
+  result_status: z.string().optional(),
+  result_digest: z.string().optional(),
+  result_commit_ref: z.string().optional(),
 }).refine(
-  (result) => (result.zcode_output !== undefined) !== (result.projection !== undefined),
-  "Result must contain either zcode_output or projection",
-);
-
-/** P1 §3.4 / ADR-056: one bounded page of the stored canonical Result JSON.
- * Concatenating every page's data (following next_offset) reproduces the
- * stored bytes whose SHA-256 equals result_digest. */
-export const zcodeResultPageSchema = z.object({
-  task_id: z.string(),
-  attempt: z.number().int().positive(),
-  status: z.enum(["queued", "running", "completed", "failed", "cancelled", "waiting_for_master"]),
-  result_status: z.string(),
-  result_digest: z.string(),
-  result_commit_ref: z.string(),
-  page: z.object({
-    offset_bytes: z.number().int().nonnegative(),
-    next_offset: z.number().int().positive().nullable(),
-    total_bytes: z.number().int().nonnegative(),
-    data: z.string(),
-  }),
-});
-
-export const zcodeResultOutputSchema = z.union([zcodeResultFullOrSummarySchema, zcodeResultPageSchema]).meta({
+  (result) => (result.zcode_output !== undefined ? 1 : 0) + (result.projection !== undefined ? 1 : 0) + (result.page !== undefined ? 1 : 0) === 1,
+  "Result must contain exactly one of zcode_output, projection, or page",
+).meta({
   oneOf: [{ required: ["zcode_output"] }, { required: ["projection"] }, { required: ["page"] }],
 });
 
