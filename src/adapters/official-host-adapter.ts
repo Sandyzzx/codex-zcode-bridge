@@ -247,9 +247,6 @@ export function officialProviderCapabilityWarning(
     : null;
 }
 
-/** @deprecated Use officialProviderCapabilityWarning; this value is diagnostic, not an execution gate. */
-export const officialProviderCapabilityFailure = officialProviderCapabilityWarning;
-
 export type OfficialHostModuleSource =
   | OfficialHostModule
   | (() => Promise<OfficialHostModule> | OfficialHostModule);

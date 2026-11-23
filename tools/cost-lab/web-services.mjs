@@ -49,7 +49,6 @@ export async function inspectCostLabEnvironment(options = {}) {
       installation_fingerprint: runtime.installation_fingerprint ?? null,
       installation_safety: runtime.installation_safety ?? null,
       runtime_status: runtime.runtime_status,
-      experimental_authorization: runtime.experimental_authorization ?? null,
       discount_status: runtime.discount_status,
       version: runtime.desktop_version ?? null,
       appserver_protocol: runtime.manifest?.appserver_protocol ?? null,

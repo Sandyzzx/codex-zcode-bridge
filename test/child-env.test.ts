@@ -36,14 +36,11 @@ test("child environments keep only OS and explicit Bridge settings", () => {
 test("worker environments forward the env-only browser settings and nothing broader", () => {
   const worker = createWorkerEnv({
     PATH: "safe-path",
-    ZCODE_BRIDGE_EXPERIMENTAL_RUNTIME_AUTHORIZATION_FILE: "C:/project/.run/compatibility/authorization.json",
     ZCODE_BRIDGE_BROWSER_USE: "headless",
     ZCODE_BRIDGE_BROWSER_EXECUTABLE: "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
     ZCODE_BRIDGE_BROWSER_SECRET: "must-not-leak",
   });
   assert.equal(
-    worker.ZCODE_BRIDGE_EXPERIMENTAL_RUNTIME_AUTHORIZATION_FILE,
-    "C:/project/.run/compatibility/authorization.json",
   );
   assert.equal(worker.ZCODE_BRIDGE_BROWSER_USE, "headless");
   assert.equal(worker.ZCODE_BRIDGE_BROWSER_EXECUTABLE, "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe");

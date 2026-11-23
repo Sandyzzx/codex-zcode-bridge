@@ -18,7 +18,6 @@ const UNVERIFIED = "OFFICIAL_RUNTIME_UNVERIFIED";
 function fixture(fingerprint: string, options: {
   readonly runtimeStatus?: string;
   readonly installationSafety?: string;
-  readonly authorization?: { readonly state: string; readonly scopes: readonly string[] };
   readonly bundleSha?: string;
 } = {}): Record<string, unknown> {
   const bundleSha = options.bundleSha ?? "1".repeat(64);
@@ -32,7 +31,6 @@ function fixture(fingerprint: string, options: {
       installation_fingerprint: fingerprint,
       installation_safety: options.installationSafety ?? SAFE,
       runtime_status: options.runtimeStatus ?? VERIFIED,
-      experimental_authorization: options.authorization ?? { state: "not_configured", scopes: [] },
       version: "3.19.0.10774",
       desktop_app_version: "3.19.0.10774",
       desktop_build_commit_id: "abc123",
@@ -143,7 +141,6 @@ test("A safe unverified Runtime can run the protocol probe while an unsafe Runti
     runtime = fixture("c".repeat(64), {
       runtimeStatus: UNVERIFIED,
       installationSafety: "OFFICIAL_INSTALLATION_UNSAFE",
-      authorization: { state: "authorized", scopes: ["coding_plan_probe"] },
     });
     await assert.rejects(
       fixtureSet.service.runAuthorizedProtocolProbe(),

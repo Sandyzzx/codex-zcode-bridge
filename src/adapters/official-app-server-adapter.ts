@@ -19,10 +19,7 @@ import {
 
 export type { OfficialInstalledRuntimeResolver } from "./official-host-adapter.js";
 import type { OfficialInstalledRuntimeResolver } from "./official-host-adapter.js";
-export {
-  officialProviderCapabilityFailure,
-  officialProviderCapabilityWarning,
-} from "./official-host-adapter.js";
+export { officialProviderCapabilityWarning } from "./official-host-adapter.js";
 
 export interface OfficialAppServerWorkerAdapterOptions extends ZCodeAppServerAdapterOptions {
   readonly officialRuntimeResolver?: OfficialInstalledRuntimeResolver;
