@@ -1,9 +1,9 @@
 # Project State
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-23（Native MCP deployment-aligned trusted-local Wake）
-> Last verified: 2026-11-23，核对隔离 Desktop/profile、PR #131 candidate `e64eef26c`、`origin/preview@8ee7ec93a82c2093dce74707a9d1937c1c567887` 与一次真实 loaded/idle trusted-local Wake：候选 Thin MCP 由 Host 原生工具读取同一隔离 Authority；Queue、Turn、Result digest、Cleanup、Release 和 Desktop visibility 均有真实证据。严格 C/D、Desktop fully exited、Official Runtime provenance 和真实工程交付验收仍为 `NOT_RUN`。
-> Verified against: `origin/preview@8ee7ec93a82c2093dce74707a9d1937c1c567887` + PR #131 candidate `e64eef26c01e3f708505af66acf00a481c5be3ed`；bundle SHA-256 `202be2e4834e5c8f154c46293b7dfe607c4f788de38ed7c4d0c29186f8946cf8`。
+> Last updated: 2026-11-23（Preview.14 release preparation）
+> Last verified: 2026-11-23，核对 PR #131 合并后的 `origin/preview@c7bfc28b1112dead95ae4179a00962de76051920`、合并后 CI `45124466655`，以及隔离真实 loaded/idle trusted-local Wake。Native MCP Result readback、Master 生命周期独立验收和 Desktop visible 均为 `PASS — REAL`；严格 C/D、Desktop fully exited、Official Runtime provenance 和非空工程交付验收仍为 `NOT_RUN`。
+> Verified against: `origin/preview@c7bfc28b1112dead95ae4179a00962de76051920`。
 
 当前发布状态：
 
@@ -16,12 +16,12 @@
 - 已发布 Preview `2.0.0-preview.10`：集成 SQLite v13 退役、旧 JSON Authority 提示退役、无引用 ZCode 3.18.0 Patch 清理、历史研究归档、CI 去重/Impact 精化与 Windows 两路分片。SQLite v14 是唯一当前 Schema；Stable 不受影响。
 - 已发布 Preview `2.0.0-preview.11`：基于 `origin/preview@f549373404ac137600e89991b99114a4802133f2`，保留默认完整 Result，提供显式 `zcode_result(view="summary")`、默认 32 KiB Event 页（ADR-048）、`zcode_events(include_attempt=true)` 与 `zcode_result(expected_attempt)` 的既有 SQLite 事实归属核对。
 - Preview.11 同时包含更严格的 ADR-039 行政释放保护：带 Launch Receipt/Identity 的 pre-Claim 不得释放；`cleanup_unverified` 仅在原 Result 已 `cancelled`、exact identity `exited`、recorded root 已观察、tree scan clean 且 Adapter closure 缺失时行政释放；活动 Worker、live descendant、终止失败与 probe failure 保持占用。`zcode_status`/`zcode_cancel` 以可选字段加性报告 `dispatch_blocker`。
-- `2.0.0-preview.13` 发布候选：当前基线为 `origin/preview@8ee7ec93a82c2093dce74707a9d1937c1c567887`（内容基于 Preview.12 `c941f578` 的版本/生成物发布推进），保留当前探测、Worker 身份、进程树、Cleanup、Cancel、Release、SQLite CAS 与无固定次数 Recovery Observation 合同。
+- 已发布 Preview `2.0.0-preview.13`：Tag `codex-zcode-bridge-preview-v2.0.0-preview.13`，发布提交 `8ee7ec93a82c2093dce74707a9d1937c1c567887`。
 - Preview.12 对超过 8 条历史 Hold 的 Cleanup/Cancel 消解使用完整事件集合的 count/root 承诺，旧 digest 数组继续可校验；既有 v14 的精确旧 Trigger 可只读打开，并在可写打开时事务内精确升级，`user_version` 仍为 14。隔离 Task89 快照已验证第 9 次观察和重复去重，生产 Task89 未取消、未写入。
 - Preview.13 通过 PR #129 移除 AgentReport 的 400,000 字符固定前缀扫描上限，改用有界内存覆盖完整已捕获响应；通过 PR #130 把 ADR-039 行政释放的终态 Result 范围扩展到 `completed`/`failed`/`waiting_for_master`/`cancelled`，并统一使用一个 `zcode_cancel` 用户流程。新释放证据统一绑定原 Result digest/commit、Claim、Worker identity 与 Recovery evidence；旧 `cancelled` 取消证明只作历史读取兼容。
-- ZCode Desktop `3.19.0.10774`：仅通过 ADR-042 的 `OFFICIAL_RUNTIME_EXPERIMENTAL` 精确指纹授权完成兼容性探测；不是 Preview.13 的发布支持版本，Coding Plan 倍率仍 `INCONCLUSIVE`，Start Plan 因无 active plan 为 `BLOCKED`。
-- Async Executor PR 2–6：PR #131 保持 open，位于 `codex/async-executor-rc-20261122`。Base `ab2d09a2` 已包含统一 Console、Deep Link 与 real-process synthetic-Worker E2E。当前候选增加显式 `trusted-local` Wake：默认 strict 不变，显式本地 Owner policy 可在没有 Desktop control socket 时自动执行一次官方 Queue；Queue ACK、message ID、Turn 未确认 Web fallback 和 Result/Cleanup/Release 绑定分别持久化。2026-11-23 的隔离真实 loaded/idle Wake 已通过官方 Queue、新 Turn、Host 原生 MCP `zcode_status` / `zcode_result`、Result digest、Cleanup、Release 与 Desktop visibility；严格 C/D、Desktop fully exited 与 Official Runtime provenance 仍未验证。
-- 2026-11-23 Operations Console 候选仍位于 `codex/async-executor-rc-20261122`：Task Web Console 已扩展为 Dashboard/Tasks/Cost Lab/Runtime/Settings 的单一 loopback Origin，Cost Lab 仅通过 same-origin API 复用既有服务，Runtime Auto-Learn 按 exact fingerprint 保存兼容性证据。Bridge 源码候选 `1a7fcd89f` 已通过本地 Windows 完整 Release Gate；第一次 GitHub CI 暴露 Cost Lab 临时根 `RUNNER~1` 与 Authority `realpath(native)` 不一致，`f8e6aa7f` 在生成隔离 Authority Root 前规范化父路径；下一次运行又暴露规范化后 bootstrap stage path 超过 Windows 常规上限，`63d58994` 缩短隔离 state root、增加 fail-fast path budget 并清理未 ready 的启动子进程。Cost Lab 复验 89/89。GitHub Windows/Ubuntu 结果仍待新推送后生成。该候选的 Cost Lab Runner 使用隔离 Authority Root 和独立 Executor 进程；当前通过的是 synthetic Worker/合成账单证据，不能提升为真实 Provider、真实 Desktop 关闭或最终发布结论。
+- ZCode Desktop `3.19.0.10774`：仅通过 ADR-042 的 `OFFICIAL_RUNTIME_EXPERIMENTAL` 精确指纹授权完成兼容性探测；不是 Preview.14 的发布支持版本，Coding Plan 倍率仍 `INCONCLUSIVE`，Start Plan 因无 active plan 为 `BLOCKED`。
+- Preview `2.0.0-preview.14` 发布候选：PR #131 已合并为 `origin/preview@c7bfc28b1112dead95ae4179a00962de76051920`，合并后 CI `45124466655` 的 Windows、Ubuntu、SQLite 资源矩阵和 Cost Lab 均通过。候选包含独立 Executor、Lifetime Lease、Named Pipe IPC、Thin MCP、Task CLI、Operations Console 与 trusted-local Wake。真实 loaded/idle trusted-local 自动 Wake、Native MCP Result readback、Master 生命周期独立验收和 Desktop visible 为 `PASS — REAL`；严格 C/D、Desktop fully exited、Official Runtime provenance 与非空工程交付验收为 `NOT_RUN`。
+- Operations Console 与 Cost Lab 已随 PR #131 合并到 Preview：Task Web Console 扩展为 Dashboard/Tasks/Cost Lab/Runtime/Settings 的单一 loopback Origin，Cost Lab 仅通过 same-origin API 复用既有服务，Runtime Auto-Learn 按 exact fingerprint 保存兼容性证据。Cost Lab Runner 使用隔离 Authority Root 和独立 Executor 进程；当前通过的是 synthetic Worker/合成账单证据，不能提升为真实 Provider、真实 Desktop 关闭或最终发布结论。
 
 ## 当前生产架构
 
@@ -87,7 +87,7 @@ Preview.3 的 Start Plan 历史证据覆盖 Windows、官方 AppServer `0.17.1`�
 | Preview.7 发布完整回归 | `PASS — CANDIDATE` | PR #96 Windows 完整回归 913 项：911 pass、0 fail、2 skip；Ubuntu 772 项：723 pass、0 fail、49 skip；Typecheck、Build、Plugin Validation、生成物 Freshness 与 `git diff --check` 通过。见 [CI 43720237853](https://github.com/Sandyzzx/codex-zcode-bridge/actions/runs/43720237853)。只覆盖 Windows x64、Node 24.16.0 |
 | Async Executor PR 2–6 历史本地完整回归 | `PASS — HISTORICAL CANDIDATE` | 历史候选 `c75c3433`：1060 tests、1058 pass、0 fail、2 existing skips；注册压力 4/4；生成物 13/13 fresh，插件结构校验通过。见 [统一 RC 证据](reports/async-executor-release-candidate-20261122.md)。该结果不属于当前验收提交 `7f54531a`，也不替代真实 Desktop 关闭或真实 Official Runtime |
 | Async Executor Web/real-process acceptance | `PASS — REAL PROCESS + SYNTHETIC WORKER` | PR #131 final integration candidate `7ab652ba`（Web implementation/evidence `02a9e811`，整合 `origin/preview@8ee7ec93`）：定向主集合 92/92 PASS；真实 MCP Host / Executor / Console / Chromium 进程与 synthetic Worker 完成 C1；Host 退出后 Executor/Console 仍 active，原 Attempt Result/Cleanup/Release 各一次、Spawn 一次、新 Host 读回同一 Result。后续 trusted-local loaded/idle Wake 另行通过真实 Queue/Turn/Native MCP readback；Desktop 全退、严格 C/D、Official Runtime provenance 和真实 Skill 遵循率仍 `NOT_RUN`。见 [Web real-process E2E](reports/async-executor-web-real-host-e2e-20261122.md) |
-| Trusted-local Wake candidate | `PASS — REAL LOADED/IDLE` | 72/72 focused tests 之外，隔离 Host 真实完成一次 Queue、新 Turn、原生 MCP Result readback、Result digest、Cleanup/Release 与 Desktop Visible；`wakefinal20261123f`/Attempt 1 各事实均只出现一次。严格 C/D、Desktop fully exited、Official Runtime provenance 和真实工程交付仍未验证。见 [evidence](reports/trusted-local-wake-20261123.md) |
+| Preview.14 trusted-local Wake | `PASS — REAL LOADED/IDLE` | 隔离 Host 真实完成一次 Queue、新 Turn、原生 MCP Result readback、Result digest、Cleanup/Release、Master 生命周期独立验收与 Desktop Visible；`wakefinal20261123f`/Attempt 1 各事实均只出现一次。严格 C/D、Desktop fully exited、Official Runtime provenance 和非空工程交付仍未验证。见 [evidence](reports/trusted-local-wake-20261123.md) |
 | Operations Console + Web UI | `PASS — SYNTHETIC` | 真实 Chromium 加载统一 Console；Runtime 7/7、Web 10/10；Deep Link 选中/刷新保留、Result pending 独立显示、i18n/theme、loopback/Host/Origin/CSRF、动态端口发现与同 Root 复用均通过。Worker、Billing 与 Runtime Provider 边界为 synthetic/mock，不是真实模型证据。 |
 | Cost Lab unified API + Runner | `PASS — SYNTHETIC` | Cost Lab 全量隔离套件 89/89；同时验证 same-origin 挂载、CSRF、历史/账单脱敏、并发刷新去重和显式真实确认。独立 Runner 使用真实 Executor/MCP 进程与 synthetic Worker，完成 Result、Cleanup、Release、Idle-only Shutdown 与 PID 退出。 |
 | Runtime Auto-Learn | `PASS — CONTRACT` | 静态 fingerprint 证据、去重与历史比较、Provider/Billing scope 隔离、授权零模型协议探针和 Manifest 不变均有定向测试；真实 Provider E2E、真实 Billing 和真实版本兼容提升 `NOT_RUN / BLOCKED`。 |
@@ -109,7 +109,7 @@ Preview.3 的 Start Plan 历史证据覆盖 Windows、官方 AppServer `0.17.1`�
 
 Preview.7 的本机验证只覆盖 Windows x64、Node `24.16.0`。已安装 Desktop `3.18.2.10443` 的官方签名 helper 与固定 Host 通过进程管理 smoke；Desktop `3.18.0`、`3.18.1` 实机组合未验证，不能标记为不兼容。真实 OAuth refresh 与跨机器制品复现未执行，但属于 Owner 已接受的 Preview 阶段有限风险。PR #96 合并后的 preview push 首次 Windows run 观察到既有 `released` lifecycle observation timeout；Root cause 保持 `UNCONFIRMED`，未修改断言或超时，failed-job rerun 通过。
 
-2026-11-23 的 Bridge 源码已冻结到 `1a7fcd89f` 并通过一次本地 Windows 完整 Release Gate；Cost Lab 的 8.3 路径与 SQLite bootstrap path-length 修复汇总到 `63d58994` 并在本地复验 89/89。当前 PR #131 trusted-local Wake 已在隔离 Host 中完成一次真实 loaded/idle Queue、Turn、原生 MCP Result readback、Cleanup/Release 与 Desktop Visible；这不等同于真实 Codex Desktop fully exited、严格 Wake C/D、Official Runtime Provider/Billing 或非空工程交付。当前未合并 Preview、未发布 Release。
+PR #131 已合入 Preview，合并后 CI `45124466655` 通过。Preview.14 的 trusted-local Wake 已在隔离 Host 中完成一次真实 loaded/idle Queue、Turn、原生 MCP Result readback、Cleanup/Release、Master 生命周期独立验收与 Desktop Visible；这不等同于真实 Codex Desktop fully exited、严格 Wake C/D、Official Runtime provenance 或非空工程交付。Preview.14 发布仍在准备中，尚未创建 Tag 或 GitHub Release。
 
 ## 当前文档入口
 

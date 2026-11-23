@@ -1,9 +1,9 @@
 # 共享核心与宿主适配
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-22（Preview.13 + Async Executor PR 2–6 candidate）
-> Last verified: 2026-11-22，核对 `src/core.ts` 导出、Host/Worker 入口、共享 Official Host session factory、动态 Provider capability 检查、生产 Runtime Auth fail-closed、插件 BOM/生成物校验、R7 Runtime Events 边界、Preview.13 终态释放与 Async Thin MCP candidate；外部 fork 实际升级仍为 NOT RUN。
-> Verified against: Preview `8ee7ec93a82c2093dce74707a9d1937c1c567887` + `codex/async-executor-rc-20261122` final integration candidate `7ab652baac606fedfa3e86c6db08e7892df122f7`；ADR-041 implementation `a676c6cd14573f2620339f992a345ed0715541ff`（tree `4d1b54835d4ebe1e1ae15113d5a152130a98480c`）；Final Closure implementation `f19ab1d75dcced7613bfe6e12c84d780d01f7127`（tree `dab3db21e5f51eb764ff421ab31901981964c3c2`）
+> Last updated: 2026-11-23（Preview.14 release preparation）
+> Last verified: 2026-11-23，核对 `src/core.ts` 导出、Host/Worker 入口、共享 Official Host session factory、动态 Provider capability 检查、生产 Runtime Auth fail-closed、插件 BOM/生成物校验、R7 Runtime Events 边界、Preview.14 Thin MCP 与独立 Executor；外部 fork 实际升级仍为 NOT RUN。
+> Verified against: Preview `c7bfc28b1112dead95ae4179a00962de76051920`；ADR-041 implementation `a676c6cd14573f2620339f992a345ed0715541ff`（tree `4d1b54835d4ebe1e1ae15113d5a152130a98480c`）；Final Closure implementation `f19ab1d75dcced7613bfe6e12c84d780d01f7127`（tree `dab3db21e5f51eb764ff421ab31901981964c3c2`）
 
 公共入口为 `codex-zcode-bridge/core`（`src/core.ts`），无服务器启动副作用，构建同时输出类型声明。项目为 private，尚未发布独立 npm 包；本地 npm pack/fork 消费仍是公共兼容边界。
 
@@ -41,7 +41,7 @@ ADR-038 收紧了公共 Core 导出：`renderTaskFeedback`、A4 `renderFeedback`
 
 ## 主版本兼容性
 
-Owner 批准 [ADR-029](decisions/ADR-029-legacy-runtime-retirement.md)：删除 TaskStore、旧 BridgeTaskManager/TaskManagerOptions、createWorkerSpawner、runWorkerTask/RunWorkerTaskOptions、buildTaskObservation。旧 store/workspaceProvider/spawnWorker 构造参数、自定义 JSON Worker 与这些导出的消费者需要迁移；不存在保留旧运行时的兼容包装。当前 Preview 发布候选身份为 2.0.0-preview.13。Stable 合同由其发布标签单独管理。
+Owner 批准 [ADR-029](decisions/ADR-029-legacy-runtime-retirement.md)：删除 TaskStore、旧 BridgeTaskManager/TaskManagerOptions、createWorkerSpawner、runWorkerTask/RunWorkerTaskOptions、buildTaskObservation。旧 store/workspaceProvider/spawnWorker 构造参数、自定义 JSON Worker 与这些导出的消费者需要迁移；不存在保留旧运行时的兼容包装。当前 Preview 发布候选身份为 2.0.0-preview.14。Stable 合同由其发布标签单独管理。
 
 startBridge、MCP 工具及 schema、TaskPackage/TaskResult、32 MiB/v14、纯 feedback/observation/usage 与进程身份导出继续保留。DirectWorkspaceProvider 是小型独立路径工具，保留其已公开入口；生产 Manager 直接使用 SQLite Admission 的路径验证。
 

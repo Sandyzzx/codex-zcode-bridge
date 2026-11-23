@@ -7,8 +7,8 @@ description: 用户明确要求使用 ZCode/Codex ZCode Bridge、查询或继续
 
 > Status: AUTHORITATIVE
 > Last updated: 2026-11-23（trusted-local automatic Wake）
-> Last verified: 2026-11-23，核对 opt-in Result 摘要/默认完整 Result、默认 32 KiB Event 页、ADR-039 四种终态 Result 统一行政释放、默认 13 工具面、strict/trusted-local Executor Wake、Async Handoff 与渐进加载路由；真实自动 Wake Turn、Host 文案消费和真实模型遵循率未做 A/B。
-> Verified against: Preview `c941f578ec00834ab0e93f235134d24bf14a827a` + PR #131 `codex/async-executor-rc-20261122`
+> Last verified: 2026-11-23，核对 PR #131 合并后的 Preview.14、loaded/idle trusted-local Queue、新 Turn、Host 原生 MCP Result readback、Master 生命周期独立验收、Desktop Visible、strict C/D 与非空工程交付边界。
+> Verified against: `origin/preview@c7bfc28b1112dead95ae4179a00962de76051920`
 > Scope: Master 授权、派发、监控、独立验收与恢复；不修改 Bridge TaskPackage Schema 或 MCP 工具 API。
 
 ## 职责与授权
@@ -29,7 +29,7 @@ description: 用户明确要求使用 ZCode/Codex ZCode Bridge、查询或继续
 - 选择 `staged`：存在真实审批门、重大未决公共 API/架构/持久化/安全决策，或后续工作必须依赖前阶段成果时，只派发当前一个可独立验收的完整阶段。
 - 不按文件数、模型名称或价格机械拆分，也不为普通工程选择新增确认点。同一任务返工保持原策略；新独立目标重新判断授权和策略。
 
-Task Scope 与 Handoff Mechanism 分开决定。`whole_task`/`staged` 只定义交付和验收边界；`async_wake`/`foreground` 只定义当前 Master Turn 是否等待。它们都不是 MCP/TaskPackage 字段。只有 Task 已可靠受理且没有已知 Pending Interaction 时才可采用 Async Handoff；Queue 还须核实 Executor、Thread 绑定和一次性 Wake 授权。默认 `strict` 模式必须由 Executor 取得同 Owner 实时 loaded/idle 与模型配置证据；显式 `trusted-local` Owner 策略才允许在没有私有 control socket 时提交一次 Queue，但不得把实际模型或 Turn 启动报告为已证明。任一条件缺失时只报告 Web Notify 回退。
+Task Scope 与 Handoff Mechanism 分开决定。`whole_task`/`staged` 只定义交付和验收边界；`async_wake`/`foreground` 只定义当前 Master Turn 是否等待。它们都不是 MCP/TaskPackage 字段。只有 Task 已可靠受理且没有已知 Pending Interaction 时才可采用 Async Handoff；Queue 还须核实 Executor、Thread 绑定和一次性 Wake 授权。默认 `strict` 模式必须由 Executor 取得同 Owner 实时 loaded/idle 与模型配置证据；显式 `trusted-local` Owner 策略才允许在没有私有 control socket 时提交一次 Queue。trusted-local Adapter 本身不得声称模型匹配或 loaded 状态已证明；Turn Started、Master Result readback 与 Desktop Visible 只能在独立观察有证据时分别报告。任一条件缺失时只报告 Web Notify 回退。
 
 ## 执行与验收边界
 
@@ -42,7 +42,7 @@ Task Scope 与 Handoff Mechanism 分开决定。`whole_task`/`staged` 只定义�
 - Async Handoff 只以可靠 Task 受理为交接点。提交前完成 Ready Gate；受理后记录可核实的 Task/Attempt、Authority 和 Thread，取得经 `task console-url`/Executor 验证的 Task Console `web_url`（不可用则说明安全查询替代方式），向用户简洁报告，然后结束 Turn 并停止轮询。不要调用 `codex queue`、`--resume` 或自行制造 Wake。
 - Task Console 链接只携带 `task_id`，不包含 CSRF 或凭据；不得拼接、猜测或伪造地址。链接可用不等于 Turn、Result、Cleanup 或验收已完成，页面轮询或关闭不影响 Executor。
 - Turn 结束、客户端断连、MCP 停止或调用超时不取消已受理 Task。只有用户明确授权具体取消时才走 `zcode_cancel`；回执未知时先以原 `task_id` 对账，不换 ID 重派。
-- Wake 只表示有持久 Result 可读，不表示 Master 已恢复、Task 已验收或资源已释放。恢复时直接调用 Host 已注册的原生 `zcode_status` 与 `zcode_result(view="summary", expected_attempt=<Attempt>)`，核对 Task/Attempt/Operation/digest、Result 摘要和 Cleanup/Release 证据，再独立检查实际 diff、文件与测试。不要在受限 Thread 中通过 `exec_command`/PowerShell/Node 启动 Thin MCP 或 Task CLI 读取 Named Pipe。固定 ACK 不是验收。
+- Wake 只表示有持久 Result 可读，不表示 Master 已恢复、Task 已验收或资源已释放。恢复时直接调用 Host 已注册的原生 `zcode_status` 与 `zcode_result(view="summary", expected_attempt=<Attempt>)`，核对 Task/Attempt/Operation/digest、Result 摘要和 Cleanup/Release 证据，再独立检查实际 diff、文件与测试。不要在受限 Thread 中通过 `exec_command`/PowerShell/Node 启动 Thin MCP 或 Task CLI 读取 Named Pipe。Native MCP Result Readback、Master 生命周期独立验收与 Desktop Visible 已在一次真实 loaded/idle E2E 中分别通过；固定 ACK 仍不是验收。
 - 已知 Pending Interaction 是阻塞事实，不是完成或可忽略状态。结束 Turn 前必须先处理；返回时按原请求与明确授权审批，不得自动放行。Async Handoff 不新增 Pending Wake，必要审批仍经 Web/CLI 或下一次用户 Turn 进入。
 - 已知 SQLite 清理 Hold 不得绕过。`zcode_cancel` 是唯一标准恢复入口，一次调用就是用户授权；状态只决定内部动作，不决定是否需要额外用户资格。它可能终止原身份 Worker。已被取消且无持久 Spawn 证据的历史 `launch_intent` 需用户再次显式取消才能行政释放；`completed`、`failed`、`waiting_for_master`、`cancelled` 四种终态 Result 的 `cleanup_unverified` 在 exact exit + clean tree 但缺少 Adapter closure 时，用户显式调用一次即可进入同一行政释放流程；活动/不可验证 Worker 与有 Receipt 的 Launch Intent 必须保持占用。`released`、`unverified_admin_release` 不是 `cleanup_verified`。成功后也须先检查原 workspace WIP，再讨论新 Attempt。
 - Worktree、路径声明和 `yolo` profile 不是 OS 沙箱；Worker 使用当前本机账户权限。未获用户相应授权不得提交、推送、发布、读取/修改凭据或删除任务外数据。

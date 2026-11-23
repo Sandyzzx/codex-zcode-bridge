@@ -25,7 +25,9 @@ The Coding Plan result applies to the tested account, model, and runtime. The `1
 
 For Preview, use **Windows x64**, **Node.js `24.16.0`**, and the installed official **ZCode Desktop `3.18.2.10443`**. Sign in to ZCode with access to your chosen plan and model. You also need Git and Codex with plugin support. Install Node.js and ZCode separately.
 
-Use one marketplace channel per Codex installation. Preview `2.0.0-preview.13` contains the installed Runtime integration, Cost Lab, SQLite v14-only runtime, bounded Event monitoring, opt-in Result summaries, full-captured-response AgentReport parsing, unified terminal release through `zcode_cancel`, and deduplicated Recovery observations without a fixed observation limit. Stable remains at `v1.7.2`.
+Use one marketplace channel per Codex installation. Preview `2.0.0-preview.14` contains the installed Runtime integration, Cost Lab, SQLite v14-only runtime, bounded Event monitoring, opt-in Result summaries, the independent Executor with Thin MCP, Task CLI and Web Console, trusted-local loaded/idle Queue Wake, and Async Master handoff. Stable remains at `v1.7.2`.
+
+Automatic Wake is verified only for an isolated loaded/idle Thread using explicit trusted-local authorization. Strict not-loaded Wake, Desktop fully exited recovery, Official Runtime provenance and a non-empty real engineering delivery remain unverified.
 
 ### Preview
 

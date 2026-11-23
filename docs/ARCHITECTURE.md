@@ -3,13 +3,13 @@
 > Status: AUTHORITATIVE
 
 > 2026-11-16 本地候选修订：[ADR-039](decisions/ADR-039-host-authorized-cancellation.md) 将取消授权与清理事实分离。queued + Launch Intent 无 Claim 时允许原子持久化取消并禁止迟到 Claim，未证明的进程/资源占用保留；Running 的 cleanup-only Hold 可经新鲜取消树证明追加消解记录，再继续原 CAS。此修复不增加 MCP 工具、Schema、重派或第二套恢复引擎。
-> Last updated: 2026-11-23（Operations Console + Cost Lab + Runtime Auto-Learn candidate）
-> Last verified: 2026-11-23，核对 ADR-045/049/050/051/052 的候选边界，以及统一 Operations Console、Cost Lab same-origin Adapter、Runtime Auto-Learn exact-fingerprint 证据、跨进程 synthetic Worker Runner 与 trusted-local Wake 定向路径。真实自动 Wake Turn、Master Result readback、真实计费、Desktop 关闭、严格 C/D 仍 `NOT_RUN / BLOCKED`；完整 Release Gate 待最终候选冻结后执行。
-> Verified against: `origin/preview@8ee7ec93a82c2093dce74707a9d1937c1c567887` + trusted-local Wake candidate `ca10518728c87b35c719b0293b48045946728932`。
+> Last updated: 2026-11-23（Preview.14 release preparation）
+> Last verified: 2026-11-23，核对 PR #131 合并、合并后 CI `45124466655`、隔离 loaded/idle trusted-local Wake、Native MCP Result readback、Master 生命周期独立验收与 Desktop Visible。严格 C/D、Desktop fully exited、Official Runtime provenance 和非空工程交付仍为 `NOT_RUN`。
+> Verified against: `origin/preview@c7bfc28b1112dead95ae4179a00962de76051920`。
 
-本文件描述当前 Preview.13 发布候选的生产架构。Windows x64 已默认切换到官方 Host 路径，R7 Runtime Events/Usage 复用同一 SQLite Authority；候选保留 ZCode 3.18.2 Host 模块、官方 Start Plan 认证投影与官方签名 runtime host，并完成 ADR-041 的 Thin Official Host 收敛。PR #116 已在 `450c18af` 合入 opt-in Result 摘要/默认完整 Result 与 Event Attempt 归属；PR #121 已在 `f51e965e` 合入无固定次数的 Recovery 观察去重与历史 v14 Hold 兼容；PR #129 已合入完整已捕获响应的 AgentReport 扫描；PR #130 已合入四种终态 Result 的统一 `zcode_cancel` 行政释放。公开合同继续以 [INTERFACES.md](INTERFACES.md) 为准，宿主和运行配置分别见 [SHARED_CORE.md](SHARED_CORE.md) 与 [ZCODE_RUNTIME.md](ZCODE_RUNTIME.md)。
+本文件描述当前 Preview.14 发布候选的生产架构。Windows x64 已默认切换到官方 Host 路径，R7 Runtime Events/Usage 复用同一 SQLite Authority；候选保留 ZCode 3.18.2 Host 模块、官方 Start Plan 认证投影与官方签名 runtime host，并完成 ADR-041 的 Thin Official Host 收敛。PR #116 已在 `450c18af` 合入 opt-in Result 摘要/默认完整 Result 与 Event Attempt 归属；PR #121 已在 `f51e965e` 合入无固定次数的 Recovery 观察去重与历史 v14 Hold 兼容；PR #129 已合入完整已捕获响应的 AgentReport 扫描；PR #130 已合入四种终态 Result 的统一 `zcode_cancel` 行政释放；PR #131 已合入独立 Executor、Thin MCP、Task CLI/Web 与 trusted-local Wake。公开合同继续以 [INTERFACES.md](INTERFACES.md) 为准，宿主和运行配置分别见 [SHARED_CORE.md](SHARED_CORE.md) 与 [ZCODE_RUNTIME.md](ZCODE_RUNTIME.md)。
 
-> 2026-11-23 架构状态：Owner 已接受 [ADR-045](decisions/ADR-045-async-executor-ownership.md) 与 Async Executor 总体架构。PR 2–6 candidate 已实现 Lifetime Lease、IPC、Thin MCP、Control-only CLI、loopback Web、strict/trusted-local Wake 与 Async Master Handoff。strict Wake 缺少同 Owner live preflight 时继续 Web Notify；显式 trusted-local policy 只用于本地单用户 Owner 接受当前 Thread 模型风险后的单次官方 Queue，并把 Queue ACK、Turn 未确认、Result/Cleanup/Release 与 Master 验收分开。当前 PR #131 已整合到 Preview.13 `8ee7ec93`，但真实自动 Wake Turn、Master Result readback、Desktop 关闭、严格 C/D、真实 Official Runtime 和真实模型 Skill 遵循率仍为 `NOT_RUN / BLOCKED`。
+> 2026-11-23 架构状态：Owner 已接受 [ADR-045](decisions/ADR-045-async-executor-ownership.md) 与 Async Executor 总体架构。PR #131 已合并到 Preview `c7bfc28b`，实现 Lifetime Lease、IPC、Thin MCP、Control-only CLI、loopback Web、strict/trusted-local Wake 与 Async Master Handoff。loaded/idle trusted-local 自动 Wake、Native MCP Result readback、Master 生命周期独立验收与 Desktop Visible 为 `PASS — REAL`；strict C/D、Desktop fully exited、Official Runtime provenance、非空工程交付和真实模型 Skill 遵循率仍为 `NOT_RUN`。
 
 2026-11-23 的候选把 Task Web Console 扩展为单一 loopback Operations
 Console，包含 Dashboard、Tasks、Cost Lab、Runtime 和 Settings。Cost Lab
@@ -97,6 +97,6 @@ Store 在任何可写 SQLite 句柄之前执行只读 `PRAGMA user_version` 预�
 
 ## 发布边界
 
-`2.0.0-preview.13` 的 `package.json`、`package-lock.json`、插件 manifest、MCP server version、固定官方 Host、BOM、Runtime Events Schema 与 Administrative Recovery CLI 应由同一 Tag 和 Release asset 提供。Preview 支持声明限定为 Windows x64、Node.js `24.16.0` 和已安装的官方 ZCode Desktop `3.18.2.10443`。Preview.13 保持 v14 数据合同，在 Preview.12 的完整 Result/可选摘要、分页 Event、Attempt 归属、用户授权阻塞释放与 Recovery 观察去重之上，加入完整已捕获响应的 AgentReport 扫描和四种终态 Result 的统一行政释放。
+`2.0.0-preview.14` 的 `package.json`、`package-lock.json`、插件 manifest、MCP server version、固定官方 Host、BOM、Runtime Events Schema 与 Administrative Recovery CLI 应由同一 Tag 和 Release asset 提供。Preview 支持声明限定为 Windows x64、Node.js `24.16.0` 和已安装的官方 ZCode Desktop `3.18.2.10443`。Preview.14 保持 v14 数据合同，并加入独立 Executor、Thin MCP、Task CLI/Web Console、trusted-local loaded/idle Queue Wake 与 Async Master Handoff。
 
 Preview.6 的固定源码树重建、ordered-patch replay、same-source-tree repeatability、BOM/native load、clean install、签名 helper ProcessManager smoke 和带数据的升级回滚为 `PASS`。Preview.7 的 Windows/Ubuntu Release Gate、SQLite 矩阵、生成物 Freshness、CI dispatch 边界与 MCP Events 分页为 `PASS`；真实模型流量不重复执行。跨机器复现仍为 `NOT_VERIFIED`，仅作为 Preview 阶段风险接受；完整 ZCode 产品资源图不进入 Bridge 支持范围。真实 Coding Plan 完整 E2E 和 Start Plan 核心功能路径已通过；历史 Start Plan 完整 E2E 因 Workspace 边界保持 `FAIL`，一般 Desktop Main 独立性、真实 OAuth refresh 与 3.18.0/3.18.1 实机安装组合仍未验证。3.18.0/3.18.1 是 `NOT_VERIFIED`，不是已证明不兼容。

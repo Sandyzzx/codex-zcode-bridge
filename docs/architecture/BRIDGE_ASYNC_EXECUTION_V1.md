@@ -1,10 +1,10 @@
 # Bridge Async Execution Architecture v1
 
-> Status: IMPLEMENTED — TARGETED / REAL WAKE BLOCKED（trusted-local Wake targeted tests passed；真实自动 Wake Turn 与 final Release Gate 未完成，未合入 Preview，不可发布）
+> Status: IMPLEMENTED — PREVIEW.14 RELEASE CANDIDATE；loaded/idle trusted-local Wake 为 `PASS — REAL`，严格 C/D、Desktop fully exited、Official Runtime provenance 与非空工程交付为 `NOT_RUN`
 > Decision status: [ADR-045](../decisions/ADR-045-async-executor-ownership.md) = ACCEPTED；[ADR-051](../decisions/ADR-051-executor-wake-delivery.md) = ACCEPTED；[ADR-052](../decisions/ADR-052-async-master-handoff.md) = ACCEPTED；本文档记录目标合同与当前实现边界
-> Date: 2026-11-22（Asia/Shanghai）
-> Baseline: `origin/preview` `8ee7ec93a82c2093dce74707a9d1937c1c567887`；PR #131 final integration candidate `7ab652baac606fedfa3e86c6db08e7892df122f7`（Web implementation/evidence `02a9e81198cffc5b90077eaba00b5abbfd40f640`）；earlier C1 evidence candidate `8f83bd340f1d6f31ddac12360583257969bb5863`；historical full-matrix candidate `c75c34330287266702cab5949662bf897b74ed5a`；PR 2 base `f330b511270934fa40014006333aa7747dad684c`
-> Evidence classification: 文中逐项标注 `VERIFIED`、`INFERRED`、`UNVERIFIED`；证据见 [PR 2 report](../reports/async-executor-pr2-20261122.md)、[PR 2.5 report](../reports/async-executor-pr2.5-20261122.md)、[PR 5 report](../reports/async-executor-pr5-20261122.md)、[PR 6 report](../reports/async-executor-pr6-20261122.md)、[统一 RC report](../reports/async-executor-release-candidate-20261122.md) 与 [Web real-process E2E](../reports/async-executor-web-real-host-e2e-20261122.md)
+> Date: 2026-11-23（Asia/Shanghai）
+> Baseline: `origin/preview` `c7bfc28b1112dead95ae4179a00962de76051920`（PR #131 merge）；historical full-matrix candidate `c75c34330287266702cab5949662bf897b74ed5a`；PR 2 base `f330b511270934fa40014006333aa7747dad684c`
+> Evidence classification: 文中逐项标注 `VERIFIED`、`INFERRED`、`UNVERIFIED`；证据见 [PR 2 report](../reports/async-executor-pr2-20261122.md)、[PR 2.5 report](../reports/async-executor-pr2.5-20261122.md)、[PR 5 report](../reports/async-executor-pr5-20261122.md)、[PR 6 report](../reports/async-executor-pr6-20261122.md)、[统一 RC report](../reports/async-executor-release-candidate-20261122.md)、[Web real-process E2E](../reports/async-executor-web-real-host-e2e-20261122.md) 与 [trusted-local Wake evidence](../reports/trusted-local-wake-20261123.md)
 
 ## 1. 目标与非目标
 
@@ -36,17 +36,17 @@
 | SDK/Host 强制结束 Manager 时，原 Worker 的 completed Result 可能丢失并进入恢复重排 | VERIFIED | 2026-11-20 隔离实验，`RESULT_DURABILITY=FAIL` |
 | Desktop 运行且 owning backend loaded/idle 时，官方 Queue 能启动原 Thread 新 Turn | VERIFIED | 2026-11-21 B/C 实验 |
 | CLI queue 参数能覆盖原 Thread 当前模型/effort | REFUTED | A 实验：实际仍为 Sol/xhigh |
-| Queue 支持 notLoaded Thread 或 Desktop 全退 | UNVERIFIED | 严格 C/D 未执行 |
+| Queue 支持 notLoaded Thread 或 Desktop 全退 | UNVERIFIED | 严格 C/D 与 Desktop fully exited 均为 `NOT_RUN` |
 | Queue ACK 与 Turn 启动是不同事实 | VERIFIED | CLI help 说明 Queue 使用 Thread 当前 model；PR 5 coordinator 以新 `inProgress` Turn 记录 `TURN_STARTED` |
 | loaded/idle Thread + exact model/provider/effort preflight 可安全转成一次性 Queue 请求 | VERIFIED（合成客户端） | strict Wake 保持 fail closed；真实 App Server control socket 当前不存在 |
-| 显式 trusted-local Owner 策略可在无私有 control socket 时提交一次 Queue | VERIFIED（合成 Queue/Host） | 单次 Queue、message ID、Result/Cleanup/Release 绑定、timeout 不重试与 SQLite evidence 定向测试通过；真实自动 Turn 未获预算授权 |
+| 显式 trusted-local Owner 策略可在无私有 control socket 时提交一次 Queue | VERIFIED（REAL LOADED/IDLE） | 隔离 Host 真实完成 Queue ACK、新 Turn、Native MCP Result readback、Cleanup/Release、Master 生命周期独立验收与 Desktop Visible；各事实仅一次 |
 | shipped MCP Host 进程退出后，独立 Executor 仍完成原 Attempt Result/Cleanup/Release | VERIFIED（synthetic Worker） | `executor-process-targeted-final.log`：Host 真实进程退出、Executor `active`、单次 Spawn/Result、Cleanup/Release 各一次，新 Host 重连读取同一 Result |
 | 真实 Web Console + Chromium 观察动态 Deep Link，且 Host 退出后 Web/Executor 继续可用 | VERIFIED（real process / synthetic Worker） | [Web real-process E2E](../reports/async-executor-web-real-host-e2e-20261122.md)：running/completed 页面、真实 URL、Host 退出后 active、原 Attempt 单 Result/Cleanup/Release |
 | 独立 Executor 能在真实 Codex Desktop 关闭后保持运行 | UNVERIFIED | Owner 当前 Desktop 未关闭；synthetic Worker 证据不能替代 |
 
-当前集成基线为 `origin/preview@8ee7ec93a82c2093dce74707a9d1937c1c567887`
-（Preview.13）；发布支持范围仍按现有文档限定为 Windows x64、Node `24.16.0`、
-ZCode Desktop `3.18.2.10443`、SQLite v14 ONLY。PR 2 branch 不扩大该范围，也不把
+当前集成基线为 `origin/preview@c7bfc28b1112dead95ae4179a00962de76051920`
+（Preview.14 release candidate）；发布支持范围仍按现有文档限定为 Windows x64、
+Node `24.16.0`、ZCode Desktop `3.18.2.10443`、SQLite v14 ONLY。PR #131 不扩大该范围，也不把
 实验性 ADR-042 安装或 Token Efficiency 候选写成当前支持范围。
 
 历史统一候选 `c75c34330287266702cab5949662bf897b74ed5a` 已通过 Windows
@@ -54,11 +54,12 @@ ZCode Desktop `3.18.2.10443`、SQLite v14 ONLY。PR 2 branch 不扩大该范围�
 4/4、13 个生成物 Freshness 与插件结构校验。PR #131 的 Web/real-process 证据
 已安全整合到包含终态 Result 行政释放的上游 Preview；Web
 implementation/evidence candidate `02a9e81198cffc5b90077eaba00b5abbfd40f640`
-随后继续合并 Preview.13，最终集成候选
-`7ab652baac606fedfa3e86c6db08e7892df122f7` 在相同树重新通过 92/92 项定向
-测试与 C1 real-process/synthetic-Worker E2E。旧提交的完整回归和 GitHub
-Release Gate 不能自动代表当前 head。当前结果仍不替代真实 Desktop 关闭、
-真实 Official Runtime、严格 Wake C/D 或真实模型 Skill 遵循率。
+随后继续合并 Preview.13，并由 PR #131 合并到 Preview。合并后 CI
+`45124466655` 的 Windows、Ubuntu、SQLite 资源矩阵和 Cost Lab 均通过。
+隔离 Host 的 loaded/idle trusted-local Wake、Native MCP Result readback、
+Cleanup/Release、Master 生命周期独立验收与 Desktop Visible 为 `PASS — REAL`。
+该结果不替代真实 Desktop fully exited、严格 Wake C/D、Official Runtime
+provenance、非空工程交付或真实模型 Skill 遵循率。
 
 ### 2.1 PR 2 / PR 2.5 实施边界
 
@@ -88,11 +89,10 @@ shipped `bridge.mjs` 路径，也不是生产回退。公共 Core 中嵌入
 独立进程启动，在 Task 受理和 `launch_intent` 后终止 Host；隔离 Executor 与
 Console 保持可用，浏览器继续观察同一 Deep Link，synthetic Worker 提交原
 Attempt Result，Cleanup 与 Release 各持久化一次，新 Host 可重连读取同一
-Result。该证据边界固定为 **REAL PROCESS + SYNTHETIC WORKER**。真实 Codex
-Desktop 关闭后原 Attempt 继续执行仍为
-`NOT_RUN / BLOCKED_BY_OWNER_ENVIRONMENT`；未关闭 Owner 当前正在使用的
-Desktop，未发起付费模型请求。不得把 Host 进程测试冒充 Desktop 关闭，也不得
-据此合入 Preview、声明发布通过或对外宣称真实 Desktop 场景已验证。
+Result。该证据边界固定为 **REAL PROCESS + SYNTHETIC WORKER**。PR #131 已合并
+到 Preview.14 release candidate，但真实 Codex Desktop fully exited 后原 Attempt
+继续执行仍为 `NOT_RUN`；不得把 Host 进程测试冒充 Desktop fully exited，也不得
+据此宣称严格 C/D 或 Official Runtime provenance 已通过。
 
 ## 3. 目标架构
 
@@ -400,9 +400,10 @@ Recovery；真实 Desktop UI acknowledgement 仍是 `UNKNOWN`。
 
 - strict：loaded/idle exact-config Queue 投递后必须区分 `QUEUED` 与 `TURN_STARTED`，`TURN_COMPLETED`
   另行由 Thread 事件/后续验收观察，不能由 Queue ACK 推断。
-- trusted-local：无同 Owner 控制面时只允许 `QUEUED` 或
-  `trusted_local_turn_start_unverified`；不得声称 loaded/idle、当前模型匹配或
-  `TURN_STARTED`。Queue 只提交一次，失败/未知不自动重试。
+- trusted-local：无同 Owner 控制面时，Adapter 只记录 `QUEUED` 或
+  `trusted_local_turn_start_unverified`，不得声称 loaded/idle 或当前模型匹配。
+  独立观察取得新 Turn 证据时可另行记录 `TURN_STARTED`；Queue 只提交一次，
+  失败/未知不自动重试。
 - notLoaded：严格 C，普通 Queue 与 `--resume` 分别验证。
 - Desktop 全退：D 场景验证是否持久排队或由独立 owner 消费。
 - 模型失控负例：当前 model/effort/budget 未确认时 fail-closed 转 Web Notify。
@@ -412,7 +413,9 @@ Recovery；真实 Desktop UI acknowledgement 仍是 `UNKNOWN`。
   `zcode_result(view="summary", expected_attempt=...)` 读取原 Attempt；
   `exec_command`/PowerShell/Node 启动的 Thin MCP 或 Task CLI 不是受支持的
   readback 证据。安装版仍指向旧 in-process Manager 时，
-  `NATIVE_MCP_READBACK=BLOCKED_BY_INSTALLED_HOST_VERSION`。
+  `NATIVE_MCP_READBACK=BLOCKED_BY_INSTALLED_HOST_VERSION`；Preview.14
+  隔离部署已实际加载 Thin MCP，并由 Host 原生工具读取原 Attempt，结果为
+  `PASS — REAL`。
 
 当前确定性证据：
 
@@ -430,16 +433,13 @@ Recovery；真实 Desktop UI acknowledgement 仍是 `UNKNOWN`。
   各一次，新 Host 重连读取同一 Result。
 - 真实 Web Console、Chromium 与 `task console-url` 使用同一动态 URL；Host
   退出后浏览器继续可见 `ACTIVE`，最终页面显示 `completed` 和 Result。
-- 当前真实环境无 App Server control socket；strict probe 保持
-  `web_notify / app_server_unavailable` 且 Queue 调用为 0；显式 trusted-local
-  已具备单次 Queue 路径，但真实自动 Turn、Master readback、Desktop visible
-  和付费模型：`BLOCKED_BY_AUTHORIZATION`。
-- 2026-11-23 的真实 Wake Turn 已证明 Queue ACK 与 Turn Started；该 Turn
-  的 readback 由测试包装器明确要求在受限 Thread 中启动 Thin MCP 子进程，
-  因而只构成 `SANDBOX_READBACK=FAIL`。当前 Desktop 注册的插件仍是
-  `2.0.0-preview.13` in-process Manager，不是本候选 Thin MCP；原生工具
-  虽可调用，但不能读取隔离 Executor Authority，故
-  `NATIVE_MCP_READBACK=BLOCKED_BY_INSTALLED_HOST_VERSION`。
+- 2026-11-23 的隔离真实 E2E 证明 loaded/idle trusted-local Queue、Queue
+  message ID、新 Turn、Host 原生 MCP Result readback、Result digest、
+  Cleanup/Release、Master 生命周期独立验收与 Desktop Visible 均为
+  `PASS — REAL`；只出现一次 Queue、Worker、Turn、Result、Cleanup 与 Release。
+- 早期受限 shell readback 失败与旧 Host 版本阻断保留在
+  [trusted-local Wake evidence](../reports/trusted-local-wake-20261123.md)，
+  不改写为未发生；后续修复使用 Host 原生 MCP，不新增 Result 服务或第二权威。
 
 ## 8. 发布门槛
 
@@ -490,15 +490,15 @@ Recovery；真实 Desktop UI acknowledgement 仍是 `UNKNOWN`。
 4. MCP 等待请求与 Executor 控制请求的生命周期已在 PR 2/2.5 candidate 中实现并覆盖 `REQUEST_CANCELLED`、`TASK_CANCEL_REQUESTED`、`SUBMISSION_UNKNOWN`、`EXECUTOR_UNAVAILABLE`；真实 Host 行为仍待 E2E。
 5. Thin MCP 已删除 `in_process` 分支；仍依赖客户端在 Executor 未启动时明确得到 `EXECUTOR_UNAVAILABLE`，而不是自动拉起 Executor。
 6. Web 列表投影的扫描规模与 Token 输出仍需基准，不得无界读取全部事件。
-7. strict Queue 只证明 loaded/idle；notLoaded 与 Desktop 全退 UNVERIFIED。
-   trusted-local 可在无 control socket 时提交单次 Queue，但不证明 loaded、
-   当前模型或 Turn 启动；Queue ACK、Turn Started、Master Result readback 与
-   Desktop Visible 必须分开报告。真实自动 Wake Turn 尚无本轮模型预算授权。
+7. loaded/idle trusted-local Queue、Turn Started、Master Native MCP Result
+   readback 与 Desktop Visible 已真实通过；strict C/D 与 Desktop fully
+   exited 仍为 `NOT_RUN`。trusted-local Adapter 本身仍不证明 Thread 当前
+   loaded 或模型匹配，真实测试观察也不能提升为实时模型预检。
 8. A 实验 Sol/xhigh 费用/额度变化不可观察，不估算。
 9. Token Efficiency 架构敏感候选保持冻结；本架构不得预设其结果。
-10. Async Handoff 目前由 Skill 行为约束，不是服务端强制鉴权。模型可能不遵循
-    Turn-end、Pending 或 Wake 核对规则；统一 Release Candidate 需要记录该
-    未验证风险，真实 Host A/B 未运行前不得宣称可靠。
+10. Master 生命周期独立验收已通过一次真实 Host E2E；Async Handoff 仍由 Skill
+    行为约束，不是服务端强制鉴权。真实模型 Skill 遵循率 A/B 与非空工程交付
+    验收仍为 `NOT_RUN`，不得据单次生命周期通过宣称所有模型都会可靠遵循。
 
 ## 10. Owner 批准记录
 
