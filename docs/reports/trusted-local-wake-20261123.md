@@ -10,8 +10,10 @@
 > Real E2E baseline: `ab73180b929be219bb680a0cc50825feca74b478`
 > Readback diagnosis baseline: `f88e0919259b17862f012f6549b57f2b2608cfc6`
 > Readback contract fix: `42667cff0646fbdac907809ba546cb500362503b`
-> Overall result: `PARTIAL — REAL AUTO QUEUE + TURN_STARTED PASS / NATIVE READBACK BLOCKED BY INSTALLED HOST VERSION`
-> Preview recommendation: `NO-GO until the current Thin MCP is installed in the Host and native Result readback passes a fresh Wake Turn`
+> Native Host deployment / final Wake: `2026-11-23T05:56Z–05:59Z`, candidate
+> `e64eef26c01e3f708505af66acf00a481c5be3ed`
+> Overall result: `PASS — REAL LOADED/IDLE TRUSTED-LOCAL AUTO WAKE + NATIVE MCP READBACK`
+> Preview recommendation: `GO for Preview review after the required release gate, scoped to loaded/idle trusted-local Wake; strict C/D and Official Runtime provenance remain separate NOT_RUN gates`
 
 ## 结论
 
@@ -38,12 +40,13 @@ Thin MCP 子进程，结果收到 `EXECUTOR_UNAVAILABLE`；相同命令在普通
 中成功。该证据只证明 **sandboxed shell child path** 失败，不等于原生
 Host MCP 失败。
 
-后续只读诊断发现本轮另一个更早的部署条件：当前 Codex Host 注册的
+后续只读诊断发现本轮另一个更早的部署条件：当时 Codex Host 注册的
 `zcode_bridge` 仍指向 `2.0.0-preview.13` 的旧 in-process Manager，而 PR #131
 候选的 shipped MCP 已是 Thin control transport。原生 `zcode_status` /
 `zcode_result` 工具确实可调用，但只能读取安装版 Authority：对旧的隔离 Task
-返回 `TASK_NOT_FOUND`。因此 `NATIVE_MCP_READBACK` 当前是
-`BLOCKED_BY_INSTALLED_HOST_VERSION`，没有进行新的真实模型 Turn。
+返回 `TASK_NOT_FOUND`。随后使用隔离 Desktop profile、隔离 Authority Root 和
+候选 `launch-node24.mjs` 完成部署对齐；最新真实 Wake Turn 已由 Host 原生
+MCP 读取同一 Executor 的 Task/Attempt Result、Cleanup 和 Release。
 
 ## 官方机制核对
 
@@ -109,10 +112,10 @@ Task/Attempt/Operation 的既有 intent 阻止第二次 Queue。
 | `TURN_STARTED` | `PASS — REAL` | 原 Thread 出现 `turn_trigger=queue` 的新 Turn。 |
 | `SANDBOX_READBACK` | `FAIL — REAL` | 测试包装器让受限 Thread 的 shell 子进程启动 Thin MCP；连接 Executor 返回 `EXECUTOR_UNAVAILABLE`。 |
 | `NATIVE_MCP_REGISTERED` | `PASS — OBSERVED` | Host 原生 tools 可调用；`zcode_bridge` 注册为 enabled。 |
-| `NATIVE_MCP_CURRENT_RC` | `FAIL — DEPLOYMENT` | 注册插件仍是 Preview.13 in-process Manager，不包含候选 Thin control marker。 |
-| `MASTER_RESULT_READBACK` | `BLOCKED_BY_INSTALLED_HOST_VERSION` | 原生工具不能读取旧隔离 Executor；未启动新 Turn，不伪称 PASS/FAIL。 |
-| `MASTER_INDEPENDENT_ACCEPTANCE` | `NOT_RUN` | 没有任何本轮原生 Result readback，固定 ACK 仍不计 PASS。 |
-| `DESKTOP_VISIBLE` | `PASS — REAL, POST-COMPLETION` | Thread 与失败回复在 Desktop 可见；运行中截图未采集。 |
+| `NATIVE_MCP_CURRENT_RC` | `PASS — ISOLATED HOST` | 隔离 Host 的 MCP 子进程使用候选 `launch-node24.mjs`，bundle hash 与 Thin control marker 均匹配；Owner 生产安装未被切换。 |
+| `MASTER_RESULT_READBACK` | `PASS — REAL` | 隔离 Host 的原生 `zcode_status`、`zcode_result(summary/full)`、`zcode_feedback` 和 `zcode_events` 读取了同一 Authority 的原 Task/Attempt。 |
+| `MASTER_INDEPENDENT_ACCEPTANCE` | `PASS — REAL, SCOPED` | Master 独立核对了 Result digest、Cleanup/Release 与任务生命周期，并明确拒绝把 synthetic 空结果冒充真实工程交付。 |
+| `DESKTOP_VISIBLE` | `PASS — REAL` | 新 Wake message、原生工具调用进程和最终验收回复均在隔离 Desktop Thread 中实时显示。 |
 | `WEB_NOTIFY_FALLBACK` | `PASS — TARGETED` | SQLite v14 evidence、CLI/Web 投影与通知回调保留。 |
 
 ## 2026-11-23 隔离真实 E2E
@@ -288,29 +291,91 @@ Desktop 在新 Turn 完成后显示了 original Wake message、失败 readback �
 `.run/executor-auto-wake-e2e-20261123/desktop-visible.png`。运行中状态由
 Thread 工具观测为 `active`，但没有在 Turn 进行中采集 Desktop 截图。
 
+## Native Host 部署对齐与 Final Wake
+
+上述旧部署问题随后在完全隔离的 Desktop profile 中关闭。Owner 当前
+Desktop PID `29640` 未关闭、未切换插件；测试使用另一个 Desktop PID
+`20264`、其 stdio app-server PID `25032` 和候选 MCP 子进程 PID `20852`。
+
+构建身份：
+
+```text
+candidate commit       e64eef26c01e3f708505af66acf00a481c5be3ed
+bridge.mjs SHA-256     202be2e4834e5c8f154c46293b7dfe607c4f788de38ed7c4d0c29186f8946cf8
+launch-node24.mjs      a2714424693bd14c41b274f19dfc1688cfdbb212831dc3c4ba3f55acfc3910c2
+Node                   24.16.0
+Thin marker            present
+```
+
+包内 `serverInfo.version` 仍为 `2.0.0-preview.13`，因为它来自候选前的
+package version；实际加载身份由 MCP 子进程命令中的候选
+`launch-node24.mjs`、bundle SHA-256 和 Thin control marker 共同确认，不能
+仅凭版本字符串判断。
+
+测试 Thread 与新 Task：
+
+```text
+thread_id              01a206d6-a890-7383-adf0-89ce48b3e345
+task_id                wakefinal20261123f
+attempt                1
+operation_id           sqlite-aa57721276e50edf54fc9bf82fddc3e9
+turn_id                01a206fa-f5c5-77d0-a7e4-79c0183cf9e1
+queue_message_id       01a206fa-e7d6-7530-8aac-f2f6f41dee15
+result_digest          4974810b4446af9e3e3ffa8c757ca45f0c9772dd9db942984c1631e00c0b3638
+cleanup_digest         ab94d326c0ca8f6bffc5a5dcbbe6ee274b3d96a367a4bcb75309c3946871609b
+```
+
+实际结果：
+
+| Gate | Result | Evidence |
+|---|---|---|
+| Candidate build identity | `PASS` | exact commit + bundle/launcher hashes + Thin marker |
+| Isolated Host loaded candidate | `PASS` | MCP child PID `20852` under app-server `25032` used the candidate launcher |
+| Native MCP Authority alignment | `PASS` | native status/result returned the isolated task instead of `TASK_NOT_FOUND` |
+| Executor automatic Queue | `PASS — REAL` | one post-Release Queue submission |
+| Queue ACK | `PASS — REAL` | message ID `01a206fa-e7d6-7530-8aac-f2f6f41dee15` |
+| Turn Started | `PASS — REAL` | `turn_trigger=queue`; new Turn `01a206fa-f5c5-77d0-a7e4-79c0183cf9e1` |
+| Native MCP status read | `PASS — REAL` | completed, Attempt 1, exit code 0 |
+| Native MCP Result read | `PASS — REAL` | `view=summary` and `view=full`, same Task/Attempt |
+| Result digest match | `PASS — REAL` | `result_committed` seq 26 matched the Wake fact |
+| Cleanup/Release readback | `PASS — REAL` | `cleanup_verified` seq 28 then `released` seq 29; resources complete, worker tree complete, workspace untouched |
+| Master independent acceptance | `PASS — REAL, SCOPED` | lifecycle/readback accepted; synthetic empty deliverable explicitly not claimed as engineering acceptance |
+| Desktop visible | `PASS — REAL` | Wake message, native tool calls and final reply visible in isolated Desktop |
+| Duplicate Queue / Worker / Turn | `PASS — NONE` | one Queue, one Worker spawn, one new Turn, one Result/Cleanup/Release |
+| Idle-only Executor shutdown | `PASS` | PID `27180` exited; active Lease absent and released Lease persisted |
+
+`monitor.json` 的 `turn_completed` 字段因为测试器先看到
+`final_answer` 而提前返回，仍为 `false`；同一 rollout 随后记录了
+`event_msg.task_complete`（`2026-11-23T05:58:55.076Z`）。因此该字段是
+harness 采样时序，不是 Turn 仍在运行的证据。
+
+Rollout 可观测的该 Turn 累计 token usage 为
+`input=134,805 / cached=128,256 / output=2,023 / reasoning=1,004 / total=136,828`。
+Provider 账单金额与账户扣费不可观测；本报告不估算金额。本次只发生一次新的
+Queue Wake Turn，未自动重试 Queue，也未发起 Official Runtime 或 Start Plan /
+Coding Plan 新请求。
+
+严格 Wake C（Thread `notLoaded`）与 D（Desktop fully exited）仍未运行；
+Official Runtime provenance 仍未运行。它们不影响本次已验证的
+loaded/idle trusted-local 自动 Wake 结论，但不能被改写为 PASS。
+
 ## 最小后续实验
 
-1. 不重跑已经消费授权的 Turn。先在隔离 Host 中部署当前 PR #131 Thin MCP，
-   确认 `zcode_bridge` 的注册 cwd/bundle hash 指向该候选，而不是
-   Preview.13 in-process Manager。
-2. 用真实独立 Executor、真实 Control IPC 和 synthetic Worker 验证原生
-   `zcode_status` / `zcode_result` 能读取同一 Authority；错误 Task/Attempt
-   不得返回其他结果，读取路径不得 Spawn Worker 或调用 Task/Cancel/Continue/
-   Shutdown。
-3. 取得新的单 Turn 授权后，用全新 synthetic Task 重做一次自动 Queue E2E；
-   Master 必须在原生工具中读取同一 Result digest、Cleanup 和 Release，再作
-   独立验收。上一次失败的 Task/Attempt 不重发。
-4. 若原生工具仍不可用，保持 `QUEUED + Web Notify` 安全降级，不宣称自动
-   Master recovery；不得回退到沙箱 shell child。
+1. 在隔离 Host 中补做严格 C（`notLoaded`）和 D（Desktop fully exited），
+   记录 Queue ACK、Web Notify 和是否需要手动恢复，不能由当前 loaded/idle
+   结果推断。
+2. 单独取得 Official Runtime 的精确版本、Provider 与费用授权，执行一次
+   最小真实任务；该结果不能由 synthetic Worker 代替。
+3. 对真实工程交付使用一个非空任务验证 Master 的独立验收和失败报告路径；
+   本次 synthetic Task 只证明生命周期与 readback。
 
 ## 发布建议
 
-当前实现可作为 PR #131 的 targeted candidate 评审，但不应合并 Preview。
 自动 Queue 和 Turn Started 已真实通过；结果读取实现本身已有跨进程
-Result/Cleanup/Release 与 Thin MCP reconnect 证据。当前发布阻断是部署与
-验收边界：安装版 Host 仍为旧 in-process Manager，且没有在新的原生 readback
-路径上取得真实 Turn 证据。发布建议保持 `NO-GO`，直到原生 Host readback
-真实 PASS。
+Result/Cleanup/Release、Thin MCP reconnect 和隔离 Host 原生 readback
+证据。发布建议为：在最终候选完成适用 Release Gate 后，可以按
+`loaded/idle + trusted-local` 范围推进 Preview review；不得把该结论扩大为
+严格 C/D、Desktop fully exited 或 Official Runtime provenance PASS。
 
 ## 证据索引
 
@@ -327,6 +392,13 @@ Result/Cleanup/Release 与 Thin MCP reconnect 证据。当前发布阻断是部�
 .run/pr131-native-readback-20261123/codex-mcp-list.txt
 .run/pr131-native-readback-20261123/native-readback-evidence.json
 .run/pr131-native-readback-20261123/pipe-probe-evidence.json
+.run/pr131-native-deploy-20261123/phase4-native-readback-05/build.json
+.run/pr131-native-deploy-20261123/phase4-native-readback-05/host-processes.json
+.run/pr131-native-deploy-20261123/phase4-native-readback-05/summary.json
+.run/pr131-native-deploy-20261123/phase5-final-wake-02/monitor.json
+.run/pr131-native-deploy-20261123/phase5-final-wake-02/rollout-evidence.json
+.run/pr131-native-deploy-20261123/phase5-final-wake-02/post-master-native-read.json
+.run/pr131-native-deploy-20261123/phase5-final-wake-02/shutdown.json
 ```
 
 首次预提交包装器失败保存在相邻的
