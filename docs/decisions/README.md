@@ -1,9 +1,9 @@
 # 决策路由 / Decisions
 
 > Status: AUTHORITATIVE（仅指本索引）
-> Last updated: 2026-11-23（Preview.14 release preparation；ADR-055 派发合同）
-> Last verified: 2026-11-23，核对 ADR-045/051/052 的合并状态、loaded/idle trusted-local Wake、Native MCP Result readback、Master 生命周期独立验收与 Desktop Visible，以及 ADR-055 的 whole_task/staged 合同。严格 C/D、Desktop fully exited、Official Runtime provenance、非空工程交付和真实模型 Skill 遵循率仍为 `NOT_RUN`。
-> Verified against: `origin/preview@89ca334802f6e5c1e88b8284863f8151bf4be134`（ADR-055 审计基线；运行时证据仍引用其原始提交）。
+> Last updated: 2026-11-24（Preview 最终集成：ADR-054 + ADR-055 同树）
+> Last verified: 2026-11-24，核对 ADR-045/051/052 的合并状态、ADR-055 的 whole_task/staged 合同（PR #135，Release Gate 45200314368），以及 ADR-054 安装安全门禁与静态 Manifest 诊断分离的实现差异（本候选树）。严格 C/D、Desktop fully exited、真实 Provider/Billing、非空工程交付和真实模型 Skill 遵循率仍为 `NOT_RUN`。
+> Verified against: `codex/final-integration-20261124`（基于 PR #135 merge `7d0e6f35f` 与 ADR-054 适配 `15e75001` 的合并候选）。
 
 先读当前 [架构](../ARCHITECTURE.md)/[接口](../INTERFACES.md)，只在需要解释取舍时加载对应决策。文件保持原路径和历史正文；Partially superseded 的标注优先于历史段落。
 
@@ -37,7 +37,8 @@
 | Host 授权取消 | [039](ADR-039-host-authorized-cancellation.md) | 当前本地修复；无 Claim 的 Launch Intent 首次取消保留未核实占用，用户再次显式 `zcode_cancel` 可行政释放；四种终态 Result 的 `cleanup_unverified` 由同一 `zcode_cancel` 入口进入原子行政释放，新证据统一绑定 Result/Claim/Worker/Recovery，旧取消证明仅作历史读取兼容；Running cleanup-only Hold 仍先走新鲜取消树证明，保留原 CAS 与历史 |
 | 官方 Runtime | [040](ADR-040-installed-official-appserver-runtime.md) | 候选集成；安装版官方 AppServer 的统一 Runtime 与精确 Manifest 门禁 |
 | Thin Official Host | [041](ADR-041-thin-official-host-end-state.md) | 统一 Model Catalog/Worker session factory；所有 Provider 走安装版 AppServer；direct stdio 仅测试；三项 patch 暂留 |
-| 未知版本实验授权 | [042](ADR-042-unknown-runtime-experimental-authorization.md) | 安全检查与 Manifest 兼容分离；精确指纹授权后可进行 Provider 分 scope 探测；不自动提升为 VERIFIED |
+| 未知版本实验授权 | [042](ADR-042-unknown-runtime-experimental-authorization.md) | 安全检查与 Manifest 兼容分离；精确指纹授权历史由 ADR-054 部分替代 |
+| 安全安装版执行 | [054](ADR-054-safe-installed-runtime-without-static-version-gate.md) | 安全安装不因版本、摘要、签名、指纹或实验授权缺失而阻断；静态事实仅作诊断，Provider/Billing 仍独立验证 |
 | Recovery 编号对账 | [044](ADR-044-preview-lifecycle-recovery-reconciliation.md) | Preview 保留 ADR-037 官方认证语义；Stable Host Recovery 在未来对账中使用 ADR-044；不做机械覆盖 |
 | Result 摘要、Event 归属 | [047](ADR-047-compatible-result-summary.md) | 候选 MCP 可选摘要、全量证据读取及 Attempt 核对 |
 | Event 默认预算 | [048](ADR-048-bounded-default-event-pages.md) | `zcode_events` 省略 `max_bytes` 时使用 32 KiB 页预算；显式预算仍为硬限制；所有事件可按 cursor 完整续读 |
@@ -46,7 +47,7 @@
 | Task Web Console | [050](ADR-050-local-task-web-console.md) | 仅 loopback；Root 级动态发现/CAS 复用、Deep Link 与跨页 summary；经同一 Executor Control 读取 Task/Event/Result/Attention 并显式转发 Cancel/Reply；不创建 Task、不打开 SQLite、不拥有 Executor 生命周期 |
 | Executor Wake | [051](ADR-051-executor-wake-delivery.md) | post-Release 一次性 Wake；strict 默认要求同 Owner loaded/idle exact-config；显式 trusted-local 已完成真实 loaded/idle Queue、新 Turn、Native MCP Result readback、Cleanup/Release 与 Desktop Visible；严格 C/D 仍 `NOT_RUN`，SQLite v14 observation 不重试 |
 | Async Handoff | [052](ADR-052-async-master-handoff.md) | Task Scope 与 Handoff 分离；可靠受理后结束 Turn/停止轮询，断连不取消；loaded/idle Wake 后 Master 生命周期独立验收为 `PASS — REAL`；真实模型 Skill 遵循率与 Pending Interaction 原审批边界仍按未验证处理 |
-| Runtime Auto-Learn | [053](ADR-053-runtime-auto-learn-compatibility.md) | exact fingerprint 证据库、静态检查、授权零模型探针、Provider/Billing 分离矩阵和待审查 Candidate Report；不修改 Manifest、不自动授权、不发起付费请求 |
+| Runtime Auto-Learn | [053](ADR-053-runtime-auto-learn-compatibility.md) | exact fingerprint 证据库、静态检查、安全安装上的显式零模型探针、Provider/Billing 分离矩阵和待审查 Candidate Report；不修改 Manifest、不发起付费请求 |
 
 ADR-032、ADR-033、ADR-034 和 ADR-035 的正文记录决定作出时的状态；顶部 Applicability 标注当前适用性。当前实现状态以 [ARCHITECTURE](../ARCHITECTURE.md) 和 [PROJECT_STATE](../PROJECT_STATE.md) 为准：Windows x64 Worker 使用 `OfficialAppServerWorkerAdapter`、固定 Official Host module、安装版 ZCode AppServer、官方只读 Start Plan 认证与官方签名 runtime host；Model Catalog 使用同一 session factory。Linux、macOS 与 Windows 非 x64 在构造 Adapter 前 fail closed；direct stdio 只保留测试入口。`research/zcode-official-host-integration-v1/` 的 [Implementation Summary](../research/zcode-official-host-integration-v1/IMPLEMENTATION_SUMMARY.md) 与 [Final Acceptance](../research/zcode-official-host-integration-v1/FINAL_ACCEPTANCE_REPORT.md) 是 Preview.4/3.18.0 历史证据，不能作为当前候选的兼容通过证明。
 

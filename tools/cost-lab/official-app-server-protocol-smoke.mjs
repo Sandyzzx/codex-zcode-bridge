@@ -47,18 +47,14 @@ export async function runOfficialAppServerProtocolSmoke(options = {}) {
   }
 
   const runtime = await inspectRuntime({ env, platform, arch });
-  if ((runtime.runtime_status !== "OFFICIAL_RUNTIME_VERIFIED"
-      && runtime.runtime_status !== "OFFICIAL_RUNTIME_EXPERIMENTAL")
-    || !runtime.install_root) {
-    return failed("installed_official_runtime_unverified", startedAt);
+  if (runtime.installation_safety !== "OFFICIAL_INSTALLATION_SAFE" || !runtime.install_root) {
+    return failed("installed_official_runtime_unsafe_or_incomplete", startedAt);
   }
-  if (!runtime.desktop_version
-    || !runtime.desktop_app_version
-    || !runtime.desktop_build_commit_id
+  if (!runtime.desktop_app_version
     || !runtime.assets?.bundle?.relative_path
     || !runtime.assets?.runtime_host?.relative_path
     || !runtime.assets?.builtin_provider_config?.relative_path) {
-    return failed("runtime_manifest_incomplete", startedAt);
+    return failed("runtime_launch_assets_incomplete", startedAt);
   }
 
   const account = resolveDataRoot(null, {
@@ -182,7 +178,6 @@ export async function runOfficialAppServerProtocolSmoke(options = {}) {
         runtime_status: runtime.runtime_status,
         installation_fingerprint: runtime.installation_fingerprint,
         installation_safety: runtime.installation_safety,
-        experimental_authorization_state: runtime.experimental_authorization?.state ?? null,
         desktop_version: runtime.desktop_version,
         bundle_sha256: runtime.assets.bundle.sha256,
       },

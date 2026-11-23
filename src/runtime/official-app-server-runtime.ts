@@ -13,9 +13,6 @@ import { isSupportedNodeVersion, SUPPORTED_NODE_RANGE } from "./node-runtime.js"
 import { discoverZCodeInstall, isAbsolutePathForPlatform } from "./paths.js";
 import {
   computeOfficialInstallationFingerprint,
-  lookupOfficialRuntimeAuthorization,
-  type OfficialRuntimeAuthorization,
-  type OfficialRuntimeProbeScope,
 } from "./official-runtime-authorization.js";
 import {
   loadPersistedRuntimeEnvironment,
@@ -139,7 +136,6 @@ export interface OfficialAppServerRuntimeDescriptor {
   readonly status: OfficialRuntimeVerificationStatus;
   readonly installation_safety?: OfficialInstallationSafety;
   readonly installation_fingerprint?: string | null;
-  readonly experimental_authorization?: OfficialRuntimeAuthorization | null;
   readonly discount_capability: OfficialDiscountCapability;
   readonly start_plan_static_compatibility: StartPlanStaticCompatibility | null;
   readonly reason: string | null;
@@ -189,7 +185,6 @@ export interface OfficialAppServerRuntimeResolverOptions {
     args: readonly string[];
     env: NodeJS.ProcessEnv;
   }>;
-  readonly experimentalAuthorizationFile?: string | null;
   readonly inspectExecutable?: (filePath: string) => Promise<OfficialWindowsExecutableIdentity>;
 }
 
@@ -216,7 +211,6 @@ export class OfficialAppServerRuntimeResolver implements RuntimeResolver {
   readonly #probeNodeVersion: (executable: string) => Promise<string>;
   readonly #probeDesktopVersion: (executable: string) => Promise<string>;
   readonly #inspectExecutable: (filePath: string) => Promise<OfficialWindowsExecutableIdentity>;
-  readonly #experimentalAuthorizationFile: string | null | undefined;
   readonly #readDesktopLaunch: (bundlePath: string) => Readonly<{
     args: readonly string[];
     env: NodeJS.ProcessEnv;
@@ -234,7 +228,6 @@ export class OfficialAppServerRuntimeResolver implements RuntimeResolver {
     this.#probeNodeVersion = options.probeNodeVersion ?? probeNodeCliVersion;
     this.#probeDesktopVersion = options.probeDesktopVersion ?? probeWindowsFileVersion;
     this.#inspectExecutable = options.inspectExecutable ?? inspectWindowsExecutable;
-    this.#experimentalAuthorizationFile = options.experimentalAuthorizationFile;
     this.#readDesktopLaunch = options.readDesktopLaunch
       ?? ((bundlePath) => buildZCodeAppServerLaunch(bundlePath, {}));
   }
@@ -310,37 +303,38 @@ export class OfficialAppServerRuntimeResolver implements RuntimeResolver {
     let bundleBytes: number;
     let builtinBytes: number;
     let runtimeHostBytes: number;
-    let bundleSha256: string;
-    let builtinSha256: string;
-    let runtimeHostSha256: string;
     let desktopExecutableBytes: number;
-    let desktopExecutableSha256: string;
     let desktopArchiveBytes: number;
-    let desktopArchiveSha256: string;
     try {
-      [{ size: bundleBytes }, bundleSha256] = await Promise.all([
+      [
+        { size: bundleBytes },
+        { size: builtinBytes },
+        { size: runtimeHostBytes },
+        { size: desktopExecutableBytes },
+        { size: desktopArchiveBytes },
+      ] = await Promise.all([
         lstat(bundlePath),
-        this.#hashFile(bundlePath),
-      ]);
-      [{ size: builtinBytes }, builtinSha256] = await Promise.all([
         lstat(builtinPath),
-        this.#hashFile(builtinPath),
-      ]);
-      [{ size: runtimeHostBytes }, runtimeHostSha256] = await Promise.all([
         lstat(runtimeHostPath),
-        this.#hashFile(runtimeHostPath),
-      ]);
-      [{ size: desktopExecutableBytes }, desktopExecutableSha256] = await Promise.all([
         lstat(desktopExecutablePath),
-        this.#hashFile(desktopExecutablePath),
-      ]);
-      [{ size: desktopArchiveBytes }, desktopArchiveSha256] = await Promise.all([
         lstat(desktopArchivePath),
-        this.#hashFile(desktopArchivePath),
       ]);
     } catch (error) {
       return unverified(`could not verify installed Official runtime assets: ${errorMessage(error)}`, nodeExecutable);
     }
+    const [
+      bundleSha256,
+      builtinSha256,
+      runtimeHostSha256,
+      desktopExecutableSha256,
+      desktopArchiveSha256,
+    ] = await Promise.all([
+      optionalSha256(this.#hashFile, bundlePath),
+      optionalSha256(this.#hashFile, builtinPath),
+      optionalSha256(this.#hashFile, runtimeHostPath),
+      optionalSha256(this.#hashFile, desktopExecutablePath),
+      optionalSha256(this.#hashFile, desktopArchivePath),
+    ]);
 
     let desktopExecutableIdentity: OfficialWindowsExecutableIdentity;
     let runtimeHostIdentity: OfficialWindowsExecutableIdentity;
@@ -372,10 +366,10 @@ export class OfficialAppServerRuntimeResolver implements RuntimeResolver {
         },
       );
     }
-    const unsafeExecutableReason = executableSafetyFailure(
+    const unsafeExecutableReason = executableArchitectureFailure(
       desktopExecutableIdentity,
       "Desktop executable",
-    ) ?? executableSafetyFailure(runtimeHostIdentity, "runtime-host");
+    ) ?? executableArchitectureFailure(runtimeHostIdentity, "runtime-host");
     if (unsafeExecutableReason) {
       return unsafe(unsafeExecutableReason, nodeExecutable, {
         install_dir: installDir,
@@ -405,118 +399,45 @@ export class OfficialAppServerRuntimeResolver implements RuntimeResolver {
     let launchEnv: NodeJS.ProcessEnv;
     try {
       launchEnv = this.#readDesktopLaunch(bundlePath).env;
-    } catch (error) {
-      return unverified(`installed Desktop launch metadata could not be inspected: ${errorMessage(error)}`, nodeExecutable);
+    } catch {
+      launchEnv = {};
     }
     let desktopVersion: string | null = null;
     try {
       desktopVersion = normalizeDesktopVersion(await this.#probeDesktopVersion(desktopExecutablePath));
-    } catch (error) {
-      return unverified(`installed Desktop version could not be inspected: ${errorMessage(error)}`, nodeExecutable, {
-        install_dir: installDir,
-        install_source: discovery.source,
-        bundle_path: bundlePath,
-        bundle_bytes: bundleBytes,
-        bundle_sha256: bundleSha256,
-        builtin_provider_config_path: builtinPath,
-        builtin_provider_config_bytes: builtinBytes,
-        builtin_provider_config_sha256: builtinSha256,
-        runtime_host_path: runtimeHostPath,
-        runtime_host_bytes: runtimeHostBytes,
-        runtime_host_sha256: runtimeHostSha256,
-      });
-    }
-    if (!launchEnv.ZCODE_APP_VERSION || !launchEnv.ZCODE_BUILD_COMMIT_ID) {
-      return unverified("installed Desktop AppServer launch identity metadata is unavailable", nodeExecutable, {
-        install_dir: installDir,
-        install_source: discovery.source,
-        desktop_version: desktopVersion,
-        bundle_path: bundlePath,
-        bundle_bytes: bundleBytes,
-        bundle_sha256: bundleSha256,
-        builtin_provider_config_path: builtinPath,
-        builtin_provider_config_bytes: builtinBytes,
-        builtin_provider_config_sha256: builtinSha256,
-        runtime_host_path: runtimeHostPath,
-        runtime_host_bytes: runtimeHostBytes,
-        runtime_host_sha256: runtimeHostSha256,
-      });
-    }
-
+    } catch {}
     let nodeVersion: string | null = null;
     try {
       nodeVersion = normalizeNodeVersion(await this.#probeNodeVersion(nodeExecutable));
-    } catch (error) {
-      return unverified(`configured Node runtime could not be inspected: ${errorMessage(error)}`, nodeExecutable, {
-        install_dir: installDir,
-        install_source: discovery.source,
-        desktop_version: desktopVersion,
-        bundle_path: bundlePath,
-        bundle_bytes: bundleBytes,
-        bundle_sha256: bundleSha256,
-        builtin_provider_config_path: builtinPath,
-        builtin_provider_config_bytes: builtinBytes,
-        builtin_provider_config_sha256: builtinSha256,
-        runtime_host_path: runtimeHostPath,
-        runtime_host_bytes: runtimeHostBytes,
-        runtime_host_sha256: runtimeHostSha256,
-      });
-    }
-    const nodeCompatible = isSupportedNodeVersion(nodeVersion);
+    } catch {}
+    const nodeCompatible = nodeVersion !== null && isSupportedNodeVersion(nodeVersion);
 
-    const observedDesktopVersion = desktopVersion;
-    const observedAppVersion = launchEnv.ZCODE_APP_VERSION;
-    const observedBuildCommitId = launchEnv.ZCODE_BUILD_COMMIT_ID;
-    if (!observedDesktopVersion || !observedAppVersion || !observedBuildCommitId || !nodeVersion) {
-      return unverified("installed Official runtime identity is incomplete", nodeExecutable, {
-        install_dir: installDir,
-        install_source: discovery.source,
-        desktop_version: observedDesktopVersion,
-        bundle_path: bundlePath,
-        bundle_bytes: bundleBytes,
-        bundle_sha256: bundleSha256,
-        builtin_provider_config_path: builtinPath,
-        builtin_provider_config_bytes: builtinBytes,
-        builtin_provider_config_sha256: builtinSha256,
-        runtime_host_path: runtimeHostPath,
-        runtime_host_bytes: runtimeHostBytes,
-        runtime_host_sha256: runtimeHostSha256,
-        runtime_host_signer_subject: runtimeHostIdentity.signer_subject,
-        runtime_host_signer_thumbprint: runtimeHostIdentity.signer_thumbprint,
-        desktop_executable_path: desktopExecutablePath,
-        desktop_executable_bytes: desktopExecutableBytes,
-        desktop_executable_sha256: desktopExecutableSha256,
-        desktop_executable_signer_subject: desktopExecutableIdentity.signer_subject,
-        desktop_executable_signer_thumbprint: desktopExecutableIdentity.signer_thumbprint,
-        desktop_archive_path: desktopArchivePath,
-        desktop_archive_bytes: desktopArchiveBytes,
-        desktop_archive_sha256: desktopArchiveSha256,
-        node_version: nodeVersion,
-        node_compatible: nodeCompatible,
-      });
-    }
+    const observedDesktopVersion = desktopVersion ?? "unavailable";
+    const observedAppVersion = launchEnv.ZCODE_APP_VERSION ?? "unavailable";
+    const observedBuildCommitId = launchEnv.ZCODE_BUILD_COMMIT_ID ?? "unavailable";
     const installationFingerprint = computeOfficialInstallationFingerprint({
       desktop_version: observedDesktopVersion,
       desktop_app_version: observedAppVersion,
       desktop_build_commit_id: observedBuildCommitId,
       desktop_executable_bytes: desktopExecutableBytes,
-      desktop_executable_sha256: desktopExecutableSha256,
+      desktop_executable_sha256: desktopExecutableSha256 ?? "unavailable",
       desktop_archive_bytes: desktopArchiveBytes,
-      desktop_archive_sha256: desktopArchiveSha256,
+      desktop_archive_sha256: desktopArchiveSha256 ?? "unavailable",
       bundle_bytes: bundleBytes,
-      bundle_sha256: bundleSha256,
+      bundle_sha256: bundleSha256 ?? "unavailable",
       builtin_provider_config_bytes: builtinBytes,
-      builtin_provider_config_sha256: builtinSha256,
+      builtin_provider_config_sha256: builtinSha256 ?? "unavailable",
       runtime_host_bytes: runtimeHostBytes,
-      runtime_host_sha256: runtimeHostSha256,
+      runtime_host_sha256: runtimeHostSha256 ?? "unavailable",
       desktop_signer_thumbprint: desktopExecutableIdentity.signer_thumbprint ?? "",
       runtime_host_signer_thumbprint: runtimeHostIdentity.signer_thumbprint ?? "",
-      node_version: nodeVersion,
+      node_version: nodeVersion ?? "unavailable",
     });
 
     const manifestCandidate = this.#manifest.find((entry) =>
       entry.desktop_version === desktopVersion
       && entry.bundle_bytes === bundleBytes
+      && bundleSha256 !== null
       && entry.bundle_sha256.toLowerCase() === bundleSha256.toLowerCase()
     ) ?? null;
 
@@ -529,42 +450,28 @@ export class OfficialAppServerRuntimeResolver implements RuntimeResolver {
         mismatches.push("Desktop launch identity does not match the compatibility manifest");
       }
       if (manifestCandidate.builtin_provider_config_bytes !== builtinBytes
+        || builtinSha256 === null
         || manifestCandidate.builtin_provider_config_sha256.toLowerCase() !== builtinSha256.toLowerCase()) {
         mismatches.push("builtin provider config identity does not match the compatibility manifest");
       }
       if (manifestCandidate.runtime_host_bytes !== runtimeHostBytes
+        || runtimeHostSha256 === null
         || manifestCandidate.runtime_host_sha256.toLowerCase() !== runtimeHostSha256.toLowerCase()) {
         mismatches.push("runtime-host identity does not match the compatibility manifest");
       }
       if (manifestCandidate.desktop_executable_bytes !== undefined
         && (manifestCandidate.desktop_executable_bytes !== desktopExecutableBytes
+          || desktopExecutableSha256 === null
           || manifestCandidate.desktop_executable_sha256?.toLowerCase() !== desktopExecutableSha256.toLowerCase())) {
         mismatches.push("Desktop executable identity does not match the compatibility manifest");
       }
       if (manifestCandidate.desktop_archive_bytes !== undefined
         && (manifestCandidate.desktop_archive_bytes !== desktopArchiveBytes
+          || desktopArchiveSha256 === null
           || manifestCandidate.desktop_archive_sha256?.toLowerCase() !== desktopArchiveSha256.toLowerCase())) {
         mismatches.push("Desktop archive identity does not match the compatibility manifest");
       }
-      if (manifestCandidate.node_compatibility !== SUPPORTED_NODE_RANGE || !nodeCompatible) {
-        mismatches.push(`Node ${nodeVersion} is outside the verified compatibility range ${manifestCandidate.node_compatibility}`);
-      }
     }
-
-    const authorizationHost: BridgeHostProfile = this.#host ?? codexHostProfile(this.#homeDir);
-    const configuredAuthorizationFile = env["ZCODE_BRIDGE_EXPERIMENTAL_RUNTIME_AUTHORIZATION_FILE"]?.trim();
-    const authorizationFile = this.#experimentalAuthorizationFile !== undefined
-      ? this.#experimentalAuthorizationFile
-      : configuredAuthorizationFile || path.join(
-          authorizationHost.settingsDirectory,
-          "experimental-runtime-authorization.json",
-        );
-    // Capability probes may simulate Windows, but the authorization file is host-local.
-    const experimentalAuthorization = await lookupOfficialRuntimeAuthorization({
-      filePath: authorizationFile,
-      installationFingerprint,
-      desktopVersion: observedDesktopVersion,
-    });
     const manifest = manifestCandidate && mismatches.length === 0 ? manifestCandidate : null;
     const manifestStage = manifest?.verification_stage ?? "VERIFIED";
     const common = {
@@ -572,7 +479,6 @@ export class OfficialAppServerRuntimeResolver implements RuntimeResolver {
       install_source: discovery.source,
       installation_safety: "OFFICIAL_INSTALLATION_SAFE" as const,
       installation_fingerprint: installationFingerprint,
-      experimental_authorization: experimentalAuthorization,
       desktop_version: observedDesktopVersion,
       desktop_app_version: observedAppVersion,
       desktop_build_commit_id: observedBuildCommitId,
@@ -599,9 +505,6 @@ export class OfficialAppServerRuntimeResolver implements RuntimeResolver {
       node_compatible: nodeCompatible,
       manifest,
     } satisfies Partial<OfficialAppServerRuntimeDescriptor>;
-    if (!nodeCompatible) {
-      return unverified(`Node ${nodeVersion} is outside the supported compatibility range ${SUPPORTED_NODE_RANGE}`, nodeExecutable, common);
-    }
     if (manifest && manifestStage === "VERIFIED") {
       return {
         status: "OFFICIAL_RUNTIME_VERIFIED",
@@ -614,42 +517,37 @@ export class OfficialAppServerRuntimeResolver implements RuntimeResolver {
         node_executable: nodeExecutable,
       };
     }
-    if (experimentalAuthorization.state === "invalid") {
-      return unverified(
-        `EXPERIMENTAL_AUTHORIZATION_INVALID: ${experimentalAuthorization.reason}`,
-        nodeExecutable,
-        common,
-      );
-    }
-    if (experimentalAuthorization.state !== "authorized") {
-      return unverified(
-        `EXPERIMENTAL_AUTHORIZATION_REQUIRED: ${mismatches.join("; ") || "runtime identity is not production-verified"}`,
-        nodeExecutable,
-        common,
-      );
+    const diagnosticReason = mismatches.join("; ")
+      || "runtime identity is not present in the reviewed compatibility manifest";
+    if (manifest && manifestStage === "EXPERIMENTAL") {
+      return {
+        status: "OFFICIAL_RUNTIME_EXPERIMENTAL",
+        ...common,
+        discount_capability: "OFFICIAL_DISCOUNT_NOT_VERIFIED",
+        start_plan_static_compatibility: manifest.start_plan_static_compatibility,
+        reason: `SAFE_INSTALLATION_EXPERIMENTAL_MANIFEST: ${diagnosticReason}`,
+        node_executable: nodeExecutable,
+      };
     }
     return {
-      status: "OFFICIAL_RUNTIME_EXPERIMENTAL",
+      status: "OFFICIAL_RUNTIME_UNVERIFIED",
       ...common,
       discount_capability: "OFFICIAL_DISCOUNT_NOT_VERIFIED",
-      start_plan_static_compatibility: manifest?.start_plan_static_compatibility
-        ?? "OFFLINE_RESEARCH_PENDING",
-      reason: mismatches.length > 0
-        ? `explicit experimental authorization accepted for an unverified runtime identity: ${mismatches.join("; ")}`
-        : "explicit experimental authorization accepted; Provider capabilities remain independently unverified",
+      start_plan_static_compatibility: "OFFLINE_RESEARCH_PENDING",
+      reason: `SAFE_INSTALLATION_MANIFEST_UNVERIFIED: ${diagnosticReason}`,
       node_executable: nodeExecutable,
     };
   }
 
   async resolve(): Promise<ZCodeRuntimeConfig> {
     const descriptor = await this.inspect();
-    if ((descriptor.status !== "OFFICIAL_RUNTIME_VERIFIED"
-      && descriptor.status !== "OFFICIAL_RUNTIME_EXPERIMENTAL")
+    if (descriptor.installation_safety !== "OFFICIAL_INSTALLATION_SAFE"
       || !descriptor.bundle_path
-      || !descriptor.builtin_provider_config_path) {
+      || !descriptor.builtin_provider_config_path
+      || !descriptor.runtime_host_path) {
       throw new BridgeError(
         "provider_config_invalid",
-        `OFFICIAL_RUNTIME_UNVERIFIED: ${descriptor.reason ?? "installed Official AppServer is unavailable"}; ` +
+        `OFFICIAL_INSTALLATION_UNSAFE: ${descriptor.reason ?? "installed Official AppServer is unavailable"}; ` +
           "OFFICIAL_DISCOUNT_NOT_VERIFIED",
       );
     }
@@ -677,7 +575,6 @@ function unverified(
     status: "OFFICIAL_RUNTIME_UNVERIFIED",
     installation_safety: details.installation_safety ?? "OFFICIAL_INSTALLATION_INCOMPLETE",
     installation_fingerprint: details.installation_fingerprint ?? null,
-    experimental_authorization: details.experimental_authorization ?? null,
     discount_capability: "OFFICIAL_DISCOUNT_NOT_VERIFIED",
     start_plan_static_compatibility: null,
     reason,
@@ -723,22 +620,12 @@ function unsafe(
   });
 }
 
-function executableSafetyFailure(
+function executableArchitectureFailure(
   identity: OfficialWindowsExecutableIdentity,
   label: string,
 ): string | null {
   if (identity.architecture !== "x64") {
     return `OFFICIAL_INSTALLATION_UNSAFE: ${label} is not an x64 PE executable`;
-  }
-  if (identity.signature_status.trim().toLowerCase() !== "valid") {
-    return `OFFICIAL_INSTALLATION_UNSAFE: ${label} Authenticode signature is not valid`;
-  }
-  const signerSubject = identity.signer_subject?.replace(/\s+/gu, " ").trim() ?? "";
-  if (!signerSubject.includes("CN=北京智谱华章科技股份有限公司")) {
-    return `OFFICIAL_INSTALLATION_UNSAFE: ${label} signer is not the official Zhipu publisher`;
-  }
-  if (!identity.signer_thumbprint || !/^[0-9A-F]{40,64}$/u.test(identity.signer_thumbprint.replace(/\s+/gu, ""))) {
-    return `OFFICIAL_INSTALLATION_UNSAFE: ${label} signer thumbprint is unavailable`;
   }
   return null;
 }
@@ -746,58 +633,63 @@ function executableSafetyFailure(
 async function inspectWindowsExecutable(filePath: string): Promise<OfficialWindowsExecutableIdentity> {
   const architecture = readPortableExecutableArchitecture(filePath);
   const systemRoot = process.env["SystemRoot"]?.trim();
-  if (!systemRoot) throw new Error("SystemRoot is unavailable for Authenticode inspection");
-  const powershell = path.join(
-    systemRoot,
-    "System32",
-    "WindowsPowerShell",
-    "v1.0",
-    "powershell.exe",
-  );
-  const script = [
-    "$ProgressPreference = 'SilentlyContinue'",
-    "$ErrorActionPreference = 'Stop'",
-    "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)",
-    "$target = $env:ZCODE_BRIDGE_AUTHENTICODE_FILE",
-    "if ([string]::IsNullOrWhiteSpace($target)) { exit 2 }",
-    "$signature = Get-AuthenticodeSignature -LiteralPath $target",
-    "$certificate = $signature.SignerCertificate",
-    "[pscustomobject]@{",
-    "status = [string]$signature.Status;",
-    "subject = if ($null -eq $certificate) { $null } else { [string]$certificate.Subject };",
-    "thumbprint = if ($null -eq $certificate) { $null } else { [string]$certificate.Thumbprint }",
-    "} | ConvertTo-Json -Compress",
-  ].join("\n");
-  const encoded = Buffer.from(script, "utf16le").toString("base64");
-  const { stdout } = await execFileAsync(powershell, [
-    "-NoProfile",
-    "-NonInteractive",
-    "-EncodedCommand",
-    encoded,
-  ], {
-    encoding: "utf8",
-    timeout: 30_000,
-    windowsHide: true,
-    env: {
-      SystemRoot: systemRoot,
-      ZCODE_BRIDGE_AUTHENTICODE_FILE: filePath,
-    },
-  });
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(stdout.trim()) as unknown;
-  } catch {
-    throw new Error("Authenticode probe returned invalid JSON");
+  let signatureStatus = "";
+  let signerSubject: string | null = null;
+  let signerThumbprint: string | null = null;
+  if (systemRoot) {
+    try {
+      const powershell = path.join(
+        systemRoot,
+        "System32",
+        "WindowsPowerShell",
+        "v1.0",
+        "powershell.exe",
+      );
+      const script = [
+        "$ProgressPreference = 'SilentlyContinue'",
+        "$ErrorActionPreference = 'Stop'",
+        "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)",
+        "$target = $env:ZCODE_BRIDGE_AUTHENTICODE_FILE",
+        "if ([string]::IsNullOrWhiteSpace($target)) { exit 2 }",
+        "$signature = Get-AuthenticodeSignature -LiteralPath $target",
+        "$certificate = $signature.SignerCertificate",
+        "[pscustomobject]@{",
+        "status = [string]$signature.Status;",
+        "subject = if ($null -eq $certificate) { $null } else { [string]$certificate.Subject };",
+        "thumbprint = if ($null -eq $certificate) { $null } else { [string]$certificate.Thumbprint }",
+        "} | ConvertTo-Json -Compress",
+      ].join("\n");
+      const encoded = Buffer.from(script, "utf16le").toString("base64");
+      const { stdout } = await execFileAsync(powershell, [
+        "-NoProfile",
+        "-NonInteractive",
+        "-EncodedCommand",
+        encoded,
+      ], {
+        encoding: "utf8",
+        timeout: 30_000,
+        windowsHide: true,
+        env: {
+          SystemRoot: systemRoot,
+          ZCODE_BRIDGE_AUTHENTICODE_FILE: filePath,
+        },
+      });
+      const parsed = JSON.parse(stdout.trim()) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        const value = parsed as Record<string, unknown>;
+        signatureStatus = typeof value["status"] === "string" ? value["status"] : "";
+        signerSubject = typeof value["subject"] === "string" ? value["subject"] : null;
+        signerThumbprint = typeof value["thumbprint"] === "string" ? value["thumbprint"] : null;
+      }
+    } catch {
+      // Authenticode is diagnostic; architecture and actual process startup remain authoritative.
+    }
   }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("Authenticode probe returned an invalid object");
-  }
-  const value = parsed as Record<string, unknown>;
   return {
     architecture,
-    signature_status: typeof value["status"] === "string" ? value["status"] : "",
-    signer_subject: typeof value["subject"] === "string" ? value["subject"] : null,
-    signer_thumbprint: typeof value["thumbprint"] === "string" ? value["thumbprint"] : null,
+    signature_status: signatureStatus,
+    signer_subject: signerSubject,
+    signer_thumbprint: signerThumbprint,
   };
 }
 
@@ -850,6 +742,17 @@ async function sha256File(filePath: string): Promise<string> {
     stream.once("end", resolve);
   });
   return hash.digest("hex");
+}
+
+async function optionalSha256(
+  hashFile: (filePath: string) => Promise<string>,
+  filePath: string,
+): Promise<string | null> {
+  try {
+    return await hashFile(filePath);
+  } catch {
+    return null;
+  }
 }
 
 async function probeNodeCliVersion(executable: string): Promise<string> {

@@ -7,7 +7,7 @@ var __export = (target, all) => {
 
 // src/web/main.ts
 import { randomUUID as randomUUID8 } from "node:crypto";
-import path22 from "node:path";
+import path21 from "node:path";
 import process2 from "node:process";
 import { fileURLToPath as fileURLToPath9 } from "node:url";
 
@@ -341,7 +341,7 @@ function resolveUserHome(env, options = {}) {
 function discoverZCodeData(env, options = {}) {
   const platform = options.platform ?? process.platform;
   const pathImpl = platform === "win32" ? path2.win32 : path2.posix;
-  const readFile7 = options.readFile ?? ((filePath) => readFileSync(filePath, "utf8"));
+  const readFile6 = options.readFile ?? ((filePath) => readFileSync(filePath, "utf8"));
   const fileExists = options.fileExists ?? existsSync;
   const home = resolveUserHome(env, options);
   const settingFile = pathImpl.join(home.userHome, ".zcode", "v2", "setting.json");
@@ -351,18 +351,18 @@ function discoverZCodeData(env, options = {}) {
   if (!fileExists(settingFile)) {
     settingStatus = "absent";
   } else {
-    let text2;
+    let text;
     try {
-      text2 = readFile7(settingFile);
+      text = readFile6(settingFile);
     } catch (error2) {
       settingStatus = isPermissionDeniedCode(error2) ? "permission_denied" : "unreadable";
       settingError = error2 instanceof Error ? error2.message : String(error2);
-      text2 = "";
+      text = "";
     }
     if (settingStatus === "ok") {
       let parsed;
       try {
-        parsed = JSON.parse(text2);
+        parsed = JSON.parse(text);
       } catch (error2) {
         settingStatus = "invalid_json";
         settingError = error2 instanceof Error ? error2.message : String(error2);
@@ -710,9 +710,9 @@ var NodeRuntimeResolver = class {
     if (!isReadableFile(filePath)) {
       throw new BridgeError("provider_config_missing", `${label} not found: ${filePath}`);
     }
-    let text2;
+    let text;
     try {
-      text2 = readFileSync2(filePath, "utf8");
+      text = readFileSync2(filePath, "utf8");
     } catch (error2) {
       throw new BridgeError(
         "provider_config_invalid",
@@ -721,7 +721,7 @@ var NodeRuntimeResolver = class {
     }
     let parsed;
     try {
-      parsed = JSON.parse(text2);
+      parsed = JSON.parse(text);
     } catch (error2) {
       throw new BridgeError(
         "provider_config_invalid",
@@ -1140,10 +1140,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path23) {
-  if (!path23)
+function getElementAtPath(obj, path22) {
+  if (!path22)
     return obj;
-  return path23.reduce((acc, key) => acc?.[key], obj);
+  return path22.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -1483,11 +1483,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path23, issues) {
+function prefixIssues(path22, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path23);
+    iss.path.unshift(path22);
     return iss;
   });
 }
@@ -1933,16 +1933,16 @@ function flattenError(error2, mapper = (issue2) => issue2.message) {
 }
 function formatError(error2, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error3, path23 = []) => {
+  const processError = (error3, path22 = []) => {
     for (const issue2 of error3.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path23, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path22, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path23, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path22, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path23, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path22, ...issue2.path]);
       } else {
-        const fullpath = [...path23, ...issue2.path];
+        const fullpath = [...path22, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -7414,14 +7414,14 @@ var RemoteTaskManager = class {
 // src/web/cost-lab-integration.ts
 import { createHash as createHash9 } from "node:crypto";
 import { existsSync as existsSync6 } from "node:fs";
-import path19 from "node:path";
+import path18 from "node:path";
 import { fileURLToPath as fileURLToPath8 } from "node:url";
 
 // src/adapters/official-host-adapter.ts
 import { createHash as createHash4 } from "node:crypto";
 import { createReadStream as createReadStream2 } from "node:fs";
-import { lstat as lstat3, realpath as realpath2 } from "node:fs/promises";
-import path9 from "node:path";
+import { lstat as lstat2, realpath as realpath2 } from "node:fs/promises";
+import path8 from "node:path";
 import { fileURLToPath as fileURLToPath3, pathToFileURL } from "node:url";
 
 // src/runtime/desktop-host-launch.ts
@@ -7566,9 +7566,9 @@ function isRecord2(value) {
 import { createHash as createHash3 } from "node:crypto";
 import { execFile } from "node:child_process";
 import { closeSync as closeSync2, createReadStream, openSync as openSync2, readSync as readSync2 } from "node:fs";
-import { lstat as lstat2, realpath } from "node:fs/promises";
+import { lstat, realpath } from "node:fs/promises";
 import { homedir as homedir3 } from "node:os";
-import path8 from "node:path";
+import path7 from "node:path";
 import { promisify } from "node:util";
 
 // src/runtime/node-runtime.ts
@@ -7584,16 +7584,12 @@ function isSupportedNodeVersion(version2) {
 
 // src/runtime/official-runtime-authorization.ts
 import { createHash as createHash2 } from "node:crypto";
-import { lstat, readFile as readFile2 } from "node:fs/promises";
-import path7 from "node:path";
 var OFFICIAL_RUNTIME_PROBE_SCOPES = Object.freeze([
   "coding_plan_probe",
   "start_plan_probe",
   "other_provider_probe"
 ]);
 var MAX_AUTHORIZATION_BYTES = 64 * 1024;
-var FINGERPRINT_PATTERN = /^[0-9a-f]{64}$/u;
-var VERSION_PATTERN2 = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:\.(?:0|[1-9]\d*))?(?:-[0-9A-Za-z.-]+)?$/u;
 function computeOfficialInstallationFingerprint(input) {
   const normalized = {
     schema_version: 1,
@@ -7627,133 +7623,6 @@ function computeOfficialInstallationFingerprint(input) {
     node_version: input.node_version
   };
   return createHash2("sha256").update(JSON.stringify(normalized), "utf8").digest("hex");
-}
-async function lookupOfficialRuntimeAuthorization(options) {
-  if (!options.filePath) {
-    return {
-      state: "not_configured",
-      file_path: null,
-      reason: null,
-      record: null,
-      scopes: []
-    };
-  }
-  if (!isAbsolutePathForPlatform(options.filePath, options.platform)) {
-    return invalid(options.filePath, "experimental authorization path is not absolute");
-  }
-  const filePath = path7.resolve(options.filePath);
-  let metadata;
-  try {
-    metadata = await lstat(filePath);
-  } catch (error2) {
-    if (error2.code === "ENOENT") {
-      return {
-        state: "required",
-        file_path: filePath,
-        reason: null,
-        record: null,
-        scopes: []
-      };
-    }
-    return invalid(filePath, "experimental authorization file could not be inspected");
-  }
-  if (!metadata.isFile() || metadata.isSymbolicLink()) {
-    return invalid(filePath, "experimental authorization path is not a regular file");
-  }
-  if (metadata.size > MAX_AUTHORIZATION_BYTES) {
-    return invalid(filePath, "experimental authorization file exceeds 64 KB");
-  }
-  let parsed;
-  try {
-    parsed = JSON.parse(await readFile2(filePath, "utf8"));
-  } catch {
-    return invalid(filePath, "experimental authorization file is not valid JSON");
-  }
-  const root = asRecord(parsed);
-  if (!root || root["schema_version"] !== 1 || !Array.isArray(root["authorizations"])) {
-    return invalid(filePath, "experimental authorization file has an unsupported schema");
-  }
-  const records = [];
-  const identities = /* @__PURE__ */ new Set();
-  for (const raw of root["authorizations"]) {
-    const record4 = parseRecord(raw);
-    if (!record4) {
-      return invalid(filePath, "experimental authorization file contains a malformed record");
-    }
-    const identity = `${record4.desktop_version}\0${record4.installation_fingerprint}`;
-    if (identities.has(identity)) {
-      return invalid(filePath, "experimental authorization file contains duplicate records");
-    }
-    identities.add(identity);
-    records.push(record4);
-  }
-  const matches = [];
-  for (const record4 of records) {
-    if (record4.desktop_version !== options.desktopVersion) continue;
-    if (record4.installation_fingerprint === options.installationFingerprint) matches.push(record4);
-  }
-  if (matches.length === 0) {
-    return {
-      state: "required",
-      file_path: filePath,
-      reason: null,
-      record: null,
-      scopes: []
-    };
-  }
-  if (matches.length !== 1) {
-    return invalid(filePath, "experimental authorization file contains duplicate matching records");
-  }
-  const record3 = matches[0];
-  return {
-    state: "authorized",
-    file_path: filePath,
-    reason: null,
-    record: record3,
-    scopes: record3.scopes
-  };
-}
-function parseRecord(value) {
-  const record3 = asRecord(value);
-  if (!record3) return null;
-  const fingerprint = text(record3["installation_fingerprint"]);
-  const desktopVersion = text(record3["desktop_version"]);
-  const authorizedAt = text(record3["authorized_at"]);
-  const authorizedBy = text(record3["authorized_by"]);
-  const rawScopes = record3["scopes"];
-  if (!fingerprint || !FINGERPRINT_PATTERN.test(fingerprint) || !desktopVersion || !VERSION_PATTERN2.test(desktopVersion) || !authorizedAt || Number.isNaN(new Date(authorizedAt).getTime()) || !authorizedBy || !Array.isArray(rawScopes) || rawScopes.length === 0) {
-    return null;
-  }
-  const scopes = [];
-  for (const rawScope of rawScopes) {
-    if (typeof rawScope !== "string" || !OFFICIAL_RUNTIME_PROBE_SCOPES.includes(rawScope)) {
-      return null;
-    }
-    const scope = rawScope;
-    if (!scopes.includes(scope)) scopes.push(scope);
-  }
-  return {
-    installation_fingerprint: fingerprint,
-    desktop_version: desktopVersion,
-    authorized_at: new Date(authorizedAt).toISOString(),
-    authorized_by: authorizedBy,
-    scopes
-  };
-}
-function invalid(filePath, reason) {
-  return {
-    state: "invalid",
-    file_path: filePath,
-    reason,
-    record: null,
-    scopes: []
-  };
-}
-function asRecord(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? value : null;
-}
-function text(value) {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
 // src/runtime/official-app-server-runtime.ts
@@ -7813,7 +7682,6 @@ var OfficialAppServerRuntimeResolver = class {
   #probeNodeVersion;
   #probeDesktopVersion;
   #inspectExecutable;
-  #experimentalAuthorizationFile;
   #readDesktopLaunch;
   constructor(options = {}) {
     this.#env = options.env ?? process.env;
@@ -7827,7 +7695,6 @@ var OfficialAppServerRuntimeResolver = class {
     this.#probeNodeVersion = options.probeNodeVersion ?? probeNodeCliVersion;
     this.#probeDesktopVersion = options.probeDesktopVersion ?? probeWindowsFileVersion;
     this.#inspectExecutable = options.inspectExecutable ?? inspectWindowsExecutable;
-    this.#experimentalAuthorizationFile = options.experimentalAuthorizationFile;
     this.#readDesktopLaunch = options.readDesktopLaunch ?? ((bundlePath) => buildZCodeAppServerLaunch(bundlePath, {}));
   }
   async inspect() {
@@ -7878,17 +7745,17 @@ var OfficialAppServerRuntimeResolver = class {
       );
       runtimeHostPath = await canonicalFileInside(
         installDir,
-        path8.join(installDir, "resources", "tools", "runtime-host", "zcode-runtime-host.exe"),
+        path7.join(installDir, "resources", "tools", "runtime-host", "zcode-runtime-host.exe"),
         "installed runtime-host"
       );
       desktopExecutablePath = await canonicalFileInside(
         installDir,
-        path8.join(installDir, "ZCode.exe"),
+        path7.join(installDir, "ZCode.exe"),
         "installed Desktop executable"
       );
       desktopArchivePath = await canonicalFileInside(
         installDir,
-        path8.join(installDir, "resources", "app.asar"),
+        path7.join(installDir, "resources", "app.asar"),
         "installed Desktop archive"
       );
     } catch (error2) {
@@ -7897,37 +7764,38 @@ var OfficialAppServerRuntimeResolver = class {
     let bundleBytes;
     let builtinBytes;
     let runtimeHostBytes;
-    let bundleSha256;
-    let builtinSha256;
-    let runtimeHostSha256;
     let desktopExecutableBytes;
-    let desktopExecutableSha256;
     let desktopArchiveBytes;
-    let desktopArchiveSha256;
     try {
-      [{ size: bundleBytes }, bundleSha256] = await Promise.all([
-        lstat2(bundlePath),
-        this.#hashFile(bundlePath)
-      ]);
-      [{ size: builtinBytes }, builtinSha256] = await Promise.all([
-        lstat2(builtinPath),
-        this.#hashFile(builtinPath)
-      ]);
-      [{ size: runtimeHostBytes }, runtimeHostSha256] = await Promise.all([
-        lstat2(runtimeHostPath),
-        this.#hashFile(runtimeHostPath)
-      ]);
-      [{ size: desktopExecutableBytes }, desktopExecutableSha256] = await Promise.all([
-        lstat2(desktopExecutablePath),
-        this.#hashFile(desktopExecutablePath)
-      ]);
-      [{ size: desktopArchiveBytes }, desktopArchiveSha256] = await Promise.all([
-        lstat2(desktopArchivePath),
-        this.#hashFile(desktopArchivePath)
+      [
+        { size: bundleBytes },
+        { size: builtinBytes },
+        { size: runtimeHostBytes },
+        { size: desktopExecutableBytes },
+        { size: desktopArchiveBytes }
+      ] = await Promise.all([
+        lstat(bundlePath),
+        lstat(builtinPath),
+        lstat(runtimeHostPath),
+        lstat(desktopExecutablePath),
+        lstat(desktopArchivePath)
       ]);
     } catch (error2) {
       return unverified(`could not verify installed Official runtime assets: ${errorMessage(error2)}`, nodeExecutable);
     }
+    const [
+      bundleSha256,
+      builtinSha256,
+      runtimeHostSha256,
+      desktopExecutableSha256,
+      desktopArchiveSha256
+    ] = await Promise.all([
+      optionalSha256(this.#hashFile, bundlePath),
+      optionalSha256(this.#hashFile, builtinPath),
+      optionalSha256(this.#hashFile, runtimeHostPath),
+      optionalSha256(this.#hashFile, desktopExecutablePath),
+      optionalSha256(this.#hashFile, desktopArchivePath)
+    ]);
     let desktopExecutableIdentity;
     let runtimeHostIdentity;
     try {
@@ -7958,10 +7826,10 @@ var OfficialAppServerRuntimeResolver = class {
         }
       );
     }
-    const unsafeExecutableReason = executableSafetyFailure(
+    const unsafeExecutableReason = executableArchitectureFailure(
       desktopExecutableIdentity,
       "Desktop executable"
-    ) ?? executableSafetyFailure(runtimeHostIdentity, "runtime-host");
+    ) ?? executableArchitectureFailure(runtimeHostIdentity, "runtime-host");
     if (unsafeExecutableReason) {
       return unsafe(unsafeExecutableReason, nodeExecutable, {
         install_dir: installDir,
@@ -7990,114 +7858,43 @@ var OfficialAppServerRuntimeResolver = class {
     let launchEnv;
     try {
       launchEnv = this.#readDesktopLaunch(bundlePath).env;
-    } catch (error2) {
-      return unverified(`installed Desktop launch metadata could not be inspected: ${errorMessage(error2)}`, nodeExecutable);
+    } catch {
+      launchEnv = {};
     }
     let desktopVersion = null;
     try {
       desktopVersion = normalizeDesktopVersion(await this.#probeDesktopVersion(desktopExecutablePath));
-    } catch (error2) {
-      return unverified(`installed Desktop version could not be inspected: ${errorMessage(error2)}`, nodeExecutable, {
-        install_dir: installDir,
-        install_source: discovery.source,
-        bundle_path: bundlePath,
-        bundle_bytes: bundleBytes,
-        bundle_sha256: bundleSha256,
-        builtin_provider_config_path: builtinPath,
-        builtin_provider_config_bytes: builtinBytes,
-        builtin_provider_config_sha256: builtinSha256,
-        runtime_host_path: runtimeHostPath,
-        runtime_host_bytes: runtimeHostBytes,
-        runtime_host_sha256: runtimeHostSha256
-      });
-    }
-    if (!launchEnv.ZCODE_APP_VERSION || !launchEnv.ZCODE_BUILD_COMMIT_ID) {
-      return unverified("installed Desktop AppServer launch identity metadata is unavailable", nodeExecutable, {
-        install_dir: installDir,
-        install_source: discovery.source,
-        desktop_version: desktopVersion,
-        bundle_path: bundlePath,
-        bundle_bytes: bundleBytes,
-        bundle_sha256: bundleSha256,
-        builtin_provider_config_path: builtinPath,
-        builtin_provider_config_bytes: builtinBytes,
-        builtin_provider_config_sha256: builtinSha256,
-        runtime_host_path: runtimeHostPath,
-        runtime_host_bytes: runtimeHostBytes,
-        runtime_host_sha256: runtimeHostSha256
-      });
+    } catch {
     }
     let nodeVersion = null;
     try {
       nodeVersion = normalizeNodeVersion(await this.#probeNodeVersion(nodeExecutable));
-    } catch (error2) {
-      return unverified(`configured Node runtime could not be inspected: ${errorMessage(error2)}`, nodeExecutable, {
-        install_dir: installDir,
-        install_source: discovery.source,
-        desktop_version: desktopVersion,
-        bundle_path: bundlePath,
-        bundle_bytes: bundleBytes,
-        bundle_sha256: bundleSha256,
-        builtin_provider_config_path: builtinPath,
-        builtin_provider_config_bytes: builtinBytes,
-        builtin_provider_config_sha256: builtinSha256,
-        runtime_host_path: runtimeHostPath,
-        runtime_host_bytes: runtimeHostBytes,
-        runtime_host_sha256: runtimeHostSha256
-      });
+    } catch {
     }
-    const nodeCompatible = isSupportedNodeVersion(nodeVersion);
-    const observedDesktopVersion = desktopVersion;
-    const observedAppVersion = launchEnv.ZCODE_APP_VERSION;
-    const observedBuildCommitId = launchEnv.ZCODE_BUILD_COMMIT_ID;
-    if (!observedDesktopVersion || !observedAppVersion || !observedBuildCommitId || !nodeVersion) {
-      return unverified("installed Official runtime identity is incomplete", nodeExecutable, {
-        install_dir: installDir,
-        install_source: discovery.source,
-        desktop_version: observedDesktopVersion,
-        bundle_path: bundlePath,
-        bundle_bytes: bundleBytes,
-        bundle_sha256: bundleSha256,
-        builtin_provider_config_path: builtinPath,
-        builtin_provider_config_bytes: builtinBytes,
-        builtin_provider_config_sha256: builtinSha256,
-        runtime_host_path: runtimeHostPath,
-        runtime_host_bytes: runtimeHostBytes,
-        runtime_host_sha256: runtimeHostSha256,
-        runtime_host_signer_subject: runtimeHostIdentity.signer_subject,
-        runtime_host_signer_thumbprint: runtimeHostIdentity.signer_thumbprint,
-        desktop_executable_path: desktopExecutablePath,
-        desktop_executable_bytes: desktopExecutableBytes,
-        desktop_executable_sha256: desktopExecutableSha256,
-        desktop_executable_signer_subject: desktopExecutableIdentity.signer_subject,
-        desktop_executable_signer_thumbprint: desktopExecutableIdentity.signer_thumbprint,
-        desktop_archive_path: desktopArchivePath,
-        desktop_archive_bytes: desktopArchiveBytes,
-        desktop_archive_sha256: desktopArchiveSha256,
-        node_version: nodeVersion,
-        node_compatible: nodeCompatible
-      });
-    }
+    const nodeCompatible = nodeVersion !== null && isSupportedNodeVersion(nodeVersion);
+    const observedDesktopVersion = desktopVersion ?? "unavailable";
+    const observedAppVersion = launchEnv.ZCODE_APP_VERSION ?? "unavailable";
+    const observedBuildCommitId = launchEnv.ZCODE_BUILD_COMMIT_ID ?? "unavailable";
     const installationFingerprint = computeOfficialInstallationFingerprint({
       desktop_version: observedDesktopVersion,
       desktop_app_version: observedAppVersion,
       desktop_build_commit_id: observedBuildCommitId,
       desktop_executable_bytes: desktopExecutableBytes,
-      desktop_executable_sha256: desktopExecutableSha256,
+      desktop_executable_sha256: desktopExecutableSha256 ?? "unavailable",
       desktop_archive_bytes: desktopArchiveBytes,
-      desktop_archive_sha256: desktopArchiveSha256,
+      desktop_archive_sha256: desktopArchiveSha256 ?? "unavailable",
       bundle_bytes: bundleBytes,
-      bundle_sha256: bundleSha256,
+      bundle_sha256: bundleSha256 ?? "unavailable",
       builtin_provider_config_bytes: builtinBytes,
-      builtin_provider_config_sha256: builtinSha256,
+      builtin_provider_config_sha256: builtinSha256 ?? "unavailable",
       runtime_host_bytes: runtimeHostBytes,
-      runtime_host_sha256: runtimeHostSha256,
+      runtime_host_sha256: runtimeHostSha256 ?? "unavailable",
       desktop_signer_thumbprint: desktopExecutableIdentity.signer_thumbprint ?? "",
       runtime_host_signer_thumbprint: runtimeHostIdentity.signer_thumbprint ?? "",
-      node_version: nodeVersion
+      node_version: nodeVersion ?? "unavailable"
     });
     const manifestCandidate = this.#manifest.find(
-      (entry) => entry.desktop_version === desktopVersion && entry.bundle_bytes === bundleBytes && entry.bundle_sha256.toLowerCase() === bundleSha256.toLowerCase()
+      (entry) => entry.desktop_version === desktopVersion && entry.bundle_bytes === bundleBytes && bundleSha256 !== null && entry.bundle_sha256.toLowerCase() === bundleSha256.toLowerCase()
     ) ?? null;
     const mismatches = [];
     if (!manifestCandidate) {
@@ -8106,33 +7903,19 @@ var OfficialAppServerRuntimeResolver = class {
       if (manifestCandidate.desktop_app_version !== observedAppVersion || manifestCandidate.desktop_build_commit_id !== observedBuildCommitId) {
         mismatches.push("Desktop launch identity does not match the compatibility manifest");
       }
-      if (manifestCandidate.builtin_provider_config_bytes !== builtinBytes || manifestCandidate.builtin_provider_config_sha256.toLowerCase() !== builtinSha256.toLowerCase()) {
+      if (manifestCandidate.builtin_provider_config_bytes !== builtinBytes || builtinSha256 === null || manifestCandidate.builtin_provider_config_sha256.toLowerCase() !== builtinSha256.toLowerCase()) {
         mismatches.push("builtin provider config identity does not match the compatibility manifest");
       }
-      if (manifestCandidate.runtime_host_bytes !== runtimeHostBytes || manifestCandidate.runtime_host_sha256.toLowerCase() !== runtimeHostSha256.toLowerCase()) {
+      if (manifestCandidate.runtime_host_bytes !== runtimeHostBytes || runtimeHostSha256 === null || manifestCandidate.runtime_host_sha256.toLowerCase() !== runtimeHostSha256.toLowerCase()) {
         mismatches.push("runtime-host identity does not match the compatibility manifest");
       }
-      if (manifestCandidate.desktop_executable_bytes !== void 0 && (manifestCandidate.desktop_executable_bytes !== desktopExecutableBytes || manifestCandidate.desktop_executable_sha256?.toLowerCase() !== desktopExecutableSha256.toLowerCase())) {
+      if (manifestCandidate.desktop_executable_bytes !== void 0 && (manifestCandidate.desktop_executable_bytes !== desktopExecutableBytes || desktopExecutableSha256 === null || manifestCandidate.desktop_executable_sha256?.toLowerCase() !== desktopExecutableSha256.toLowerCase())) {
         mismatches.push("Desktop executable identity does not match the compatibility manifest");
       }
-      if (manifestCandidate.desktop_archive_bytes !== void 0 && (manifestCandidate.desktop_archive_bytes !== desktopArchiveBytes || manifestCandidate.desktop_archive_sha256?.toLowerCase() !== desktopArchiveSha256.toLowerCase())) {
+      if (manifestCandidate.desktop_archive_bytes !== void 0 && (manifestCandidate.desktop_archive_bytes !== desktopArchiveBytes || desktopArchiveSha256 === null || manifestCandidate.desktop_archive_sha256?.toLowerCase() !== desktopArchiveSha256.toLowerCase())) {
         mismatches.push("Desktop archive identity does not match the compatibility manifest");
       }
-      if (manifestCandidate.node_compatibility !== SUPPORTED_NODE_RANGE || !nodeCompatible) {
-        mismatches.push(`Node ${nodeVersion} is outside the verified compatibility range ${manifestCandidate.node_compatibility}`);
-      }
     }
-    const authorizationHost = this.#host ?? codexHostProfile(this.#homeDir);
-    const configuredAuthorizationFile = env["ZCODE_BRIDGE_EXPERIMENTAL_RUNTIME_AUTHORIZATION_FILE"]?.trim();
-    const authorizationFile = this.#experimentalAuthorizationFile !== void 0 ? this.#experimentalAuthorizationFile : configuredAuthorizationFile || path8.join(
-      authorizationHost.settingsDirectory,
-      "experimental-runtime-authorization.json"
-    );
-    const experimentalAuthorization = await lookupOfficialRuntimeAuthorization({
-      filePath: authorizationFile,
-      installationFingerprint,
-      desktopVersion: observedDesktopVersion
-    });
     const manifest = manifestCandidate && mismatches.length === 0 ? manifestCandidate : null;
     const manifestStage = manifest?.verification_stage ?? "VERIFIED";
     const common = {
@@ -8140,7 +7923,6 @@ var OfficialAppServerRuntimeResolver = class {
       install_source: discovery.source,
       installation_safety: "OFFICIAL_INSTALLATION_SAFE",
       installation_fingerprint: installationFingerprint,
-      experimental_authorization: experimentalAuthorization,
       desktop_version: observedDesktopVersion,
       desktop_app_version: observedAppVersion,
       desktop_build_commit_id: observedBuildCommitId,
@@ -8167,9 +7949,6 @@ var OfficialAppServerRuntimeResolver = class {
       node_compatible: nodeCompatible,
       manifest
     };
-    if (!nodeCompatible) {
-      return unverified(`Node ${nodeVersion} is outside the supported compatibility range ${SUPPORTED_NODE_RANGE}`, nodeExecutable, common);
-    }
     if (manifest && manifestStage === "VERIFIED") {
       return {
         status: "OFFICIAL_RUNTIME_VERIFIED",
@@ -8180,35 +7959,32 @@ var OfficialAppServerRuntimeResolver = class {
         node_executable: nodeExecutable
       };
     }
-    if (experimentalAuthorization.state === "invalid") {
-      return unverified(
-        `EXPERIMENTAL_AUTHORIZATION_INVALID: ${experimentalAuthorization.reason}`,
-        nodeExecutable,
-        common
-      );
-    }
-    if (experimentalAuthorization.state !== "authorized") {
-      return unverified(
-        `EXPERIMENTAL_AUTHORIZATION_REQUIRED: ${mismatches.join("; ") || "runtime identity is not production-verified"}`,
-        nodeExecutable,
-        common
-      );
+    const diagnosticReason = mismatches.join("; ") || "runtime identity is not present in the reviewed compatibility manifest";
+    if (manifest && manifestStage === "EXPERIMENTAL") {
+      return {
+        status: "OFFICIAL_RUNTIME_EXPERIMENTAL",
+        ...common,
+        discount_capability: "OFFICIAL_DISCOUNT_NOT_VERIFIED",
+        start_plan_static_compatibility: manifest.start_plan_static_compatibility,
+        reason: `SAFE_INSTALLATION_EXPERIMENTAL_MANIFEST: ${diagnosticReason}`,
+        node_executable: nodeExecutable
+      };
     }
     return {
-      status: "OFFICIAL_RUNTIME_EXPERIMENTAL",
+      status: "OFFICIAL_RUNTIME_UNVERIFIED",
       ...common,
       discount_capability: "OFFICIAL_DISCOUNT_NOT_VERIFIED",
-      start_plan_static_compatibility: manifest?.start_plan_static_compatibility ?? "OFFLINE_RESEARCH_PENDING",
-      reason: mismatches.length > 0 ? `explicit experimental authorization accepted for an unverified runtime identity: ${mismatches.join("; ")}` : "explicit experimental authorization accepted; Provider capabilities remain independently unverified",
+      start_plan_static_compatibility: "OFFLINE_RESEARCH_PENDING",
+      reason: `SAFE_INSTALLATION_MANIFEST_UNVERIFIED: ${diagnosticReason}`,
       node_executable: nodeExecutable
     };
   }
   async resolve() {
     const descriptor = await this.inspect();
-    if (descriptor.status !== "OFFICIAL_RUNTIME_VERIFIED" && descriptor.status !== "OFFICIAL_RUNTIME_EXPERIMENTAL" || !descriptor.bundle_path || !descriptor.builtin_provider_config_path) {
+    if (descriptor.installation_safety !== "OFFICIAL_INSTALLATION_SAFE" || !descriptor.bundle_path || !descriptor.builtin_provider_config_path || !descriptor.runtime_host_path) {
       throw new BridgeError(
         "provider_config_invalid",
-        `OFFICIAL_RUNTIME_UNVERIFIED: ${descriptor.reason ?? "installed Official AppServer is unavailable"}; OFFICIAL_DISCOUNT_NOT_VERIFIED`
+        `OFFICIAL_INSTALLATION_UNSAFE: ${descriptor.reason ?? "installed Official AppServer is unavailable"}; OFFICIAL_DISCOUNT_NOT_VERIFIED`
       );
     }
     const base = this.#baseResolver ?? new NodeRuntimeResolver({
@@ -8230,7 +8006,6 @@ function unverified(reason, nodeExecutable, details = {}) {
     status: "OFFICIAL_RUNTIME_UNVERIFIED",
     installation_safety: details.installation_safety ?? "OFFICIAL_INSTALLATION_INCOMPLETE",
     installation_fingerprint: details.installation_fingerprint ?? null,
-    experimental_authorization: details.experimental_authorization ?? null,
     discount_capability: "OFFICIAL_DISCOUNT_NOT_VERIFIED",
     start_plan_static_compatibility: null,
     reason,
@@ -8270,77 +8045,71 @@ function unsafe(reason, nodeExecutable, details = {}) {
     installation_safety: "OFFICIAL_INSTALLATION_UNSAFE"
   });
 }
-function executableSafetyFailure(identity, label) {
+function executableArchitectureFailure(identity, label) {
   if (identity.architecture !== "x64") {
     return `OFFICIAL_INSTALLATION_UNSAFE: ${label} is not an x64 PE executable`;
-  }
-  if (identity.signature_status.trim().toLowerCase() !== "valid") {
-    return `OFFICIAL_INSTALLATION_UNSAFE: ${label} Authenticode signature is not valid`;
-  }
-  const signerSubject = identity.signer_subject?.replace(/\s+/gu, " ").trim() ?? "";
-  if (!signerSubject.includes("CN=\u5317\u4EAC\u667A\u8C31\u534E\u7AE0\u79D1\u6280\u80A1\u4EFD\u6709\u9650\u516C\u53F8")) {
-    return `OFFICIAL_INSTALLATION_UNSAFE: ${label} signer is not the official Zhipu publisher`;
-  }
-  if (!identity.signer_thumbprint || !/^[0-9A-F]{40,64}$/u.test(identity.signer_thumbprint.replace(/\s+/gu, ""))) {
-    return `OFFICIAL_INSTALLATION_UNSAFE: ${label} signer thumbprint is unavailable`;
   }
   return null;
 }
 async function inspectWindowsExecutable(filePath) {
   const architecture = readPortableExecutableArchitecture(filePath);
   const systemRoot = process.env["SystemRoot"]?.trim();
-  if (!systemRoot) throw new Error("SystemRoot is unavailable for Authenticode inspection");
-  const powershell = path8.join(
-    systemRoot,
-    "System32",
-    "WindowsPowerShell",
-    "v1.0",
-    "powershell.exe"
-  );
-  const script = [
-    "$ProgressPreference = 'SilentlyContinue'",
-    "$ErrorActionPreference = 'Stop'",
-    "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)",
-    "$target = $env:ZCODE_BRIDGE_AUTHENTICODE_FILE",
-    "if ([string]::IsNullOrWhiteSpace($target)) { exit 2 }",
-    "$signature = Get-AuthenticodeSignature -LiteralPath $target",
-    "$certificate = $signature.SignerCertificate",
-    "[pscustomobject]@{",
-    "status = [string]$signature.Status;",
-    "subject = if ($null -eq $certificate) { $null } else { [string]$certificate.Subject };",
-    "thumbprint = if ($null -eq $certificate) { $null } else { [string]$certificate.Thumbprint }",
-    "} | ConvertTo-Json -Compress"
-  ].join("\n");
-  const encoded = Buffer.from(script, "utf16le").toString("base64");
-  const { stdout } = await execFileAsync(powershell, [
-    "-NoProfile",
-    "-NonInteractive",
-    "-EncodedCommand",
-    encoded
-  ], {
-    encoding: "utf8",
-    timeout: 3e4,
-    windowsHide: true,
-    env: {
-      SystemRoot: systemRoot,
-      ZCODE_BRIDGE_AUTHENTICODE_FILE: filePath
+  let signatureStatus = "";
+  let signerSubject = null;
+  let signerThumbprint = null;
+  if (systemRoot) {
+    try {
+      const powershell = path7.join(
+        systemRoot,
+        "System32",
+        "WindowsPowerShell",
+        "v1.0",
+        "powershell.exe"
+      );
+      const script = [
+        "$ProgressPreference = 'SilentlyContinue'",
+        "$ErrorActionPreference = 'Stop'",
+        "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)",
+        "$target = $env:ZCODE_BRIDGE_AUTHENTICODE_FILE",
+        "if ([string]::IsNullOrWhiteSpace($target)) { exit 2 }",
+        "$signature = Get-AuthenticodeSignature -LiteralPath $target",
+        "$certificate = $signature.SignerCertificate",
+        "[pscustomobject]@{",
+        "status = [string]$signature.Status;",
+        "subject = if ($null -eq $certificate) { $null } else { [string]$certificate.Subject };",
+        "thumbprint = if ($null -eq $certificate) { $null } else { [string]$certificate.Thumbprint }",
+        "} | ConvertTo-Json -Compress"
+      ].join("\n");
+      const encoded = Buffer.from(script, "utf16le").toString("base64");
+      const { stdout } = await execFileAsync(powershell, [
+        "-NoProfile",
+        "-NonInteractive",
+        "-EncodedCommand",
+        encoded
+      ], {
+        encoding: "utf8",
+        timeout: 3e4,
+        windowsHide: true,
+        env: {
+          SystemRoot: systemRoot,
+          ZCODE_BRIDGE_AUTHENTICODE_FILE: filePath
+        }
+      });
+      const parsed = JSON.parse(stdout.trim());
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        const value = parsed;
+        signatureStatus = typeof value["status"] === "string" ? value["status"] : "";
+        signerSubject = typeof value["subject"] === "string" ? value["subject"] : null;
+        signerThumbprint = typeof value["thumbprint"] === "string" ? value["thumbprint"] : null;
+      }
+    } catch {
     }
-  });
-  let parsed;
-  try {
-    parsed = JSON.parse(stdout.trim());
-  } catch {
-    throw new Error("Authenticode probe returned invalid JSON");
   }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("Authenticode probe returned an invalid object");
-  }
-  const value = parsed;
   return {
     architecture,
-    signature_status: typeof value["status"] === "string" ? value["status"] : "",
-    signer_subject: typeof value["subject"] === "string" ? value["subject"] : null,
-    signer_thumbprint: typeof value["thumbprint"] === "string" ? value["thumbprint"] : null
+    signature_status: signatureStatus,
+    signer_subject: signerSubject,
+    signer_thumbprint: signerThumbprint
   };
 }
 function readPortableExecutableArchitecture(filePath) {
@@ -8364,16 +8133,16 @@ function readPortableExecutableArchitecture(filePath) {
   }
 }
 async function canonicalDirectory(candidate) {
-  const stat4 = await lstat2(candidate);
+  const stat4 = await lstat(candidate);
   if (!stat4.isDirectory() || stat4.isSymbolicLink()) throw new Error("installed ZCode root is not a real directory");
   return realpath(candidate);
 }
 async function canonicalFileInside(root, candidate, label) {
-  const stat4 = await lstat2(candidate);
+  const stat4 = await lstat(candidate);
   if (!stat4.isFile() || stat4.isSymbolicLink()) throw new Error(`${label} is not a regular file`);
   const resolved = await realpath(candidate);
-  const relative = path8.relative(root, resolved);
-  if (!relative || relative === ".." || relative.startsWith(`..${path8.sep}`) || path8.isAbsolute(relative)) {
+  const relative = path7.relative(root, resolved);
+  if (!relative || relative === ".." || relative.startsWith(`..${path7.sep}`) || path7.isAbsolute(relative)) {
     throw new Error(`${label} resolves outside the installed ZCode root`);
   }
   return resolved;
@@ -8387,6 +8156,13 @@ async function sha256File(filePath) {
     stream.once("end", resolve);
   });
   return hash.digest("hex");
+}
+async function optionalSha256(hashFile, filePath) {
+  try {
+    return await hashFile(filePath);
+  } catch {
+    return null;
+  }
 }
 async function probeNodeCliVersion(executable) {
   const { stdout } = await execFileAsync(executable, ["--version"], {
@@ -8418,7 +8194,7 @@ async function probeWindowsFileVersion(executable) {
   const encoded = Buffer.from(script, "utf16le").toString("base64");
   const systemRoot = process.env["SystemRoot"]?.trim();
   if (!systemRoot) throw new Error("SystemRoot is unavailable for the Windows version probe");
-  const powershell = path8.join(
+  const powershell = path7.join(
     systemRoot,
     "System32",
     "WindowsPowerShell",
@@ -8502,7 +8278,7 @@ async function verifyOfficialHostAssets(workerModuleUrl = import.meta.url) {
   const root = fileURLToPath3(new URL(`${OFFICIAL_HOST_ASSET_RELATIVE_ROOT}/`, workerUrl));
   let rootReal;
   try {
-    const rootStat = await lstat3(root);
+    const rootStat = await lstat2(root);
     if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new Error("not a real directory");
     rootReal = await realpath2(root);
   } catch (error2) {
@@ -8510,9 +8286,9 @@ async function verifyOfficialHostAssets(workerModuleUrl = import.meta.url) {
   }
   const verified = /* @__PURE__ */ new Map();
   for (const [name, definition] of Object.entries(OFFICIAL_HOST_ASSETS)) {
-    const candidate = path9.resolve(rootReal, definition.relativePath);
+    const candidate = path8.resolve(rootReal, definition.relativePath);
     try {
-      const candidateStat = await lstat3(candidate);
+      const candidateStat = await lstat2(candidate);
       if (!candidateStat.isFile() || candidateStat.isSymbolicLink()) throw new Error("not a regular file");
       const candidateReal = await realpath2(candidate);
       if (!isPathInside(rootReal, candidateReal)) throw new Error("resolved outside the shipped asset root");
@@ -8563,8 +8339,8 @@ function normalizeOfficialHostProductVersion(value) {
 }
 var officialHostEnvironmentTail = Promise.resolve();
 function isPathInside(root, candidate) {
-  const relative = path9.relative(root, candidate);
-  return relative !== "" && !relative.startsWith(`..${path9.sep}`) && relative !== ".." && !path9.isAbsolute(relative);
+  const relative = path8.relative(root, candidate);
+  return relative !== "" && !relative.startsWith(`..${path8.sep}`) && relative !== ".." && !path8.isAbsolute(relative);
 }
 async function sha256File2(filePath) {
   const hash = createHash4("sha256");
@@ -8952,11 +8728,11 @@ function responseTimeSeconds(response) {
 
 // tools/cost-lab/web-services.mjs
 import { access as access2, stat as stat2 } from "node:fs/promises";
-import path13 from "node:path";
+import path12 from "node:path";
 
 // tools/cost-lab/path-discovery.mjs
 import { existsSync as existsSync4, readFileSync as readFileSync4 } from "node:fs";
-import path10 from "node:path";
+import path9 from "node:path";
 var USER_HOME_SOURCES = Object.freeze(["HOME", "USERPROFILE", "FALLBACK"]);
 var SETTING_FILE_STATUSES = Object.freeze([
   "ok",
@@ -8970,7 +8746,7 @@ function isWindowsAbsolutePath2(value) {
   return /^[A-Za-z]:[\\/]/u.test(value) || /^\/\/[^\\/]+[\\/][^\\/]+(?:[\\/].*)?$/u.test(value) || /^\\\\[^\\/]+[\\/][^\\/]+(?:[\\/].*)?$/u.test(value);
 }
 function isAbsolutePathForPlatform2(value, platform = process.platform) {
-  return platform === "win32" ? isWindowsAbsolutePath2(value) : path10.posix.isAbsolute(value);
+  return platform === "win32" ? isWindowsAbsolutePath2(value) : path9.posix.isAbsolute(value);
 }
 function isPermissionDenied(error2) {
   return error2?.code === "EACCES" || error2?.code === "EPERM";
@@ -8980,7 +8756,7 @@ function resolveUserHome2({
   platform = process.platform,
   fallbackHomeDir = null
 } = {}) {
-  const pathImpl = platform === "win32" ? path10.win32 : path10.posix;
+  const pathImpl = platform === "win32" ? path9.win32 : path9.posix;
   const homeRaw = env.HOME?.trim() || null;
   const userProfileRaw = env.USERPROFILE?.trim() || null;
   if (platform !== "win32") {
@@ -9038,9 +8814,9 @@ function discoverZCodeData2({
   platform = process.platform,
   fallbackHomeDir = null,
   fileExists = existsSync4,
-  readFile: readFile7 = (filePath) => readFileSync4(filePath, "utf8")
+  readFile: readFile6 = (filePath) => readFileSync4(filePath, "utf8")
 } = {}) {
-  const pathImpl = platform === "win32" ? path10.win32 : path10.posix;
+  const pathImpl = platform === "win32" ? path9.win32 : path9.posix;
   const home = resolveUserHome2({ env, platform, fallbackHomeDir });
   const settingFile = pathImpl.join(home.userHome, ".zcode", "v2", "setting.json");
   let settingStatus = "ok";
@@ -9049,9 +8825,9 @@ function discoverZCodeData2({
   if (!fileExists(settingFile)) {
     settingStatus = "absent";
   } else {
-    let text2;
+    let text;
     try {
-      text2 = readFile7(settingFile);
+      text = readFile6(settingFile);
     } catch (error2) {
       settingStatus = isPermissionDenied(error2) ? "permission_denied" : "unreadable";
       settingError = error2 instanceof Error ? error2.message : String(error2);
@@ -9059,7 +8835,7 @@ function discoverZCodeData2({
     if (settingStatus === "ok") {
       let parsed;
       try {
-        parsed = JSON.parse(text2);
+        parsed = JSON.parse(text);
       } catch (error2) {
         settingStatus = "invalid_json";
         settingError = error2 instanceof Error ? error2.message : String(error2);
@@ -9106,7 +8882,7 @@ function resolveBillingDataBaseDir(explicitDataBaseDir, discoveryOptions = {}) {
       throw new Error("billing_data_base_dir_empty");
     }
     return {
-      dataBaseDir: path10.resolve(explicitDataBaseDir.trim()),
+      dataBaseDir: path9.resolve(explicitDataBaseDir.trim()),
       dataBaseDirSource: "explicit",
       discovery: null
     };
@@ -9122,7 +8898,7 @@ function resolveBillingDataBaseDir(explicitDataBaseDir, discoveryOptions = {}) {
 // tools/cost-lab/official-runtime-manifest.mjs
 import { createHash as createHash5 } from "node:crypto";
 import { access } from "node:fs/promises";
-import path11 from "node:path";
+import path10 from "node:path";
 var resolverModule = new URL("../../dist/src/runtime/official-app-server-runtime.js", import.meta.url);
 async function inspectOfficialRuntimeAssets({ env, platform, arch } = {}) {
   if (!await access(resolverModule).then(() => true, () => false)) {
@@ -9146,7 +8922,7 @@ async function inspectOfficialRuntimeAssets({ env, platform, arch } = {}) {
     const file = runtime[`${name}_path`];
     if (root && file) {
       assets[name] = {
-        relative_path: path11.relative(root, file).split(path11.sep).join("/"),
+        relative_path: path10.relative(root, file).split(path10.sep).join("/"),
         bytes: runtime[`${name}_bytes`],
         sha256: runtime[`${name}_sha256`]
       };
@@ -9188,21 +8964,21 @@ async function inspectOfficialRuntimeAssets({ env, platform, arch } = {}) {
 // tools/cost-lab/vendor-loader.mjs
 import { createHash as createHash6 } from "node:crypto";
 import { existsSync as existsSync5 } from "node:fs";
-import { readFile as readFile3, stat } from "node:fs/promises";
+import { readFile as readFile2, stat } from "node:fs/promises";
 import { registerHooks } from "node:module";
-import path12 from "node:path";
+import path11 from "node:path";
 import { fileURLToPath as fileURLToPath4, pathToFileURL as pathToFileURL2 } from "node:url";
-var SCRIPT_ROOT = path12.dirname(fileURLToPath4(import.meta.url));
-var BUNDLED_VENDOR_ROOT = path12.basename(SCRIPT_ROOT) === "dist" && existsSync5(path12.join(SCRIPT_ROOT, "vendor", "official-billing-runtime.mjs"));
-var PROJECT_ROOT = BUNDLED_VENDOR_ROOT ? path12.resolve(SCRIPT_ROOT, "..") : path12.resolve(SCRIPT_ROOT, "..", "..");
-var OFFICIAL_RUNTIME_PATH = path12.join(
+var SCRIPT_ROOT = path11.dirname(fileURLToPath4(import.meta.url));
+var BUNDLED_VENDOR_ROOT = path11.basename(SCRIPT_ROOT) === "dist" && existsSync5(path11.join(SCRIPT_ROOT, "vendor", "official-billing-runtime.mjs"));
+var PROJECT_ROOT = BUNDLED_VENDOR_ROOT ? path11.resolve(SCRIPT_ROOT, "..") : path11.resolve(SCRIPT_ROOT, "..", "..");
+var OFFICIAL_RUNTIME_PATH = path11.join(
   SCRIPT_ROOT,
   "vendor",
   "official-billing-runtime.mjs"
 );
 var OFFICIAL_RUNTIME_SHA256 = "dcb3fc7cb7a62e7a6dbe7ce8a9e1427075309458453641f6a4c7e8e1971a63e6";
 var OFFICIAL_KEYRING_NATIVE_SHA256 = "52b16658275b7848f8081a6542fee3448f1b1c5d3a36487107ae0e7cec95ac6f";
-var OFFICIAL_HOST_MODULES = BUNDLED_VENDOR_ROOT ? path12.join(
+var OFFICIAL_HOST_MODULES = BUNDLED_VENDOR_ROOT ? path11.join(
   PROJECT_ROOT,
   "worker",
   "vendor",
@@ -9210,7 +8986,7 @@ var OFFICIAL_HOST_MODULES = BUNDLED_VENDOR_ROOT ? path12.join(
   "win32-x64-node24.16.0-zcode3.18.2-fec97590",
   "node_modules",
   "@napi-rs"
-) : path12.join(
+) : path11.join(
   PROJECT_ROOT,
   "plugins",
   "codex-zcode-bridge",
@@ -9221,8 +8997,8 @@ var OFFICIAL_HOST_MODULES = BUNDLED_VENDOR_ROOT ? path12.join(
   "node_modules",
   "@napi-rs"
 );
-var OFFICIAL_KEYRING_JS_PATH = path12.join(OFFICIAL_HOST_MODULES, "keyring", "index.js");
-var OFFICIAL_KEYRING_NATIVE_PATH = path12.join(
+var OFFICIAL_KEYRING_JS_PATH = path11.join(OFFICIAL_HOST_MODULES, "keyring", "index.js");
+var OFFICIAL_KEYRING_NATIVE_PATH = path11.join(
   OFFICIAL_HOST_MODULES,
   "keyring-win32-x64-msvc",
   "keyring.win32-x64-msvc.node"
@@ -9234,7 +9010,7 @@ function sha256(data) {
 async function verifyFile(filePath, expectedSha256, code) {
   const metadata = await stat(filePath).catch(() => null);
   if (!metadata?.isFile()) throw new Error(`${code}_missing`);
-  const digest = sha256(await readFile3(filePath));
+  const digest = sha256(await readFile2(filePath));
   if (digest !== expectedSha256) throw new Error(`${code}_hash_mismatch`);
   return digest;
 }
@@ -9377,7 +9153,7 @@ async function inspectBillingAvailability(options = {}) {
   }
 }
 async function inspectCredentialAvailability(data, options) {
-  const credentialFile = path13.join(data.dataBaseDir, ".zcode", "v2", "credentials.json");
+  const credentialFile = path12.join(data.dataBaseDir, ".zcode", "v2", "credentials.json");
   try {
     const metadata = await (options.statFile ?? stat2)(credentialFile);
     return {
@@ -9468,14 +9244,14 @@ function errorCode(error2) {
 // tools/cost-lab/official-app-server-protocol-smoke.mjs
 import { randomUUID as randomUUID3 } from "node:crypto";
 import { access as access3, mkdir, rm, stat as stat3 } from "node:fs/promises";
-import path14 from "node:path";
+import path13 from "node:path";
 import { fileURLToPath as fileURLToPath5, pathToFileURL as pathToFileURL3 } from "node:url";
-var SCRIPT_ROOT2 = path14.dirname(fileURLToPath5(import.meta.url));
-var PROJECT_ROOT2 = path14.resolve(SCRIPT_ROOT2, "..", "..");
+var SCRIPT_ROOT2 = path13.dirname(fileURLToPath5(import.meta.url));
+var PROJECT_ROOT2 = path13.resolve(SCRIPT_ROOT2, "..", "..");
 var OFFICIAL_PROTOCOL_SMOKE_METHOD = "runtime/capabilities";
 var DEFAULT_TIMEOUT_MS = 3e4;
 var RUNTIME_HOST_TRANSPORT_MAX_FRAME_BYTES = 16 * 1024 * 1024;
-var FIXED_HOST_MODULE_RELATIVE_PATH = path14.join(
+var FIXED_HOST_MODULE_RELATIVE_PATH = path13.join(
   "plugins",
   "codex-zcode-bridge",
   "worker",
@@ -9487,7 +9263,7 @@ var FIXED_HOST_MODULE_RELATIVE_PATH = path14.join(
 var runtimeHostEnvironmentTail = Promise.resolve();
 async function runOfficialAppServerProtocolSmoke(options = {}) {
   const startedAt = Date.now();
-  const projectRoot = path14.resolve(options.projectRoot ?? PROJECT_ROOT2);
+  const projectRoot = path13.resolve(options.projectRoot ?? PROJECT_ROOT2);
   const platform = options.platform ?? process.platform;
   const arch = options.arch ?? process.arch;
   if (platform !== "win32" || arch !== "x64") {
@@ -9502,35 +9278,35 @@ async function runOfficialAppServerProtocolSmoke(options = {}) {
     return failed("timeout_invalid", startedAt);
   }
   const runtime = await inspectRuntime({ env, platform, arch });
-  if (runtime.runtime_status !== "OFFICIAL_RUNTIME_VERIFIED" && runtime.runtime_status !== "OFFICIAL_RUNTIME_EXPERIMENTAL" || !runtime.install_root) {
-    return failed("installed_official_runtime_unverified", startedAt);
+  if (runtime.installation_safety !== "OFFICIAL_INSTALLATION_SAFE" || !runtime.install_root) {
+    return failed("installed_official_runtime_unsafe_or_incomplete", startedAt);
   }
-  if (!runtime.desktop_version || !runtime.desktop_app_version || !runtime.desktop_build_commit_id || !runtime.assets?.bundle?.relative_path || !runtime.assets?.runtime_host?.relative_path || !runtime.assets?.builtin_provider_config?.relative_path) {
-    return failed("runtime_manifest_incomplete", startedAt);
+  if (!runtime.desktop_app_version || !runtime.assets?.bundle?.relative_path || !runtime.assets?.runtime_host?.relative_path || !runtime.assets?.builtin_provider_config?.relative_path) {
+    return failed("runtime_launch_assets_incomplete", startedAt);
   }
   const account = resolveDataRoot(null, {
     env,
     platform,
     fallbackHomeDir: options.fallbackHomeDir
   });
-  const zcodeHome = path14.join(account.dataBaseDir, ".zcode");
-  const personalProviderConfig = path14.join(zcodeHome, "v2", "provider_config.json");
+  const zcodeHome = path13.join(account.dataBaseDir, ".zcode");
+  const personalProviderConfig = path13.join(zcodeHome, "v2", "provider_config.json");
   try {
     await access3(personalProviderConfig);
     await stat3(personalProviderConfig);
   } catch {
     return failed("personal_provider_config_unavailable", startedAt);
   }
-  const runRootParent = path14.resolve(options.runRootParent ?? path14.join(projectRoot, ".run"));
-  const runRoot = path14.join(runRootParent, "cost-lab-web", `protocol-smoke-${createId()}`);
+  const runRootParent = path13.resolve(options.runRootParent ?? path13.join(projectRoot, ".run"));
+  const runRoot = path13.join(runRootParent, "cost-lab-web", `protocol-smoke-${createId()}`);
   assertInside(runRootParent, runRoot);
   const layout = {
     root: runRoot,
-    home: path14.join(runRoot, "home"),
-    appData: path14.join(runRoot, "app-data"),
-    localAppData: path14.join(runRoot, "local-app-data"),
-    temp: path14.join(runRoot, "temp"),
-    workspace: path14.join(runRoot, "workspace")
+    home: path13.join(runRoot, "home"),
+    appData: path13.join(runRoot, "app-data"),
+    localAppData: path13.join(runRoot, "local-app-data"),
+    temp: path13.join(runRoot, "temp"),
+    workspace: path13.join(runRoot, "workspace")
   };
   let manager = null;
   let workspace = null;
@@ -9541,17 +9317,17 @@ async function runOfficialAppServerProtocolSmoke(options = {}) {
     for (const directory of Object.values(layout).slice(1)) {
       await mkdir(directory, { recursive: true });
     }
-    const hostModulePath = path14.resolve(
-      options.hostModulePath ?? path14.join(projectRoot, FIXED_HOST_MODULE_RELATIVE_PATH)
+    const hostModulePath = path13.resolve(
+      options.hostModulePath ?? path13.join(projectRoot, FIXED_HOST_MODULE_RELATIVE_PATH)
     );
     if (!options.loadHostModule) await stat3(hostModulePath);
     const module = await (options.loadHostModule ? options.loadHostModule(hostModulePath) : import(pathToFileURL3(hostModulePath).href));
     if (typeof module.ZCodeAgentProcessManager !== "function") {
       return failed("official_host_manager_missing", startedAt);
     }
-    const bundlePath = path14.join(runtime.install_root, runtime.assets.bundle.relative_path);
-    const runtimeHostPath = path14.join(runtime.install_root, runtime.assets.runtime_host.relative_path);
-    const builtinProviderConfig = path14.join(
+    const bundlePath = path13.join(runtime.install_root, runtime.assets.bundle.relative_path);
+    const runtimeHostPath = path13.join(runtime.install_root, runtime.assets.runtime_host.relative_path);
+    const builtinProviderConfig = path13.join(
       runtime.install_root,
       runtime.assets.builtin_provider_config.relative_path
     );
@@ -9622,7 +9398,6 @@ async function runOfficialAppServerProtocolSmoke(options = {}) {
         runtime_status: runtime.runtime_status,
         installation_fingerprint: runtime.installation_fingerprint,
         installation_safety: runtime.installation_safety,
-        experimental_authorization_state: runtime.experimental_authorization?.state ?? null,
         desktop_version: runtime.desktop_version,
         bundle_sha256: runtime.assets.bundle.sha256
       }
@@ -9668,8 +9443,8 @@ async function runOfficialAppServerProtocolSmoke(options = {}) {
   }
 }
 function buildSmokeEnvironment(layout, source, official) {
-  const homeDrive = path14.parse(layout.home).root.replace(/[\\/]+$/u, "");
-  const homePath = layout.home.slice(path14.parse(layout.home).root.length - 1);
+  const homeDrive = path13.parse(layout.home).root.replace(/[\\/]+$/u, "");
+  const homePath = layout.home.slice(path13.parse(layout.home).root.length - 1);
   const retained = {};
   for (const key of [
     "PATH",
@@ -9741,15 +9516,15 @@ function safeErrorCode2(error2) {
   return String(code).replace(/\b(authorization|api[_-]?key|access[_-]?token|project[_-]?token)\b\s*[:=]\s*(?:Bearer\s+)?[^\s,;]+/giu, "$1=<redacted>").replace(/\bBearer\s+[^\s,;]+/giu, "Bearer <redacted>").replace(/\b[A-Za-z]:[\\/][^\r\n\t"'<>|]*/gu, "<redacted-path>").replace(/\\\\[^\\/\s]+[\\/][^\r\n\t"'<>|]*/gu, "<redacted-path>").slice(0, 200);
 }
 function assertInside(root, candidate) {
-  const relative = path14.relative(path14.resolve(root), path14.resolve(candidate));
-  if (relative === "" || relative === ".." || relative.startsWith(`..${path14.sep}`) || path14.isAbsolute(relative)) {
+  const relative = path13.relative(path13.resolve(root), path13.resolve(candidate));
+  if (relative === "" || relative === ".." || relative.startsWith(`..${path13.sep}`) || path13.isAbsolute(relative)) {
     throw new Error("protocol_smoke_path_outside_run_root");
   }
 }
 
 // tools/cost-lab/startplan-reader.mjs
-import { lstat as lstat4 } from "node:fs/promises";
-import path15 from "node:path";
+import { lstat as lstat3 } from "node:fs/promises";
+import path14 from "node:path";
 import { pathToFileURL as pathToFileURL4 } from "node:url";
 
 // tools/cost-lab/startplan-billing.mjs
@@ -10226,7 +10001,7 @@ function isRecord4(value) {
 }
 async function fileMetadata(filePath) {
   try {
-    const info = await lstat4(filePath);
+    const info = await lstat3(filePath);
     return {
       exists: true,
       type: info.isFile() ? "file" : info.isDirectory() ? "directory" : "other",
@@ -10281,8 +10056,8 @@ function assertOfficialRequest(input, expectedAppVersion) {
   };
 }
 async function defaultOfficialDependencies(projectRoot) {
-  const authFile = path15.join(projectRoot, "dist", "src", "runtime", "start-plan-production-auth.js");
-  const adapterFile = path15.join(projectRoot, "dist", "src", "adapters", "official-host-adapter.js");
+  const authFile = path14.join(projectRoot, "dist", "src", "runtime", "start-plan-production-auth.js");
+  const adapterFile = path14.join(projectRoot, "dist", "src", "adapters", "official-host-adapter.js");
   let authModule;
   let adapterModule;
   try {
@@ -10323,15 +10098,15 @@ async function readOfficialStartPlanBilling(options = {}) {
   if (!options.officialHostWorker) {
     throw readerError("startplan_official_host_worker_required", "The official Host Worker is required.");
   }
-  const projectRoot = path15.resolve(options.projectRoot ?? process.cwd());
-  const dataBaseDir = path15.resolve(options.dataBaseDir);
-  const officialHostWorker = path15.resolve(options.officialHostWorker);
+  const projectRoot = path14.resolve(options.projectRoot ?? process.cwd());
+  const dataBaseDir = path14.resolve(options.dataBaseDir);
+  const officialHostWorker = path14.resolve(options.officialHostWorker);
   const workerUrl = pathToFileURL4(officialHostWorker);
   const now = typeof options.now === "function" ? options.now : () => Date.now();
   const timeoutMs = options.timeoutMs ?? 2e4;
   const dependencies = options.officialDependencies ?? await defaultOfficialDependencies(projectRoot);
   const transportFetch = options.transportFetch ?? globalThis.fetch;
-  const credentialFile = path15.join(dataBaseDir, ".zcode", "v2", "credentials.json");
+  const credentialFile = path14.join(dataBaseDir, ".zcode", "v2", "credentials.json");
   const keyringLockFile = `${credentialFile}.keyring.lock`;
   const operationController = new AbortController();
   const abortFromParent = () => operationController.abort(options.signal?.reason);
@@ -10487,7 +10262,7 @@ async function readOfficialStartPlanBilling(options = {}) {
         schema_version: 1,
         official_runtime: {
           product_version: productVersion,
-          worker_module: path15.relative(projectRoot, officialHostWorker).replaceAll("\\", "/")
+          worker_module: path14.relative(projectRoot, officialHostWorker).replaceAll("\\", "/")
         },
         authentication: {
           resolver: "createOfficialStartPlanAuthenticationResolver",
@@ -10511,25 +10286,25 @@ async function readOfficialStartPlanBilling(options = {}) {
 // tools/cost-lab/web-server.mjs
 import { randomBytes, randomUUID as randomUUID6 } from "node:crypto";
 import { createReadStream as createReadStream3 } from "node:fs";
-import { mkdir as mkdir3, readFile as readFile6 } from "node:fs/promises";
+import { mkdir as mkdir3, readFile as readFile5 } from "node:fs/promises";
 import http from "node:http";
-import path18 from "node:path";
+import path17 from "node:path";
 import { fileURLToPath as fileURLToPath7, pathToFileURL as pathToFileURL6 } from "node:url";
 
 // tools/cost-lab/coding-plan-billing.mjs
-import { access as access4, mkdir as mkdir2, readFile as readFile4, rename, rm as rm2, writeFile } from "node:fs/promises";
+import { access as access4, mkdir as mkdir2, readFile as readFile3, rename, rm as rm2, writeFile } from "node:fs/promises";
 import { randomUUID as randomUUID4 } from "node:crypto";
-import path16 from "node:path";
+import path15 from "node:path";
 import { fileURLToPath as fileURLToPath6, pathToFileURL as pathToFileURL5 } from "node:url";
 var SNAPSHOT_SCHEMA_VERSION = 1;
 var RECONCILIATION_SCHEMA_VERSION = 3;
 var DEFAULT_PROVIDER_ID = "account:bigmodel-individual-coding-plan";
 var DEFAULT_TIME_ZONE = "Asia/Shanghai";
 var DEFAULT_TIMEOUT_MS2 = 45e3;
-var SCRIPT_ROOT3 = path16.dirname(fileURLToPath6(import.meta.url));
-var PROJECT_ROOT3 = path16.resolve(SCRIPT_ROOT3, "..", "..");
-var RUN_ROOT = path16.join(PROJECT_ROOT3, ".run");
-var DEFAULT_OUTPUT_ROOT = path16.join(PROJECT_ROOT3, ".run", "cost-lab-billing");
+var SCRIPT_ROOT3 = path15.dirname(fileURLToPath6(import.meta.url));
+var PROJECT_ROOT3 = path15.resolve(SCRIPT_ROOT3, "..", "..");
+var RUN_ROOT = path15.join(PROJECT_ROOT3, ".run");
+var DEFAULT_OUTPUT_ROOT = path15.join(PROJECT_ROOT3, ".run", "cost-lab-billing");
 var DEFAULT_RUNTIME_PATH = OFFICIAL_RUNTIME_PATH;
 var MODEL_ARRAY_FIELDS = Object.freeze([
   "cachedInputTokensUsage",
@@ -10602,7 +10377,7 @@ function parseArgs(argv) {
       options.dataRoot = requiredValue(rest, index, arg);
       index += 1;
     } else if (arg === "--out") {
-      options.out = path16.resolve(requiredValue(rest, index, arg));
+      options.out = path15.resolve(requiredValue(rest, index, arg));
       index += 1;
     } else if (arg === "--timeout-ms") {
       const value = Number(requiredValue(rest, index, arg));
@@ -10612,13 +10387,13 @@ function parseArgs(argv) {
       options.timeoutMs = value;
       index += 1;
     } else if (arg === "--before") {
-      options.before = path16.resolve(requiredValue(rest, index, arg));
+      options.before = path15.resolve(requiredValue(rest, index, arg));
       index += 1;
     } else if (arg === "--after") {
-      options.after = path16.resolve(requiredValue(rest, index, arg));
+      options.after = path15.resolve(requiredValue(rest, index, arg));
       index += 1;
     } else if (arg === "--usage") {
-      options.usage = path16.resolve(requiredValue(rest, index, arg));
+      options.usage = path15.resolve(requiredValue(rest, index, arg));
       index += 1;
     } else if (arg === "--hour") {
       const value = Number(requiredValue(rest, index, arg));
@@ -11097,11 +10872,11 @@ function reconcileBillingSnapshots(before, after, rawUsage, options = {}) {
   };
 }
 async function atomicWriteJson(filePath, value) {
-  const directory = path16.dirname(filePath);
+  const directory = path15.dirname(filePath);
   await mkdir2(directory, { recursive: true });
-  const temporary = path16.join(
+  const temporary = path15.join(
     directory,
-    `.${path16.basename(filePath)}.${process.pid}.${randomUUID4()}.tmp`
+    `.${path15.basename(filePath)}.${process.pid}.${randomUUID4()}.tmp`
   );
   try {
     await writeFile(temporary, `${JSON.stringify(value, null, 2)}
@@ -11116,8 +10891,8 @@ async function atomicWriteJson(filePath, value) {
   }
 }
 function assertProjectRunOutput(filePath) {
-  const relative = path16.relative(RUN_ROOT, path16.resolve(filePath));
-  if (relative === "" || relative.startsWith(`..${path16.sep}`) || relative === ".." || path16.isAbsolute(relative)) {
+  const relative = path15.relative(RUN_ROOT, path15.resolve(filePath));
+  if (relative === "" || relative.startsWith(`..${path15.sep}`) || relative === ".." || path15.isAbsolute(relative)) {
     throw new Error("output_must_be_inside_project_run_root");
   }
 }
@@ -11125,7 +10900,7 @@ function timestampSlug(date2) {
   return date2.toISOString().replaceAll(":", "").replaceAll(".", "").replace("T", "-").replace("Z", "Z");
 }
 function defaultOutputPath(prefix, now) {
-  return path16.join(DEFAULT_OUTPUT_ROOT, `${prefix}-${timestampSlug(now)}.json`);
+  return path15.join(DEFAULT_OUTPUT_ROOT, `${prefix}-${timestampSlug(now)}.json`);
 }
 function sanitizeErrorMessage(error2) {
   const raw = error2 instanceof Error ? error2.message : String(error2);
@@ -11224,15 +10999,15 @@ async function captureSnapshot(options, dependencies = {}) {
 }
 async function readJson(filePath) {
   try {
-    return JSON.parse(await readFile4(filePath, "utf8"));
+    return JSON.parse(await readFile3(filePath, "utf8"));
   } catch (error2) {
-    if (error2 instanceof SyntaxError) throw new Error(`json_invalid:${path16.basename(filePath)}`);
+    if (error2 instanceof SyntaxError) throw new Error(`json_invalid:${path15.basename(filePath)}`);
     throw error2;
   }
 }
 async function run(argv, dependencies = {}) {
   const options = parseArgs(argv);
-  const stdout = dependencies.stdout ?? ((text2) => process.stdout.write(text2));
+  const stdout = dependencies.stdout ?? ((text) => process.stdout.write(text));
   const now = dependencies.now?.() ?? /* @__PURE__ */ new Date();
   let result;
   let prefix;
@@ -11256,7 +11031,7 @@ async function run(argv, dependencies = {}) {
   await atomicWriteJson(outputPath, result);
   const commandResult = {
     ok: true,
-    output_path: path16.relative(PROJECT_ROOT3, outputPath).replaceAll(path16.sep, "/"),
+    output_path: path15.relative(PROJECT_ROOT3, outputPath).replaceAll(path15.sep, "/"),
     data: result
   };
   if (options.json) {
@@ -11277,14 +11052,14 @@ async function main() {
     process.exitCode = 1;
   }
 }
-if (process.argv[1] && import.meta.url === pathToFileURL5(path16.resolve(process.argv[1])).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL5(path15.resolve(process.argv[1])).href) {
   await main();
 }
 
 // tools/cost-lab/startplan-web.mjs
 import { createHash as createHash8, randomUUID as randomUUID5 } from "node:crypto";
-import { readFile as readFile5 } from "node:fs/promises";
-import path17 from "node:path";
+import { readFile as readFile4 } from "node:fs/promises";
+import path16 from "node:path";
 var DEFAULT_COOLDOWN_MS = 5e3;
 var DEFAULT_HISTORY_LIMIT = 25;
 var MAX_HISTORY_ITEMS = 100;
@@ -11359,7 +11134,7 @@ function publicItem(item, nowMs) {
 function createStartPlanBillingService(options = {}) {
   if (!options.historyPath) throw new Error("startplan_history_path_required");
   if (typeof options.readBilling !== "function") throw new Error("startplan_reader_required");
-  const historyPath = path17.resolve(options.historyPath);
+  const historyPath = path16.resolve(options.historyPath);
   const now = options.now ?? (() => /* @__PURE__ */ new Date());
   const createId = options.createId ?? randomUUID5;
   const cooldownMs = options.cooldownMs ?? DEFAULT_COOLDOWN_MS;
@@ -11375,7 +11150,7 @@ function createStartPlanBillingService(options = {}) {
   async function ensureLoaded() {
     if (state.loaded) return;
     try {
-      const parsed = JSON.parse(await readFile5(historyPath, "utf8"));
+      const parsed = JSON.parse(await readFile4(historyPath, "utf8"));
       if (parsed?.schema_version !== STARTPLAN_HISTORY_SCHEMA_VERSION || !Array.isArray(parsed.items)) {
         throw new Error("startplan_history_schema_invalid");
       }
@@ -11548,10 +11323,10 @@ function createStartPlanBillingService(options = {}) {
 }
 
 // tools/cost-lab/web-server.mjs
-var SCRIPT_ROOT4 = path18.dirname(fileURLToPath7(import.meta.url));
-var PROJECT_ROOT4 = path18.resolve(SCRIPT_ROOT4, "..", "..");
-var DEFAULT_HISTORY_PATH = path18.join(PROJECT_ROOT4, ".run", "cost-lab-web", "history.json");
-var DEFAULT_STARTPLAN_HISTORY_PATH = path18.join(PROJECT_ROOT4, ".run", "cost-lab-web", "startplan-history.json");
+var SCRIPT_ROOT4 = path17.dirname(fileURLToPath7(import.meta.url));
+var PROJECT_ROOT4 = path17.resolve(SCRIPT_ROOT4, "..", "..");
+var DEFAULT_HISTORY_PATH = path17.join(PROJECT_ROOT4, ".run", "cost-lab-web", "history.json");
+var DEFAULT_STARTPLAN_HISTORY_PATH = path17.join(PROJECT_ROOT4, ".run", "cost-lab-web", "startplan-history.json");
 var LOOPBACK_HOST = "127.0.0.1";
 var CONFIRMATION_PHRASE = "START REAL CODING PLAN VERIFICATION";
 var MAX_JSON_BYTES = 64 * 1024;
@@ -11568,13 +11343,13 @@ var STATIC_FILES = Object.freeze({
   "/favicon.svg": Object.freeze({ file: "favicon.svg", type: "image/svg+xml" })
 });
 function createCostLabWebServer(options = {}) {
-  const projectRoot = path18.resolve(options.projectRoot ?? PROJECT_ROOT4);
-  const uiRoot = path18.join(SCRIPT_ROOT4, "web");
+  const projectRoot = path17.resolve(options.projectRoot ?? PROJECT_ROOT4);
+  const uiRoot = path17.join(SCRIPT_ROOT4, "web");
   const apiMountPath = options.apiMountPath ? normalizeApiMountPath(options.apiMountPath) : null;
-  const evidenceRoot = path18.resolve(options.evidenceRoot ?? path18.join(projectRoot, ".run"));
-  const historyPath = path18.resolve(options.historyPath ?? path18.join(projectRoot, ".run", "cost-lab-web", "history.json"));
-  const startPlanHistoryPath = path18.resolve(
-    options.startPlanHistoryPath ?? path18.join(projectRoot, ".run", "cost-lab-web", "startplan-history.json")
+  const evidenceRoot = path17.resolve(options.evidenceRoot ?? path17.join(projectRoot, ".run"));
+  const historyPath = path17.resolve(options.historyPath ?? path17.join(projectRoot, ".run", "cost-lab-web", "history.json"));
+  const startPlanHistoryPath = path17.resolve(
+    options.startPlanHistoryPath ?? path17.join(projectRoot, ".run", "cost-lab-web", "startplan-history.json")
   );
   assertInside2(evidenceRoot, historyPath);
   assertInside2(evidenceRoot, startPlanHistoryPath);
@@ -11594,8 +11369,8 @@ function createCostLabWebServer(options = {}) {
       6e4
     ]
   };
-  const officialHostWorker = path18.resolve(
-    options.officialHostWorker ?? path18.join(
+  const officialHostWorker = path17.resolve(
+    options.officialHostWorker ?? path17.join(
       projectRoot,
       "plugins",
       "codex-zcode-bridge",
@@ -11657,7 +11432,7 @@ function createCostLabWebServer(options = {}) {
   state.server = server;
   async function start() {
     if (state.server.listening) return publicAddress();
-    await mkdir3(path18.dirname(historyPath), { recursive: true });
+    await mkdir3(path17.dirname(historyPath), { recursive: true });
     await ensureHistoryLoaded();
     await new Promise((resolve, reject) => {
       const onError = (error2) => {
@@ -12160,7 +11935,7 @@ function createCostLabWebServer(options = {}) {
   async function ensureHistoryLoaded() {
     if (state.historyLoaded) return;
     try {
-      const parsed = JSON.parse(await readFile6(historyPath, "utf8"));
+      const parsed = JSON.parse(await readFile5(historyPath, "utf8"));
       if (!parsed || parsed.schema_version !== 1 || !Array.isArray(parsed.items)) {
         throw new Error("cost_lab_history_schema_invalid");
       }
@@ -12223,7 +11998,7 @@ function normalizeApiMountPath(value) {
   return value;
 }
 async function serveStatic(root, definition, method, response) {
-  const filePath = path18.join(root, definition.file);
+  const filePath = path17.join(root, definition.file);
   assertInside2(root, filePath);
   response.writeHead(200, {
     "Content-Type": definition.type,
@@ -12259,14 +12034,14 @@ function applySecurityHeaders(response) {
   response.setHeader("X-Frame-Options", "DENY");
 }
 function sendJson(response, status, payload, extraHeaders = {}) {
-  const text2 = `${JSON.stringify(payload)}
+  const text = `${JSON.stringify(payload)}
 `;
   response.writeHead(status, {
     "Content-Type": "application/json; charset=utf-8",
     "Cache-Control": "no-store",
     ...extraHeaders
   });
-  response.end(text2);
+  response.end(text);
 }
 async function readJsonBody(request) {
   if (!/^application\/json(?:;|$)/iu.test(request.headers["content-type"] ?? "")) {
@@ -12356,8 +12131,8 @@ function validHistoryRecord(value) {
   return value && typeof value === "object" && typeof value.id === "string" && /^[0-9a-f-]{36}$/u.test(value.id) && typeof value.status === "string";
 }
 function assertInside2(root, candidate) {
-  const relative = path18.relative(path18.resolve(root), path18.resolve(candidate));
-  if (relative === "" || relative.startsWith(`..${path18.sep}`) || relative === ".." || path18.isAbsolute(relative)) {
+  const relative = path17.relative(path17.resolve(root), path17.resolve(candidate));
+  if (relative === "" || relative.startsWith(`..${path17.sep}`) || relative === ".." || path17.isAbsolute(relative)) {
     throw new Error("cost_lab_path_outside_allowed_root");
   }
 }
@@ -12419,7 +12194,7 @@ function withTimeout2(promise, milliseconds, code) {
   ]).finally(() => clearTimeout(timer));
 }
 function loadOptionalVerificationRunner() {
-  const fixedModule = path18.join(SCRIPT_ROOT4, "production-verification-runner.mjs");
+  const fixedModule = path17.join(SCRIPT_ROOT4, "production-verification-runner.mjs");
   return async (input) => {
     let module;
     try {
@@ -12458,7 +12233,7 @@ async function main2() {
   process.once("SIGINT", shutdown);
   process.once("SIGTERM", shutdown);
 }
-if (process.argv[1] && import.meta.url === pathToFileURL6(path18.resolve(process.argv[1])).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL6(path17.resolve(process.argv[1])).href) {
   await main2();
 }
 
@@ -12470,7 +12245,7 @@ function createUnifiedCostLabApplication(options) {
     ...input,
     projectRoot: layout.costLabProjectRoot,
     hostModulePath: layout.officialHostModule,
-    runRootParent: path19.join(options.dataRoot, ".run"),
+    runRootParent: path18.join(options.dataRoot, ".run"),
     inspectRuntime
   });
   const readStartPlanBilling = async ({ signal } = {}) => {
@@ -12492,9 +12267,9 @@ function createUnifiedCostLabApplication(options) {
   };
   return createCostLabWebServer({
     projectRoot: layout.costLabProjectRoot,
-    evidenceRoot: path19.join(options.dataRoot, ".run"),
-    historyPath: path19.join(options.dataRoot, ".run", "cost-lab-web", "history.json"),
-    startPlanHistoryPath: path19.join(options.dataRoot, ".run", "cost-lab-web", "startplan-history.json"),
+    evidenceRoot: path18.join(options.dataRoot, ".run"),
+    historyPath: path18.join(options.dataRoot, ".run", "cost-lab-web", "history.json"),
+    startPlanHistoryPath: path18.join(options.dataRoot, ".run", "cost-lab-web", "startplan-history.json"),
     apiMountPath: "/api/cost-lab",
     officialHostWorker: layout.officialHostWorker,
     inspectEnvironment: (input = {}) => inspectCostLabEnvironment({ ...input, inspectRuntime }),
@@ -12506,13 +12281,13 @@ function resolveConsoleProjectRoot(moduleUrl) {
   return consoleLayout(moduleUrl).costLabProjectRoot;
 }
 function consoleLayout(moduleUrl) {
-  const moduleDirectory = path19.dirname(fileURLToPath8(moduleUrl));
-  const bundleRoot = path19.basename(moduleDirectory) === "dist" && existsSync6(path19.join(path19.dirname(moduleDirectory), "worker", "worker-main.mjs")) ? path19.dirname(moduleDirectory) : null;
+  const moduleDirectory = path18.dirname(fileURLToPath8(moduleUrl));
+  const bundleRoot = path18.basename(moduleDirectory) === "dist" && existsSync6(path18.join(path18.dirname(moduleDirectory), "worker", "worker-main.mjs")) ? path18.dirname(moduleDirectory) : null;
   if (bundleRoot) {
     return {
       costLabProjectRoot: bundleRoot,
-      officialHostWorker: path19.join(bundleRoot, "worker", "worker-main.mjs"),
-      officialHostModule: path19.join(
+      officialHostWorker: path18.join(bundleRoot, "worker", "worker-main.mjs"),
+      officialHostModule: path18.join(
         bundleRoot,
         "worker",
         "vendor",
@@ -12523,11 +12298,11 @@ function consoleLayout(moduleUrl) {
     };
   }
   const repositoryRoot = findRepositoryRoot(moduleDirectory);
-  const pluginRoot = path19.join(repositoryRoot, "plugins", "codex-zcode-bridge");
+  const pluginRoot = path18.join(repositoryRoot, "plugins", "codex-zcode-bridge");
   return {
     costLabProjectRoot: repositoryRoot,
-    officialHostWorker: path19.join(pluginRoot, "worker", "worker-main.mjs"),
-    officialHostModule: path19.join(
+    officialHostWorker: path18.join(pluginRoot, "worker", "worker-main.mjs"),
+    officialHostModule: path18.join(
       pluginRoot,
       "worker",
       "vendor",
@@ -12538,12 +12313,12 @@ function consoleLayout(moduleUrl) {
   };
 }
 function findRepositoryRoot(start) {
-  let current = path19.resolve(start);
+  let current = path18.resolve(start);
   for (; ; ) {
-    if (existsSync6(path19.join(current, "plugins", "codex-zcode-bridge", "worker", "worker-main.mjs"))) {
+    if (existsSync6(path18.join(current, "plugins", "codex-zcode-bridge", "worker", "worker-main.mjs"))) {
       return current;
     }
-    const parent = path19.dirname(current);
+    const parent = path18.dirname(current);
     if (parent === current) break;
     current = parent;
   }
@@ -12561,7 +12336,7 @@ async function inspectInstalledRuntime(input = {}) {
     const file = runtime[`${name}_path`];
     if (root && typeof file === "string") {
       assets[name] = {
-        relative_path: path19.relative(root, file).split(path19.sep).join("/"),
+        relative_path: path18.relative(root, file).split(path18.sep).join("/"),
         bytes: runtime[`${name}_bytes`],
         sha256: runtime[`${name}_sha256`]
       };
@@ -12574,7 +12349,6 @@ async function inspectInstalledRuntime(input = {}) {
     runtime_status: runtime.status,
     installation_safety: runtime.installation_safety ?? "OFFICIAL_INSTALLATION_INCOMPLETE",
     installation_fingerprint: runtime.installation_fingerprint ?? null,
-    experimental_authorization: runtime.experimental_authorization ?? null,
     discount_status: runtime.discount_capability,
     desktop_version: runtime.desktop_version,
     desktop_app_version: runtime.desktop_app_version ?? null,
@@ -12603,7 +12377,7 @@ async function inspectInstalledRuntime(input = {}) {
 // src/web/runtime-compatibility.ts
 import { createHash as createHash10, randomUUID as randomUUID7 } from "node:crypto";
 import { existsSync as existsSync7, lstatSync as lstatSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync5, renameSync, writeFileSync } from "node:fs";
-import path20 from "node:path";
+import path19 from "node:path";
 var STORE_SCHEMA_VERSION = 1;
 var EVIDENCE_SCHEMA_VERSION = 1;
 var MAX_EVIDENCE_RECORDS = 200;
@@ -12624,8 +12398,8 @@ var RuntimeCompatibilityService = class {
   #now;
   #createId;
   constructor(options) {
-    this.#historyPath = path20.resolve(
-      options.historyPath ?? path20.join(options.projectRoot, ".run", "bridge-console", "runtime-compatibility.json")
+    this.#historyPath = path19.resolve(
+      options.historyPath ?? path19.join(options.projectRoot, ".run", "bridge-console", "runtime-compatibility.json")
     );
     this.#inspectEnvironment = options.inspectEnvironment;
     this.#runProtocolProbe = options.runProtocolProbe;
@@ -12677,15 +12451,6 @@ var RuntimeCompatibilityService = class {
       throw new RuntimeCompatibilityError(
         "RUNTIME_UNSAFE",
         "Protocol probing is unavailable until the installation passes the safety gate.",
-        403
-      );
-    }
-    const runtimeStatus = installation.runtime_status;
-    const authorizationState = installation.experimental_authorization.state;
-    if (runtimeStatus !== "OFFICIAL_RUNTIME_VERIFIED" && !(runtimeStatus === "OFFICIAL_RUNTIME_EXPERIMENTAL" && authorizationState === "authorized")) {
-      throw new RuntimeCompatibilityError(
-        "RUNTIME_PROBE_AUTHORIZATION_REQUIRED",
-        "A verified manifest match or exact-fingerprint experimental authorization is required.",
         403
       );
     }
@@ -12836,7 +12601,7 @@ var RuntimeCompatibilityService = class {
     }
   }
   #writeStore(store) {
-    const parent = path20.dirname(this.#historyPath);
+    const parent = path19.dirname(this.#historyPath);
     if (!existsSync7(parent)) mkdirSync2(parent, { recursive: true });
     const temporary = `${this.#historyPath}.new-${this.#createId()}`;
     writeFileSync(temporary, `${JSON.stringify(store, null, 2)}
@@ -13356,7 +13121,7 @@ async function ensureCostLab(){if(!state.costLoaded){state.costLoaded=true;void 
 async function loadCostLab(){try{const [session,environment,history]=await Promise.all([loadCostSession(),costApi("environment"),costApi("history").catch(()=>({items:[]}))]);state.costSession=session;state.costHistory=history.items||[];renderCostEnvironment(environment);await Promise.all([loadStartPlan(),loadCostHistory()]);const latest=state.costHistory[0];if(latest)$("#cost-ratio").textContent=formatRatio(latest)}catch(error){toast(errorMessage(error),true)}}
 function renderCostEnvironment(environment){const zcode=environment.zcode||{};$("#cost-runtime").textContent=zcode.runtime_status||"UNKNOWN";$("#cost-runtime-detail").textContent=(zcode.version||"unknown")+" / "+(zcode.installation_safety||"UNKNOWN");$("#cost-discount").textContent=zcode.discount_status||"UNKNOWN";$("#cost-billing").textContent=(environment.billing_reader&&environment.billing_reader.status)||"UNKNOWN"}
 async function ensureRuntime(){if(state.runtimeLoaded)return;state.runtimeLoaded=true;$("#runtime-state").textContent="";try{const runtime=await taskApi("/api/runtime");state.runtime=runtime;renderRuntime(runtime);$("#dash-runtime").textContent=runtime.installation&&runtime.installation.manifest_status||"UNKNOWN";$("#dash-runtime-note").textContent=runtime.fingerprint?String(runtime.fingerprint).slice(0,16)+"…":"UNAVAILABLE"}catch(error){state.runtimeLoaded=false;$("#runtime-state").textContent=errorMessage(error);toast(errorMessage(error),true)}}
-function renderRuntime(runtime){const installation=runtime.installation||{},assets=installation.assets||{},caps=runtime.capabilities||{};$("#runtime-safety").textContent=installation.installation_safety||"UNKNOWN";$("#runtime-manifest").textContent=installation.manifest_status||"UNKNOWN";$("#runtime-protocol").textContent=(caps.protocol&&caps.protocol.status)||"NOT_RUN";$("#runtime-fingerprint").textContent=runtime.fingerprint?shortHash(runtime.fingerprint):"UNAVAILABLE";$("#runtime-version").textContent=(installation.desktop_version||"unknown")+" / Node "+(installation.node_version||"unknown");$("#runtime-authorization").textContent=(installation.experimental_authorization&&installation.experimental_authorization.state||"not_configured")+" / "+((installation.experimental_authorization&&installation.experimental_authorization.scopes)||[]).join(", ");const change=$("#runtime-change");change.hidden=!runtime.runtime_changed;change.textContent=runtime.runtime_changed?t("runtimeChanged")+" "+runtime.changed_assets.join(", "):"";const facts=$("#runtime-facts");facts.replaceChildren();const rows=[["Desktop version",installation.desktop_version],["App version",installation.desktop_app_version],["Build commit",installation.desktop_build_commit_id],["Node",installation.node_version],["Fingerprint",runtime.fingerprint],["Bundle SHA-256",assets.bundle&&assets.bundle.sha256],["Runtime host SHA-256",assets.runtime_host&&assets.runtime_host.sha256],["Builtin config SHA-256",assets.builtin_provider_config&&assets.builtin_provider_config.sha256],["Desktop executable SHA-256",assets.desktop_executable&&assets.desktop_executable.sha256],["Desktop archive SHA-256",assets.desktop_archive&&assets.desktop_archive.sha256],["Model requests on inspection","0"],["Production manifest modified",t("no")]];for(const row of rows){const tr=document.createElement("tr");tr.append(element("td","",row[0]),element("td","mono",row[1]||"UNKNOWN"));facts.append(tr)}const capBody=$("#runtime-capabilities");capBody.replaceChildren();for(const [name,value] of Object.entries(caps)){const tr=document.createElement("tr");const statusCell=document.createElement("td");statusCell.append(tag(value.status));tr.append(element("td","mono",name),statusCell,element("td","",value.source||""),element("td","",value.limitation||""));capBody.append(tr)}const evidence=$("#runtime-evidence");evidence.replaceChildren();if(!runtime.evidence||!runtime.evidence.length){evidence.append(empty(t("noEvidence")))}else{for(const record of runtime.evidence.slice(0,12)){const row=element("div","history-row");for(const pair of [["Type",record.probe_type],["Result",record.result],["Scope",record.probe_scope],["Captured",record.captured_at],["Digest",shortHash(record.evidence_digest)]]){const cell=document.createElement("div");cell.append(element("small","",pair[0]),element("strong","",pair[1]));row.append(cell)}evidence.append(row)}}const authorization=installation.experimental_authorization||{};const allowed=installation.installation_safety==="OFFICIAL_INSTALLATION_SAFE"&&(installation.runtime_status==="OFFICIAL_RUNTIME_VERIFIED"||(installation.runtime_status==="OFFICIAL_RUNTIME_EXPERIMENTAL"&&authorization.state==="authorized"));$("#run-protocol-probe").disabled=!allowed}
+function renderRuntime(runtime){const installation=runtime.installation||{},assets=installation.assets||{},caps=runtime.capabilities||{};$("#runtime-safety").textContent=installation.installation_safety||"UNKNOWN";$("#runtime-manifest").textContent=installation.manifest_status||"UNKNOWN";$("#runtime-protocol").textContent=(caps.protocol&&caps.protocol.status)||"NOT_RUN";$("#runtime-fingerprint").textContent=runtime.fingerprint?shortHash(runtime.fingerprint):"UNAVAILABLE";$("#runtime-version").textContent=(installation.desktop_version||"unknown")+" / Node "+(installation.node_version||"unknown");$("#runtime-authorization").textContent=(installation.experimental_authorization&&installation.experimental_authorization.state||"not_configured")+" / "+((installation.experimental_authorization&&installation.experimental_authorization.scopes)||[]).join(", ");const change=$("#runtime-change");change.hidden=!runtime.runtime_changed;change.textContent=runtime.runtime_changed?t("runtimeChanged")+" "+runtime.changed_assets.join(", "):"";const facts=$("#runtime-facts");facts.replaceChildren();const rows=[["Desktop version",installation.desktop_version],["App version",installation.desktop_app_version],["Build commit",installation.desktop_build_commit_id],["Node",installation.node_version],["Fingerprint",runtime.fingerprint],["Bundle SHA-256",assets.bundle&&assets.bundle.sha256],["Runtime host SHA-256",assets.runtime_host&&assets.runtime_host.sha256],["Builtin config SHA-256",assets.builtin_provider_config&&assets.builtin_provider_config.sha256],["Desktop executable SHA-256",assets.desktop_executable&&assets.desktop_executable.sha256],["Desktop archive SHA-256",assets.desktop_archive&&assets.desktop_archive.sha256],["Model requests on inspection","0"],["Production manifest modified",t("no")]];for(const row of rows){const tr=document.createElement("tr");tr.append(element("td","",row[0]),element("td","mono",row[1]||"UNKNOWN"));facts.append(tr)}const capBody=$("#runtime-capabilities");capBody.replaceChildren();for(const [name,value] of Object.entries(caps)){const tr=document.createElement("tr");const statusCell=document.createElement("td");statusCell.append(tag(value.status));tr.append(element("td","mono",name),statusCell,element("td","",value.source||""),element("td","",value.limitation||""));capBody.append(tr)}const evidence=$("#runtime-evidence");evidence.replaceChildren();if(!runtime.evidence||!runtime.evidence.length){evidence.append(empty(t("noEvidence")))}else{for(const record of runtime.evidence.slice(0,12)){const row=element("div","history-row");for(const pair of [["Type",record.probe_type],["Result",record.result],["Scope",record.probe_scope],["Captured",record.captured_at],["Digest",shortHash(record.evidence_digest)]]){const cell=document.createElement("div");cell.append(element("small","",pair[0]),element("strong","",pair[1]));row.append(cell)}evidence.append(row)}}$("#run-protocol-probe").disabled=installation.installation_safety!=="OFFICIAL_INSTALLATION_SAFE"}
 async function runRuntimeCheck(probe){const button=probe?$("#run-protocol-probe"):$("#run-static-check");button.disabled=true;$("#runtime-state").textContent=probe?t("runProtocolProbe")+"...":t("runStaticCheck")+"...";try{const runtime=await taskApi(probe?"/api/runtime/protocol-probe":"/api/runtime/check",{method:"POST",body:"{}",csrf:true,origin:true});state.runtime=runtime;renderRuntime(runtime);$("#runtime-state").textContent=probe?t("probeCompleted"):t("staticCompleted");toast(probe?t("probeCompleted"):t("staticCompleted"))}catch(error){$("#runtime-state").textContent=errorCode(error)==="RUNTIME_PROBE_AUTHORIZATION_REQUIRED"||errorCode(error)==="RUNTIME_UNSAFE"?t("probeBlocked"):errorMessage(error);toast($("#runtime-state").textContent,true)}finally{if(!probe)button.disabled=false;else renderRuntime(state.runtime||{})}}
 async function captureBilling(){const button=$("#capture-billing");button.disabled=true;$("#billing-state").textContent="Reading official snapshot...";try{const snapshot=await costApi("billing/snapshot",{method:"POST",body:"{}",csrf:true});renderBilling(snapshot);$("#billing-state").textContent=t("snapshotCaptured")+" "+new Date().toLocaleString();toast(t("snapshotCaptured"))}catch(error){$("#billing-state").textContent=t("snapshotFailed");toast(errorMessage(error),true)}finally{button.disabled=false}}
 function renderBilling(snapshot){const target=$("#billing-view");target.replaceChildren();const rows=[];if(Array.isArray(snapshot.models)){for(const model of snapshot.models){for(const hour of model.hours||[]){if(hour.total_tokens||hour.total_credits)rows.push([hour.bucket,hour.total_tokens,hour.total_credits,hour.cached_input_tokens,hour.output_tokens])}}}if(!rows.length){target.append(empty("No attributed Coding Plan ledger rows were returned."));return}const wrap=element("div","table-wrap"),table=document.createElement("table"),head=document.createElement("thead"),body=document.createElement("tbody");const hr=document.createElement("tr");for(const label of ["Hour","Tokens","Credits","Cached input","Output"])hr.append(element("th","",label));head.append(hr);for(const row of rows){const tr=document.createElement("tr");for(const value of row)tr.append(element("td","mono",value));body.append(tr)}table.append(head,body);wrap.append(table);target.append(wrap)}
@@ -13804,7 +13569,7 @@ import {
   unlinkSync,
   writeSync
 } from "node:fs";
-import path21 from "node:path";
+import path20 from "node:path";
 var TASK_CONSOLE_DISCOVERY_FILE = "task-console.json";
 var TASK_CONSOLE_PROTOCOL_VERSION = 1;
 var DISCOVERY_LIMIT_BYTES = 16 * 1024;
@@ -13833,7 +13598,7 @@ function recordDigest(record3) {
 function discoveryRoot(dataRoot) {
   let root;
   try {
-    root = path21.resolve(dataRoot);
+    root = path20.resolve(dataRoot);
     const stat4 = lstatSync3(root);
     if (!stat4.isDirectory() || stat4.isSymbolicLink()) throw new Error("not_plain_directory");
   } catch {
@@ -13855,9 +13620,9 @@ function validatedEndpoint(originValue, urlValue, port) {
   }
 }
 function taskConsoleDiscoveryPath(dataRoot) {
-  return path21.join(discoveryRoot(dataRoot), TASK_CONSOLE_DISCOVERY_FILE);
+  return path20.join(discoveryRoot(dataRoot), TASK_CONSOLE_DISCOVERY_FILE);
 }
-function parseRecord2(value) {
+function parseRecord(value) {
   let parsed;
   try {
     parsed = JSON.parse(value);
@@ -13896,7 +13661,7 @@ function readTaskConsoleDiscovery(dataRoot) {
     if (!stat4.isFile() || stat4.isSymbolicLink() || stat4.size > DISCOVERY_LIMIT_BYTES) {
       throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_INVALID");
     }
-    const record3 = parseRecord2(readFileSync6(file, "utf8"));
+    const record3 = parseRecord(readFileSync6(file, "utf8"));
     if (record3.authority_root_digest !== authorityRootDigest(dataRoot)) {
       throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_INVALID");
     }
@@ -13927,7 +13692,7 @@ async function publishTaskConsoleDiscovery(input) {
     started_at: input.startedAt ?? (/* @__PURE__ */ new Date()).toISOString()
   };
   const record3 = { ...body, record_digest: recordDigest(body) };
-  const file = path21.join(root, TASK_CONSOLE_DISCOVERY_FILE);
+  const file = path20.join(root, TASK_CONSOLE_DISCOVERY_FILE);
   let fd;
   let created = false;
   try {
@@ -14047,12 +13812,12 @@ function parseArguments(argv, host) {
     const argument = argv[index];
     const value = argv[index + 1];
     if (argument === "--data-root") {
-      if (!value || !path22.isAbsolute(value)) fail("data_root_absolute_required");
-      dataRoot = path22.normalize(value);
+      if (!value || !path21.isAbsolute(value)) fail("data_root_absolute_required");
+      dataRoot = path21.normalize(value);
       index += 1;
     } else if (argument === "--settings-directory") {
-      if (!value || !path22.isAbsolute(value)) fail("settings_directory_absolute_required");
-      settingsDirectory = path22.normalize(value);
+      if (!value || !path21.isAbsolute(value)) fail("settings_directory_absolute_required");
+      settingsDirectory = path21.normalize(value);
       index += 1;
     } else if (argument === "--port") {
       if (!value || !/^\d+$/u.test(value)) fail("port_invalid");
@@ -14096,7 +13861,7 @@ async function runTaskConsoleMain(argv = process2.argv.slice(2)) {
     const projectRoot = resolveConsoleProjectRoot(import.meta.url);
     const runtimeCompatibility = new RuntimeCompatibilityService({
       projectRoot,
-      historyPath: path22.join(
+      historyPath: path21.join(
         options.dataRoot,
         ".run",
         "bridge-console",
@@ -14199,7 +13964,7 @@ async function runTaskConsoleMain(argv = process2.argv.slice(2)) {
     }
   }
 }
-if (process2.argv[1] && path22.resolve(process2.argv[1]) === path22.resolve(fileURLToPath9(import.meta.url))) {
+if (process2.argv[1] && path21.resolve(process2.argv[1]) === path21.resolve(fileURLToPath9(import.meta.url))) {
   void runTaskConsoleMain().catch((error2) => {
     fail(error2 instanceof Error ? error2.message : String(error2));
   });

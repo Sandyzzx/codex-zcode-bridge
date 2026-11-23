@@ -40,7 +40,9 @@ test("zero-model protocol smoke starts, inspects, and releases the official runt
       timeoutMs: 5_000,
       inspectRuntime: async () => ({
         install_root: install,
-        runtime_status: "OFFICIAL_RUNTIME_VERIFIED",
+        runtime_status: "OFFICIAL_RUNTIME_UNVERIFIED",
+        installation_safety: "OFFICIAL_INSTALLATION_SAFE",
+        installation_fingerprint: "a".repeat(64),
         desktop_version: "3.18.2.10443",
         desktop_app_version: "3.18.2",
         desktop_build_commit_id: "2681f4af",
@@ -131,20 +133,23 @@ test("zero-model protocol smoke starts, inspects, and releases the official runt
   }
 });
 
-test("protocol smoke fails closed when the installed runtime is unverified", async () => {
+test("protocol smoke allows a safe unverified runtime but still requires launch assets", async () => {
   const result = await runOfficialAppServerProtocolSmoke({
     inspectRuntime: async () => ({
+      install_root: "C:\\Synthetic\\ZCode",
       runtime_status: "OFFICIAL_RUNTIME_UNVERIFIED",
+      installation_safety: "OFFICIAL_INSTALLATION_SAFE",
+      desktop_app_version: "4.0.0",
       manifest: null,
       assets: {},
     }),
   });
   assert.equal(result.status, "FAIL");
-  assert.equal(result.reason, "installed_official_runtime_unverified");
+  assert.equal(result.reason, "runtime_launch_assets_incomplete");
   assert.equal(result.evidence.model_requests, 0);
 });
 
-test("protocol smoke accepts an explicitly authorized experimental runtime gate", async () => {
+test("protocol smoke no longer accepts an experimental authorization as a substitute for launch assets", async () => {
   const result = await runOfficialAppServerProtocolSmoke({
     inspectRuntime: async () => ({
       install_root: "C:\\Synthetic\\ZCode",
@@ -154,16 +159,12 @@ test("protocol smoke accepts an explicitly authorized experimental runtime gate"
       desktop_version: "3.19.0.10774",
       desktop_app_version: "3.19.0",
       desktop_build_commit_id: "a7ed1054",
-      experimental_authorization: {
-        state: "authorized",
-        scopes: ["coding_plan_probe"],
-      },
       manifest: null,
       assets: {},
     }),
   });
   assert.equal(result.status, "FAIL");
-  assert.equal(result.reason, "runtime_manifest_incomplete");
+  assert.equal(result.reason, "runtime_launch_assets_incomplete");
   assert.equal(result.evidence.model_requests, 0);
 });
 
