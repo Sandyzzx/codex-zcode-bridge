@@ -22705,7 +22705,7 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
     const snapshot = this.#readSnapshot(taskId);
     const projection = asRecord6(snapshot.projection);
     if (this.#pumpFailure && projection.status === "queued") {
-      throw new TaskManagerError("TASK_STATE", `SQLite dispatch is blocked after ${this.#pumpFailure.reason}; queued lifecycle facts remain persisted while automatic Recovery retry is pending or exhausted`);
+      throw new TaskManagerError("TASK_STATE", `SQLite dispatch is blocked after ${this.#pumpFailure.reason}; ${this.#queue.length} queued attempt(s) remain persisted while automatic Recovery retry is pending or exhausted; resolve the dispatch cause and restart the Executor to clear the latch`);
     }
     const attempt = asRecord6(snapshot.attempt);
     const operation = snapshot.operation ? asRecord6(snapshot.operation) : null;

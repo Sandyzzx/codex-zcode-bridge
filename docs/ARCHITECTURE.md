@@ -3,7 +3,7 @@
 > Status: AUTHORITATIVE
 
 > 2026-11-16 本地候选修订：[ADR-039](decisions/ADR-039-host-authorized-cancellation.md) 将取消授权与清理事实分离。queued + Launch Intent 无 Claim 时允许原子持久化取消并禁止迟到 Claim，未证明的进程/资源占用保留；Running 的 cleanup-only Hold 可经新鲜取消树证明追加消解记录，再继续原 CAS。此修复不增加 MCP 工具、Schema、重派或第二套恢复引擎。
-> Last updated: 2026-11-23（Preview.14 release preparation）
+> Last updated: 2026-11-24（ADR-054 授权退役；P1 生命周期整改）
 > Last verified: 2026-11-23，核对 PR #131 合并、合并后 CI `45124466655`、隔离 loaded/idle trusted-local Wake、Native MCP Result readback、Master 生命周期独立验收与 Desktop Visible。严格 C/D、Desktop fully exited、Official Runtime provenance 和非空工程交付仍为 `NOT_RUN`。
 > Verified against: `origin/preview@c7bfc28b1112dead95ae4179a00962de76051920`。
 
@@ -57,7 +57,7 @@ R7 在同一 Authority 内增加 additive `runtime_task_events`，不新增 Even
 
 生产 Worker 的 `zcode_app_server` 模式按 [ADR-035](decisions/ADR-035-worker-platform-adapter-selection.md) 选择 Adapter。只有 `win32/x64` 实例化 `OfficialAppServerWorkerAdapter`；Linux、macOS、Windows 非 x64 与其他组合都在构造 Adapter 前以 `unsupported_worker_platform` fail closed。direct stdio 实现已收敛为显式 `ZCodeAppServerTestAdapter` 与 `testOnlyLegacyDirectAdapter`，只服务协议、帧、期限和 Cleanup 合成回归，不是生产备用路径。选择只读取 platform/arch，环境变量、TaskPackage、MCP 参数、持久配置和测试参数都不能改变正式 Worker 的 Adapter 类型。正式 Adapter 沿用 `CodingAgentAdapter` 的完成、取消、交互、结果、期限和 Cleanup 合同，没有新增公开 Adapter Mode、持久配置或平行 RuntimeAdapter。
 
-`OfficialAppServerWorkerAdapter` 与 `ZCodeModelSettings` 共用 `createInstalledOfficialHostSessionFactory`：同一个 Runtime Resolver、Official Host 模块、ProcessManager、ProtocolClient、认证回调和 Close 所有权。Coding Plan、Start Plan 与其他 Provider 的认证/权益门禁仍各自独立；Start Plan 的 Live Entitlement、Private Lease、HANDLE/ACK 与脱敏没有合并。动态 capability 分类读取官方 Provider registry 与当前账户配置，不靠 Provider ID 字符串推断；Coding Plan 未验证、Start Plan 非 `OFFLINE_COMPATIBLE` 或注册/模型不一致时均在 send 前 fail closed。实验授权只允许对应 scope 的探测，不把 `OFFICIAL_DISCOUNT_NOT_VERIFIED` 改写为优惠通过，也不把实验 Start Plan 探测改写为兼容。生产 Official Host 缺少 Provider Runtime Auth resolver 或 resolver 拒绝时只返回不可用，不读取持久化 API Key 回退；静态凭据回包仅保留给显式 Test Adapter。任何 Provider 都不能静默使用旧打包 AppServer。
+`OfficialAppServerWorkerAdapter` 与 `ZCodeModelSettings` 共用 `createInstalledOfficialHostSessionFactory`：同一个 Runtime Resolver、Official Host 模块、ProcessManager、ProtocolClient、认证回调和 Close 所有权。Coding Plan、Start Plan 与其他 Provider 的认证/权益门禁仍各自独立；Start Plan 的 Live Entitlement、Private Lease、HANDLE/ACK 与脱敏没有合并。动态 capability 分类读取官方 Provider registry 与当前账户配置，不靠 Provider ID 字符串推断；Coding Plan 未验证、Start Plan 非 `OFFLINE_COMPATIBLE` 或注册/模型不一致时均在 send 前 fail closed。ADR-054 退役了实验授权机制：安装安全是唯一执行门禁，静态 capability 事实只作诊断（`officialProviderCapabilityWarning`），不把 `OFFICIAL_DISCOUNT_NOT_VERIFIED` 改写为优惠通过，也不把实验 Start Plan 观测改写为兼容。生产 Official Host 缺少 Provider Runtime Auth resolver 或 resolver 拒绝时只返回不可用，不读取持久化 API Key 回退；静态凭据回包仅保留给显式 Test Adapter。任何 Provider 都不能静默使用旧打包 AppServer。
 
 ## 生命周期与身份
 
@@ -73,7 +73,7 @@ Recovery 由 SQLite 持久事实和当前 Host 共同协调，并可在 Host 存
 
 ## 官方 Host、账户与清理
 
-候选包只携带固定 `official-host-runtime.mjs`、官方签名 runtime-host helper、keyring native closure、许可和 BOM；不再携带 `app-server/zcode.cjs` 或 `app-server/provider/zcode-builtin.json`。生产支持路径的模型执行资产来自 ADR-040 精确 Manifest 验证后的安装版同根资产；ADR-042 只允许安全未知安装通过显式 exact-fingerprint 授权进入实验探测，不会把环境变量或持久设置变成静默的未验证入口。Windows helper 是官方 Desktop `3.18.2.10443` 的 Authenticode 签名产物，来源、PE x64、大小与 SHA-256 固化在 BOM、Build Provenance 和运行时资源校验常量；Bridge 不编译或另建 Windows 原生实现。当前发布候选只在 Windows x64、Node `24.16.0` 上完成构建、加载、clean-install 与 ProcessManager smoke；其他 Node 24 patch level、平台和 Desktop 安装组合保持 `NOT_VERIFIED`，非 Windows x64 在构造官方 Host 路径时 fail closed。
+候选包只携带固定 `official-host-runtime.mjs`、官方签名 runtime-host helper、keyring native closure、许可和 BOM；不再携带 `app-server/zcode.cjs` 或 `app-server/provider/zcode-builtin.json`。生产支持路径的模型执行资产来自安装版同根资产；ADR-040/041 的精确 Manifest 验证自 ADR-054 起降为诊断信号，安全安装（OFFICIAL_INSTALLATION_SAFE）即可调用，未验证版本不阻断，已验证版本由 README 声明。Windows helper 是官方 Desktop `3.18.2.10443` 的 Authenticode 签名产物，来源、PE x64、大小与 SHA-256 固化在 BOM、Build Provenance 和运行时资源校验常量；Bridge 不编译或另建 Windows 原生实现。当前发布候选只在 Windows x64、Node `24.16.0` 上完成构建、加载、clean-install 与 ProcessManager smoke；其他 Node 24 patch level、平台和 Desktop 安装组合保持 `NOT_VERIFIED`，非 Windows x64 在构造官方 Host 路径时 fail closed。
 
 官方 `ZCodeAgentProcessManager` 独占正常 Runtime/AppServer/helper 生命周期。Bridge 单独捕获官方 Runtime root PID 和精确 fingerprint，并在 close 后独立验证原 Worker identity 与 recorded process tree。官方 close status/stage、错误 code/name、manager residual process count、tree-scan status 与 Bridge Cleanup outcome 分开保存；有界 close 诊断进入 execution proof 和 SQLite `cleanup_verified` 事件，任意错误 message 不持久化。`dispose()` 或带错误的 `close()` resolved 不能单独生成 `cleanup_verified`。
 

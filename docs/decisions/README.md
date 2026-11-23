@@ -18,7 +18,7 @@
 | Windows 身份 | [009](ADR-009-windows-identity-bound-tree-termination.md)、[023](ADR-023-completion-window-cleanup-prewarm.md) | 原生句柄与 claimant proof；空 helper 预热 |
 | Master 委派 | [010](ADR-010-whole-task-delegation.md)、[015](ADR-015-master-skill-authorization-and-progressive-loading.md)、[055](ADR-055-whole-task-staged-dispatch-and-prompt-contract.md) | whole_task 默认、Staged 例外、删除 Auto、授权和按需加载 |
 | Workspace | [017](ADR-017-single-user-trusted-local-workspace-admission.md) | 单用户本机 Admission；无需项目白名单 |
-| Recovery | [018](ADR-018-administrative-abandonment-of-cleanup-incomplete-hold.md)、[024](ADR-024-scoped-sqlite-hold-and-local-cleanup-recovery.md)、[036](ADR-036-host-native-interruption-requeue.md) | 行政兜底、Operation-scoped Hold/清理恢复，以及 Host 内单次中断重派发 |
+| Recovery | [018](ADR-018-administrative-abandonment-of-cleanup-incomplete-hold.md)、[024](ADR-024-scoped-sqlite-hold-and-local-cleanup-recovery.md)、[036](ADR-036-host-native-interruption-requeue.md) | 行政兜底、Operation-scoped Hold/清理恢复；ADR-036 自动重派链 2026-11-24 裁定为生产不可达、test-only 保留，退役排期下周期 |
 | 配置/诊断 | [021](ADR-021-zcode-path-discovery.md)、[022](ADR-022-authority-bound-doctor.md) | ZCode 路径发现；诊断绑定 SQLite |
 | Attention | [025](ADR-025-sqlite-attention-unified-waiting.md) | SQLite snapshot、被动等待与 Thin Waiter |
 | Result | [026](ADR-026-sqlite-result-contract.md) | 32 MiB Result、256 KiB envelope、v14；Result 合同继续有效，v13 升级由 ADR-043 退役 |
@@ -83,3 +83,9 @@ SQLite 生产支持统一为 v14。ADR-026、ADR-029、ADR-036、ADR-038 中关�
 [2026-09-27 路线图](roadmap-decisions-2026-09-27.md) 与 [2026-10-03 修复计划](reliability-repair-plan-v2-2026-10-03.md) 仅供追溯，当前事实已分流到架构、接口和专题 ADR。
 
 ADR-011 原文在集成基线中不存在，本索引不伪造其已批准文本。需要历史原文时由 Owner 提供外部归档。
+
+## 编号历史注记（2026-11-24 核对）
+
+- **ADR-037 同号**：`master` 历史上存在 `ADR-037-stable-host-native-recovery.md`，`preview` 线使用 `ADR-037-official-zcode-authentication-reuse.md`。两文件从未同时出现在任一分支。下次 master↔preview 文档合并时，将 master 侧文件改号为未使用的 ADR-057 并原子更新引用；本轮不改写任一侧历史身份。
+- **ADR-046 空号**：无文件、无引用，是编号保留空位，不补造决策记录。
+- **ADR-054/055/056**：Preview 线连续编号；ADR-057 保留给上述改号迁移。
