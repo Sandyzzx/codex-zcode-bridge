@@ -110,10 +110,10 @@ export function createProductionCodingPlanVerificationRunner(options = {}) {
   const bridgeShutdownTimeoutMs = options.bridgeShutdownTimeoutMs ?? 60_000;
   const executorReadyTimeoutMs = options.executorReadyTimeoutMs ?? 30_000;
   const executorShutdownTimeoutMs = options.executorShutdownTimeoutMs ?? 120_000;
-  // Cleanup may legitimately spend the lifecycle gate's full 30 second
+  // Cleanup may legitimately spend the lifecycle gate's full 90 second
   // process-tree probe budget before it can persist cleanup_verified and
   // released. Keep observation strictly longer than that bounded work.
-  const releaseTimeoutMs = options.releaseTimeoutMs ?? 45_000;
+  const releaseTimeoutMs = options.releaseTimeoutMs ?? 120_000;
 
   return async function runVerification(input) {
     validateVerificationInput(input);

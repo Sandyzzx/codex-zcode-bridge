@@ -51,7 +51,10 @@ import { WorkerHandleGate } from "../runtime/start-plan-handle-gate.js";
 import type { WindowsTreeTransactionLike } from "../adapters/windows-process-cleanup.js";
 
 const DEFAULT_PROCESS_PROBE_TIMEOUT_MS = 5_000;
-const DEFAULT_PROCESS_TREE_PROBE_TIMEOUT_MS = 30_000;
+// Hosted Windows runners can take substantially longer than an interactive
+// workstation to enumerate the process table. The timeout only bounds proof
+// collection; it never substitutes for a clean tree scan.
+const DEFAULT_PROCESS_TREE_PROBE_TIMEOUT_MS = 90_000;
 // Share a verified process-tree stop across Managers using the same local
 // SQLite Authority. Keep it until Release so an earlier alive probe cannot
 // trigger a second signal from a competing Recovery.

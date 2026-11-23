@@ -1063,7 +1063,7 @@ test("production runner retains result evidence when a code-edit task makes no c
 });
 
 test("production runner keeps Executor and MCP process ownership across a synthetic Worker", {
-  timeout: 120_000,
+  timeout: 150_000,
 }, async () => {
   await mkdir(RUN_ROOT, { recursive: true });
   const root = await mkdtemp(path.join(RUN_ROOT, "production-runner-process-"));

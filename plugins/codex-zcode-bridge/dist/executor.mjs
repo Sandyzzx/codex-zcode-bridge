@@ -10628,6 +10628,7 @@ var TRANSPORT_MAX_BUFFERED_BYTES = 8388608;
 var TRANSPORT_MAX_BUFFERED_LINES = 65536;
 var TRANSPORT_MAX_ENUM_ROWS = 4096;
 var TRANSPORT_TOTAL_SESSION_MS_DEFAULT = 12e4;
+var TRANSPORT_ENUM_RESPONSE_MS = 6e4;
 var TRANSPORT_HELPER_STARTUP_MS_DEFAULT = 6e4;
 var PowerShellTreeTransaction = class _PowerShellTreeTransaction {
   #child;
@@ -10782,11 +10783,11 @@ var PowerShellTreeTransaction = class _PowerShellTreeTransaction {
   }
   async enumerate() {
     this.#child.stdin.write("enum\n");
-    const begin = await this.#nextLine(2e4, "enum begin");
+    const begin = await this.#nextLine(TRANSPORT_ENUM_RESPONSE_MS, "enum begin");
     if (begin !== "ENUM_BEGIN") throw new Error("process_tree_snapshot_invalid: protocol missing");
     const rows = [];
     for (; ; ) {
-      const line = await this.#nextLine(2e4, "enum row");
+      const line = await this.#nextLine(TRANSPORT_ENUM_RESPONSE_MS, "enum row");
       if (line === "ENUM_END") break;
       const match = /^R (\d{1,12}) (\d{1,12}) (\d{1,25}|unknown) (\d{1,25}|unknown)$/u.exec(line);
       if (!match) throw new Error("process_tree_snapshot_invalid: malformed identity");
@@ -13064,7 +13065,7 @@ var WorkerHandleGate = class _WorkerHandleGate {
 
 // src/store/lifecycle-gate.ts
 var DEFAULT_PROCESS_PROBE_TIMEOUT_MS = 5e3;
-var DEFAULT_PROCESS_TREE_PROBE_TIMEOUT_MS = 3e4;
+var DEFAULT_PROCESS_TREE_PROBE_TIMEOUT_MS = 9e4;
 var verifiedRecoveryStops = /* @__PURE__ */ new Map();
 function recoveryStopKey(dataRoot, databaseFileName, operationId) {
   return `${path18.resolve(dataRoot)}\0${databaseFileName ?? "operations.sqlite3"}\0${operationId}`;

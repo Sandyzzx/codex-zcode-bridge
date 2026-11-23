@@ -4679,7 +4679,7 @@ function windowsTreeTransactionScript() {
 async function openPowerShellTreeTransaction() {
   return PowerShellTreeTransaction.start();
 }
-var CIM_REPRESENTATION_INTERVAL_TICKS, WindowsTreeCleanupError, TRANSPORT_MAX_LINE_BYTES, TRANSPORT_MAX_BUFFERED_BYTES, TRANSPORT_MAX_BUFFERED_LINES, TRANSPORT_MAX_ENUM_ROWS, TRANSPORT_TOTAL_SESSION_MS_DEFAULT, TRANSPORT_HELPER_STARTUP_MS_DEFAULT, PowerShellTreeTransaction;
+var CIM_REPRESENTATION_INTERVAL_TICKS, WindowsTreeCleanupError, TRANSPORT_MAX_LINE_BYTES, TRANSPORT_MAX_BUFFERED_BYTES, TRANSPORT_MAX_BUFFERED_LINES, TRANSPORT_MAX_ENUM_ROWS, TRANSPORT_TOTAL_SESSION_MS_DEFAULT, TRANSPORT_ENUM_RESPONSE_MS, TRANSPORT_HELPER_STARTUP_MS_DEFAULT, PowerShellTreeTransaction;
 var init_windows_process_cleanup = __esm({
   "src/adapters/windows-process-cleanup.ts"() {
     "use strict";
@@ -4699,6 +4699,7 @@ var init_windows_process_cleanup = __esm({
     TRANSPORT_MAX_BUFFERED_LINES = 65536;
     TRANSPORT_MAX_ENUM_ROWS = 4096;
     TRANSPORT_TOTAL_SESSION_MS_DEFAULT = 12e4;
+    TRANSPORT_ENUM_RESPONSE_MS = 6e4;
     TRANSPORT_HELPER_STARTUP_MS_DEFAULT = 6e4;
     PowerShellTreeTransaction = class _PowerShellTreeTransaction {
       #child;
@@ -4853,11 +4854,11 @@ var init_windows_process_cleanup = __esm({
       }
       async enumerate() {
         this.#child.stdin.write("enum\n");
-        const begin = await this.#nextLine(2e4, "enum begin");
+        const begin = await this.#nextLine(TRANSPORT_ENUM_RESPONSE_MS, "enum begin");
         if (begin !== "ENUM_BEGIN") throw new Error("process_tree_snapshot_invalid: protocol missing");
         const rows = [];
         for (; ; ) {
-          const line = await this.#nextLine(2e4, "enum row");
+          const line = await this.#nextLine(TRANSPORT_ENUM_RESPONSE_MS, "enum row");
           if (line === "ENUM_END") break;
           const match = /^R (\d{1,12}) (\d{1,12}) (\d{1,25}|unknown) (\d{1,25}|unknown)$/u.exec(line);
           if (!match) throw new Error("process_tree_snapshot_invalid: malformed identity");
