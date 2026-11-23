@@ -173,8 +173,9 @@ UTF-16 单元和 UTF-8 字节。未调用模型，也未宣称 Token 或 Cache R
   `26/26 PASS`
 - `npm run test:full`（第二次完整运行）：`1099` tests，`1097 PASS`，`0 FAIL`，
   `2 skipped`；插件结构校验 `PASS`
+- `npm run test:affected -- --development`：`121/121 PASS`；`typecheck`、build、
+  plugin validation、generated-artifact freshness 与 diff check 均通过
 - `git diff --check`：`PASS`
-- `npm run test:affected -- --development`：待最终候选构建后运行
 - GitHub Release Gate：待提交并推送最终候选后运行
 
 首次完整运行出现两个测试失败。其中一个是对旧输出断言的测试未随实现更新，修正后定向
