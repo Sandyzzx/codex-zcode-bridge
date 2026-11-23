@@ -7,8 +7,9 @@
 > CI timeout alignment: `99d034bf561dcc8845037cd43fb83cc1f060b58f`
 > CI stress-wait alignment: `17dd8d8ea4dd0798780ced3d48019e49a22da3f2`
 > PR: #131, open, base `preview`
-> Overall result: `PARTIAL — TARGETED PASS / REAL TURN BLOCKED_BY_AUTHORIZATION`
-> Preview recommendation: `NO-GO until isolated real Wake and Master Result readback pass`
+> Real E2E baseline: `ab73180b929be219bb680a0cc50825feca74b478`
+> Overall result: `PARTIAL — REAL AUTO QUEUE + TURN_STARTED PASS / MASTER READBACK FAIL`
+> Preview recommendation: `NO-GO until sandboxed Master Result readback passes`
 
 ## 结论
 
@@ -26,6 +27,14 @@ Bridge 现在有两种互斥的 Queue Wake 模式：
 只记录 `QUEUED`；没有同 Owner 观察面时随后记录
 `web_notify / trusted_local_turn_start_unverified`，用于 Web 可发现性和安全
 降级，不重发 Queue，也不改写为 `TURN_STARTED`。
+
+2026-11-23 的隔离真实 E2E 进一步证明：Executor 会在 Result Commit、
+Cleanup Verified、Operation Released 后自动调用一次官方 Queue；Queue ACK
+之后原 Desktop Thread 确实启动了新 Turn，实际模型/provider/effort 与授权快照
+一致。但 Master 在该 Turn 内执行只读 readback 时收到
+`EXECUTOR_UNAVAILABLE`，因此没有完成原 Attempt 的独立验收。相同 readback
+在普通本机进程中成功，说明 Result 与 Executor 没有丢失，失败发生在受限
+Thread 工具环境到 Executor Named Pipe 的读取路径。
 
 ## 官方机制核对
 
@@ -86,13 +95,59 @@ Task/Attempt/Operation 的既有 intent 阻止第二次 Queue。
 | `TRUSTED_PREFLIGHT_AVAILABLE` | `false` | 当前 Desktop 无私用 control socket；不新增 Host Agent。 |
 | `SAME_OWNER_PROVEN` | `false` in trusted-local | Owner 显式接受本地风险，未证明 Desktop Owner。 |
 | `MODEL_MATCH_PROVEN` | `false` in trusted-local | 不把 policy 快照与实际 Thread 配置混同。 |
-| `EXECUTOR_AUTO_QUEUE` | `PASS — SYNTHETIC` | Coordinator 在 post-Release hook 中自动调用一次 Queue。 |
-| `QUEUE_ACK` | `PASS — SYNTHETIC` | exit 0 持久化 `queued`，并解析 official message ID。 |
-| `TURN_STARTED` | `BLOCKED` | 无同 Owner 控制面；trusted-local 不改写为 started。 |
-| `MASTER_RESULT_READBACK` | `BLOCKED_BY_AUTHORIZATION` | 需要真实 Codex Wake Turn。 |
-| `MASTER_INDEPENDENT_ACCEPTANCE` | `BLOCKED_BY_AUTHORIZATION` | 固定 ACK 不计 PASS。 |
-| `DESKTOP_VISIBLE` | `BLOCKED_BY_AUTHORIZATION` | 本轮未触发新 Desktop Turn。 |
+| `EXECUTOR_AUTO_QUEUE` | `PASS — REAL + SYNTHETIC` | 真实 post-Release hook 自动提交一次 Queue。 |
+| `QUEUE_ACK` | `PASS — REAL` | exit 0 持久化 `queued` 并记录 official message ID。 |
+| `TURN_STARTED` | `PASS — REAL` | 原 Thread 出现 `turn_trigger=queue` 的新 Turn。 |
+| `MASTER_RESULT_READBACK` | `FAIL — REAL` | Thread 内 `zcode_status` 返回 `EXECUTOR_UNAVAILABLE`。 |
+| `MASTER_INDEPENDENT_ACCEPTANCE` | `FAIL / NOT_PROVEN` | Master 明确表示未作验收判断；固定 ACK 不计 PASS。 |
+| `DESKTOP_VISIBLE` | `PASS — REAL, POST-COMPLETION` | Thread 与失败回复在 Desktop 可见；运行中截图未采集。 |
 | `WEB_NOTIFY_FALLBACK` | `PASS — TARGETED` | SQLite v14 evidence、CLI/Web 投影与通知回调保留。 |
+
+## 2026-11-23 隔离真实 E2E
+
+测试 Thread：
+
+```text
+01a205c7-1bca-7642-919c-38e09cc22bf6
+cwd = C:\Users\Sandy\.codex\worktrees\async-executor-pr5-20261122\codex-zcode-bridge
+```
+
+Executor 以独立 Node 进程运行，Lease 为
+`84b5a510-b616-4737-8fd8-fbe84385d05b`。MCP Host 在收到 Task 受理回执后
+退出；synthetic Worker 继续执行。Task/Attempt 为
+`wakeauto202611231119 / 1`，Operation 为
+`sqlite-70b3dfb63ff8c2a128cce2a1d3d44133`。
+
+| 事实 | 结果 | 证据 |
+|---|---|---|
+| synthetic Worker spawn | `PASS — 1` | `worker-spawns.log`、PID `12820` |
+| Result Commit | `PASS — 1` | digest `8df0d8198fef63e8dc7ea88b109483cee3cf69ee8b5371091d80618f32b29f0f` |
+| Cleanup Verified | `PASS — 1` | `operation_resources_complete=true`、`workspace_touched=false` |
+| Operation Released | `PASS — 1` | `task-events.json` 中唯一 `released` |
+| Executor auto Queue | `PASS — 1` | Queue wrapper 唯一 invocation，exit `0` |
+| Queue Message ID | `PASS — REAL` | `01a2066a-e167-7830-ab7d-e40f4e07a673` |
+| new Turn | `PASS — REAL` | `01a2066a-f9d9-70e3-a76b-3353876ee25d`，`turn_trigger=queue` |
+| model/provider/effort | `PASS — SNAPSHOT MATCH` | `opencode-go/deepseek-v4.1-flash` / `magpie` / `low` |
+| Master `zcode_status` | `FAIL — REAL` | `EXECUTOR_UNAVAILABLE: EXECUTOR_UNAVAILABLE` |
+| direct non-sandbox readback | `PASS — REAL` | completed、attempt 1、Result/Cleanup/Release/Wake facts 各一次 |
+| duplicate Queue / Worker / Turn | `PASS — NONE` | 唯一 Queue invocation、Worker spawn、`turn_trigger=queue` Turn |
+
+目标 Turn 的 rollout 记录显示其权限为 managed restricted filesystem、
+`network=restricted`、`sandbox_policy=read-only`。Thread 内 readback 子进程
+已经打印正确的隔离 Authority Root，并加载 Thin MCP，但连接 Executor 时失败。
+相同命令在受限 Thread 外的本机进程 PASS。当前证据可以排除 Result 丢失、
+Executor 提前退出和 Authority Root 选择错误；不能进一步区分 Named Pipe
+ACL、沙箱网络分类或子进程继承策略，因此根因标记 `UNKNOWN_SANDBOX_PATH`。
+
+本轮第一个 harness 尝试在调用官方 Queue 之前被包装器参数错误拒绝，记录
+`QUEUE_WRAPPER_COMMAND_INVALID`。它没有产生官方 Queue、模型请求或新 Turn。
+修复后使用新的 Task 完成上述唯一真实 Queue；旧 Task/Attempt 未重发。
+
+Token usage 可从 rollout 观测，目标 Turn 累计为
+`input=44,367 / cached=21,760 / output=358 / reasoning=74 / total=44,725`。
+Provider 费用和账户扣费不可观测，报告不估算金额。单 Turn 内有一次
+readback tool callback，因此包含两次 token usage record；没有第二个 Queue
+Turn。
 
 ## 定向验证
 
@@ -117,7 +172,8 @@ node scripts/test-isolated.mjs \
 timeout `submission_unknown`、Web fallback、Skill 合同、SQLite v14 evidence
 与历史读取兼容。当前源码的跨进程 E2E 另为 `1/1 PASS`：真实 Executor 与
 synthetic Worker 完成原 Attempt 的 Result、Cleanup Verified、Release，并
-记录一次 policy-missing Web fallback；该结果仍不是自动 Queue Turn。
+记录一次 policy-missing Web fallback。该定向结果本身不是 Queue Turn；
+真实自动 Queue Turn 见上一节。
 
 ## CI 证据
 
@@ -161,36 +217,50 @@ Cost Lab 和 impact selection 均为 success；Integration gate 按配置 skippe
 
 ## 真实 E2E 边界
 
-本轮没有：
+本轮只使用一个隔离测试 Thread、一个 synthetic Worker 和一个真实 Queue
+Wake Turn。没有关闭 Desktop，没有向 Owner 当前工作 Thread 注入消息，
+没有合并 Preview，没有发布 Release。未自动重试 Queue，也没有对同一
+Task/Attempt 重发。
 
-- 发起新的 Codex 模型请求；
-- 向 Owner 当前工作 Thread 注入 Wake；
-- 关闭 Desktop；
-- 合并 Preview 或发布 Release；
-- 将历史人工 Queue 结果当成本轮自动 Wake 结果。
-
-历史人工实验仍只证明 loaded/idle Thread 的真实 Queue ACK、Turn Started、
-Master response 和 Desktop Visible，message ID
-`01a205cc-60d0-7dc1-a396-c6385de2a417`。它不证明 Executor 自动预检或自动
-Master Result readback。
+Desktop 在新 Turn 完成后显示了 original Wake message、失败 readback 和
+“No acceptance determination was made.”。证据截图：
+`.run/executor-auto-wake-e2e-20261123/desktop-visible.png`。运行中状态由
+Thread 工具观测为 `active`，但没有在 Turn 进行中采集 Desktop 截图。
 
 ## 最小后续实验
 
-1. 取得隔离 Thread 的明确低成本模型/费用预算授权。
-2. 用 synthetic Worker 派发隔离 Task，并写入 trusted-local one-shot policy。
-3. Executor 完成原 Result/Cleanup/Release 后自动 Queue 一次。
-4. 分别采集 Queue ACK、message ID、新 Turn、Master 的
-   `zcode_status`/`zcode_result` readback、Result digest、Cleanup/Release 与
-   Desktop 可见性。
-5. 不重试未知提交；若未自动启动 Turn，保留 Web Notify 并标
-   `TURN_STARTED=UNKNOWN`。
+1. 不重跑已经消费授权的 Turn。先设计一个受限 Thread 可访问的只读结果通道，
+   优先让 host-side MCP 在工具沙箱之外执行 `zcode_status` / `zcode_result`，
+   不扩大写权限，也不新增第二状态机。
+2. 用确定性测试证明该通道在 `read-only + network=restricted` Thread 中可读，
+   且不能执行 Task、Cancel、Continue、Shutdown 或其他写操作。
+3. 取得新的单 Turn 授权后，用新的 synthetic Task 重做一次自动 Queue E2E；
+   必须由 Master 本身读取同一 Result digest、Cleanup 和 Release，再作独立验收。
+4. 若该通道仍不可用，保持 `QUEUED + Web Notify` 安全降级，不宣称自动
+   Master recovery。
 
 ## 发布建议
 
-当前实现可作为 PR #131 的 targeted candidate 评审，但不应仅凭本报告合并
-Preview。发布仍需要：
+当前实现可作为 PR #131 的 targeted candidate 评审，但不应合并 Preview。
+自动 Queue 和 Turn Started 已真实通过；发布阻断已收敛为一个具体契约缺口：
+受限 Codex Thread 内无法通过当前 Named Pipe Thin MCP 完成 Result readback。
+在 Master 能读取原 Result 并完成独立验收前，trusted-local Wake 只能视为
+“能唤醒但未必能闭环”，发布建议为 `NO-GO`。
 
-- isolated real automatic Wake Turn；
-- Master 读取原 Result 并独立验收；
-- 至少一次真实 Desktop Visible 证据；
-- 最终候选 exact-head Release Gate。
+## 证据索引
+
+本地隔离证据位于：
+
+```text
+.run/executor-auto-wake-e2e-20261123/queue-invocation.json
+.run/executor-auto-wake-e2e-20261123/queue-wrapper.jsonl
+.run/executor-auto-wake-e2e-20261123/task-events.json
+.run/executor-auto-wake-e2e-20261123/task-result.json
+.run/executor-auto-wake-e2e-20261123/readback-outside-sandbox.json
+.run/executor-auto-wake-e2e-20261123/executor-status.json
+.run/executor-auto-wake-e2e-20261123/desktop-visible.png
+```
+
+首次预提交包装器失败保存在相邻的
+`.run/executor-auto-wake-e2e-20261123-preflight-wrapper-failure/`，不属于
+Queue 或模型请求证据。
