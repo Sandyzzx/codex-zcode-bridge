@@ -4,6 +4,7 @@
 > Date: 2026-11-23（Asia/Shanghai）
 > Wake implementation: `ca10518728c87b35c719b0293b48045946728932`
 > CI isolation commit: `eac515a1c8080235ba18a0fe2a164544ef4e5203`
+> CI timeout alignment: `99d034bf561dcc8845037cd43fb83cc1f060b58f`
 > PR: #131, open, base `preview`
 > Overall result: `PARTIAL — TARGETED PASS / REAL TURN BLOCKED_BY_AUTHORIZATION`
 > Preview recommendation: `NO-GO until isolated real Wake and Master Result readback pass`
@@ -120,7 +121,8 @@ synthetic Worker 完成原 Attempt 的 Result、Cleanup Verified、Release，并
 ## CI 证据
 
 PR run `45095687608` 的首轮 Cost Lab job `137434933391` 与单 job rerun
-`137440844056` 均在同一个 Windows 进程树探针超时：
+`137440844056` 均在同一个 Windows 进程树探针超时。串行测试提交后，run
+`45098105506` 的 job `137442456030` 仍在同一处失败：
 
 ```text
 COST_LAB_RELEASE_WAIT_FAILED
@@ -133,10 +135,25 @@ probe_state=incomplete
 ```
 
 Executor 正确保持 Cleanup Hold，未把未证明的 Cleanup 当成 Release；这不是
-Wake 或 Result 丢失。Commit `eac515a1` 仅将 Cost Lab 测试文件串行执行，
-避免并行测试争用 Windows 进程树探针。本地
-`npm run cost-lab:test` 为 `90/90 PASS`；对应进程所有权 E2E 用时 17.4 秒，
-低于其 120 秒测试预算。最终 PR CI 结果必须在 exact head 上重新采集。
+Wake 或 Result 丢失。这三次失败证明串行化不是充分修复；Hosted Windows
+Runner 的进程表枚举本身可以超过原 30 秒 Gate 和 20 秒 helper 响应预算。
+Commit `99d034bf` 只对齐超时预算：精确 Process Tree 证明合同不变，
+enumeration response 为 60 秒、Lifecycle Tree Gate 为 90 秒、Cost Lab
+Release 观察为 120 秒。定向验证为：
+
+```text
+npm run typecheck                      PASS
+npm run build                          PASS
+windows-recorded-tree-native + process-spawn   6/6 PASS
+cleanup/process-tree composition               24/24 PASS
+executor-process synthetic Result/Cleanup/Release 1/1 PASS
+npm run cost-lab:test                  90/90 PASS
+npm run validate:plugin                PASS
+npm run check:generated                14/14 fresh
+```
+
+本地 Cost Lab 进程所有权 E2E 用时 14.9 秒。最终 PR CI 结果必须在 exact head
+上重新采集。
 
 ## 真实 E2E 边界
 
