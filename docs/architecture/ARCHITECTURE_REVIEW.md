@@ -2,7 +2,7 @@
 
 > Status: IMPLEMENTED — PR 2–6 CANDIDATE（architecture accepted；release blocked）
 > Date: 2026-11-22
-> Review baseline: `origin/preview` `8ee7ec93a82c2093dce74707a9d1937c1c567887` + PR #131 final integration candidate `7ab652baac606fedfa3e86c6db08e7892df122f7` (Web implementation/evidence `02a9e81198cffc5b90077eaba00b5abbfd40f640`); earlier C1 evidence candidate `8f83bd340f1d6f31ddac12360583257969bb5863`; historical full-matrix candidate `c75c34330287266702cab5949662bf897b74ed5a`
+> Review baseline: `origin/preview` `8ee7ec93a82c2093dce74707a9d1937c1c567887` + PR #131 readback diagnosis candidate `f88e0919259b17862f012f6549b57f2b2608cfc6`; final web integration `7ab652baac606fedfa3e86c6db08e7892df122f7`; historical full-matrix candidate `c75c34330287266702cab5949662bf897b74ed5a`
 
 ## Verdict
 
@@ -43,6 +43,7 @@ PR #131 保持 open，最终 Release Gate 尚须在文档更新后的候选上�
 | 14 | High | 已修正：生产 Executor CLI 不接受 `--test-only-fake-adapter` 或任意 `--worker-entry`；测试入口只存在于显式 test harness。 |
 | 15 | Medium | 已修正：开发期延期 `FULL_SUITE` 仍执行直接/域安全测试；CI Integration 使用 `--safe-tests-only`，延期不得显示为完整 PASS。 |
 | 16 | Medium | PR 6 已把 Task Scope 与 Handoff Mechanism 分离；可靠受理后允许结束 Turn/停止轮询，但 Wake 只触发身份核对与独立验收，Pending Interaction 不新增自动审批路径。 |
+| 17 | High | Wake readback 必须直接调用 Host 已注册的原生 MCP 只读工具；受限 Thread 内的 shell 子进程不是同一权限面。安装版仍为旧 in-process Manager 时，原生 readback 只能标记 `BLOCKED_BY_INSTALLED_HOST_VERSION`。 |
 
 ## PR 2 / PR 2.5 Evidence Update
 
@@ -96,6 +97,8 @@ PR #131 保持 open，最终 Release Gate 尚须在文档更新后的候选上�
 | Web Console local boundary | `PASS — REAL BROWSER + SYNTHETIC WORKER` | loopback/Origin/CSRF、只读 Task/Event/Result、显式 Cancel/Reply；动态发现/复用、Deep Link 跨页解析、Result pending 与 Host 退出后真实浏览器观察通过 |
 | Executor Wake | `PASS — SYNTHETIC / REAL BLOCKED` | post-Release once-only Queue + Web Notify、SQLite v14 evidence、exact-config fail closed；Owner policy/CLI/Web 展示通过；当前无 App Server socket 时 0 Queue 并降级，真实 Queue/C/D 未运行 |
 | Async Master Handoff | `PASS — CONTRACT / MODEL NOT_RUN` | deterministic Skill decision contract；真实 Host 模型遵循率、真实 Wake 恢复与 Desktop visible 未验证 |
+| Native MCP Result readback | `BLOCKED — INSTALLED HOST VERSION` | 当前注册插件为 Preview.13 旧 in-process Manager；对隔离 Authority 的 `zcode_status` 返回 `TASK_NOT_FOUND`，不能替代 PR #131 Thin MCP readback |
+| Sandboxed shell Thin MCP readback | `FAIL — REAL` | 真实 Wake Turn 按测试包装器在 managed restricted/read-only Thread 内启动子进程，连接 Executor 得到 `EXECUTOR_UNAVAILABLE`；不再作为受支持路径 |
 | Historical unified local release gate | `PASS — LOCAL` | Windows 1060 项完整回归、4/4 压力矩阵、生成物与插件校验通过（`c75c3433`） |
 | Unified GitHub release gate | `PASS — EXACT HEAD` | `3a238ee8` 的 [CI run 45024250578](https://github.com/Sandyzzx/codex-zcode-bridge/actions/runs/45024250578) 成功；这是该已验证提交的 CI 事实，不替代真实 Desktop/Wake/Official Runtime 验收 |
 | Current web/real-process acceptance | `PASS — REAL PROCESS / SYNTHETIC WORKER` | `7ab652ba` 在 Preview.13 合并后重跑定向测试 92/92，并重新完成 C1 浏览器/进程/Result/Cleanup/Release；真实 Desktop/Wake/Official Runtime 仍 `BLOCKED` |

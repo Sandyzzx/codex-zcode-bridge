@@ -8,8 +8,9 @@
 > CI stress-wait alignment: `17dd8d8ea4dd0798780ced3d48019e49a22da3f2`
 > PR: #131, open, base `preview`
 > Real E2E baseline: `ab73180b929be219bb680a0cc50825feca74b478`
-> Overall result: `PARTIAL — REAL AUTO QUEUE + TURN_STARTED PASS / MASTER READBACK FAIL`
-> Preview recommendation: `NO-GO until sandboxed Master Result readback passes`
+> Readback diagnosis baseline: `f88e0919259b17862f012f6549b57f2b2608cfc6`
+> Overall result: `PARTIAL — REAL AUTO QUEUE + TURN_STARTED PASS / NATIVE READBACK BLOCKED BY INSTALLED HOST VERSION`
+> Preview recommendation: `NO-GO until the current Thin MCP is installed in the Host and native Result readback passes a fresh Wake Turn`
 
 ## 结论
 
@@ -31,10 +32,17 @@ Bridge 现在有两种互斥的 Queue Wake 模式：
 2026-11-23 的隔离真实 E2E 进一步证明：Executor 会在 Result Commit、
 Cleanup Verified、Operation Released 后自动调用一次官方 Queue；Queue ACK
 之后原 Desktop Thread 确实启动了新 Turn，实际模型/provider/effort 与授权快照
-一致。但 Master 在该 Turn 内执行只读 readback 时收到
-`EXECUTOR_UNAVAILABLE`，因此没有完成原 Attempt 的独立验收。相同 readback
-在普通本机进程中成功，说明 Result 与 Executor 没有丢失，失败发生在受限
-Thread 工具环境到 Executor Named Pipe 的读取路径。
+一致。该 Turn 的测试包装器明确要求 Master 通过 `exec_command` 启动
+Thin MCP 子进程，结果收到 `EXECUTOR_UNAVAILABLE`；相同命令在普通本机进程
+中成功。该证据只证明 **sandboxed shell child path** 失败，不等于原生
+Host MCP 失败。
+
+后续只读诊断发现本轮另一个更早的部署条件：当前 Codex Host 注册的
+`zcode_bridge` 仍指向 `2.0.0-preview.13` 的旧 in-process Manager，而 PR #131
+候选的 shipped MCP 已是 Thin control transport。原生 `zcode_status` /
+`zcode_result` 工具确实可调用，但只能读取安装版 Authority：对旧的隔离 Task
+返回 `TASK_NOT_FOUND`。因此 `NATIVE_MCP_READBACK` 当前是
+`BLOCKED_BY_INSTALLED_HOST_VERSION`，没有进行新的真实模型 Turn。
 
 ## 官方机制核对
 
@@ -98,8 +106,11 @@ Task/Attempt/Operation 的既有 intent 阻止第二次 Queue。
 | `EXECUTOR_AUTO_QUEUE` | `PASS — REAL + SYNTHETIC` | 真实 post-Release hook 自动提交一次 Queue。 |
 | `QUEUE_ACK` | `PASS — REAL` | exit 0 持久化 `queued` 并记录 official message ID。 |
 | `TURN_STARTED` | `PASS — REAL` | 原 Thread 出现 `turn_trigger=queue` 的新 Turn。 |
-| `MASTER_RESULT_READBACK` | `FAIL — REAL` | Thread 内 `zcode_status` 返回 `EXECUTOR_UNAVAILABLE`。 |
-| `MASTER_INDEPENDENT_ACCEPTANCE` | `FAIL / NOT_PROVEN` | Master 明确表示未作验收判断；固定 ACK 不计 PASS。 |
+| `SANDBOX_READBACK` | `FAIL — REAL` | 测试包装器让受限 Thread 的 shell 子进程启动 Thin MCP；连接 Executor 返回 `EXECUTOR_UNAVAILABLE`。 |
+| `NATIVE_MCP_REGISTERED` | `PASS — OBSERVED` | Host 原生 tools 可调用；`zcode_bridge` 注册为 enabled。 |
+| `NATIVE_MCP_CURRENT_RC` | `FAIL — DEPLOYMENT` | 注册插件仍是 Preview.13 in-process Manager，不包含候选 Thin control marker。 |
+| `MASTER_RESULT_READBACK` | `BLOCKED_BY_INSTALLED_HOST_VERSION` | 原生工具不能读取旧隔离 Executor；未启动新 Turn，不伪称 PASS/FAIL。 |
+| `MASTER_INDEPENDENT_ACCEPTANCE` | `NOT_RUN` | 没有任何本轮原生 Result readback，固定 ACK 仍不计 PASS。 |
 | `DESKTOP_VISIBLE` | `PASS — REAL, POST-COMPLETION` | Thread 与失败回复在 Desktop 可见；运行中截图未采集。 |
 | `WEB_NOTIFY_FALLBACK` | `PASS — TARGETED` | SQLite v14 evidence、CLI/Web 投影与通知回调保留。 |
 
@@ -148,6 +159,36 @@ Token usage 可从 rollout 观测，目标 Turn 累计为
 Provider 费用和账户扣费不可观测，报告不估算金额。单 Turn 内有一次
 readback tool callback，因此包含两次 token usage record；没有第二个 Queue
 Turn。
+
+## Native MCP 与沙箱 shell 诊断
+
+本次只读检查没有产生模型请求，也没有启动第二个 Executor：
+
+| 观测 | 结果 |
+|---|---|
+| Codex Desktop / CLI | `26.1117.4957.0` / `0.171.0-alpha.13` |
+| Desktop App Server | PID `23280`，包安装路径 `OpenAI.Codex_26.1117.4957.0_x64__2p2nqsd0c76g0` |
+| 插件 MCP 进程 | PID `27344`，父 PID `23280`，`node ./launch-node24.mjs` |
+| `zcode_bridge` 注册 cwd | `C:\Users\Sandy\.codex\plugins\cache\codex-zcode-bridge-preview\codex-zcode-bridge\2.0.0-preview.13\.` |
+| 安装版 bundle | SHA-256 `02b2d24b98acb56ac5b64454fb7b05c68c9ccd12f8b54c31b17c55043058045b`，无 Thin control marker |
+| 当前 RC bundle（修复前） | SHA-256 `202be2e4834e5c8f154c46293b7dfe607c4f788de38ed7c4d0c29186f8946cf8`，有 Thin control marker |
+| 原生 `zcode_doctor` | 可调用；读取安装版 SQLite Authority |
+| 原生 status：隔离 Task | `TASK_NOT_FOUND` |
+| 原生 status/result：安装版 cancelled Task | 可读取；原生 transport 本身可达 |
+| Named Pipe 探针 | 普通进程连接 PASS；CLI 无法在此进程重建同款 packaged Windows sandbox，未取得限制态 OS error code |
+
+关键结论：当前失败不是“Host 无法调用 MCP”，也不是 Result 丢失。它是两个
+独立边界：
+
+1. 旧测试 Turn 使用了不被支持的 sandboxed shell child readback；
+2. 当前安装版 Host 尚未部署 PR #131 Thin MCP，因此原生工具指向错误 Authority。
+
+为避免测试器再次把 shell child 当成原生 MCP，Wake message 与 Async Handoff
+Skill 已明确要求直接调用 Host 已注册的原生 `zcode_status` 和
+`zcode_result(view="summary", expected_attempt=<attempt>)`，并禁止通过
+`exec_command`/PowerShell/Node 启动 `bridge.mjs`、Thin MCP 或 Task CLI
+读取 Named Pipe。该修改不改变 Queue、Task、Result、Cleanup、Release 或
+Recovery 合同。
 
 ## 定向验证
 
@@ -229,23 +270,27 @@ Thread 工具观测为 `active`，但没有在 Turn 进行中采集 Desktop 截�
 
 ## 最小后续实验
 
-1. 不重跑已经消费授权的 Turn。先设计一个受限 Thread 可访问的只读结果通道，
-   优先让 host-side MCP 在工具沙箱之外执行 `zcode_status` / `zcode_result`，
-   不扩大写权限，也不新增第二状态机。
-2. 用确定性测试证明该通道在 `read-only + network=restricted` Thread 中可读，
-   且不能执行 Task、Cancel、Continue、Shutdown 或其他写操作。
-3. 取得新的单 Turn 授权后，用新的 synthetic Task 重做一次自动 Queue E2E；
-   必须由 Master 本身读取同一 Result digest、Cleanup 和 Release，再作独立验收。
-4. 若该通道仍不可用，保持 `QUEUED + Web Notify` 安全降级，不宣称自动
-   Master recovery。
+1. 不重跑已经消费授权的 Turn。先在隔离 Host 中部署当前 PR #131 Thin MCP，
+   确认 `zcode_bridge` 的注册 cwd/bundle hash 指向该候选，而不是
+   Preview.13 in-process Manager。
+2. 用真实独立 Executor、真实 Control IPC 和 synthetic Worker 验证原生
+   `zcode_status` / `zcode_result` 能读取同一 Authority；错误 Task/Attempt
+   不得返回其他结果，读取路径不得 Spawn Worker 或调用 Task/Cancel/Continue/
+   Shutdown。
+3. 取得新的单 Turn 授权后，用全新 synthetic Task 重做一次自动 Queue E2E；
+   Master 必须在原生工具中读取同一 Result digest、Cleanup 和 Release，再作
+   独立验收。上一次失败的 Task/Attempt 不重发。
+4. 若原生工具仍不可用，保持 `QUEUED + Web Notify` 安全降级，不宣称自动
+   Master recovery；不得回退到沙箱 shell child。
 
 ## 发布建议
 
 当前实现可作为 PR #131 的 targeted candidate 评审，但不应合并 Preview。
-自动 Queue 和 Turn Started 已真实通过；发布阻断已收敛为一个具体契约缺口：
-受限 Codex Thread 内无法通过当前 Named Pipe Thin MCP 完成 Result readback。
-在 Master 能读取原 Result 并完成独立验收前，trusted-local Wake 只能视为
-“能唤醒但未必能闭环”，发布建议为 `NO-GO`。
+自动 Queue 和 Turn Started 已真实通过；结果读取实现本身已有跨进程
+Result/Cleanup/Release 与 Thin MCP reconnect 证据。当前发布阻断是部署与
+验收边界：安装版 Host 仍为旧 in-process Manager，且没有在新的原生 readback
+路径上取得真实 Turn 证据。发布建议保持 `NO-GO`，直到原生 Host readback
+真实 PASS。
 
 ## 证据索引
 
@@ -259,6 +304,9 @@ Thread 工具观测为 `active`，但没有在 Turn 进行中采集 Desktop 截�
 .run/executor-auto-wake-e2e-20261123/readback-outside-sandbox.json
 .run/executor-auto-wake-e2e-20261123/executor-status.json
 .run/executor-auto-wake-e2e-20261123/desktop-visible.png
+.run/pr131-native-readback-20261123/codex-mcp-list.txt
+.run/pr131-native-readback-20261123/native-readback-evidence.json
+.run/pr131-native-readback-20261123/pipe-probe-evidence.json
 ```
 
 首次预提交包装器失败保存在相邻的

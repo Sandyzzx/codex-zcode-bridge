@@ -362,7 +362,11 @@ test("trusted-local policy submits exactly one Queue without a control socket an
     assert.equal(queued.calls.length, 1);
     assert.equal(queued.calls[0]?.threadId, THREAD_ID);
     assert.match(queued.calls[0]?.message ?? "", /zcode_status/u);
-    assert.match(queued.calls[0]?.message ?? "", /zcode_result\(view="summary"\)/u);
+    assert.match(queued.calls[0]?.message ?? "", /zcode_result\(view="summary", expected_attempt=1\)/u);
+    assert.match(queued.calls[0]?.message ?? "", /expected_attempt=1/u);
+    assert.match(queued.calls[0]?.message ?? "", /host-registered native MCP/iu);
+    assert.match(queued.calls[0]?.message ?? "", /Do not launch bridge\.mjs, Thin MCP/iu);
+    assert.match(queued.calls[0]?.message ?? "", /sandboxed shell child/iu);
     assert.match(queued.calls[0]?.message ?? "", /Cleanup/u);
     assert.match(queued.calls[0]?.message ?? "", /released/u);
     assert.doesNotMatch(queued.calls[0]?.message ?? "", /--resume/u);

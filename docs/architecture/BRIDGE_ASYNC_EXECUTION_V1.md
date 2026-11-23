@@ -408,6 +408,11 @@ Recovery；真实 Desktop UI acknowledgement 仍是 `UNKNOWN`。
 - 模型失控负例：当前 model/effort/budget 未确认时 fail-closed 转 Web Notify。
 - 多 writer、版本漂移、提交未知：不自动重发。
 - Desktop visible：没有显式 UI acknowledgement 时固定为 `UNKNOWN`。
+- Native Host readback：Queue 后必须由 Host 已注册的原生 `zcode_status` /
+  `zcode_result(view="summary", expected_attempt=...)` 读取原 Attempt；
+  `exec_command`/PowerShell/Node 启动的 Thin MCP 或 Task CLI 不是受支持的
+  readback 证据。安装版仍指向旧 in-process Manager 时，
+  `NATIVE_MCP_READBACK=BLOCKED_BY_INSTALLED_HOST_VERSION`。
 
 当前确定性证据：
 
@@ -429,6 +434,12 @@ Recovery；真实 Desktop UI acknowledgement 仍是 `UNKNOWN`。
   `web_notify / app_server_unavailable` 且 Queue 调用为 0；显式 trusted-local
   已具备单次 Queue 路径，但真实自动 Turn、Master readback、Desktop visible
   和付费模型：`BLOCKED_BY_AUTHORIZATION`。
+- 2026-11-23 的真实 Wake Turn 已证明 Queue ACK 与 Turn Started；该 Turn
+  的 readback 由测试包装器明确要求在受限 Thread 中启动 Thin MCP 子进程，
+  因而只构成 `SANDBOX_READBACK=FAIL`。当前 Desktop 注册的插件仍是
+  `2.0.0-preview.13` in-process Manager，不是本候选 Thin MCP；原生工具
+  虽可调用，但不能读取隔离 Executor Authority，故
+  `NATIVE_MCP_READBACK=BLOCKED_BY_INSTALLED_HOST_VERSION`。
 
 ## 8. 发布门槛
 

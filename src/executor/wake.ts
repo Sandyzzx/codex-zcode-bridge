@@ -710,7 +710,9 @@ function wakeMessage(release: ExecutorWakeReleaseFact): string {
     `Result status: ${release.result_status}`,
     `Result digest: ${release.result_digest}`,
     `Result commit: ${release.result_commit_ref}`,
-    "Required readback: call zcode_status for this Task and Attempt, then call zcode_result(view=\"summary\") and verify the same Result digest.",
+    "Required readback: use the host-registered native MCP tools directly: call zcode_status for this Task and Attempt, then call " +
+      `zcode_result(view="summary", expected_attempt=${release.attempt}) and verify the same Result digest.`,
+    "Do not launch bridge.mjs, Thin MCP, the Task CLI, Node, PowerShell, or another shell child for readback; a sandboxed shell child is not the native Host MCP path.",
     "Check Cleanup verified and Operation released before independently checking the Task's acceptance criteria.",
     "Do not create a duplicate Task. A fixed ACK alone is not acceptance. This Wake does not authorize new work.",
   ].join("\n");

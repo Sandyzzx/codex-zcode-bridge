@@ -42,7 +42,7 @@ Task Scope 与 Handoff Mechanism 分开决定。`whole_task`/`staged` 只定义�
 - Async Handoff 只以可靠 Task 受理为交接点。提交前完成 Ready Gate；受理后记录可核实的 Task/Attempt、Authority 和 Thread，取得经 `task console-url`/Executor 验证的 Task Console `web_url`（不可用则说明安全查询替代方式），向用户简洁报告，然后结束 Turn 并停止轮询。不要调用 `codex queue`、`--resume` 或自行制造 Wake。
 - Task Console 链接只携带 `task_id`，不包含 CSRF 或凭据；不得拼接、猜测或伪造地址。链接可用不等于 Turn、Result、Cleanup 或验收已完成，页面轮询或关闭不影响 Executor。
 - Turn 结束、客户端断连、MCP 停止或调用超时不取消已受理 Task。只有用户明确授权具体取消时才走 `zcode_cancel`；回执未知时先以原 `task_id` 对账，不换 ID 重派。
-- Wake 只表示有持久 Result 可读，不表示 Master 已恢复、Task 已验收或资源已释放。恢复后核对 Task/Attempt/Operation/digest，调用 `zcode_status` 与 `zcode_result(view="summary")`，读取 Result 摘要和 Cleanup/Release 证据，再独立检查实际 diff、文件与测试。固定 ACK 不是验收。
+- Wake 只表示有持久 Result 可读，不表示 Master 已恢复、Task 已验收或资源已释放。恢复时直接调用 Host 已注册的原生 `zcode_status` 与 `zcode_result(view="summary", expected_attempt=<Attempt>)`，核对 Task/Attempt/Operation/digest、Result 摘要和 Cleanup/Release 证据，再独立检查实际 diff、文件与测试。不要在受限 Thread 中通过 `exec_command`/PowerShell/Node 启动 Thin MCP 或 Task CLI 读取 Named Pipe。固定 ACK 不是验收。
 - 已知 Pending Interaction 是阻塞事实，不是完成或可忽略状态。结束 Turn 前必须先处理；返回时按原请求与明确授权审批，不得自动放行。Async Handoff 不新增 Pending Wake，必要审批仍经 Web/CLI 或下一次用户 Turn 进入。
 - 已知 SQLite 清理 Hold 不得绕过。`zcode_cancel` 是唯一标准恢复入口，一次调用就是用户授权；状态只决定内部动作，不决定是否需要额外用户资格。它可能终止原身份 Worker。已被取消且无持久 Spawn 证据的历史 `launch_intent` 需用户再次显式取消才能行政释放；`completed`、`failed`、`waiting_for_master`、`cancelled` 四种终态 Result 的 `cleanup_unverified` 在 exact exit + clean tree 但缺少 Adapter closure 时，用户显式调用一次即可进入同一行政释放流程；活动/不可验证 Worker 与有 Receipt 的 Launch Intent 必须保持占用。`released`、`unverified_admin_release` 不是 `cleanup_verified`。成功后也须先检查原 workspace WIP，再讨论新 Attempt。
 - Worktree、路径声明和 `yolo` profile 不是 OS 沙箱；Worker 使用当前本机账户权限。未获用户相应授权不得提交、推送、发布、读取/修改凭据或删除任务外数据。

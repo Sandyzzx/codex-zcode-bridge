@@ -69,10 +69,12 @@ Wake 消息到达表示 Executor 已完成自身 post-Release 通知流程，不
 
 1. 从消息核对 `task_id`、Attempt、Operation、Result digest 与已记录交接绑定。
    任一不一致或缺失时保持未验收，查询原 Task 并报告冲突。
-2. 用 `zcode_status`/Attention/Events 核对当前 Attempt、Pending Interaction、
-   Result、Cleanup Hold 与 Operation Release；需要时传 `expected_attempt`。
-3. 用 `zcode_result(view="summary")` 读取持久 Result，并核对消息中的 Result
-   digest；已知需要原文或摘要缺项时，按同一 Attempt 读取 `view="full"`。
+2. 直接使用 Host 已注册的原生 MCP 工具。用 `zcode_status`/Attention/Events
+   核对返回的当前 Attempt、Pending Interaction、Result、Cleanup Hold 与
+   Operation Release。
+3. 直接调用原生 `zcode_result(view="summary", expected_attempt=<Attempt>)`
+   读取持久 Result，并核对消息中的 Result digest；已知需要原文或摘要缺项时，
+   按同一 Attempt 读取 `view="full"`。
    Result 存在不等于 Cleanup 或 Release 完成。
 4. 在实际执行目录独立检查 Git 状态、diff、文件与适用测试；分别记录
    Result committed、Cleanup verified、Operation released 和 Master acceptance。
@@ -85,6 +87,13 @@ Queue exit 0、消息出现或新 Turn 开始均不能证明 Worker Result、Cle
 `trusted_local_turn_start_unverified` 只表示 Queue 已被接受且自动 Turn 启动
 尚未由同 Owner 控制面证明；不得改写为 `TURN_STARTED`，也不得因该 fallback
 再次提交 Queue。固定 ACK 或只回复“收到”不是 Master acceptance。
+
+原生 MCP 是默认且受支持的 readback 路径。不要在受限 Thread 中用
+`exec_command`、PowerShell、Node、`bridge.mjs`、Thin MCP 或 Task CLI
+另起子进程读取 Named Pipe；工具沙箱与 Host MCP 进程的权限边界不同。
+原生工具返回 `EXECUTOR_UNAVAILABLE`、`TASK_NOT_FOUND` 或版本不匹配时，
+保留原 Task/Attempt 并报告具体错误；不要改走未验证的 shell 通道，也不要
+把 Queue ACK 或固定 ACK 当作验收。
 
 Task Console 的 `web_url` 只证明受理后的状态查询入口可用，不证明 Turn 已启动、
 Result 已提交或任务已验收。页面默认轮询只刷新本地 Adapter；Console 断开不等于
@@ -108,5 +117,6 @@ Pending Interaction 是活动阻塞事实，不是完成、可自动批准或可
 - 不直接修改 Wake 策略、Codex Desktop 数据库、私有 IPC 或凭据。
 - 不在链接、日志或用户报告中放入 CSRF、凭据或伪造的 Console 地址。
 - 不由 Master 直接运行 `codex queue`；Queue 只属于已授权的 Executor Wake Adapter。
+- 不通过受限 shell 子进程启动 Thin MCP/Task CLI 读取 Executor Result。
 - 不以新 Task/Attempt 掩盖未知回执，不自动重试潜在模型请求。
 - 不把 `completed`、Wake、Queue ACK、Turn start 或文件存在单独当作验收 PASS。

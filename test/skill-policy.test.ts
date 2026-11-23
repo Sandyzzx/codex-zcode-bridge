@@ -233,6 +233,17 @@ test("deterministic Async Handoff workflow separates scope, handoff, Wake and ac
   assert.match(handoff, /Console 不可用[\s\S]*替代/);
 });
 
+test("Wake readback uses native Host MCP rather than a sandboxed shell child", () => {
+  const handoff = reference("async-handoff.md");
+  assert.match(skill, /Host 已注册的原生 `zcode_status`/);
+  assert.match(skill, /`zcode_result\(view="summary", expected_attempt=<Attempt>\)`/);
+  assert.match(skill, /不要在受限 Thread 中[\s\S]*Thin MCP 或 Task CLI/);
+  assert.match(handoff, /直接使用 Host 已注册的原生 MCP 工具/);
+  assert.match(handoff, /原生 `zcode_result\(view="summary", expected_attempt=<Attempt>\)`/);
+  assert.match(handoff, /不要在受限 Thread 中用[\s\S]*Thin MCP 或 Task CLI/);
+  assert.match(handoff, /把 Queue ACK 或固定 ACK 当作验收/);
+});
+
 const evaluation = JSON.parse(readFileSync(path.resolve("test/fixtures/master-skill-evaluation-20261111.json"), "utf8")) as {
   readonly comparison: string;
   readonly model: string;

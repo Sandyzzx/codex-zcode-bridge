@@ -3,10 +3,11 @@
 > Status: DECISION
 > Date: 2026-11-22
 > Decision: Accepted for the Async Executor Preview candidate
-> Implementation status: IMPLEMENTED — TRUSTED-LOCAL TARGETED / REAL E2E BLOCKED
+> Implementation status: IMPLEMENTED — TRUSTED-LOCAL TARGETED / NATIVE READBACK BLOCKED BY INSTALLED HOST VERSION
 > Baseline: `origin/preview` `1bf039fda2ccfd17a992458a871bddd7b48b38c1`
 > PR #131 baseline: `a1bc911ec1b03cd22bbf13e717fc2233284e6183`
 > Acceptance implementation: `7f54531acba0844937bc134609dae840090294ec`
+> Readback diagnosis baseline: `f88e0919259b17862f012f6549b57f2b2608cfc6`
 > Related architecture: [BRIDGE_ASYNC_EXECUTION_V1.md](../architecture/BRIDGE_ASYNC_EXECUTION_V1.md)
 
 ## 决定
@@ -120,10 +121,21 @@ codex queue --thread <thread-id> --message <bounded-wake-message>
 | trusted-local exit 0、无同 Owner 观察能力 | 先记 `queued`，再记 `web_notify` / `trusted_local_turn_start_unverified` |
 
 Queue 消息只包含 Task、Attempt、Operation、Result digest 和读取
-`zcode_status`、`zcode_result(view="summary")`、Cleanup/Release 核对与独立
-验收指令，不复制 Worker 完整输出。CLI 输出中的官方 Queue message ID 作为
-可选 `queue_message_id` 追加到 `queued` evidence；该字段不改变凭证或公共
-MCP schema，也不提升 SQLite Schema Version。
+`zcode_status`、`zcode_result(view="summary", expected_attempt=<attempt>)`、
+Cleanup/Release 核对与独立验收指令，不复制 Worker 完整输出。readback 必须
+直接使用 Host 已注册的原生 MCP 工具；不得要求 Master 在受限 Thread 中用
+`exec_command`、PowerShell、Node、`bridge.mjs`、Thin MCP 或 Task CLI
+另起子进程连接 Executor Named Pipe。Host MCP 与工具沙箱是不同权限边界，
+shell child 失败不能证明原生 MCP 不可用，也不能改写成 `TASK_NOT_FOUND` 或
+Executor 不存在。CLI 输出中的官方 Queue message ID 作为可选
+`queue_message_id` 追加到 `queued` evidence；该字段不改变凭证或公共 MCP
+schema，也不提升 SQLite Schema Version。
+
+原生 readback 只调用既有只读 `zcode_status`、`zcode_events` 和
+`zcode_result`，不新增 Result 服务、第二持久化权威或写权限。若原生 MCP
+已注册但版本仍是旧 in-process Manager，必须报告
+`BLOCKED_BY_INSTALLED_HOST_VERSION`；在安装当前 Thin MCP 并取得真实
+Authority readback 前，不得以普通本机 CLI 成功替代 Host readback。
 
 `QUEUED`、`TURN_STARTED`、`TURN_COMPLETED`、`DESKTOP_VISIBLE` 必须分别报告；
 没有 Desktop UI acknowledgement 时 Desktop visible 始终为 `UNKNOWN`。
