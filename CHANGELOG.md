@@ -4,6 +4,36 @@
 
 当前版本以 `package.json` 和 Release Please manifest 为准。提交推送到 `master` 后，Release Please 会在有待发布变更时创建发布 PR，并同步更新版本文件与本日志；合并发布 PR 后会生成对应 Git tag 和 GitHub Release。
 
+## [2.0.0-preview.14](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-preview-v2.0.0-preview.13...codex-zcode-bridge-preview-v2.0.0-preview.14) (2026-11-23)
+
+Preview 2.0.0-preview.14（EXPERIMENTAL / PREVIEW ONLY；发布目标为 `preview` 分支）。
+
+### Features
+
+* Independent Executor with Authority Root lifetime lease, exact process ownership, Idle-only Shutdown and bounded Named Pipe control IPC.
+* Thin MCP, Control-only Task CLI and loopback Task Web Console reuse the same Executor Authority; MCP disconnect and Turn end do not cancel accepted Tasks.
+* Trusted-local one-shot Queue Wake for loaded/idle Codex Threads, with Web Notify fallback, durable Wake evidence and no automatic retry.
+* Async Master Handoff contract: report reliable acceptance, end the current Master Turn, and resume independent acceptance only after Wake.
+* Operations Console includes Dashboard, Tasks, Cost Lab, Runtime and Settings on one loopback origin.
+
+### Validation
+
+* PR #131 merged to Preview as `c7bfc28b1112dead95ae4179a00962de76051920`.
+* Post-merge CI `45124466655`: Ubuntu, both Windows shards, both SQLite resource matrices and Cost Lab passed.
+* Isolated real Host E2E: Queue ACK, new Turn, native MCP Result readback, Result digest, Cleanup verified, Operation released, Master lifecycle acceptance and Desktop visibility passed once without duplicate Worker, Queue, Turn or Result.
+* Synthetic Worker and real-process tests verify shipped MCP Host exit does not interrupt the original Attempt Result/Cleanup/Release.
+
+### Compatibility
+
+* SQLite v14 remains the only supported Schema; public MCP tool names and schema remain unchanged.
+* Supported release boundary remains Windows x64, Node.js `24.16.0` and ZCode Desktop `3.18.2.10443`.
+
+### Not verified
+
+* Strict Wake C (`notLoaded`) and strict Wake D / Desktop fully exited remain `NOT_RUN`.
+* Official Runtime provenance for the current installed `3.19.0.10774` remains `NOT_RUN`.
+* A non-empty real engineering deliverable and real-model Async Master Skill adherence A/B remain `NOT_RUN`.
+
 ## [2.0.0-preview.4](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-preview-v2.0.0-preview.3...codex-zcode-bridge-preview-v2.0.0-preview.4) (2026-11-11)
 
 SQLite v13 → v14 seamless startup migration (EXPERIMENTAL / PREVIEW ONLY; migration runs once on first startup after upgrade).

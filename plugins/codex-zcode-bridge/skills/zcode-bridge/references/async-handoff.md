@@ -2,8 +2,8 @@
 
 > Status: AUTHORITATIVE
 > Last updated: 2026-11-23
-> Last verified: 2026-11-23，核对 ADR-045、ADR-051、ADR-052、strict/trusted-local Wake 与确定性 Skill 合同测试；真实自动 Wake Turn、真实模型遵循率和 Desktop 关闭 E2E 均 NOT RUN。
-> Verified against: `codex/async-executor-pr6-20261122` candidate
+> Last verified: 2026-11-23，核对 PR #131 合并后的 Preview.14、loaded/idle trusted-local Queue/Turn、Host 原生 MCP Result readback、Master 生命周期独立验收与 Desktop Visible；真实模型 Skill 遵循率、严格 C/D 与 Desktop fully exited 仍 `NOT_RUN`。
+> Verified against: `origin/preview@c7bfc28b1112dead95ae4179a00962de76051920`
 
 本文件只在入口已确认 Bridge 授权后使用。它不决定交付范围：
 `whole_task`、`staged` 和只读 `auto` 仍由
@@ -24,8 +24,8 @@
 3. 能核实 Executor Authority；当前 Codex Thread ID 和一次性 Wake 授权可核实，
    或用户已知道本次只能依赖 Web Notify/下一次 Turn。默认 `strict` 模式还须
    由 Executor 核实同 Owner 实时 loaded/idle、workspace 与模型配置；显式
-   `trusted-local` Owner 策略允许跳过该私有控制面预检，但实际模型、loaded
-   状态和 Turn 启动必须保持 `UNKNOWN`；
+   `trusted-local` Owner 策略允许跳过该私有控制面预检；Adapter 本身不得
+   声称实际模型或 loaded 状态已证明，Turn 启动须由独立观察另行确认；
 4. 当前 Attempt 无已知 Pending Interaction、执行启动错误或未决清理事实；
 5. 用户要求的是已授权交付，不把 Async Handoff 变成无人值守审批或无限取消权限。
 
@@ -84,9 +84,13 @@ Wake 消息到达表示 Executor 已完成自身 post-Release 通知流程，不
 `QUEUED`、`TURN_STARTED`、`TURN_COMPLETED`、`DESKTOP_VISIBLE` 是独立状态。
 Queue exit 0、消息出现或新 Turn 开始均不能证明 Worker Result、Cleanup、Release
 或验收；没有 UI acknowledgement 时 `DESKTOP_VISIBLE=UNKNOWN`。
-`trusted_local_turn_start_unverified` 只表示 Queue 已被接受且自动 Turn 启动
-尚未由同 Owner 控制面证明；不得改写为 `TURN_STARTED`，也不得因该 fallback
-再次提交 Queue。固定 ACK 或只回复“收到”不是 Master acceptance。
+`trusted_local_turn_start_unverified` 只表示 Queue 已被接受且 Adapter 尚未
+证明自动 Turn 启动；只有独立观察取得新 Turn 证据时才可改写为
+`TURN_STARTED`。不得因该 fallback 再次提交 Queue。固定 ACK 或只回复“收到”
+不是 Master acceptance。2026-11-23 的真实 loaded/idle E2E 已分别证明
+Queue、新 Turn、Native MCP Result readback、Master 生命周期独立验收和
+Desktop Visible，但真实模型 Skill 遵循率、严格 C/D 与 Desktop fully exited
+仍为 `NOT_RUN`。
 
 原生 MCP 是默认且受支持的 readback 路径。不要在受限 Thread 中用
 `exec_command`、PowerShell、Node、`bridge.mjs`、Thin MCP 或 Task CLI

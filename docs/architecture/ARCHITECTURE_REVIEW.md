@@ -1,8 +1,8 @@
 # Async Execution Architecture Review
 
-> Status: IMPLEMENTED — PR 2–6 CANDIDATE（architecture accepted；release blocked）
-> Date: 2026-11-22
-> Review baseline: `origin/preview` `8ee7ec93a82c2093dce74707a9d1937c1c567887` + PR #131 readback diagnosis candidate `f88e0919259b17862f012f6549b57f2b2608cfc6`; final web integration `7ab652baac606fedfa3e86c6db08e7892df122f7`; historical full-matrix candidate `c75c34330287266702cab5949662bf897b74ed5a`
+> Status: IMPLEMENTED — PREVIEW.14 RELEASE CANDIDATE（loaded/idle trusted-local Wake PASS REAL；strict C/D NOT_RUN）
+> Date: 2026-11-22（updated 2026-11-23）
+> Review baseline: `origin/preview` `c7bfc28b1112dead95ae4179a00962de76051920`; historical full-matrix candidate `c75c34330287266702cab5949662bf897b74ed5a`
 
 ## Verdict
 
@@ -21,7 +21,11 @@ synthetic Worker 的 C1 E2E。
 当前结论仍为
 `PARTIAL / BLOCKED`：真实 Codex Desktop 关闭、严格 Wake C/D、真实 Queue
 ACK/Turn/Master、真实 Official Runtime 和真实模型 Skill 遵循率仍未运行；
-PR #131 保持 open，最终 Release Gate 尚须在文档更新后的候选上运行。
+PR #131 已合并；合并后 CI `45124466655` 通过。隔离 Host 随后完成真实
+loaded/idle trusted-local Queue、新 Turn、Host 原生 MCP Result readback、
+Cleanup/Release、Master 生命周期独立验收与 Desktop Visible。严格 Wake C/D、
+Desktop fully exited、Official Runtime provenance、非空工程交付和真实模型
+Skill 遵循率仍为 `NOT_RUN`。
 
 ## Findings
 
@@ -59,8 +63,14 @@ PR #131 保持 open，最终 Release Gate 尚须在文档更新后的候选上�
 | 跨进程 fake Worker durability | `PASS` | 原 Attempt `result_committed` 一次、Cleanup pending/verified、Operation `released`、Result digest 非空 |
 | Shipped MCP Host 进程退出 | `PASS — SYNTHETIC WORKER` | Host 真实终止后 Executor 保持 active；单次 Spawn/Result，Cleanup/Release 各一次，新 Host 重连读取同一 Result |
 | Web Deep Link + Host exit | `PASS — REAL PROCESS / SYNTHETIC WORKER` | 真实 Chromium 打开动态 URL 的 queued/running/completed 页面；Host 退出后 Executor/Console 仍 active，原 Attempt 单 Result/Cleanup/Release，Spawn 一次 |
-| 真实 Codex Desktop 关闭 E2E | `BLOCKED` | 未关闭 Owner 当前 Desktop；Host 进程退出证据不能替代 Desktop 全退 |
-| 真实 Official Runtime E2E | `NOT_RUN` | 无新的付费模型授权；合成 fake adapter 不能替代 |
+| loaded/idle trusted-local Wake | `PASS — REAL` | 隔离 Host 完成 Queue ACK、新 Turn、Result digest、Cleanup/Release，各事实一次 |
+| Native MCP Result readback | `PASS — REAL` | Host 原生 `zcode_status` / `zcode_result` 读取同一 Executor Authority；未使用 shell 子进程 |
+| Master 生命周期独立验收 | `PASS — REAL` | Wake 后 Master 读取原 Attempt、核对 Cleanup/Release 并完成独立验收 |
+| Desktop Visible | `PASS — REAL` | Wake、原生工具调用和最终回复在隔离 Desktop 中可见 |
+| 严格 Wake C/D | `NOT_RUN` | notLoaded 与 `--resume` 对照尚未执行 |
+| Desktop fully exited | `NOT_RUN` | Host 进程退出证据不能替代 Desktop 全退 |
+| Official Runtime provenance | `NOT_RUN` | 当前安装 `3.19.0.10774` 未提升为发布支持范围 |
+| 非空工程交付验收 | `NOT_RUN` | 本次使用 synthetic Worker 验证生命周期与 readback |
 
 ## Implementation Corrections and Current Status
 

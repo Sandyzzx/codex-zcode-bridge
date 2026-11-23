@@ -3,8 +3,9 @@
 > Status: DECISION
 > Date: 2026-11-22
 > Decision: Accepted for the Async Executor Preview candidate
-> Implementation status: IMPLEMENTED — TRUSTED-LOCAL TARGETED / NATIVE READBACK BLOCKED BY INSTALLED HOST VERSION
-> Baseline: `origin/preview` `1bf039fda2ccfd17a992458a871bddd7b48b38c1`
+> Last verified: 2026-11-23
+> Implementation status: IMPLEMENTED — REAL LOADED/IDLE TRUSTED-LOCAL WAKE；STRICT C/D NOT_RUN
+> Baseline: `origin/preview` `c7bfc28b1112dead95ae4179a00962de76051920`
 > PR #131 baseline: `a1bc911ec1b03cd22bbf13e717fc2233284e6183`
 > Acceptance implementation: `7f54531acba0844937bc134609dae840090294ec`
 > Readback diagnosis baseline: `f88e0919259b17862f012f6549b57f2b2608cfc6`
@@ -136,6 +137,9 @@ schema，也不提升 SQLite Schema Version。
 已注册但版本仍是旧 in-process Manager，必须报告
 `BLOCKED_BY_INSTALLED_HOST_VERSION`；在安装当前 Thin MCP 并取得真实
 Authority readback 前，不得以普通本机 CLI 成功替代 Host readback。
+2026-11-23 的最终隔离部署已验证 Host 实际加载 PR #131 Thin MCP，并由
+Host 原生工具读取同一 Executor Authority 的原 Attempt Result；早期旧版本
+阻断和受限 shell 失败仍保留在原始报告中，不改写为未发生。
 
 `QUEUED`、`TURN_STARTED`、`TURN_COMPLETED`、`DESKTOP_VISIBLE` 必须分别报告；
 没有 Desktop UI acknowledgement 时 Desktop visible 始终为 `UNKNOWN`。
@@ -172,24 +176,28 @@ Wake 计数、提示条和行内 badge；用户不再需要先逐条打开 Event
 
 ## 独立验收
 
-- 已加载 idle 模式通过合成 App Server/Queue 客户端与跨进程 fake Worker
-  Result -> Cleanup -> Release -> Wake -> Web fallback E2E。
+- loaded/idle trusted-local 模式在隔离 Codex Desktop/profile 中完成一次真实
+  官方 Queue：Queue ACK、message ID、新 Turn、Host 原生 MCP Result readback、
+  Result digest、Cleanup verified、Operation released、Master 生命周期独立
+  验收与 Desktop Visible 均为 `PASS — REAL`。
+- 同一 E2E 只出现一次 Queue、Worker、Turn、Result、Cleanup 与 Release；
+  未发生自动重试、重复 Spawn 或结果覆盖。
+- 合成 App Server/Queue 客户端与跨进程 fake Worker 的
+  Result -> Cleanup -> Release -> Wake -> Web fallback 路径继续通过，作为
+  strict/fallback 合同证据。
 - shipped MCP Host 进程被终止后，隔离 Executor 仍完成原 Attempt Result、
   Cleanup、Release；单次 Spawn，新 Host 可重连读取同一 Result。证据边界是
   `REAL MCP HOST PROCESS EXIT + SYNTHETIC WORKER`，不是真实 Desktop。
-- 真实 Desktop loaded/idle Queue 证据来自 2026-11-21 B/C 实验；本候选没有
-  在 Owner 当前 Desktop 上重放。
 - notLoaded 的严格 C 与 Desktop 全退的严格 D 仍未运行，作为独立发布门禁，
   不阻塞已加载模式实验版。
-- 真实 App Server control socket、真实 Queue 和真实付费模型未在候选测试中
-  调用；当前 socket 不存在时真实 probe 固定记录
-  `web_notify / app_server_unavailable`，Queue 调用为 0，费用/额度不可观测。
-- 新增 trusted-local 定向测试覆盖显式/旧 policy、过期授权、Task 绑定、
-  单次 Queue、message ID、timeout、Turn 未确认降级和 SQLite v14 evidence；
-  真实自动 Wake Turn、Master Result readback 与 Desktop Visible 仍需要新的
-  Codex 模型预算授权，当前 `BLOCKED_BY_AUTHORIZATION`。
-- 未合入 Preview、未发布；Async Master Skill 只有确定性合同测试，未完成真实
-  模型遵循率验收。
+- Desktop fully exited、Official Runtime provenance 与非空工程交付验收仍为
+  `NOT_RUN`。这些边界不能用 loaded/idle 生命周期 E2E 替代。
+- 早期受限 Thread 通过 shell 子进程读取 Named Pipe 的失败、旧 Host 版本
+  阻断和后续原生 MCP 修复均保留在
+  [trusted-local Wake 报告](../reports/trusted-local-wake-20261123.md)。
+- PR #131 已合并到 Preview，合并后 CI `45124466655` 通过；Preview.14
+  Tag/Release 尚未创建。Async Master Skill 的真实模型遵循率 A/B 仍为
+  `NOT_RUN`。
 
 完整实机验收记录见
 [async-executor-real-host-acceptance-20261122.md](../reports/async-executor-real-host-acceptance-20261122.md)。
