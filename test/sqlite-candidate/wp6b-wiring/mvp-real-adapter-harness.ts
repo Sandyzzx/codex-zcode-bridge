@@ -493,6 +493,13 @@ async function withRealAdapterMcp(
     const previousZcodeHome = process.env["ZCODE_HOME"];
     const previousBuiltinConfig = process.env["ZCODE_BUILTIN_PROVIDER_CONFIG_FILE"];
     const previousPersonalConfig = process.env["ZCODE_PERSONAL_PROVIDER_CONFIG_FILE"];
+    // A host session (for example a ZCode Desktop agent shell) may export its
+    // own ZCODE_DATA_BASE_DIR/ZCODE_WINDOWS_APP_INSTALL_DIR; both would fight
+    // the fixture ZCODE_HOME below and redirect install discovery.
+    const previousDataBaseDir = process.env["ZCODE_DATA_BASE_DIR"];
+    const previousAppInstallDir = process.env["ZCODE_WINDOWS_APP_INSTALL_DIR"];
+    delete process.env["ZCODE_DATA_BASE_DIR"];
+    delete process.env["ZCODE_WINDOWS_APP_INSTALL_DIR"];
     process.env["ZCODE_BRIDGE_ZCODE_CJS"] = runtime.entrypoint;
     process.env["ZCODE_BRIDGE_NODE"] = process.execPath;
     process.env["ZCODE_BUILTIN_PROVIDER_CONFIG_FILE"] = runtime.builtinConfig;
@@ -619,6 +626,8 @@ async function withRealAdapterMcp(
       if (previousZcodeHome === undefined) delete process.env["ZCODE_HOME"]; else process.env["ZCODE_HOME"] = previousZcodeHome;
       if (previousBuiltinConfig === undefined) delete process.env["ZCODE_BUILTIN_PROVIDER_CONFIG_FILE"]; else process.env["ZCODE_BUILTIN_PROVIDER_CONFIG_FILE"] = previousBuiltinConfig;
       if (previousPersonalConfig === undefined) delete process.env["ZCODE_PERSONAL_PROVIDER_CONFIG_FILE"]; else process.env["ZCODE_PERSONAL_PROVIDER_CONFIG_FILE"] = previousPersonalConfig;
+      if (previousDataBaseDir === undefined) delete process.env["ZCODE_DATA_BASE_DIR"]; else process.env["ZCODE_DATA_BASE_DIR"] = previousDataBaseDir;
+      if (previousAppInstallDir === undefined) delete process.env["ZCODE_WINDOWS_APP_INSTALL_DIR"]; else process.env["ZCODE_WINDOWS_APP_INSTALL_DIR"] = previousAppInstallDir;
     }
     if (authorityShutdownError !== undefined) throw authorityShutdownError;
     if (runOrCloseFailure !== undefined) throw runOrCloseFailure;

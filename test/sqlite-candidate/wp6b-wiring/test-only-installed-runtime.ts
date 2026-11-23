@@ -43,6 +43,8 @@ export function createTestOnlyInstalledRuntime(options: {
       const config = await resolve();
       return {
         status: "OFFICIAL_RUNTIME_VERIFIED",
+        installation_safety: "OFFICIAL_INSTALLATION_SAFE",
+        installation_fingerprint: "e".repeat(64),
         discount_capability: options.codingPlanDiscountVerified === false
           ? "OFFICIAL_DISCOUNT_NOT_VERIFIED"
           : "OFFICIAL_DISCOUNT_VERIFIED",
