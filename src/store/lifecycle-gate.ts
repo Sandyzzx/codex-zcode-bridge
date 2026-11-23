@@ -172,6 +172,7 @@ interface ClaimOnlyPort {
   readTaskAttention(taskId: string): Readonly<Record<string, unknown>> | null;
   readRecoverableQueuedAttempts(): readonly Readonly<Record<string, unknown>>[];
   readTaskEvents(taskId: string, options?: { readonly afterCursor?: number; readonly limit?: number }): LifecycleEventsPage;
+  readTaskResultPage(taskId: string, offsetBytes: number, maxBytes: number): unknown;
   readTaskFeedback(taskId: string): unknown;
   readRecoverySnapshot(): unknown;
   recordRecoveryObservation(input: Readonly<Record<string, unknown>>, evidence: Readonly<Record<string, unknown>>): unknown;
@@ -406,6 +407,7 @@ export interface LifecycleCandidateStore {
     readonly afterCursor?: number;
     readonly limit?: number;
   }): LifecycleEventsPage;
+  readTaskResultPage(taskId: string, offsetBytes: number, maxBytes: number): unknown;
   readRecoverySnapshot(): unknown;
 }
 
@@ -1417,6 +1419,7 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
   }): unknown;
   readTaskAttention(taskId: string): unknown;
   readTaskEvents(taskId: string, options?: { readonly afterCursor?: number; readonly limit?: number }): LifecycleEventsPage;
+  readTaskResultPage(taskId: string, offsetBytes: number, maxBytes: number): unknown;
   readCommittedResult(operationId: string): CandidateCommittedResult | null;
   readTaskFeedback(taskId: string): unknown;
   readRecoverySnapshot(): unknown;
@@ -2281,6 +2284,7 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
     readTaskProjections: (options) => port.readTaskProjections(options),
     readTaskAttention: (taskId) => port.readTaskAttention(taskId),
     readTaskEvents: (taskId, options) => port.readTaskEvents(taskId, options),
+    readTaskResultPage: (taskId, offsetBytes, maxBytes) => port.readTaskResultPage(taskId, offsetBytes, maxBytes),
     readCommittedResult: (operationId) => port.readCommittedResult(operationId),
     readTaskFeedback: (taskId) => port.readTaskFeedback(taskId),
     createNextAttempt: (input) => port.createNextAttempt(input, {

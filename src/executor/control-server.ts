@@ -74,7 +74,14 @@ async function dispatch(
       if (!manager.listTasks) throw Object.assign(new Error("TASK_LIST_UNAVAILABLE"), { code: "TASK_LIST_UNAVAILABLE" });
       return await manager.listTasks(request.params) as unknown as Record<string, unknown>;
     case "getStatus": return await manager.getStatus(request.params.task_id) as unknown as Record<string, unknown>;
-    case "getResult": return await manager.getResult(request.params.task_id) as unknown as Record<string, unknown>;
+    case "getResult": return await manager.getResult(request.params.task_id, request.params.view) as unknown as Record<string, unknown>;
+    case "getResultPage": {
+      // P1 §3.4A: bounded page over the stored canonical Result JSON. Only the
+      // SQLite authority implements it; other managers fail explicitly.
+      const pageManager = manager as { getResultPage?: (taskId: string, offsetBytes: number, maxBytes: number) => Promise<Record<string, unknown>> };
+      if (!pageManager.getResultPage) throw new Error("RESULT_PAGE_UNAVAILABLE");
+      return await pageManager.getResultPage(request.params.task_id, request.params.offset_bytes, request.params.max_bytes) as unknown as Record<string, unknown>;
+    }
     case "continueTask": return await manager.continueTask(request.params.input) as unknown as Record<string, unknown>;
     case "cancelTask": return await manager.cancelTask(request.params.task_id) as unknown as Record<string, unknown>;
     case "getEvents": return await manager.getEvents(request.params.input) as unknown as Record<string, unknown>;
@@ -138,6 +145,7 @@ const CONTROL_METHODS = new Set<ExecutorControlRequest["method"]>([
   "listTasks",
   "getStatus",
   "getResult",
+  "getResultPage",
   "getEvents",
   "getFeedback",
   "getAttention",

@@ -859,17 +859,9 @@ function computeOfficialInstallationFingerprint(input2) {
   };
   return createHash4("sha256").update(JSON.stringify(normalized), "utf8").digest("hex");
 }
-var OFFICIAL_RUNTIME_PROBE_SCOPES, MAX_AUTHORIZATION_BYTES;
 var init_official_runtime_authorization = __esm({
   "src/runtime/official-runtime-authorization.ts"() {
     "use strict";
-    init_paths();
-    OFFICIAL_RUNTIME_PROBE_SCOPES = Object.freeze([
-      "coding_plan_probe",
-      "start_plan_probe",
-      "other_provider_probe"
-    ]);
-    MAX_AUTHORIZATION_BYTES = 64 * 1024;
   }
 });
 
@@ -1001,7 +993,6 @@ var init_resolver = __esm({
       "ZCODE_HOME",
       "ZCODE_DATA_BASE_DIR",
       "ZCODE_WINDOWS_APP_INSTALL_DIR",
-      "ZCODE_BRIDGE_EXPERIMENTAL_RUNTIME_AUTHORIZATION_FILE",
       "ZCODE_BRIDGE_DEFAULT_PROVIDER_ID",
       "ZCODE_BRIDGE_DEFAULT_MODEL_ID",
       "ZCODE_BRIDGE_DEFAULT_REASONING_LEVEL",
@@ -2299,7 +2290,7 @@ async function sha256File2(filePath) {
   });
   return hash2.digest("hex");
 }
-var OFFICIAL_HOST_TRANSPORT_MAX_FRAME_BYTES, OFFICIAL_HOST_ASSET_RELATIVE_ROOT, OFFICIAL_HOST_ASSETS, officialProviderCapabilityFailure, officialHostEnvironmentTail;
+var OFFICIAL_HOST_TRANSPORT_MAX_FRAME_BYTES, OFFICIAL_HOST_ASSET_RELATIVE_ROOT, OFFICIAL_HOST_ASSETS, officialHostEnvironmentTail;
 var init_official_host_adapter = __esm({
   "src/adapters/official-host-adapter.ts"() {
     "use strict";
@@ -2340,7 +2331,6 @@ var init_official_host_adapter = __esm({
         sha256: "52B16658275B7848F8081A6542FEE3448F1B1C5D3A36487107AE0E7CEC95AC6F"
       }
     };
-    officialProviderCapabilityFailure = officialProviderCapabilityWarning;
     officialHostEnvironmentTail = Promise.resolve();
   }
 });
@@ -27670,7 +27660,7 @@ var init_zcode_app_server_adapter = __esm({
           await client.request("session/send", { sessionId, content: prompt });
           entry.rpcAcceptedAt = this.#now().toISOString();
           if (!entry.turnStartedAt) {
-            entry.onEvent({ type: "turn_started", summary: "ZCode accepted the task and started a turn", details: { rpc_accepted: true, ...entry.turnId ? { turn_id: entry.turnId } : {} } });
+            entry.onEvent({ type: "turn_accepted", summary: "ZCode accepted the task request; the turn is not yet observed started", details: { ...entry.turnId ? { turn_id: entry.turnId } : {} } });
           }
           entry.bindingTimer = setTimeout(() => {
             if (!entry.awaitingTurnStart) return;
@@ -28709,8 +28699,9 @@ var init_zcode_app_server_adapter = __esm({
             if (upgrade === "yes") entry.acceptedEvidence = "yes";
           }
           if (turnId) entry.boundTurnIds.add(turnId);
-          if (!entry.acceptingTurn) return;
-          if (entry.awaitingTurnStart && type !== "turn.started") return;
+          const terminalTurnEvent = type === "turn.completed" || type === "turn.failed";
+          if (!entry.acceptingTurn && !(type === "turn.started" && entry.pendingCompletion)) return;
+          if (entry.awaitingTurnStart && type !== "turn.started" && !terminalTurnEvent) return;
           if (entry.turnId && turnId && entry.turnId !== turnId) return;
           if (typeof params.seq === "number") {
             if (!Number.isSafeInteger(params.seq) || params.seq <= entry.lastEventSeq) return;
@@ -28718,6 +28709,9 @@ var init_zcode_app_server_adapter = __esm({
           }
           entry.lastEventAt = Date.now();
           if (type === "turn.started") {
+            if (entry.pendingCompletion && turnId && entry.pendingCompletion.turnId !== null && entry.pendingCompletion.turnId !== turnId) {
+              return;
+            }
             if (turnId) entry.turnId = turnId;
             entry.awaitingTurnStart = false;
             entry.turnStartedAt = this.#now().toISOString();
@@ -28728,7 +28722,7 @@ var init_zcode_app_server_adapter = __esm({
           }
           if (type === "turn.completed") {
             if (entry.awaitingTurnStart) {
-              entry.pendingCompletion = { payload, event: params, heldAt: Date.now() };
+              entry.pendingCompletion = { payload, event: params, turnId, heldAt: Date.now() };
               entry.acceptingTurn = false;
               if (!entry.pendingTimer) {
                 entry.pendingTimer = setTimeout(() => this.#settlePendingCompletion(entry), this.#turnBindingCompatMs);
@@ -28745,6 +28739,11 @@ var init_zcode_app_server_adapter = __esm({
           }
           if (type === "turn.failed") {
             entry.acceptingTurn = false;
+            entry.awaitingTurnStart = false;
+            if (entry.bindingTimer) {
+              clearTimeout(entry.bindingTimer);
+              entry.bindingTimer = null;
+            }
             entry.turnCompletedAt = this.#now().toISOString();
             const extraction = extractTurnFailureEvidence(payload.error);
             const upstreamPhase = typeof asRecord4(payload.error).turnPhase === "string" ? asRecord4(payload.error).turnPhase : typeof payload.turnPhase === "string" ? payload.turnPhase : null;
@@ -29339,7 +29338,6 @@ var init_zcode_app_server_adapter = __esm({
 var official_app_server_adapter_exports = {};
 __export(official_app_server_adapter_exports, {
   OfficialAppServerWorkerAdapter: () => OfficialAppServerWorkerAdapter,
-  officialProviderCapabilityFailure: () => officialProviderCapabilityFailure,
   officialProviderCapabilityWarning: () => officialProviderCapabilityWarning
 });
 var OfficialAppServerWorkerAdapter;
@@ -30739,8 +30737,9 @@ async function runZCodeAdapter(bootstrap, execution, interaction, workerIdentity
           modelProfile.selection_source = event.details["model_source"];
         }
         modelProfile.effective_at = (/* @__PURE__ */ new Date()).toISOString();
-      } else if (event.type === "turn_started") {
+      } else if (event.type === "turn_accepted") {
         rpcAcceptedAt ??= (/* @__PURE__ */ new Date()).toISOString();
+      } else if (event.type === "turn_started") {
         turnStartedAt = (/* @__PURE__ */ new Date()).toISOString();
         if (typeof event.details?.["turn_id"] === "string") modelProfile.turn_id = event.details["turn_id"];
       } else if (event.type === "turn_completed") {
@@ -31051,6 +31050,7 @@ function createBoundedRuntimeEventPublisher(sender) {
   const allowed = /* @__PURE__ */ new Set([
     "session_ready",
     "model_selected",
+    "turn_accepted",
     "turn_started",
     "model_tool_call",
     "tool_status",

@@ -41,6 +41,7 @@
 | 安全安装版执行 | [054](ADR-054-safe-installed-runtime-without-static-version-gate.md) | 安全安装不因版本、摘要、签名、指纹或实验授权缺失而阻断；静态事实仅作诊断，Provider/Billing 仍独立验证 |
 | Recovery 编号对账 | [044](ADR-044-preview-lifecycle-recovery-reconciliation.md) | Preview 保留 ADR-037 官方认证语义；Stable Host Recovery 在未来对账中使用 ADR-044；不做机械覆盖 |
 | Result 摘要、Event 归属 | [047](ADR-047-compatible-result-summary.md) | 候选 MCP 可选摘要、全量证据读取及 Attempt 核对 |
+| Result 回读合同 | [056](ADR-056-result-readback-contract.md) | Executor 侧摘要投影、MCP 有界文本通道与 `offset_bytes`/`max_bytes` 分页全量读取;默认 full 合同不变 |
 | Event 默认预算 | [048](ADR-048-bounded-default-event-pages.md) | `zcode_events` 省略 `max_bytes` 时使用 32 KiB 页预算；显式预算仍为硬限制；所有事件可按 cursor 完整续读 |
 | Async Executor | [045](ADR-045-async-executor-ownership.md) | Accepted / Implemented；PR #131 已合并到 Preview `c7bfc28b`；独立 Executor、Thin MCP、CLI/Web、loaded/idle trusted-local Wake 与 Native MCP Result readback 已进入 Preview.14；严格 C/D、Desktop fully exited、Official Runtime provenance 和非空工程交付仍 `NOT_RUN` |
 | Task CLI | [049](ADR-049-task-cli-control-surface.md) | CLI 只经 Executor Control 管理同一 Authority；不打开 SQLite、不实现调度或恢复；已有 Executor 不重复 Spawn，过渡和 Shutdown unknown 均有显式边界 |

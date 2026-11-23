@@ -316,7 +316,7 @@ interface RunEntry {
   turnStartedAt: string | null;
   turnCompletedAt: string | null;
   turnBinding: "strict" | "compat" | "pending";
-  pendingCompletion: { payload: JsonRecord; event: JsonRecord; heldAt: number } | null;
+  pendingCompletion: { payload: JsonRecord; event: JsonRecord; turnId: string | null; heldAt: number } | null;
   bindingTimer: NodeJS.Timeout | null;
   pendingTimer: NodeJS.Timeout | null;
   replayConsecutiveFailures: number;
@@ -1024,11 +1024,13 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       entry.providerSendNumber = 1;
       await client.request("session/send", { sessionId, content: prompt });
       entry.rpcAcceptedAt = this.#now().toISOString();
-      // A coalesced ACK + turn.started chunk can settle this send microtask
-      // after the runtime's stronger turn.started event was already published.
-      // Do not emit a second turn-start event for that same accepted turn.
+      // Request acceptance is not Turn Start. Only the native turn.started
+      // event may establish the Started fact; the ACK publishes a distinct
+      // acceptance fact. A coalesced ACK + turn.started chunk can settle this
+      // send microtask after the native turn.started already published, in
+      // which case the acceptance event is redundant and stays unemitted.
       if (!entry.turnStartedAt) {
-        entry.onEvent({ type: "turn_started", summary: "ZCode accepted the task and started a turn", details: { rpc_accepted: true, ...(entry.turnId ? { turn_id: entry.turnId } : {}) } });
+        entry.onEvent({ type: "turn_accepted", summary: "ZCode accepted the task request; the turn is not yet observed started", details: { ...(entry.turnId ? { turn_id: entry.turnId } : {}) } });
       }
       // B2: if the runtime does not deliver turn.started for the accepted
       // send within a bounded window, degrade to the documented compat path
@@ -2161,8 +2163,15 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         if (upgrade === "yes") entry.acceptedEvidence = "yes";
       }
       if (turnId) entry.boundTurnIds.add(turnId);
-      if (!entry.acceptingTurn) return;
-      if (entry.awaitingTurnStart && type !== "turn.started") return;
+      // Terminal events and the binding turn.started must survive the progress
+      // filters below. Dropping a terminal while turn binding is still pending
+      // (session with prior events, or a runtime that emits completed/failed
+      // before started) would strand a finished turn until timeout whenever
+      // replay cannot backfill turn.started; dropping a late turn.started would
+      // make the held-completion strict settle path unreachable.
+      const terminalTurnEvent = type === "turn.completed" || type === "turn.failed";
+      if (!entry.acceptingTurn && !(type === "turn.started" && entry.pendingCompletion)) return;
+      if (entry.awaitingTurnStart && type !== "turn.started" && !terminalTurnEvent) return;
       if (entry.turnId && turnId && entry.turnId !== turnId) return;
       if (typeof params.seq === "number") {
         if (!Number.isSafeInteger(params.seq) || params.seq <= entry.lastEventSeq) return;
@@ -2172,7 +2181,12 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       if (type === "turn.started") {
         // Strict binding wins: the send-accepted turn is now identified. A
         // completion held in the pending boundary settles only after this
-        // binding is in place (B2-01).
+        // binding is in place (B2-01). A foreign late started (a different
+        // turnId than the held completion) must not bind this attempt.
+        if (entry.pendingCompletion && turnId && entry.pendingCompletion.turnId !== null
+          && entry.pendingCompletion.turnId !== turnId) {
+          return;
+        }
         if (turnId) entry.turnId = turnId;
         entry.awaitingTurnStart = false;
         entry.turnStartedAt = this.#now().toISOString();
@@ -2181,7 +2195,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       if (type === "turn.completed") {
         if (entry.awaitingTurnStart) {
           // Completion before binding: hold a bounded pending boundary.
-          entry.pendingCompletion = { payload, event: params, heldAt: Date.now() };
+          entry.pendingCompletion = { payload, event: params, turnId, heldAt: Date.now() };
           entry.acceptingTurn = false;
           if (!entry.pendingTimer) {
             entry.pendingTimer = setTimeout(() => this.#settlePendingCompletion(entry), this.#turnBindingCompatMs);
@@ -2200,6 +2214,11 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       }
       if (type === "turn.failed") {
         entry.acceptingTurn = false;
+        // A failure observed before turn.started is still a terminal fact for
+        // this attempt; stop the binding window instead of letting it fire a
+        // confusing compat degradation after the run already settled.
+        entry.awaitingTurnStart = false;
+        if (entry.bindingTimer) { clearTimeout(entry.bindingTimer); entry.bindingTimer = null; }
         entry.turnCompletedAt = this.#now().toISOString();
         // ADR-011: evidence-strength adjudication replaces the old text-only
         // quota boolean. Structured rate-limit codes defeat quota-flavored

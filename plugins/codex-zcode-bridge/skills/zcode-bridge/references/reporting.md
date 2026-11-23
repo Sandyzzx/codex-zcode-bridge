@@ -12,7 +12,7 @@ Bridge 面向机器 Host。默认 MCP 工具面、Task/Result 字段和 SQLite �
 - `zcode_status` 提供当前 Task/Attempt 状态、Worker/Runtime 观测、错误与 dispatch blocker；不提供完整 Pending 请求、Result digest 或 Release 证明。
 - `zcode_events(view="summary")` 合并同一 Attempt 内连续的安全模型文本片段，并保留单调 `next_seq`、`max_bytes`、Attention 屏障与 Raw 模式；`result_committed`、`cleanup_verified` 与 `released` 也从持久事件核对。
 - `zcode_feedback` 是当前 Attempt 的简洁机器投影。它不替代 `zcode_status`、`zcode_events` 或 `zcode_result`，也不要求 Host 再渲染人类表格。
-- `zcode_result` 是持久 Result；32 MiB canonical Result 合同保持不变。Result 摘要只提供交付内容，不能替代 digest、Cleanup 或 Release 事件。
+- `zcode_result` 是持久 Result；32 MiB canonical Result 合同保持不变。Result 摘要只提供交付内容，不能替代 digest、Cleanup 或 Release 事件。超过 MCP 单行上限的大 Result 用可选 `offset_bytes`+`max_bytes` 分页读取（ADR-056）：按返回的 `next_offset` 翻页，拼接全部 `data` 后其 SHA-256 应等于 `result_digest`；分页读取不能与 `view=summary` 组合。
 
 Host 向用户说明结果时，可直接根据这些机器事实组织当前对话所需的文字，但不得把 Bridge 状态、Worker 自报、独立验收、Cleanup 和 Release 混成一个 PASS。
 

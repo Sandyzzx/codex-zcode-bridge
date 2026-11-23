@@ -355,7 +355,6 @@ var init_resolver = __esm({
       "ZCODE_HOME",
       "ZCODE_DATA_BASE_DIR",
       "ZCODE_WINDOWS_APP_INSTALL_DIR",
-      "ZCODE_BRIDGE_EXPERIMENTAL_RUNTIME_AUTHORIZATION_FILE",
       "ZCODE_BRIDGE_DEFAULT_PROVIDER_ID",
       "ZCODE_BRIDGE_DEFAULT_MODEL_ID",
       "ZCODE_BRIDGE_DEFAULT_REASONING_LEVEL",
@@ -805,17 +804,9 @@ function computeOfficialInstallationFingerprint(input) {
   };
   return createHash3("sha256").update(JSON.stringify(normalized), "utf8").digest("hex");
 }
-var OFFICIAL_RUNTIME_PROBE_SCOPES, MAX_AUTHORIZATION_BYTES;
 var init_official_runtime_authorization = __esm({
   "src/runtime/official-runtime-authorization.ts"() {
     "use strict";
-    init_paths();
-    OFFICIAL_RUNTIME_PROBE_SCOPES = Object.freeze([
-      "coding_plan_probe",
-      "start_plan_probe",
-      "other_provider_probe"
-    ]);
-    MAX_AUTHORIZATION_BYTES = 64 * 1024;
   }
 });
 
@@ -1446,7 +1437,6 @@ __export(official_host_adapter_exports, {
   loadOfficialHostProductVersion: () => loadOfficialHostProductVersion,
   loadOfficialHostProviderRuntimeAuthFactory: () => loadOfficialHostProviderRuntimeAuthFactory,
   loadOfficialStartPlanAuthenticationResolverFactory: () => loadOfficialStartPlanAuthenticationResolverFactory,
-  officialProviderCapabilityFailure: () => officialProviderCapabilityFailure,
   officialProviderCapabilityWarning: () => officialProviderCapabilityWarning,
   verifyOfficialHostAssets: () => verifyOfficialHostAssets
 });
@@ -1912,7 +1902,7 @@ async function sha256File2(filePath) {
   });
   return hash.digest("hex");
 }
-var OFFICIAL_HOST_TRANSPORT_MAX_FRAME_BYTES, OFFICIAL_HOST_ASSET_RELATIVE_ROOT, OFFICIAL_HOST_ASSETS, officialProviderCapabilityFailure, officialHostEnvironmentTail;
+var OFFICIAL_HOST_TRANSPORT_MAX_FRAME_BYTES, OFFICIAL_HOST_ASSET_RELATIVE_ROOT, OFFICIAL_HOST_ASSETS, officialHostEnvironmentTail;
 var init_official_host_adapter = __esm({
   "src/adapters/official-host-adapter.ts"() {
     "use strict";
@@ -1953,7 +1943,6 @@ var init_official_host_adapter = __esm({
         sha256: "52B16658275B7848F8081A6542FEE3448F1B1C5D3A36487107AE0E7CEC95AC6F"
       }
     };
-    officialProviderCapabilityFailure = officialProviderCapabilityWarning;
     officialHostEnvironmentTail = Promise.resolve();
   }
 });
@@ -4760,6 +4749,36 @@ var init_store = __esm({
           const rejected = operationRow ? this.#db.prepare("SELECT evidence_json FROM manager_operation_events WHERE operation_id=? AND event_type='observation_recorded' AND json_extract(evidence_json,'$.reason') LIKE 'result_submission_failed:%' ORDER BY sequence DESC LIMIT 1").get(operationRow.operation_id) : null;
           const result_submission_error = rejected ? JSON.parse(rejected.evidence_json).reason.slice("result_submission_failed:".length) : null;
           return { task, projection: { task_id: taskRow.task_id, status: taskRow.status, current_attempt: taskRow.current_attempt, created_at: taskRow.created_at }, attempt, operation, result, continuation, ...result_submission_error ? { result_submission_error } : {} };
+        });
+      }
+      /** P1 §3.4: read one bounded page of the exact stored canonical Result
+       * JSON. Byte offsets always land on UTF-8 codepoint boundaries via the
+       * returned next_offset; callers must page with it instead of computing
+       * their own offsets. Concatenating every page's data reproduces the stored
+       * bytes whose SHA-256 is operation.result_digest. */
+      readTaskResultPage(taskId, offsetBytes, maxBytes) {
+        if (!validId3(taskId) || !Number.isSafeInteger(offsetBytes) || offsetBytes < 0 || !Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 4194304) fail2("invalid_result_page_read");
+        return this.#readConsistent(() => {
+          const taskRow = this.#db.prepare("SELECT task_id,current_attempt FROM tasks WHERE task_id=?").get(taskId);
+          if (!taskRow || this.#isRetiredHistoricalTask(taskId)) fail2("task_not_found");
+          const operationRow = this.#db.prepare("SELECT operation_id,result_json,result_digest,result_commit_ref,result_status FROM manager_operations WHERE operation_kind='attempt_lifecycle' AND task_id=? AND attempt=?").get(taskId, taskRow.current_attempt);
+          if (!operationRow || operationRow.result_json === null) fail2("result_not_committed");
+          const bytes = Buffer.from(operationRow.result_json, "utf8");
+          if (offsetBytes > bytes.length) fail2("invalid_result_page_offset");
+          let end = Math.min(offsetBytes + maxBytes, bytes.length);
+          while (end < bytes.length && (bytes[end] & 192) === 128) end += 1;
+          if (end >= bytes.length) end = bytes.length;
+          const nextOffset = end < bytes.length ? end : null;
+          return {
+            operation_id: operationRow.operation_id,
+            result_digest: operationRow.result_digest,
+            result_commit_ref: operationRow.result_commit_ref,
+            result_status: operationRow.result_status,
+            offset_bytes: offsetBytes,
+            next_offset: nextOffset,
+            total_bytes: bytes.length,
+            data: bytes.subarray(offsetBytes, end).toString("utf8")
+          };
         });
       }
       /** Project Feedback only from this Attempt's persisted runtime observations
@@ -8594,6 +8613,7 @@ var init_lifecycle_port = __esm({
       "readRecoverableQueuedAttempts",
       "readTaskEvents",
       "readTaskFeedback",
+      "readTaskResultPage",
       "provisionCapacity",
       "assertCapacityPolicy",
       "admitOperation",
@@ -8694,7 +8714,6 @@ function createWorkerEnv(source, options = {}) {
     "ZCODE_BRIDGE_DEFAULT_REASONING_LEVEL",
     "ZCODE_BRIDGE_MODE",
     "ZCODE_BRIDGE_TIMEOUT_MS",
-    "ZCODE_BRIDGE_EXPERIMENTAL_RUNTIME_AUTHORIZATION_FILE",
     // Env-only browser configuration (ADR-007): non-secret strings the worker's
     // adapter reads from its own environment when no persisted setting exists.
     "ZCODE_BRIDGE_BROWSER_USE",
@@ -14474,6 +14493,7 @@ async function openClaimOnlyDriver(options) {
     readTaskProjections: (options2) => port.readTaskProjections(options2),
     readTaskAttention: (taskId) => port.readTaskAttention(taskId),
     readTaskEvents: (taskId, options2) => port.readTaskEvents(taskId, options2),
+    readTaskResultPage: (taskId, offsetBytes, maxBytes) => port.readTaskResultPage(taskId, offsetBytes, maxBytes),
     readCommittedResult: (operationId) => port.readCommittedResult(operationId),
     readTaskFeedback: (taskId) => port.readTaskFeedback(taskId),
     createNextAttempt: (input) => port.createNextAttempt(input, {
@@ -16141,6 +16161,41 @@ var TaskManagerError = class extends Error {
     this.code = code;
   }
 };
+
+// src/result-summary.ts
+var INLINE_RESULT_BYTES = 2048;
+var MAX_ITEM_CHARS = 256;
+function summarizeTaskResult(result) {
+  if (result.zcode_output.length <= INLINE_RESULT_BYTES && Buffer.byteLength(JSON.stringify(result)) <= INLINE_RESULT_BYTES) {
+    return result;
+  }
+  const { summary, files_changed, tests, issues, zcode_output, report_candidate, model, usage, timing, ...identity } = result;
+  const omittedFields = ["zcode_output"];
+  const summaryPreview = summary.slice(0, 768).replace(/[\uD800-\uDBFF]$/u, "");
+  if (summaryPreview !== summary) omittedFields.push("summary");
+  const filesPreview = files_changed.slice(0, 12).filter((file) => file.length <= MAX_ITEM_CHARS);
+  if (filesPreview.length !== files_changed.length) omittedFields.push("files_changed");
+  const issuesPreview = issues.slice(0, 8).filter((issue2) => issue2.length <= MAX_ITEM_CHARS);
+  if (issuesPreview.length !== issues.length) omittedFields.push("issues");
+  const testCounts = { passed: 0, failed: 0, not_run: 0 };
+  for (const { status } of tests) testCounts[status] += 1;
+  const testPreview = tests.slice(0, 12).filter(({ command }) => command.length <= MAX_ITEM_CHARS).map(({ command, status }) => ({ command, status }));
+  if (testPreview.length !== tests.length || tests.some(({ details }) => details !== void 0)) {
+    omittedFields.push("tests");
+  }
+  if (report_candidate !== void 0) omittedFields.push("report_candidate");
+  if (model !== void 0) omittedFields.push("model");
+  if (usage !== void 0) omittedFields.push("usage");
+  if (timing !== void 0) omittedFields.push("timing");
+  return {
+    ...identity,
+    summary: summaryPreview,
+    files_changed: filesPreview,
+    tests: testPreview,
+    issues: issuesPreview,
+    projection: { omitted_fields: omittedFields, test_counts: testCounts }
+  };
+}
 
 // src/attention/snapshot.ts
 var TASK_STATUSES = /* @__PURE__ */ new Set([
@@ -22541,7 +22596,8 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
   #testOnlyFakeAdapter;
   #routeTaskModel;
   #onOperationReleased;
-  constructor(driver, context, processProbe, testBeforeDispatch, testOnScheduler, shutdownWaitMs = DEFAULT_HOST_SHUTDOWN_WAIT_MS, startPlanAuthAvailable = false, testOnlyFakeAdapter = false, routeTaskModel2, startPlanAuthInjected = false, startPlanPrivateAuthFactory, onOperationReleased) {
+  #dispatchFence;
+  constructor(driver, context, processProbe, testBeforeDispatch, testOnScheduler, shutdownWaitMs = DEFAULT_HOST_SHUTDOWN_WAIT_MS, startPlanAuthAvailable = false, testOnlyFakeAdapter = false, routeTaskModel2, startPlanAuthInjected = false, startPlanPrivateAuthFactory, onOperationReleased, dispatchFence) {
     this.#driver = driver;
     this.#context = context;
     this.#processProbe = processProbe;
@@ -22554,6 +22610,10 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
     this.#testOnlyFakeAdapter = testOnlyFakeAdapter;
     this.#routeTaskModel = routeTaskModel2;
     this.#onOperationReleased = onOperationReleased;
+    this.#dispatchFence = dispatchFence;
+  }
+  #spawnFenceReason() {
+    return this.#dispatchFence?.() ?? null;
   }
   async createTask(task) {
     this.#assertOpen();
@@ -22698,10 +22758,45 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
     if (value === null) throw new TaskManagerError("TASK_NOT_FOUND", `unknown SQLite task: ${taskId}`);
     return parseTaskAttentionSnapshot(value, taskId);
   }
-  async getResult(taskId) {
+  async getResult(taskId, view) {
     const snapshot = this.#readSnapshot(taskId);
     if (!snapshot.result) throw new TaskManagerError("TASK_NOT_FINISHED", `task ${taskId} has no committed SQLite Result${snapshot.result_submission_error ? `: ${String(snapshot.result_submission_error)}; Recovery required; no automatic retry` : ""}`);
+    if (view === "summary") return summarizeTaskResult(snapshot.result);
     return snapshot.result;
+  }
+  /** P1 §3.4A: bounded page over the exact stored canonical Result JSON. The
+   * returned next_offset always lands on a UTF-8 codepoint boundary;
+   * concatenating every page's data reproduces the stored bytes whose SHA-256
+   * equals the operation's result_digest. */
+  async getResultPage(taskId, offsetBytes, maxBytes) {
+    this.#assertOpen();
+    if (!Number.isSafeInteger(offsetBytes) || offsetBytes < 0 || !Number.isSafeInteger(maxBytes) || maxBytes < 1024 || maxBytes > 4194304) {
+      throw new TaskManagerError("TASK_INVALID", "offset_bytes must be a non-negative integer and max_bytes must be between 1024 and 4194304");
+    }
+    const snapshot = this.#readSnapshot(taskId);
+    if (!snapshot.result) throw new TaskManagerError("TASK_NOT_FINISHED", `task ${taskId} has no committed SQLite Result`);
+    let page;
+    try {
+      page = this.#driver.readTaskResultPage(taskId, offsetBytes, maxBytes);
+    } catch (error2) {
+      const code = errorCode2(error2);
+      if (code === "invalid_result_page_offset") throw new TaskManagerError("TASK_INVALID", "offset_bytes is beyond the stored Result");
+      throw error2;
+    }
+    return {
+      task_id: taskId,
+      attempt: Number(snapshot.attempt.attempt),
+      status: taskStatus(snapshot.projection.status),
+      result_status: page.result_status,
+      result_digest: page.result_digest,
+      result_commit_ref: page.result_commit_ref,
+      page: {
+        offset_bytes: page.offset_bytes,
+        next_offset: page.next_offset,
+        total_bytes: page.total_bytes,
+        data: page.data
+      }
+    };
   }
   recordExecutorWakeObservation(input) {
     this.#assertOpen();
@@ -23233,6 +23328,7 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
         recoverable_queued_attempts: queued.filter((value) => value.dispatchable === true).length,
         root_read_only: false
       });
+      await this.#recoverUnnotifiedReleases(snapshot);
       this.#schedulePump();
     } catch (error2) {
       this.#recoveryBlocked = error2 instanceof Error ? error2.message : String(error2);
@@ -23300,7 +23396,12 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
       const blockers = Array.isArray(snapshot.root_blockers) ? snapshot.root_blockers.map(String).join(",") : "recovery_snapshot_invalid";
       throw new TaskManagerError("TASK_STATE", `SQLite Recovery is blocked (${blockers || "root_not_consistent"}); no lifecycle side effect was attempted`);
     }
-    return { operations: snapshot.operations, capacity: { capacity_limit: Number(capacity.capacity_limit) } };
+    return {
+      operations: snapshot.operations,
+      events: Array.isArray(snapshot.events) ? snapshot.events : [],
+      taskProjections: Array.isArray(snapshot.task_projections) ? snapshot.task_projections : [],
+      capacity: { capacity_limit: Number(capacity.capacity_limit) }
+    };
   }
   #driverTrustedPolicy() {
     const context = this.#context;
@@ -23314,6 +23415,7 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
       testShutdownWaitMs,
       routeTaskModel: routeTaskModel2,
       onOperationReleased,
+      dispatchFence,
       ...driverOptions
     } = options;
     const shutdownWaitMs = testShutdownWaitMs ?? DEFAULT_HOST_SHUTDOWN_WAIT_MS;
@@ -23333,7 +23435,8 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
       routeTaskModel2,
       options.startPlanPrivateAuth !== void 0,
       options.startPlanPrivateAuthFactory,
-      onOperationReleased
+      onOperationReleased,
+      dispatchFence
     );
     try {
       await authority.recoverTasks();
@@ -23399,6 +23502,11 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
       });
       return;
     }
+    const fenceReason = this.#spawnFenceReason();
+    if (fenceReason !== null) {
+      this.#schedulerStage("schedule_fenced", { reason: fenceReason, queue_depth: this.#queue.length });
+      return;
+    }
     if (this.#pumpRetryTimer || this.#workspaceRetryTimer) {
       this.#schedulerStage("schedule_waiting_for_capacity", { retry_ms: this.#capacityRetryMs, queue_depth: this.#queue.length });
       return;
@@ -23461,6 +23569,11 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
       this.#schedulerStage("pump_skipped", { closed: this.#closed, shutting_down: this.#shuttingDown, active: this.#active, queue_depth: this.#queue.length });
       return;
     }
+    const initialFence = this.#spawnFenceReason();
+    if (initialFence !== null) {
+      this.#schedulerStage("pump_fenced", { reason: initialFence, queue_depth: this.#queue.length });
+      return;
+    }
     this.#active += 1;
     this.#schedulerStage("pump_started", { queue_depth: this.#queue.length });
     let capacityBlocked = false;
@@ -23501,6 +23614,13 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
           }
         }
         if (this.#closed || this.#shuttingDown) break;
+        const dispatchFenceReason = this.#spawnFenceReason();
+        if (dispatchFenceReason !== null) {
+          this.#schedulerStage("dispatch_fenced", { task_id: next.taskId, attempt: next.attempt, reason: dispatchFenceReason });
+          this.#queue.unshift(next);
+          this.#queued.add(nextKey);
+          break;
+        }
         const dispatchPathKey = normalizeExecutionPath(executionPath);
         this.#dispatchingPaths.add(dispatchPathKey);
         const runPromise = this.#driver.run({
@@ -23650,6 +23770,70 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
         operation_id: fact.operation_id,
         reason: errorCode2(error2) ?? "executor_wake_failed"
       });
+    }
+  }
+  /** P1 §3.3: restart-safe Release→Wake recovery. Selects released operations
+   * with a committed Result and zero executor_wake observations, and re-runs
+   * the single notification hook for each. The Wake coordinator and the
+   * observation state machine remain the dedup authority: an operation with
+   * any recorded wake fact (intent, queued, submission_unknown, turn_started,
+   * web_notify) is deliberately skipped so recovery never duplicates a Queue
+   * submission whose acknowledgement outcome is unknown. */
+  async #recoverUnnotifiedReleases(snapshot) {
+    if (!this.#onOperationReleased) return;
+    const wakeNotified = /* @__PURE__ */ new Set();
+    for (const value of snapshot.events) {
+      const event = asRecord6(value);
+      if (String(event.event_type) !== "observation_recorded" || typeof event.operation_id !== "string") continue;
+      try {
+        const evidence = asRecord6(JSON.parse(String(event.evidence_json)));
+        if (evidence.reason === "executor_wake") wakeNotified.add(event.operation_id);
+      } catch {
+      }
+    }
+    const taskProjectionByTaskId = /* @__PURE__ */ new Map();
+    for (const value of snapshot.taskProjections) {
+      const projection = asRecord6(value);
+      if (typeof projection.task_id === "string") taskProjectionByTaskId.set(projection.task_id, projection);
+    }
+    for (const value of snapshot.operations) {
+      const operation = asRecord6(value);
+      const operationId = operation.operation_id;
+      if (typeof operationId !== "string" || String(operation.phase) !== "released" || wakeNotified.has(operationId)) continue;
+      if (typeof operation.result_digest !== "string" || typeof operation.result_commit_ref !== "string") continue;
+      if (String(operation.result_status) === "cancelled") continue;
+      const taskId = operation.task_id;
+      const attempt = Number(operation.attempt);
+      const generation = Number(operation.generation);
+      const projection = typeof taskId === "string" ? taskProjectionByTaskId.get(taskId) : void 0;
+      const workspace = typeof projection?.workspace === "string" ? projection.workspace : null;
+      if (typeof taskId !== "string" || !Number.isSafeInteger(attempt) || attempt < 1 || !Number.isSafeInteger(generation) || generation < 1 || !workspace) continue;
+      const fact = {
+        task_id: taskId,
+        attempt,
+        operation_id: operationId,
+        generation,
+        task_status: taskStatus(projection.status),
+        result_status: String(operation.result_status),
+        result_digest: operation.result_digest,
+        result_commit_ref: operation.result_commit_ref,
+        workspace
+      };
+      this.#schedulerStage("release_wake_recovery_selected", {
+        task_id: taskId,
+        attempt,
+        operation_id: operationId
+      });
+      try {
+        await this.#onOperationReleased(fact, (input) => this.recordExecutorWakeObservation(input));
+      } catch (error2) {
+        this.#schedulerStage("release_wake_recovery_failed", {
+          task_id: taskId,
+          attempt,
+          operation_id: operationId,
+          reason: errorCode2(error2) ?? "executor_wake_failed"
+        });
+      }
     }
   }
   #assertOpen() {
@@ -24876,7 +25060,8 @@ async function createProductionAuthorityComposition(options) {
     onWorkerDiagnosticLine: options.onWorkerDiagnosticLine ?? createWorkerDiagnosticSink("[bridge]"),
     ...options.testOnlyFakeAdapter === true ? { testOnlyFakeAdapter: true } : {},
     ...options.testBeforeDispatch ? { testBeforeDispatch: options.testBeforeDispatch } : {},
-    ...options.testOnScheduler ? { testOnScheduler: options.testOnScheduler } : {}
+    ...options.testOnScheduler ? { testOnScheduler: options.testOnScheduler } : {},
+    ...options.dispatchFence ? { dispatchFence: options.dispatchFence } : {}
   });
   const modelSettings = new ZCodeModelSettings(env, {
     homeDir,
@@ -24913,7 +25098,8 @@ var executorControlParamsSchemas = {
   createTask: strictObject({ task: zcodeTaskInputSchema }),
   listTasks: listTasksInputSchema,
   getStatus: strictObject({ task_id: nonEmptyString }),
-  getResult: strictObject({ task_id: nonEmptyString }),
+  getResult: strictObject({ task_id: nonEmptyString, view: _enum(["summary", "full"]).optional() }),
+  getResultPage: strictObject({ task_id: nonEmptyString, offset_bytes: number2().int().nonnegative(), max_bytes: number2().int().min(1024).max(4194304) }),
   continueTask: strictObject({ input: zcodeContinueInputSchema }),
   cancelTask: strictObject({ task_id: nonEmptyString }),
   getEvents: strictObject({ input: zcodeEventsInputSchema }),
@@ -25006,7 +25192,12 @@ async function dispatch(options, request, currentState) {
     case "getStatus":
       return await manager.getStatus(request.params.task_id);
     case "getResult":
-      return await manager.getResult(request.params.task_id);
+      return await manager.getResult(request.params.task_id, request.params.view);
+    case "getResultPage": {
+      const pageManager = manager;
+      if (!pageManager.getResultPage) throw new Error("RESULT_PAGE_UNAVAILABLE");
+      return await pageManager.getResultPage(request.params.task_id, request.params.offset_bytes, request.params.max_bytes);
+    }
     case "continueTask":
       return await manager.continueTask(request.params.input);
     case "cancelTask":
@@ -25074,6 +25265,7 @@ var CONTROL_METHODS = /* @__PURE__ */ new Set([
   "listTasks",
   "getStatus",
   "getResult",
+  "getResultPage",
   "getEvents",
   "getFeedback",
   "getAttention",
@@ -25302,6 +25494,10 @@ async function startExecutorService(options) {
         bridgeEntryPath: options.bridgeEntryPath,
         workerEntryPath: workerPath,
         processProbe,
+        // P1 §3.2 Lease Spawn Fence: while Executor lease ownership is unknown,
+        // the Manager may not start any new Worker Spawn. In-flight Workers and
+        // queued Attempts keep their own lifecycle rules.
+        dispatchFence: () => state === "lease_unknown" || !leaseSafe ? "lease_ownership_unknown" : state === "closed" || state === "shutdown_pending" ? "executor_not_dispatching" : null,
         ...options.testOnlyFakeAdapter ? { testOnlyFakeAdapter: true } : {},
         ...options.testBeforeDispatch ? { testBeforeDispatch: options.testBeforeDispatch } : {},
         ...options.testOnScheduler ? { testOnScheduler: options.testOnScheduler } : {},

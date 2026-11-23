@@ -28,6 +28,7 @@ export type ExecutorControlMethod =
   | "listTasks"
   | "getStatus"
   | "getResult"
+  | "getResultPage"
   | "continueTask"
   | "cancelTask"
   | "getEvents"
@@ -76,7 +77,8 @@ export interface ExecutorControlParamsByMethod {
   createTask: { readonly task: ZcodeTaskInput };
   listTasks: ListTasksInput;
   getStatus: { readonly task_id: string };
-  getResult: { readonly task_id: string };
+  getResult: { readonly task_id: string; readonly view?: "summary" | "full" };
+  getResultPage: { readonly task_id: string; readonly offset_bytes: number; readonly max_bytes: number };
   continueTask: { readonly input: ContinueTaskInput };
   cancelTask: { readonly task_id: string };
   getEvents: { readonly input: GetEventsInput };
@@ -108,7 +110,8 @@ export const executorControlParamsSchemas: {
   createTask: z.strictObject({ task: zcodeTaskInputSchema }),
   listTasks: listTasksInputSchema,
   getStatus: z.strictObject({ task_id: nonEmptyString }),
-  getResult: z.strictObject({ task_id: nonEmptyString }),
+  getResult: z.strictObject({ task_id: nonEmptyString, view: z.enum(["summary", "full"]).optional() }),
+  getResultPage: z.strictObject({ task_id: nonEmptyString, offset_bytes: z.number().int().nonnegative(), max_bytes: z.number().int().min(1024).max(4_194_304) }),
   continueTask: z.strictObject({ input: zcodeContinueInputSchema }),
   cancelTask: z.strictObject({ task_id: nonEmptyString }),
   getEvents: z.strictObject({ input: zcodeEventsInputSchema }),

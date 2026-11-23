@@ -5,7 +5,6 @@ import { homedir } from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { summarizeTaskResult } from "../result-summary.js";
 import {
   loadInstallAuthoritySelection,
   resolveSqliteStateDirectory,
@@ -271,8 +270,10 @@ async function runTaskCommand(
       const output = options.single.get("--output");
       if (output !== undefined && !path.isAbsolute(output)) throw new CliUsageError("--output requires an absolute path");
       return withClient(dependencies, pipeName, async (client) => {
-        const result = (await requestOk(client, "getResult", { task_id: taskId! })).result as unknown as TaskResult;
-        const value = view === "summary" ? summarizeTaskResult(result) : result;
+        // P1 §3.4B: the summary projection runs Executor-side; the CLI stops
+        // transporting the full Result for summary reads.
+        const result = (await requestOk(client, "getResult", { task_id: taskId!, ...(view ? { view } : {}) })).result as unknown as TaskResult;
+        const value = result;
         const serialized = `${JSON.stringify(value, null, 2)}\n`;
         if (output !== undefined) {
           writeFileSync(path.normalize(output), serialized, { encoding: "utf8", flag: "wx" });

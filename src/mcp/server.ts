@@ -7,6 +7,7 @@
 //
 // Built with the official MCP TypeScript SDK (McpServer / registerTool);
 // the SDK owns all JSON-RPC framing — this module never writes to stdout.
+import { createHash } from "node:crypto";
 import { McpServer, type CallToolResult } from "@modelcontextprotocol/server";
 import type {
   GetEventsInput,
@@ -22,7 +23,6 @@ import type {
   ZCodeInteractionReplyInput,
 } from "../interfaces.js";
 import { TaskManagerError } from "../task-errors.js";
-import { summarizeTaskResult } from "../result-summary.js";
 import type { ZcodeTaskInput } from "../api-schemas.js";
 import {
   taskReceiptSchema,
@@ -59,9 +59,29 @@ export interface BridgeServerOptions {
 const EXECUTION_NOT_VERDICT =
   "Execution only. 'completed' is NOT calling host acceptance. Independently verify the workspace diff and checks.";
 
+/** P1 §3.4 / ADR-056: large payloads keep the authoritative structuredContent
+ * channel but replace the duplicated full JSON text with a bounded reference,
+ * so a Result is never serialized twice across the MCP transport. */
+const OK_RESULT_TEXT_CHANNEL_LIMIT_BYTES = 1 << 20;
+
 function okResult(data: Record<string, unknown>): CallToolResult {
+  const text = JSON.stringify(data, null, 2);
+  if (text !== undefined && Buffer.byteLength(text, "utf8") > OK_RESULT_TEXT_CHANNEL_LIMIT_BYTES) {
+    return {
+      content: [{
+        type: "text",
+        text: JSON.stringify({
+          notice: "response_too_large_for_text_channel",
+          text_bytes: Buffer.byteLength(text, "utf8"),
+          text_sha256: createHash("sha256").update(text, "utf8").digest("hex"),
+          hint: "The structuredContent channel carries the full payload; use view=summary or offset_bytes/max_bytes paging for bounded reads.",
+        }),
+      }],
+      structuredContent: data,
+    };
+  }
   return {
-    content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+    content: [{ type: "text", text: text ?? "null" }],
     structuredContent: data,
   };
 }
@@ -264,12 +284,26 @@ export function createBridgeServer(options: BridgeServerOptions): McpServer {
       inputSchema: zcodeResultInputSchema,
       outputSchema: zcodeResultOutputSchema,
     },
-    async (args: { task_id: string; view?: "summary" | "full"; expected_attempt?: number }) => runTool(async () => {
-      const result = await manager.getResult(args.task_id);
+    async (args: { task_id: string; view?: "summary" | "full"; expected_attempt?: number; offset_bytes?: number; max_bytes?: number }) => runTool(async () => {
+      if ((args.offset_bytes === undefined) !== (args.max_bytes === undefined)) {
+        throw new TaskManagerError("TASK_INVALID", "offset_bytes and max_bytes must be provided together");
+      }
+      if (args.offset_bytes !== undefined && args.view === "summary") {
+        throw new TaskManagerError("TASK_INVALID", "paged reads return stored canonical bytes and cannot be combined with view=summary");
+      }
+      if (args.offset_bytes !== undefined) {
+        if (!("getResultPage" in manager) || typeof (manager as { getResultPage?: unknown }).getResultPage !== "function") {
+          throw new TaskManagerError("TASK_INVALID", "this Task manager does not expose paged Result reads");
+        }
+        return await (manager as unknown as { getResultPage(taskId: string, offsetBytes: number, maxBytes: number): Promise<Record<string, unknown>> })
+          .getResultPage(args.task_id, args.offset_bytes, args.max_bytes!);
+      }
+      // P1 §3.4B: the summary projection already ran Executor-side.
+      const result = await manager.getResult(args.task_id, args.view);
       if (args.expected_attempt !== undefined && result.attempt !== args.expected_attempt) {
         throw new TaskManagerError("TASK_STATE", `Expected Result Attempt ${args.expected_attempt}, found ${result.attempt} for ${args.task_id}`);
       }
-      return args.view === "summary" ? summarizeTaskResult(result) : result;
+      return result;
     }),
   );
 

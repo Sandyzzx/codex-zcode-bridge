@@ -620,8 +620,12 @@ async function runZCodeAdapter(
           modelProfile.selection_source = event.details["model_source"];
         }
         modelProfile.effective_at = new Date().toISOString();
-      } else if (event.type === "turn_started") {
+      } else if (event.type === "turn_accepted") {
+        // Request acceptance is not Turn Start (P1 §3.1); it only fixes the
+        // acceptance timestamp. turnStartedAt stays null until the adapter
+        // publishes the native turn_started event.
         rpcAcceptedAt ??= new Date().toISOString();
+      } else if (event.type === "turn_started") {
         turnStartedAt = new Date().toISOString();
         if (typeof event.details?.["turn_id"] === "string") modelProfile.turn_id = event.details["turn_id"];
       } else if (event.type === "turn_completed") {
@@ -997,7 +1001,7 @@ export function createBoundedRuntimeEventPublisher(
   sender: Readonly<{ send(event: CandidateRuntimeObservedEvent): number; close(): Promise<void> }>,
 ): CandidateRuntimeEventPublisher {
   const allowed = new Set([
-    "session_ready", "model_selected", "turn_started", "model_tool_call",
+    "session_ready", "model_selected", "turn_accepted", "turn_started", "model_tool_call",
     "tool_status", "model_output", "turn_completed", "turn_failed", "report_ready",
   ]);
   let pendingOutput = "";
