@@ -207,6 +207,7 @@ interface ClaimOnlyPort {
     readonly policy_digest: string;
     readonly authorization_digest: string;
     readonly reason_code: string;
+    readonly queue_message_id?: string;
   }): Readonly<Record<string, unknown>>;
   requestCancellation(input: Readonly<Record<string, unknown>>, evidence: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>>;
   recordCancellationVerification(input: Readonly<Record<string, unknown>>, evidence: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>>;
@@ -1451,6 +1452,7 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
     readonly policy_digest: string;
     readonly authorization_digest: string;
     readonly reason_code: string;
+    readonly queue_message_id?: string;
   }): Readonly<Record<string, unknown>>;
   requestCancellation(input: Readonly<Record<string, unknown>>, evidence: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>>;
   recordCancellationVerification(input: Readonly<Record<string, unknown>>, evidence: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>>;

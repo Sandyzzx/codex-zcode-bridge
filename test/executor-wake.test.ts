@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import {
   AppServerProxyConnector,
+  QueueCommandRunner,
   createExecutorWakeCoordinator,
   type ExecutorWakeObservationInput,
   type ExecutorWakeRecorder,
@@ -149,6 +150,7 @@ function queue(result: Partial<WakeQueueSubmission> = {}) {
           timed_out: false,
           stdout: "Queued message",
           stderr: "",
+          queue_message_id: "019c0000-0000-7000-8000-000000000099",
           ...result,
         };
       },
@@ -332,6 +334,124 @@ test("eligible loaded idle Thread records intent before one Queue submission and
   }
 });
 
+test("trusted-local policy submits exactly one Queue without a control socket and records Turn start as unverified", async () => {
+  const f = fixture();
+  const observed = recorder();
+  const queued = queue();
+  const notifications: string[] = [];
+  writePolicy(f.root, policy(f.workspace, { delivery_mode: "trusted_local" }));
+  try {
+    const coordinator = createExecutorWakeCoordinator({
+      authorityRoot: f.root,
+      now: () => NOW,
+      recorder: observed.value,
+      appServer: {
+        async connect() {
+          assert.fail("trusted-local Wake must not require the Desktop private control socket");
+        },
+      },
+      queue: queued.runner,
+      notifyWeb: (input) => notifications.push(input.reason_code),
+    });
+    const result = await coordinator.handle(f.release);
+    assert.equal(result.state, "web_notify");
+    assert.equal(result.reason_code, "trusted_local_turn_start_unverified");
+    assert.equal(result.queue_message_id, "019c0000-0000-7000-8000-000000000099");
+    assert.deepEqual(observed.observations.map((item) => item.state), ["intent", "queued", "web_notify"]);
+    assert.equal(observed.observations[1]?.queue_message_id, "019c0000-0000-7000-8000-000000000099");
+    assert.equal(queued.calls.length, 1);
+    assert.equal(queued.calls[0]?.threadId, THREAD_ID);
+    assert.match(queued.calls[0]?.message ?? "", /zcode_status/u);
+    assert.match(queued.calls[0]?.message ?? "", /zcode_result\(view="summary"\)/u);
+    assert.match(queued.calls[0]?.message ?? "", /Cleanup/u);
+    assert.match(queued.calls[0]?.message ?? "", /released/u);
+    assert.doesNotMatch(queued.calls[0]?.message ?? "", /--resume/u);
+    assert.deepEqual(notifications, ["trusted_local_turn_start_unverified"]);
+  } finally {
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test("trusted-local policy still fails closed for expired authorization and Task binding mismatch", async () => {
+  const cases = [
+    {
+      name: "expired",
+      value: {
+        delivery_mode: "trusted_local",
+        authorization: {
+          scope: "one_turn",
+          granted_by: "owner",
+          granted_at: "2026-11-20T23:55:00.000Z",
+          expires_at: "2026-11-21T00:55:00.000Z",
+        },
+      },
+      reason: "policy_invalid",
+    },
+    {
+      name: "task",
+      value: {
+        delivery_mode: "trusted_local",
+        task_id: "another-task",
+      },
+      reason: "policy_task_mismatch",
+    },
+  ] as const;
+
+  for (const item of cases) {
+    const f = fixture();
+    const observed = recorder();
+    const queued = queue();
+    writePolicy(f.root, policy(f.workspace, item.value));
+    try {
+      const coordinator = createExecutorWakeCoordinator({
+        authorityRoot: f.root,
+        now: () => NOW,
+        recorder: observed.value,
+        appServer: {
+          async connect() {
+            assert.fail("trusted-local policy rejection must not contact App Server");
+          },
+        },
+        queue: queued.runner,
+      });
+      const result = await coordinator.handle(f.release);
+      assert.equal(result.state, "web_notify", item.name);
+      assert.equal(result.reason_code, item.reason, item.name);
+      assert.equal(queued.calls.length, 0, item.name);
+    } finally {
+      rmSync(f.root, { recursive: true, force: true });
+    }
+  }
+});
+
+test("trusted-local Queue timeout remains submission_unknown with no retry or Web resubmission", async () => {
+  const f = fixture();
+  const observed = recorder();
+  const queued = queue({ timed_out: true, exit_code: null, queue_message_id: null });
+  writePolicy(f.root, policy(f.workspace, { delivery_mode: "trusted_local" }));
+  try {
+    const coordinator = createExecutorWakeCoordinator({
+      authorityRoot: f.root,
+      now: () => NOW,
+      recorder: observed.value,
+      appServer: {
+        async connect() {
+          assert.fail("trusted-local Wake must not require the Desktop private control socket");
+        },
+      },
+      queue: queued.runner,
+      notifyWeb: () => assert.fail("unknown Queue submission must not be represented as a safe fallback"),
+    });
+    const result = await coordinator.handle(f.release);
+    assert.equal(result.state, "submission_unknown");
+    assert.equal(result.reason_code, "queue_submission_timeout");
+    assert.deepEqual(observed.observations.map((item) => item.state), ["intent", "submission_unknown"]);
+    assert.equal(queued.calls.length, 1);
+  } finally {
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
 test("App Server proxy transport performs JSON-RPC preflight and new-Turn observation", async () => {
   const f = fixture();
   const observed = recorder();
@@ -407,6 +527,25 @@ test("Queue timeout or lost acknowledgement records submission_unknown exactly o
       rmSync(f.root, { recursive: true, force: true });
     }
   }
+});
+
+test("Queue runner extracts the official message ID from the bounded CLI acknowledgement", async () => {
+  const messageId = "019c0000-0000-7000-8000-000000000099";
+  const fakeSpawn = (() => spawn(
+    process.execPath,
+    ["-e", `process.stdout.write("Queued message ${messageId} for thread ${THREAD_ID}.\\n")`],
+    { stdio: ["ignore", "pipe", "pipe"], windowsHide: true, shell: false },
+  )) as unknown as typeof spawn;
+  const runner = new QueueCommandRunner({ spawnImpl: fakeSpawn });
+  const submission = await runner.submit({
+    executable: "fixture-codex",
+    threadId: THREAD_ID,
+    message: "WAKE_TEST",
+    timeoutMs: 2_000,
+  });
+  assert.equal(submission.started, true);
+  assert.equal(submission.exit_code, 0);
+  assert.equal(submission.queue_message_id, messageId);
 });
 
 test("a Queue process that never starts records Web Notify rather than a Queue delivery", async () => {

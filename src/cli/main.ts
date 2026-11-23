@@ -60,6 +60,7 @@ export const TASK_CLI_USAGE = [
   "  task console-url <task_id> [--no-start] [--timeout-ms 500..60000]",
   "  task wake-authorize <task_id> --attempt N --thread ID --model MODEL --model-provider PROVIDER",
   "      --reasoning-effort minimal|low|medium --expires-in-minutes 1..1440 --confirm-owner",
+  "      [--delivery-mode strict|trusted-local]",
 ].join("\n");
 
 export class CliUsageError extends Error {}
@@ -340,7 +341,7 @@ async function runWakeAuthorize(
     args.slice(1),
     new Set([
       "--attempt", "--thread", "--model", "--model-provider",
-      "--reasoning-effort", "--expires-in-minutes", "--confirm-owner",
+      "--reasoning-effort", "--expires-in-minutes", "--confirm-owner", "--delivery-mode",
     ]),
     new Set(["--confirm-owner"]),
   );
@@ -362,6 +363,10 @@ async function runWakeAuthorize(
     1,
     1440,
   );
+  const deliveryMode = options.single.has("--delivery-mode")
+    ? enumValue("--delivery-mode", options.single.get("--delivery-mode")!, ["strict", "trusted-local"] as const)
+      === "trusted-local" ? "trusted_local" as const : "strict" as const
+    : "strict" as const;
 
   return withClient(dependencies, pipeName, async (client) => {
     const task = await findTask(client, taskId!);
@@ -380,6 +385,7 @@ async function runWakeAuthorize(
       model_provider: provider,
       reasoning_effort: reasoningEffort,
       expires_in_ms: expiresInMinutes * 60_000,
+      delivery_mode: deliveryMode,
     };
     const written = (dependencies.writeWakePolicy ?? writeExecutorWakePolicy)(
       dataRoot,
@@ -394,6 +400,7 @@ async function runWakeAuthorize(
       model,
       model_provider: provider,
       reasoning_effort: reasoningEffort,
+      delivery_mode: written.policy.delivery_mode,
       authorization_scope: written.policy.authorization.scope,
       authorization_expires_at: written.policy.authorization.expires_at,
       policy_path: written.path,

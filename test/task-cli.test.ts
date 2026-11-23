@@ -200,6 +200,7 @@ test("Task CLI wake-authorize writes one exact Owner policy and refuses overwrit
       "--model-provider", "deepseek",
       "--reasoning-effort", "low",
       "--expires-in-minutes", "30",
+      "--delivery-mode", "trusted-local",
       "--confirm-owner",
       "--data-root", root,
     ], output.stream, dependencies);
@@ -209,6 +210,7 @@ test("Task CLI wake-authorize writes one exact Owner policy and refuses overwrit
     assert.equal(written.attempt, 2);
     assert.equal(written.authorization_scope, "one_turn");
     assert.equal(written.authorization_expires_at, "2026-11-22T00:30:00.000Z");
+    assert.equal(written.delivery_mode, "trusted_local");
     const policy = JSON.parse(readFileSync(path.join(root, "wake-policy.json"), "utf8")) as Record<string, unknown>;
     assert.deepEqual(policy.authorization, {
       scope: "one_turn",
@@ -217,6 +219,7 @@ test("Task CLI wake-authorize writes one exact Owner policy and refuses overwrit
       expires_at: "2026-11-22T00:30:00.000Z",
     });
     assert.equal(policy.fallback, "web_notify");
+    assert.equal(policy.delivery_mode, "trusted_local");
     assert.equal(String(policy.workspace).toLowerCase(), root.toLowerCase());
 
     const repeated = io();
@@ -228,6 +231,7 @@ test("Task CLI wake-authorize writes one exact Owner policy and refuses overwrit
       "--model-provider", "deepseek",
       "--reasoning-effort", "low",
       "--expires-in-minutes", "30",
+      "--delivery-mode", "trusted-local",
       "--confirm-owner",
       "--data-root", root,
     ], repeated.stream, dependencies);

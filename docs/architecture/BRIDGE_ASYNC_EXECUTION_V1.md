@@ -1,6 +1,6 @@
 # Bridge Async Execution Architecture v1
 
-> Status: IMPLEMENTED — PARTIAL（Web/real-process targeted acceptance passed；未完成 final Release Gate，未合入 Preview，不可发布）
+> Status: IMPLEMENTED — TARGETED / REAL WAKE BLOCKED（trusted-local Wake targeted tests passed；真实自动 Wake Turn 与 final Release Gate 未完成，未合入 Preview，不可发布）
 > Decision status: [ADR-045](../decisions/ADR-045-async-executor-ownership.md) = ACCEPTED；[ADR-051](../decisions/ADR-051-executor-wake-delivery.md) = ACCEPTED；[ADR-052](../decisions/ADR-052-async-master-handoff.md) = ACCEPTED；本文档记录目标合同与当前实现边界
 > Date: 2026-11-22（Asia/Shanghai）
 > Baseline: `origin/preview` `8ee7ec93a82c2093dce74707a9d1937c1c567887`；PR #131 final integration candidate `7ab652baac606fedfa3e86c6db08e7892df122f7`（Web implementation/evidence `02a9e81198cffc5b90077eaba00b5abbfd40f640`）；earlier C1 evidence candidate `8f83bd340f1d6f31ddac12360583257969bb5863`；historical full-matrix candidate `c75c34330287266702cab5949662bf897b74ed5a`；PR 2 base `f330b511270934fa40014006333aa7747dad684c`
@@ -38,7 +38,8 @@
 | CLI queue 参数能覆盖原 Thread 当前模型/effort | REFUTED | A 实验：实际仍为 Sol/xhigh |
 | Queue 支持 notLoaded Thread 或 Desktop 全退 | UNVERIFIED | 严格 C/D 未执行 |
 | Queue ACK 与 Turn 启动是不同事实 | VERIFIED | CLI help 说明 Queue 使用 Thread 当前 model；PR 5 coordinator 以新 `inProgress` Turn 记录 `TURN_STARTED` |
-| loaded/idle Thread + exact model/provider/effort preflight 可安全转成一次性 Queue 请求 | VERIFIED（合成客户端） | `test/executor-wake.test.ts` 8/8；真实 App Server control socket 当前不存在 |
+| loaded/idle Thread + exact model/provider/effort preflight 可安全转成一次性 Queue 请求 | VERIFIED（合成客户端） | strict Wake 保持 fail closed；真实 App Server control socket 当前不存在 |
+| 显式 trusted-local Owner 策略可在无私有 control socket 时提交一次 Queue | VERIFIED（合成 Queue/Host） | 单次 Queue、message ID、Result/Cleanup/Release 绑定、timeout 不重试与 SQLite evidence 定向测试通过；真实自动 Turn 未获预算授权 |
 | shipped MCP Host 进程退出后，独立 Executor 仍完成原 Attempt Result/Cleanup/Release | VERIFIED（synthetic Worker） | `executor-process-targeted-final.log`：Host 真实进程退出、Executor `active`、单次 Spawn/Result、Cleanup/Release 各一次，新 Host 重连读取同一 Result |
 | 真实 Web Console + Chromium 观察动态 Deep Link，且 Host 退出后 Web/Executor 继续可用 | VERIFIED（real process / synthetic Worker） | [Web real-process E2E](../reports/async-executor-web-real-host-e2e-20261122.md)：running/completed 页面、真实 URL、Host 退出后 active、原 Attempt 单 Result/Cleanup/Release |
 | 独立 Executor 能在真实 Codex Desktop 关闭后保持运行 | UNVERIFIED | Owner 当前 Desktop 未关闭；synthetic Worker 证据不能替代 |
@@ -318,7 +319,7 @@ PR 5 裁决采用 SQLite v14 事件记录，不新增 schema/表：
    `observation_recorded` evidence，`reason=executor_wake`。
 2. evidence 绑定 Task、Attempt、Operation、generation、Result digest、
    Result commit ref、Thread ID、delivery ID、policy digest、authorization
-   digest、state、reason code 和 evidence digest；单条上限 2 KiB。
+   digest、state、reason code、可选 Queue message ID 和 evidence digest；单条上限 2 KiB。
 3. 同一 Operation 最多 5 条 Wake evidence。相同 observation 幂等；
    delivery/binding/transition 冲突、重复 Queue ACK、超过上限或非 `released`
    Operation 均 fail closed。
@@ -340,7 +341,7 @@ Recovery；真实 Desktop UI acknowledgement 仍是 `UNKNOWN`。
 | PR 2.5 | MCP → Executor → Adapter → ZCode 四层收敛 | Thin MCP 不再构造 Authority；静态依赖边界、MCP schema parity、Executor IPC 与四层 fake Official Runtime E2E PASS；不新增执行路径 |
 | PR 3 | Task CLI + shared Control Client | MCP/CLI 并发读写同一权威；CLI 分发不拥有 SQLite/Manager |
 | PR 4 | Web Console | 已实现 loopback/Origin/CSRF、只读 Task/Event/Result/Attention、显式 Cancel/Reply、Root 级发现、`task console-url` 与 Deep Link；真实 Chromium 在 Host 退出前后观察同一 Task，页面关闭不影响 Executor |
-| PR 5 | Queue Wake Adapter | 已实现 loaded/idle exact-config 一次性 Queue + Web Notify fallback；严格 C/D 独立验收 |
+| PR 5 | Queue Wake Adapter | 默认 strict loaded/idle exact-config；显式 trusted-local 允许无 control socket 单次 Queue，并保留 Turn 未确认的 Web fallback；严格 C/D 独立验收 |
 | PR 6 | Async Master Skill & Dispatch Workflow | 已实现可靠受理后 Turn 结束/停止轮询、未知回执原 ID 对账、Wake 身份核对与独立验收；真实模型遵循率和真实 Host Wake `NOT_RUN / BLOCKED` |
 
 允许按依赖合并 PR，但每阶段不得扩大到重构生产合同。统一 Release Candidate
@@ -381,6 +382,8 @@ Recovery；真实 Desktop UI acknowledgement 仍是 `UNKNOWN`。
 | Web Task Deep Link | `task_id` 自动选择、URL 同步、刷新保留、跨页 summary 可取、URL 不含 CSRF/凭据 |
 | Web 未完成 Result | Status/Events 独立显示；`TASK_NOT_FINISHED` 只显示 pending，不掩盖其他有效证据 |
 | Wake 授权入口 | 当前 Attempt 校验后排他创建 `wake-policy.json`；已有策略不覆盖 |
+| trusted-local Wake | 仅显式 Owner policy；精确 Task/Attempt/Workspace、Result/Cleanup/Release、一次性 intent 后单次 Queue；当前模型风险由 Owner 接受 |
+| trusted-local Turn 未知 | Queue ACK 后仍记录 `trusted_local_turn_start_unverified`，不把 Web fallback 当成 Queue 重试 |
 | Web Notify 可发现性 | CLI/Web 从现有 SQLite `executor_wake` Event 投影 state/reason/at，不新增通知权威 |
 | Async Handoff 决策合同 | 授权、Scope、Mechanism、受理、未知回执、Pending、Turn end、Wake 与验收分别判定 |
 | Async Handoff 负例 | 断连/Turn end 不取消；Wake identity mismatch 不验收；静默合同测试不能冒充真实模型遵循 |
@@ -395,8 +398,11 @@ Recovery；真实 Desktop UI acknowledgement 仍是 `UNKNOWN`。
 
 ### 7.3 Wake 验收
 
-- loaded/idle：Queue 投递后必须区分 `QUEUED` 与 `TURN_STARTED`，`TURN_COMPLETED`
+- strict：loaded/idle exact-config Queue 投递后必须区分 `QUEUED` 与 `TURN_STARTED`，`TURN_COMPLETED`
   另行由 Thread 事件/后续验收观察，不能由 Queue ACK 推断。
+- trusted-local：无同 Owner 控制面时只允许 `QUEUED` 或
+  `trusted_local_turn_start_unverified`；不得声称 loaded/idle、当前模型匹配或
+  `TURN_STARTED`。Queue 只提交一次，失败/未知不自动重试。
 - notLoaded：严格 C，普通 Queue 与 `--resume` 分别验证。
 - Desktop 全退：D 场景验证是否持久排队或由独立 owner 消费。
 - 模型失控负例：当前 model/effort/budget 未确认时 fail-closed 转 Web Notify。
@@ -405,11 +411,13 @@ Recovery；真实 Desktop UI acknowledgement 仍是 `UNKNOWN`。
 
 当前确定性证据：
 
-- `test/executor-wake.test.ts`：8/8，覆盖策略缺失/失效、disabled、App Server
-  不可用、notLoaded/active/systemError/direct-input、workspace/model/provider/
-  effort 不匹配、一次性 intent、ACK lost、Turn observation 与 fallback。
-- `test/sqlite-candidate/wp6c/executor-wake.test.mjs`：4/4，覆盖 SQLite v14
-  evidence、幂等/冲突、Web fallback、Release retry 与 Continue 兼容。
+- `test/executor-wake.test.ts`：12/12，覆盖 strict 策略缺失/失效、disabled、
+  App Server 不可用、notLoaded/active/systemError/direct-input、workspace/model/
+  provider/effort 不匹配、trusted-local 显式授权、一次性 intent、message ID、
+  ACK lost、Turn observation 与 fallback。
+- `test/sqlite-candidate/wp6c/executor-wake.test.mjs`：5/5，覆盖 SQLite v14
+  evidence、Queue message ID、幂等/冲突、Web fallback、Release retry 与
+  Continue 兼容。
 - `test/executor-process.test.ts` 的 fake Worker E2E：Result -> Cleanup ->
   Release -> Wake -> Web fallback 通过，原 Attempt Result 与 release 未被改写。
 - shipped MCP Host 进程在 `launch_intent` 后退出，Executor 保持 active；
@@ -417,10 +425,10 @@ Recovery；真实 Desktop UI acknowledgement 仍是 `UNKNOWN`。
   各一次，新 Host 重连读取同一 Result。
 - 真实 Web Console、Chromium 与 `task console-url` 使用同一动态 URL；Host
   退出后浏览器继续可见 `ACTIVE`，最终页面显示 `completed` 和 Result。
-- 当前真实环境无 App Server control socket；只读 probe 得到
-  `web_notify / app_server_unavailable`，Queue 调用数为 0。
-- 真实 strict C/D、真实 Queue ACK/Turn/Master、Desktop visible 和付费模型：
-  `NOT_RUN / BLOCKED`。
+- 当前真实环境无 App Server control socket；strict probe 保持
+  `web_notify / app_server_unavailable` 且 Queue 调用为 0；显式 trusted-local
+  已具备单次 Queue 路径，但真实自动 Turn、Master readback、Desktop visible
+  和付费模型：`BLOCKED_BY_AUTHORIZATION`。
 
 ## 8. 发布门槛
 
@@ -439,8 +447,11 @@ Recovery；真实 Desktop UI acknowledgement 仍是 `UNKNOWN`。
 
 ### Wake
 
-- 仅 loaded/idle 实验版可先开放；正式版必须补严格 C/D、多 writer 和版本漂移。
-- A 类模型失控必须有负例测试；未确认 model/effort/budget 一律 Web Notify。
+- strict 仅 loaded/idle 实验版可先开放；trusted-local 只用于显式单用户本地
+  Owner policy，且必须记录 Turn/模型未证明。正式版仍须补严格 C/D、多 writer
+  和版本漂移。
+- strict 在未确认 model/effort/budget 时一律 Web Notify；trusted-local 的模型
+  风险必须由 Owner 在 policy 中显式接受，不能由代码自动升级。
 - Queue 失败/未知不得影响 Result/Cleanup/Release；Desktop visible 不得由
   Queue ACK 推断。
 
@@ -468,10 +479,10 @@ Recovery；真实 Desktop UI acknowledgement 仍是 `UNKNOWN`。
 4. MCP 等待请求与 Executor 控制请求的生命周期已在 PR 2/2.5 candidate 中实现并覆盖 `REQUEST_CANCELLED`、`TASK_CANCEL_REQUESTED`、`SUBMISSION_UNKNOWN`、`EXECUTOR_UNAVAILABLE`；真实 Host 行为仍待 E2E。
 5. Thin MCP 已删除 `in_process` 分支；仍依赖客户端在 Executor 未启动时明确得到 `EXECUTOR_UNAVAILABLE`，而不是自动拉起 Executor。
 6. Web 列表投影的扫描规模与 Token 输出仍需基准，不得无界读取全部事件。
-7. Queue 只证明 loaded/idle；notLoaded 与 Desktop 全退 UNVERIFIED。PR 5
-   已实现 fail-closed Wake Adapter；当前环境没有 App Server control socket，
-   因而安全降级到 Web Notify 且 Queue 调用为 0。真实 Queue ACK/Turn/Master
-   没有重放，严格 C/D 仍是独立发布门禁。
+7. strict Queue 只证明 loaded/idle；notLoaded 与 Desktop 全退 UNVERIFIED。
+   trusted-local 可在无 control socket 时提交单次 Queue，但不证明 loaded、
+   当前模型或 Turn 启动；Queue ACK、Turn Started、Master Result readback 与
+   Desktop Visible 必须分开报告。真实自动 Wake Turn 尚无本轮模型预算授权。
 8. A 实验 Sol/xhigh 费用/额度变化不可观察，不估算。
 9. Token Efficiency 架构敏感候选保持冻结；本架构不得预设其结果。
 10. Async Handoff 目前由 Skill 行为约束，不是服务端强制鉴权。模型可能不遵循
@@ -482,7 +493,7 @@ Recovery；真实 Desktop UI acknowledgement 仍是 `UNKNOWN`。
 
 1. `ACCEPTED`：独立用户级 Executor、Authority Root lifetime lease 和 Windows named pipe IPC 作为 S2 首版。
 2. `ACCEPTED`：MCP/CLI/Web 共用 Executor Control Client，公共 MCP 工具面保持不变。
-3. `ACCEPTED`：Queue Wake 作为可选阶段 5，且仅支持已授权 loaded/idle Thread；Web Notify 是默认安全回退。
+3. `ACCEPTED`：Queue Wake 作为可选阶段 5；strict 仅支持已授权 loaded/idle Thread，显式 trusted-local 允许本地单用户 Owner 接受当前模型风险后单次 Queue，Web Notify 是默认安全回退。
 4. `ACCEPTED`：本验收矩阵作为实施和发布门槛。真实 Desktop 关闭和严格 C/D 分别作为独立门禁。
 
 ## 11. 外部实验证据

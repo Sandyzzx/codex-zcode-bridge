@@ -1,8 +1,8 @@
 # Async Handoff 与 Wake 恢复
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-22
-> Last verified: 2026-11-22，核对 ADR-045、ADR-051、ADR-052 与确定性 Skill 合同测试；真实模型遵循率、真实 Queue 和 Desktop 关闭 E2E 均 NOT RUN。
+> Last updated: 2026-11-23
+> Last verified: 2026-11-23，核对 ADR-045、ADR-051、ADR-052、strict/trusted-local Wake 与确定性 Skill 合同测试；真实自动 Wake Turn、真实模型遵循率和 Desktop 关闭 E2E 均 NOT RUN。
 > Verified against: `codex/async-executor-pr6-20261122` candidate
 
 本文件只在入口已确认 Bridge 授权后使用。它不决定交付范围：
@@ -22,13 +22,17 @@
 1. 当前目标仍受用户明确 Bridge 授权覆盖，写入、审批、取消和外部操作权限没有扩大；
 2. `zcode_task` 返回可归属的受理回执和原 `task_id`，状态不是未知、冲突或失败；
 3. 能核实 Executor Authority；当前 Codex Thread ID 和一次性 Wake 授权可核实，
-   或用户已知道本次只能依赖 Web Notify/下一次 Turn；
+   或用户已知道本次只能依赖 Web Notify/下一次 Turn。默认 `strict` 模式还须
+   由 Executor 核实同 Owner 实时 loaded/idle、workspace 与模型配置；显式
+   `trusted-local` Owner 策略允许跳过该私有控制面预检，但实际模型、loaded
+   状态和 Turn 启动必须保持 `UNKNOWN`；
 4. 当前 Attempt 无已知 Pending Interaction、执行启动错误或未决清理事实；
 5. 用户要求的是已授权交付，不把 Async Handoff 变成无人值守审批或无限取消权限。
 
 任一条件不成立时使用 `foreground`，或保持未决并报告具体缺项。不要在缺少
-Authority、Thread、模型/effort 或预算确认时自行执行 `codex queue`、附加
-`--resume`、修改 Wake 策略或伪造一次性授权。
+Authority、Thread 或预算确认时自行执行 `codex queue`、附加 `--resume`、
+修改 Wake 策略或伪造一次性授权。`trusted-local` 是 Owner 对本地 Thread
+当前模型风险的显式接受，不是 Master 可自行选择的绕过模式。
 
 ## 受理与交接
 
@@ -40,9 +44,10 @@ Authority、Thread、模型/effort 或预算确认时自行执行 `codex queue`�
    地址。链接只携带 `task_id`，不得包含 CSRF 或凭据；Console 不可用时报告
    原因和安全的状态查询替代方式。
 4. 向用户简洁报告：目标、Task Scope、Handoff Mechanism、`task_id`、已知
-   Attempt/路径、受理状态、可验证的 Task Console 链接，以及 Result 将经
-   Queue 或 Web Notify 返回。未观察到的字段省略或写 `UNKNOWN`，不复制
-   Prompt、完整日志或凭据。
+   Attempt/路径、受理状态、Wake delivery mode、可验证的 Task Console 链接，
+   以及 Result 将经 Queue 或 Web Notify 返回。`trusted-local` 不得描述成
+   “模型匹配已验证”；未观察到的字段省略或写 `UNKNOWN`，不复制 Prompt、
+   完整日志或凭据。
 5. 结束时给出当前 Turn 的最终答复。不要继续 `wait_for`、Thin Waiter、空闲轮询
    或为保持连接而阻塞。
 6. Turn 结束、Host 断开、MCP Stop 或工具调用超时都不等于 Task 取消。不得因此
@@ -66,8 +71,9 @@ Wake 消息到达表示 Executor 已完成自身 post-Release 通知流程，不
    任一不一致或缺失时保持未验收，查询原 Task 并报告冲突。
 2. 用 `zcode_status`/Attention/Events 核对当前 Attempt、Pending Interaction、
    Result、Cleanup Hold 与 Operation Release；需要时传 `expected_attempt`。
-3. 用 `zcode_result(view="summary")` 读取持久 Result；已知需要原文或摘要缺项时，
-   按同一 Attempt 读取 `view="full"`。Result 存在不等于 Cleanup 或 Release 完成。
+3. 用 `zcode_result(view="summary")` 读取持久 Result，并核对消息中的 Result
+   digest；已知需要原文或摘要缺项时，按同一 Attempt 读取 `view="full"`。
+   Result 存在不等于 Cleanup 或 Release 完成。
 4. 在实际执行目录独立检查 Git 状态、diff、文件与适用测试；分别记录
    Result committed、Cleanup verified、Operation released 和 Master acceptance。
 5. 验收失败时按原范围做一次 `zcode_continue`；新目标、扩大写入/外部操作或无法
@@ -76,6 +82,9 @@ Wake 消息到达表示 Executor 已完成自身 post-Release 通知流程，不
 `QUEUED`、`TURN_STARTED`、`TURN_COMPLETED`、`DESKTOP_VISIBLE` 是独立状态。
 Queue exit 0、消息出现或新 Turn 开始均不能证明 Worker Result、Cleanup、Release
 或验收；没有 UI acknowledgement 时 `DESKTOP_VISIBLE=UNKNOWN`。
+`trusted_local_turn_start_unverified` 只表示 Queue 已被接受且自动 Turn 启动
+尚未由同 Owner 控制面证明；不得改写为 `TURN_STARTED`，也不得因该 fallback
+再次提交 Queue。固定 ACK 或只回复“收到”不是 Master acceptance。
 
 Task Console 的 `web_url` 只证明受理后的状态查询入口可用，不证明 Turn 已启动、
 Result 已提交或任务已验收。页面默认轮询只刷新本地 Adapter；Console 断开不等于

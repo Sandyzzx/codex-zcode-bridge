@@ -99,7 +99,9 @@ test('Wake intent, Queue acknowledgement, and observed Turn are bounded release 
   try{
     const before=f.store.readTaskLifecycle(f.ref.task_id);
     const intent=f.store.recordExecutorWakeObservation(wakeInput(f.ref,'intent'));
-    const queued=f.store.recordExecutorWakeObservation(wakeInput(f.ref,'queued'));
+    const queued=f.store.recordExecutorWakeObservation(wakeInput(f.ref,'queued',{
+      queue_message_id:'019c0000-0000-7000-8000-000000000099',
+    }));
     const turn=f.store.recordExecutorWakeObservation(wakeInput(f.ref,'turn_started'));
     assert.equal(intent.event_sequence,f.cleanupRevision+2);
     assert.equal(queued.event_sequence,intent.event_sequence+1);
@@ -107,6 +109,8 @@ test('Wake intent, Queue acknowledgement, and observed Turn are bounded release 
     assert.equal(intent.desktop_visible,'UNKNOWN');
     assert.deepEqual(wakeEvents(f.store,f.ref.operation_id).map(event=>JSON.parse(event.evidence_json).state),
       ['intent','queued','turn_started']);
+    assert.equal(JSON.parse(wakeEvents(f.store,f.ref.operation_id)[1].evidence_json).queue_message_id,
+      '019c0000-0000-7000-8000-000000000099');
     const after=f.store.readTaskLifecycle(f.ref.task_id);
     assert.deepEqual(after.result,before.result);
     assert.equal(after.projection.status,'completed');
@@ -173,6 +177,29 @@ test('Web Notify fallback needs no Thread binding and is terminal for one delive
     failWith(()=>f.store.recordExecutorWakeObservation(wakeInput(f.ref,'web_notify',{
       thread_id:null,reason_code:'second_fallback',delivery_id:'a'.repeat(64),
     })),'executor_wake_delivery_conflict');
+  }finally{
+    f.store.close();
+    stores.delete(f.store);
+  }
+});
+
+test('Queue acknowledgement remains durable before an unverified Turn falls back to Web visibility',()=>{
+  const f=makeReleased('ack-fallback');
+  try{
+    f.store.recordExecutorWakeObservation(wakeInput(f.ref,'intent'));
+    f.store.recordExecutorWakeObservation(wakeInput(f.ref,'queued',{
+      queue_message_id:'019c0000-0000-7000-8000-000000000099',
+    }));
+    f.store.recordExecutorWakeObservation(wakeInput(f.ref,'web_notify',{
+      reason_code:'trusted_local_turn_start_unverified',
+    }));
+    const events=wakeEvents(f.store,f.ref.operation_id).map(event=>JSON.parse(event.evidence_json));
+    assert.deepEqual(events.map(event=>event.state),['intent','queued','web_notify']);
+    assert.equal(events[1].queue_message_id,'019c0000-0000-7000-8000-000000000099');
+    assert.equal(f.store.readTaskLifecycle(f.ref.task_id).operation.phase,'released');
+    failWith(()=>f.store.recordExecutorWakeObservation(wakeInput(f.ref,'intent',{
+      queue_message_id:'019c0000-0000-7000-8000-000000000098',
+    })),'invalid_executor_wake_request');
   }finally{
     f.store.close();
     stores.delete(f.store);

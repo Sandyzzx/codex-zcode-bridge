@@ -718,9 +718,9 @@ function validateInteractionEvidence(eventType, value) {
 }
 function validateObservationEventEvidence(value) {
   const own = Object.keys(value).sort().join("|");
-  if (own === EXECUTOR_WAKE_EVIDENCE_KEYS.join("|")) {
+  if (own === EXECUTOR_WAKE_BASE_EVIDENCE_KEYS.join("|") || own === EXECUTOR_WAKE_EVIDENCE_KEYS.join("|")) {
     const { evidence_digest, ...unsigned } = value;
-    if (value.reason !== "executor_wake" || !EXECUTOR_WAKE_STATES.has(value.state) || !validId(value.task_id) || !validId(value.operation_id) || !Number.isSafeInteger(value.attempt) || value.attempt < 1 || !Number.isSafeInteger(value.generation) || value.generation < 1 || ![value.result_digest, value.policy_digest, value.authorization_digest, value.delivery_id].every((item) => typeof item === "string" && /^[0-9a-f]{64}$/u.test(item)) || !validId(value.result_commit_ref) || !validText2(value.reason_code, 128) || value.thread_id !== null && !validId(value.thread_id) || value.state !== "web_notify" && value.thread_id === null || evidence_digest !== digest(unsigned) || [value.task_id, value.operation_id, value.result_commit_ref].some((item) => item !== item.normalize("NFC"))) fail2("invalid_executor_wake_evidence");
+    if (value.reason !== "executor_wake" || !EXECUTOR_WAKE_STATES.has(value.state) || !validId(value.task_id) || !validId(value.operation_id) || !Number.isSafeInteger(value.attempt) || value.attempt < 1 || !Number.isSafeInteger(value.generation) || value.generation < 1 || ![value.result_digest, value.policy_digest, value.authorization_digest, value.delivery_id].every((item) => typeof item === "string" && /^[0-9a-f]{64}$/u.test(item)) || !validId(value.result_commit_ref) || !validText2(value.reason_code, 128) || value.thread_id !== null && !validId(value.thread_id) || value.state !== "web_notify" && value.thread_id === null || "queue_message_id" in value && (!validId(value.queue_message_id) || value.state !== "queued") || evidence_digest !== digest(unsigned) || [value.task_id, value.operation_id, value.result_commit_ref].some((item) => item !== item.normalize("NFC"))) fail2("invalid_executor_wake_evidence");
     return;
   }
   if (own === "cancel_id|evidence_digest|launch_id|reason|request_digest|token_digest") {
@@ -1001,7 +1001,8 @@ function validIsoInstant(value) {
   return typeof value === "string" && Number.isFinite(Date.parse(value));
 }
 function validateExecutorWakeInput(input) {
-  if (!input || Object.getPrototypeOf(input) !== Object.prototype || Object.keys(input).sort().join("|") !== EXECUTOR_WAKE_INPUT_KEYS || !validId(input.operation_id) || !validId(input.task_id) || !Number.isSafeInteger(input.attempt) || input.attempt < 1 || !Number.isSafeInteger(input.generation) || input.generation < 1 || !EXECUTOR_WAKE_STATES.has(input.state) || !validText2(input.reason_code, 128) || ![input.policy_digest, input.authorization_digest, input.delivery_id].every((item) => typeof item === "string" && /^[0-9a-f]{64}$/u.test(item)) || input.thread_id !== null && !validId(input.thread_id) || input.state !== "web_notify" && input.thread_id === null || [input.operation_id, input.task_id, input.reason_code].some((item) => item !== item.normalize("NFC")))
+  const inputKeys = input && Object.getPrototypeOf(input) === Object.prototype ? Object.keys(input).sort().join("|") : "";
+  if (!input || inputKeys !== EXECUTOR_WAKE_BASE_INPUT_KEYS && inputKeys !== EXECUTOR_WAKE_INPUT_KEYS || !validId(input.operation_id) || !validId(input.task_id) || !Number.isSafeInteger(input.attempt) || input.attempt < 1 || !Number.isSafeInteger(input.generation) || input.generation < 1 || !EXECUTOR_WAKE_STATES.has(input.state) || !validText2(input.reason_code, 128) || ![input.policy_digest, input.authorization_digest, input.delivery_id].every((item) => typeof item === "string" && /^[0-9a-f]{64}$/u.test(item)) || input.thread_id !== null && !validId(input.thread_id) || input.state !== "web_notify" && input.thread_id === null || "queue_message_id" in input && (!validId(input.queue_message_id) || input.state !== "queued") || [input.operation_id, input.task_id, input.reason_code].some((item) => item !== item.normalize("NFC")))
     fail2("invalid_executor_wake_request");
   return input;
 }
@@ -1434,7 +1435,7 @@ function callDecision(fn, workspace, input) {
     return { state: "unknown" };
   }
 }
-var HERE, SCHEMA, RUNTIME_EVENTS_SCHEMA, ADMIN_ABANDONMENT_SCHEMA, NORMALIZED_ADMIN_ABANDONMENT_SCHEMA, LEGACY_ADMIN_ABANDONMENT_SCHEMA, CONSTRUCT, SCHEMA_VERSION, SCHEMA_OBJECT_QUERY, RUNTIME_EVENT_SCHEMA_OBJECTS, expectedSchemas, expectedRecoveryBindingTriggerSql, ADMIN_ABANDONMENT_TABLE_SQL, LEGACY_ADMIN_ABANDONMENT_TABLE_SQL, NORMALIZED_ADMIN_ABANDONMENT_TABLE_SQL, NORMALIZED_LEGACY_ADMIN_ABANDONMENT_TABLE_SQL, SQLITE_V14_ONLY_MESSAGE, V13_UPGRADE_MARKER_MESSAGE, v13UpgradeMarker, RESULT_CONTRACT_VERSION, RESULT_STATUSES2, RECOVERY_PHASES, RECOVERY_SOURCES, RECOVERY_REASON_CODES, RECOVERY_QUARANTINE_CODES, RECOVERY_EVIDENCE_KEYS, RECOVERY_RELEASE_EVIDENCE_KEYS, EXECUTOR_WAKE_EVIDENCE_KEYS, EXECUTOR_WAKE_STATES, EXECUTOR_WAKE_LIMIT, RECOVERY_MATERIAL_BINDING_KEYS, RECOVERY_MATERIAL_DETAIL_KEYS, RESOLVED_RECOVERY_SET_CONTRACT, RECOVERY_MATERIAL_CONTRACT, digest, rawDigest, sortedDigests, upgradeRowJson, EVIDENCE_KEYS, FUTURE_EVENT_TYPES, FUTURE_EVIDENCE_KEYS, EVENT_PHASE, RECOVERY_INPUT_KEYS, RECOVERY_RELEASE_INPUT_KEYS, ADMIN_ABANDONMENT_INPUT_KEYS, ADMIN_ABANDONMENT_EVIDENCE_KEYS, USER_AUTHORIZED_RELEASE_INPUT_KEYS, USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS, EXECUTOR_WAKE_INPUT_KEYS, USER_AUTHORIZED_TERMINAL_RELEASE_INPUT_KEYS, AdmissionError, fail2, IsolatedAdmissionStore;
+var HERE, SCHEMA, RUNTIME_EVENTS_SCHEMA, ADMIN_ABANDONMENT_SCHEMA, NORMALIZED_ADMIN_ABANDONMENT_SCHEMA, LEGACY_ADMIN_ABANDONMENT_SCHEMA, CONSTRUCT, SCHEMA_VERSION, SCHEMA_OBJECT_QUERY, RUNTIME_EVENT_SCHEMA_OBJECTS, expectedSchemas, expectedRecoveryBindingTriggerSql, ADMIN_ABANDONMENT_TABLE_SQL, LEGACY_ADMIN_ABANDONMENT_TABLE_SQL, NORMALIZED_ADMIN_ABANDONMENT_TABLE_SQL, NORMALIZED_LEGACY_ADMIN_ABANDONMENT_TABLE_SQL, SQLITE_V14_ONLY_MESSAGE, V13_UPGRADE_MARKER_MESSAGE, v13UpgradeMarker, RESULT_CONTRACT_VERSION, RESULT_STATUSES2, RECOVERY_PHASES, RECOVERY_SOURCES, RECOVERY_REASON_CODES, RECOVERY_QUARANTINE_CODES, RECOVERY_EVIDENCE_KEYS, RECOVERY_RELEASE_EVIDENCE_KEYS, EXECUTOR_WAKE_BASE_EVIDENCE_KEYS, EXECUTOR_WAKE_EVIDENCE_KEYS, EXECUTOR_WAKE_STATES, EXECUTOR_WAKE_LIMIT, RECOVERY_MATERIAL_BINDING_KEYS, RECOVERY_MATERIAL_DETAIL_KEYS, RESOLVED_RECOVERY_SET_CONTRACT, RECOVERY_MATERIAL_CONTRACT, digest, rawDigest, sortedDigests, upgradeRowJson, EVIDENCE_KEYS, FUTURE_EVENT_TYPES, FUTURE_EVIDENCE_KEYS, EVENT_PHASE, RECOVERY_INPUT_KEYS, RECOVERY_RELEASE_INPUT_KEYS, ADMIN_ABANDONMENT_INPUT_KEYS, ADMIN_ABANDONMENT_EVIDENCE_KEYS, USER_AUTHORIZED_RELEASE_INPUT_KEYS, USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS, EXECUTOR_WAKE_BASE_INPUT_KEYS, EXECUTOR_WAKE_INPUT_KEYS, USER_AUTHORIZED_TERMINAL_RELEASE_INPUT_KEYS, AdmissionError, fail2, IsolatedAdmissionStore;
 var init_store = __esm({
   "src/sqlite-candidate/wp6b2b1/store.mjs"() {
     "use strict";
@@ -1480,7 +1481,7 @@ var init_store = __esm({
     RECOVERY_QUARANTINE_CODES = /* @__PURE__ */ new Set(["claim_identity_conflict", "operation_projection_conflict"]);
     RECOVERY_EVIDENCE_KEYS = Object.freeze(["attempt", "claim_id", "classification", "envelope_digest", "evidence_digest", "evidence_source", "expected_revision", "reason", "reason_code", "task_id", "worker_identity_digest"]);
     RECOVERY_RELEASE_EVIDENCE_KEYS = Object.freeze([...RECOVERY_EVIDENCE_KEYS, "process_tree_root_observed", "process_tree_scan_clean", "process_tree_scan_digest", "recovery_disposition"]);
-    EXECUTOR_WAKE_EVIDENCE_KEYS = Object.freeze([
+    EXECUTOR_WAKE_BASE_EVIDENCE_KEYS = Object.freeze([
       "attempt",
       "authorization_digest",
       "delivery_id",
@@ -1496,6 +1497,7 @@ var init_store = __esm({
       "task_id",
       "thread_id"
     ]);
+    EXECUTOR_WAKE_EVIDENCE_KEYS = Object.freeze([...EXECUTOR_WAKE_BASE_EVIDENCE_KEYS, "queue_message_id"].sort());
     EXECUTOR_WAKE_STATES = /* @__PURE__ */ new Set(["intent", "queued", "submission_unknown", "turn_started", "web_notify"]);
     EXECUTOR_WAKE_LIMIT = 5;
     RECOVERY_MATERIAL_BINDING_KEYS = Object.freeze(["attempt", "claim_id", "classification", "evidence_source", "reason_code", "task_id", "worker_identity_digest"]);
@@ -1565,7 +1567,8 @@ var init_store = __esm({
     ADMIN_ABANDONMENT_EVIDENCE_KEYS = "boot_time|claimant_scan_clean|claimant_scan_digest|failed_at|hosts_closed|observed_at|platform_probe_digest|process_inventory_digest|worker_exited|worker_process_id|worker_start_fingerprint|writer_closed";
     USER_AUTHORIZED_RELEASE_INPUT_KEYS = "attempt|cancel_id|generation|operation_id|release_reason|revision|task_id";
     USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS = "attempt|cancel_id|cancellation_verification_digest|generation|operation_id|recovery_evidence_digest|release_reason|revision|task_id";
-    EXECUTOR_WAKE_INPUT_KEYS = "attempt|authorization_digest|delivery_id|generation|operation_id|policy_digest|reason_code|state|task_id|thread_id";
+    EXECUTOR_WAKE_BASE_INPUT_KEYS = "attempt|authorization_digest|delivery_id|generation|operation_id|policy_digest|reason_code|state|task_id|thread_id";
+    EXECUTOR_WAKE_INPUT_KEYS = "attempt|authorization_digest|delivery_id|generation|operation_id|policy_digest|queue_message_id|reason_code|state|task_id|thread_id";
     USER_AUTHORIZED_TERMINAL_RELEASE_INPUT_KEYS = "attempt|claim_id|generation|operation_id|recovery_evidence_digest|release_reason|result_commit_ref|result_digest|revision|task_id|worker_identity_digest";
     AdmissionError = class extends Error {
       constructor(code, message = code) {
@@ -3802,7 +3805,8 @@ var init_store = __esm({
             delivery_id: input.delivery_id,
             policy_digest: input.policy_digest,
             authorization_digest: input.authorization_digest,
-            reason_code: input.reason_code
+            reason_code: input.reason_code,
+            ..."queue_message_id" in input ? { queue_message_id: input.queue_message_id } : {}
           };
           const evidence = { ...unsigned, evidence_digest: digest(unsigned) };
           validateObservationEventEvidence(evidence);

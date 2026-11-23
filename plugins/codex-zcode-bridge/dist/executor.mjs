@@ -3758,9 +3758,9 @@ function validateInteractionEvidence(eventType, value) {
 }
 function validateObservationEventEvidence(value) {
   const own2 = Object.keys(value).sort().join("|");
-  if (own2 === EXECUTOR_WAKE_EVIDENCE_KEYS.join("|")) {
+  if (own2 === EXECUTOR_WAKE_BASE_EVIDENCE_KEYS.join("|") || own2 === EXECUTOR_WAKE_EVIDENCE_KEYS.join("|")) {
     const { evidence_digest, ...unsigned } = value;
-    if (value.reason !== "executor_wake" || !EXECUTOR_WAKE_STATES.has(value.state) || !validId3(value.task_id) || !validId3(value.operation_id) || !Number.isSafeInteger(value.attempt) || value.attempt < 1 || !Number.isSafeInteger(value.generation) || value.generation < 1 || ![value.result_digest, value.policy_digest, value.authorization_digest, value.delivery_id].every((item) => typeof item === "string" && /^[0-9a-f]{64}$/u.test(item)) || !validId3(value.result_commit_ref) || !validText3(value.reason_code, 128) || value.thread_id !== null && !validId3(value.thread_id) || value.state !== "web_notify" && value.thread_id === null || evidence_digest !== digest2(unsigned) || [value.task_id, value.operation_id, value.result_commit_ref].some((item) => item !== item.normalize("NFC"))) fail2("invalid_executor_wake_evidence");
+    if (value.reason !== "executor_wake" || !EXECUTOR_WAKE_STATES.has(value.state) || !validId3(value.task_id) || !validId3(value.operation_id) || !Number.isSafeInteger(value.attempt) || value.attempt < 1 || !Number.isSafeInteger(value.generation) || value.generation < 1 || ![value.result_digest, value.policy_digest, value.authorization_digest, value.delivery_id].every((item) => typeof item === "string" && /^[0-9a-f]{64}$/u.test(item)) || !validId3(value.result_commit_ref) || !validText3(value.reason_code, 128) || value.thread_id !== null && !validId3(value.thread_id) || value.state !== "web_notify" && value.thread_id === null || "queue_message_id" in value && (!validId3(value.queue_message_id) || value.state !== "queued") || evidence_digest !== digest2(unsigned) || [value.task_id, value.operation_id, value.result_commit_ref].some((item) => item !== item.normalize("NFC"))) fail2("invalid_executor_wake_evidence");
     return;
   }
   if (own2 === "cancel_id|evidence_digest|launch_id|reason|request_digest|token_digest") {
@@ -4041,7 +4041,8 @@ function validIsoInstant(value) {
   return typeof value === "string" && Number.isFinite(Date.parse(value));
 }
 function validateExecutorWakeInput(input) {
-  if (!input || Object.getPrototypeOf(input) !== Object.prototype || Object.keys(input).sort().join("|") !== EXECUTOR_WAKE_INPUT_KEYS || !validId3(input.operation_id) || !validId3(input.task_id) || !Number.isSafeInteger(input.attempt) || input.attempt < 1 || !Number.isSafeInteger(input.generation) || input.generation < 1 || !EXECUTOR_WAKE_STATES.has(input.state) || !validText3(input.reason_code, 128) || ![input.policy_digest, input.authorization_digest, input.delivery_id].every((item) => typeof item === "string" && /^[0-9a-f]{64}$/u.test(item)) || input.thread_id !== null && !validId3(input.thread_id) || input.state !== "web_notify" && input.thread_id === null || [input.operation_id, input.task_id, input.reason_code].some((item) => item !== item.normalize("NFC")))
+  const inputKeys = input && Object.getPrototypeOf(input) === Object.prototype ? Object.keys(input).sort().join("|") : "";
+  if (!input || inputKeys !== EXECUTOR_WAKE_BASE_INPUT_KEYS && inputKeys !== EXECUTOR_WAKE_INPUT_KEYS || !validId3(input.operation_id) || !validId3(input.task_id) || !Number.isSafeInteger(input.attempt) || input.attempt < 1 || !Number.isSafeInteger(input.generation) || input.generation < 1 || !EXECUTOR_WAKE_STATES.has(input.state) || !validText3(input.reason_code, 128) || ![input.policy_digest, input.authorization_digest, input.delivery_id].every((item) => typeof item === "string" && /^[0-9a-f]{64}$/u.test(item)) || input.thread_id !== null && !validId3(input.thread_id) || input.state !== "web_notify" && input.thread_id === null || "queue_message_id" in input && (!validId3(input.queue_message_id) || input.state !== "queued") || [input.operation_id, input.task_id, input.reason_code].some((item) => item !== item.normalize("NFC")))
     fail2("invalid_executor_wake_request");
   return input;
 }
@@ -4474,7 +4475,7 @@ function callDecision(fn, workspace, input) {
     return { state: "unknown" };
   }
 }
-var HERE, SCHEMA, RUNTIME_EVENTS_SCHEMA, ADMIN_ABANDONMENT_SCHEMA, NORMALIZED_ADMIN_ABANDONMENT_SCHEMA, LEGACY_ADMIN_ABANDONMENT_SCHEMA, CONSTRUCT, SCHEMA_VERSION, SCHEMA_OBJECT_QUERY, RUNTIME_EVENT_SCHEMA_OBJECTS, expectedSchemas, expectedRecoveryBindingTriggerSql, ADMIN_ABANDONMENT_TABLE_SQL, LEGACY_ADMIN_ABANDONMENT_TABLE_SQL, NORMALIZED_ADMIN_ABANDONMENT_TABLE_SQL, NORMALIZED_LEGACY_ADMIN_ABANDONMENT_TABLE_SQL, SQLITE_V14_ONLY_MESSAGE, V13_UPGRADE_MARKER_MESSAGE, v13UpgradeMarker, RESULT_CONTRACT_VERSION, RESULT_STATUSES2, RECOVERY_PHASES, RECOVERY_SOURCES, RECOVERY_REASON_CODES, RECOVERY_QUARANTINE_CODES, RECOVERY_EVIDENCE_KEYS, RECOVERY_RELEASE_EVIDENCE_KEYS, EXECUTOR_WAKE_EVIDENCE_KEYS, EXECUTOR_WAKE_STATES, EXECUTOR_WAKE_LIMIT, RECOVERY_MATERIAL_BINDING_KEYS, RECOVERY_MATERIAL_DETAIL_KEYS, RESOLVED_RECOVERY_SET_CONTRACT, RECOVERY_MATERIAL_CONTRACT, digest2, rawDigest, sortedDigests, upgradeRowJson, EVIDENCE_KEYS, FUTURE_EVENT_TYPES, FUTURE_EVIDENCE_KEYS, EVENT_PHASE, RECOVERY_INPUT_KEYS, RECOVERY_RELEASE_INPUT_KEYS, ADMIN_ABANDONMENT_INPUT_KEYS, ADMIN_ABANDONMENT_EVIDENCE_KEYS, USER_AUTHORIZED_RELEASE_INPUT_KEYS, USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS, EXECUTOR_WAKE_INPUT_KEYS, USER_AUTHORIZED_TERMINAL_RELEASE_INPUT_KEYS, AdmissionError, fail2, IsolatedAdmissionStore;
+var HERE, SCHEMA, RUNTIME_EVENTS_SCHEMA, ADMIN_ABANDONMENT_SCHEMA, NORMALIZED_ADMIN_ABANDONMENT_SCHEMA, LEGACY_ADMIN_ABANDONMENT_SCHEMA, CONSTRUCT, SCHEMA_VERSION, SCHEMA_OBJECT_QUERY, RUNTIME_EVENT_SCHEMA_OBJECTS, expectedSchemas, expectedRecoveryBindingTriggerSql, ADMIN_ABANDONMENT_TABLE_SQL, LEGACY_ADMIN_ABANDONMENT_TABLE_SQL, NORMALIZED_ADMIN_ABANDONMENT_TABLE_SQL, NORMALIZED_LEGACY_ADMIN_ABANDONMENT_TABLE_SQL, SQLITE_V14_ONLY_MESSAGE, V13_UPGRADE_MARKER_MESSAGE, v13UpgradeMarker, RESULT_CONTRACT_VERSION, RESULT_STATUSES2, RECOVERY_PHASES, RECOVERY_SOURCES, RECOVERY_REASON_CODES, RECOVERY_QUARANTINE_CODES, RECOVERY_EVIDENCE_KEYS, RECOVERY_RELEASE_EVIDENCE_KEYS, EXECUTOR_WAKE_BASE_EVIDENCE_KEYS, EXECUTOR_WAKE_EVIDENCE_KEYS, EXECUTOR_WAKE_STATES, EXECUTOR_WAKE_LIMIT, RECOVERY_MATERIAL_BINDING_KEYS, RECOVERY_MATERIAL_DETAIL_KEYS, RESOLVED_RECOVERY_SET_CONTRACT, RECOVERY_MATERIAL_CONTRACT, digest2, rawDigest, sortedDigests, upgradeRowJson, EVIDENCE_KEYS, FUTURE_EVENT_TYPES, FUTURE_EVIDENCE_KEYS, EVENT_PHASE, RECOVERY_INPUT_KEYS, RECOVERY_RELEASE_INPUT_KEYS, ADMIN_ABANDONMENT_INPUT_KEYS, ADMIN_ABANDONMENT_EVIDENCE_KEYS, USER_AUTHORIZED_RELEASE_INPUT_KEYS, USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS, EXECUTOR_WAKE_BASE_INPUT_KEYS, EXECUTOR_WAKE_INPUT_KEYS, USER_AUTHORIZED_TERMINAL_RELEASE_INPUT_KEYS, AdmissionError, fail2, IsolatedAdmissionStore;
 var init_store = __esm({
   "src/sqlite-candidate/wp6b2b1/store.mjs"() {
     "use strict";
@@ -4520,7 +4521,7 @@ var init_store = __esm({
     RECOVERY_QUARANTINE_CODES = /* @__PURE__ */ new Set(["claim_identity_conflict", "operation_projection_conflict"]);
     RECOVERY_EVIDENCE_KEYS = Object.freeze(["attempt", "claim_id", "classification", "envelope_digest", "evidence_digest", "evidence_source", "expected_revision", "reason", "reason_code", "task_id", "worker_identity_digest"]);
     RECOVERY_RELEASE_EVIDENCE_KEYS = Object.freeze([...RECOVERY_EVIDENCE_KEYS, "process_tree_root_observed", "process_tree_scan_clean", "process_tree_scan_digest", "recovery_disposition"]);
-    EXECUTOR_WAKE_EVIDENCE_KEYS = Object.freeze([
+    EXECUTOR_WAKE_BASE_EVIDENCE_KEYS = Object.freeze([
       "attempt",
       "authorization_digest",
       "delivery_id",
@@ -4536,6 +4537,7 @@ var init_store = __esm({
       "task_id",
       "thread_id"
     ]);
+    EXECUTOR_WAKE_EVIDENCE_KEYS = Object.freeze([...EXECUTOR_WAKE_BASE_EVIDENCE_KEYS, "queue_message_id"].sort());
     EXECUTOR_WAKE_STATES = /* @__PURE__ */ new Set(["intent", "queued", "submission_unknown", "turn_started", "web_notify"]);
     EXECUTOR_WAKE_LIMIT = 5;
     RECOVERY_MATERIAL_BINDING_KEYS = Object.freeze(["attempt", "claim_id", "classification", "evidence_source", "reason_code", "task_id", "worker_identity_digest"]);
@@ -4605,7 +4607,8 @@ var init_store = __esm({
     ADMIN_ABANDONMENT_EVIDENCE_KEYS = "boot_time|claimant_scan_clean|claimant_scan_digest|failed_at|hosts_closed|observed_at|platform_probe_digest|process_inventory_digest|worker_exited|worker_process_id|worker_start_fingerprint|writer_closed";
     USER_AUTHORIZED_RELEASE_INPUT_KEYS = "attempt|cancel_id|generation|operation_id|release_reason|revision|task_id";
     USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS = "attempt|cancel_id|cancellation_verification_digest|generation|operation_id|recovery_evidence_digest|release_reason|revision|task_id";
-    EXECUTOR_WAKE_INPUT_KEYS = "attempt|authorization_digest|delivery_id|generation|operation_id|policy_digest|reason_code|state|task_id|thread_id";
+    EXECUTOR_WAKE_BASE_INPUT_KEYS = "attempt|authorization_digest|delivery_id|generation|operation_id|policy_digest|reason_code|state|task_id|thread_id";
+    EXECUTOR_WAKE_INPUT_KEYS = "attempt|authorization_digest|delivery_id|generation|operation_id|policy_digest|queue_message_id|reason_code|state|task_id|thread_id";
     USER_AUTHORIZED_TERMINAL_RELEASE_INPUT_KEYS = "attempt|claim_id|generation|operation_id|recovery_evidence_digest|release_reason|result_commit_ref|result_digest|revision|task_id|worker_identity_digest";
     AdmissionError = class extends Error {
       constructor(code, message = code) {
@@ -6842,7 +6845,8 @@ var init_store = __esm({
             delivery_id: input.delivery_id,
             policy_digest: input.policy_digest,
             authorization_digest: input.authorization_digest,
-            reason_code: input.reason_code
+            reason_code: input.reason_code,
+            ..."queue_message_id" in input ? { queue_message_id: input.queue_message_id } : {}
           };
           const evidence = { ...unsigned, evidence_digest: digest2(unsigned) };
           validateObservationEventEvidence(evidence);
@@ -24150,7 +24154,7 @@ var WAKE_TURN_POLL_MS = 200;
 var WAKE_LOADED_PAGE_LIMIT = 200;
 var WAKE_LOADED_MAX_PAGES = 50;
 var SAFE_REASONING_EFFORTS = /* @__PURE__ */ new Set(["minimal", "low", "medium"]);
-var WAKE_POLICY_KEYS = [
+var WAKE_POLICY_BASE_KEYS = [
   "attempt",
   "authorization",
   "enabled",
@@ -24163,6 +24167,7 @@ var WAKE_POLICY_KEYS = [
   "thread_id",
   "workspace"
 ];
+var WAKE_POLICY_KEYS_V2 = ["delivery_mode", ...WAKE_POLICY_BASE_KEYS];
 var WAKE_AUTHORIZATION_KEYS = ["expires_at", "granted_at", "granted_by", "scope"];
 function defaultAppServerControlSocket(env = process.env, homeDir = homedir6()) {
   const override = env.ZCODE_BRIDGE_APP_SERVER_CONTROL_SOCKET?.trim();
@@ -24237,6 +24242,62 @@ function createExecutorWakeCoordinator(options) {
           "unsafe_reasoning_effort"
         );
       }
+      const deliveryId = wakeDeliveryId(release, policyRead.policy_digest);
+      const recordIntent = (reasonCode) => {
+        const intent = {
+          operation_id: release.operation_id,
+          task_id: release.task_id,
+          attempt: release.attempt,
+          generation: release.generation,
+          state: "intent",
+          thread_id: policyRead.policy.thread_id,
+          delivery_id: deliveryId,
+          policy_digest: policyRead.policy_digest,
+          authorization_digest: policyRead.authorization_digest,
+          reason_code: reasonCode
+        };
+        try {
+          const recorded = recorder.recordExecutorWakeObservation(intent);
+          if (recorded.duplicate) {
+            return wakeResult("already_handled", "prior_intent_already_recorded");
+          }
+          return null;
+        } catch (error2) {
+          if (errorCode3(error2) === "executor_wake_intent_not_first") {
+            return wakeResult("already_handled", "wake_history_already_exists");
+          }
+          throw error2;
+        }
+      };
+      if (policyRead.policy.delivery_mode === "trusted_local") {
+        const alreadyHandled = recordIntent("owner_authorized_trusted_local");
+        if (alreadyHandled) return alreadyHandled;
+        const queued = await submitWakeQueue(
+          recorder,
+          notifyWeb,
+          release,
+          policyRead,
+          deliveryId,
+          queue,
+          codexExecutable,
+          queueTimeoutMs
+        );
+        if (queued.state !== "queued") return queued;
+        const fallback = await recordObservation(
+          recorder,
+          notifyWeb,
+          release,
+          policyRead,
+          deliveryId,
+          "web_notify",
+          "trusted_local_turn_start_unverified",
+          policyRead.policy.thread_id
+        );
+        return {
+          ...fallback,
+          ...queued.queue_message_id ? { queue_message_id: queued.queue_message_id } : {}
+        };
+      }
       let session;
       try {
         session = await appServer.connect({ socketPath, executable: codexExecutable, timeoutMs: controlTimeoutMs });
@@ -24279,82 +24340,17 @@ function createExecutorWakeCoordinator(options) {
           );
         }
         const baselineTurnIds = preflight.recent_turns.map((turn) => turn.id);
-        const deliveryId = wakeDeliveryId(release, policyRead.policy_digest);
-        const intent = {
-          operation_id: release.operation_id,
-          task_id: release.task_id,
-          attempt: release.attempt,
-          generation: release.generation,
-          state: "intent",
-          thread_id: policyRead.policy.thread_id,
-          delivery_id: deliveryId,
-          policy_digest: policyRead.policy_digest,
-          authorization_digest: policyRead.authorization_digest,
-          reason_code: "queue_preflight_passed"
-        };
-        try {
-          const recorded = recorder.recordExecutorWakeObservation(intent);
-          if (recorded.duplicate) return wakeResult("already_handled", "prior_intent_already_recorded");
-        } catch (error2) {
-          const code = errorCode3(error2);
-          if (code === "executor_wake_intent_not_first") {
-            return wakeResult("already_handled", "wake_history_already_exists");
-          }
-          throw error2;
-        }
-        let submission;
-        try {
-          submission = await queue.submit({
-            executable: codexExecutable,
-            threadId: policyRead.policy.thread_id,
-            message: wakeMessage(release),
-            timeoutMs: queueTimeoutMs
-          });
-        } catch {
-          return await recordObservation(
-            recorder,
-            notifyWeb,
-            release,
-            policyRead,
-            deliveryId,
-            "submission_unknown",
-            "queue_submission_outcome_unknown",
-            policyRead.policy.thread_id
-          );
-        }
-        if (!submission.started) {
-          return await recordObservation(
-            recorder,
-            notifyWeb,
-            release,
-            policyRead,
-            deliveryId,
-            "web_notify",
-            "queue_command_unavailable",
-            policyRead.policy.thread_id
-          );
-        }
-        if (submission.timed_out || submission.signal !== null || submission.exit_code !== 0) {
-          return await recordObservation(
-            recorder,
-            notifyWeb,
-            release,
-            policyRead,
-            deliveryId,
-            "submission_unknown",
-            submission.timed_out ? "queue_submission_timeout" : "queue_submission_outcome_unknown",
-            policyRead.policy.thread_id
-          );
-        }
-        const queued = await recordObservation(
+        const alreadyHandled = recordIntent("queue_preflight_passed");
+        if (alreadyHandled) return alreadyHandled;
+        const queued = await submitWakeQueue(
           recorder,
           notifyWeb,
           release,
           policyRead,
           deliveryId,
-          "queued",
-          "queue_command_accepted",
-          policyRead.policy.thread_id
+          queue,
+          codexExecutable,
+          queueTimeoutMs
         );
         if (queued.state !== "queued" || turnObservationMs === 0) return queued;
         const deadline = Date.now() + turnObservationMs;
@@ -24389,6 +24385,63 @@ function createExecutorWakeCoordinator(options) {
     }
   };
 }
+async function submitWakeQueue(recorder, notifyWeb, release, policy, deliveryId, queue, codexExecutable, queueTimeoutMs) {
+  let submission;
+  try {
+    submission = await queue.submit({
+      executable: codexExecutable,
+      threadId: policy.policy.thread_id,
+      message: wakeMessage(release),
+      timeoutMs: queueTimeoutMs
+    });
+  } catch {
+    return recordObservation(
+      recorder,
+      notifyWeb,
+      release,
+      policy,
+      deliveryId,
+      "submission_unknown",
+      "queue_submission_outcome_unknown",
+      policy.policy.thread_id
+    );
+  }
+  if (!submission.started) {
+    return recordObservation(
+      recorder,
+      notifyWeb,
+      release,
+      policy,
+      deliveryId,
+      "web_notify",
+      "queue_command_unavailable",
+      policy.policy.thread_id
+    );
+  }
+  if (submission.timed_out || submission.signal !== null || submission.exit_code !== 0) {
+    return recordObservation(
+      recorder,
+      notifyWeb,
+      release,
+      policy,
+      deliveryId,
+      "submission_unknown",
+      submission.timed_out ? "queue_submission_timeout" : "queue_submission_outcome_unknown",
+      policy.policy.thread_id
+    );
+  }
+  return recordObservation(
+    recorder,
+    notifyWeb,
+    release,
+    policy,
+    deliveryId,
+    "queued",
+    "queue_command_accepted",
+    policy.policy.thread_id,
+    submission.queue_message_id
+  );
+}
 function validatePolicyBinding(policy, release) {
   if (policy.task_id !== release.task_id) return "policy_task_mismatch";
   if (policy.attempt !== release.attempt) return "policy_attempt_mismatch";
@@ -24422,10 +24475,11 @@ async function recordWebFallback(recorder, notifyWeb, release, threadId, policyD
     threadId
   );
 }
-async function recordObservation(recorder, notifyWeb, release, binding, deliveryId, state, reasonCode, threadId) {
+async function recordObservation(recorder, notifyWeb, release, binding, deliveryId, state, reasonCode, threadId, queueMessageId) {
   if (state !== "web_notify" && threadId === null) {
     throw new Error("EXECUTOR_WAKE_THREAD_BINDING_INTERNAL");
   }
+  const queueMessageIdForEvidence = state === "queued" && isIdentifier(queueMessageId) ? queueMessageId : void 0;
   const result = recorder.recordExecutorWakeObservation({
     operation_id: release.operation_id,
     task_id: release.task_id,
@@ -24436,7 +24490,8 @@ async function recordObservation(recorder, notifyWeb, release, binding, delivery
     delivery_id: deliveryId,
     policy_digest: binding.policy_digest,
     authorization_digest: binding.authorization_digest,
-    reason_code: reasonCode
+    reason_code: reasonCode,
+    ...queueMessageIdForEvidence ? { queue_message_id: queueMessageIdForEvidence } : {}
   });
   if (state === "web_notify" && !result.duplicate) {
     try {
@@ -24450,14 +24505,15 @@ async function recordObservation(recorder, notifyWeb, release, binding, delivery
     } catch {
     }
   }
-  return wakeResult(state, reasonCode, result.duplicate);
+  return wakeResult(state, reasonCode, result.duplicate, queueMessageIdForEvidence);
 }
-function wakeResult(state, reasonCode, duplicate = false) {
+function wakeResult(state, reasonCode, duplicate = false, queueMessageId = void 0) {
   return {
     state,
     reason_code: reasonCode,
     desktop_visible: "UNKNOWN",
-    ...duplicate ? { duplicate: true } : {}
+    ...duplicate ? { duplicate: true } : {},
+    ...queueMessageId ? { queue_message_id: queueMessageId } : {}
   };
 }
 function readWakePolicy(authorityRoot, nowMs) {
@@ -24497,10 +24553,14 @@ function readWakePolicy(authorityRoot, nowMs) {
   }
 }
 function parseWakePolicy(value, nowMs) {
-  if (!isRecord7(value) || !hasExactKeys(value, WAKE_POLICY_KEYS)) throw new Error("wake_policy_shape_invalid");
+  if (!isRecord7(value) || !hasExactKeys(value, WAKE_POLICY_BASE_KEYS) && !hasExactKeys(value, WAKE_POLICY_KEYS_V2)) {
+    throw new Error("wake_policy_shape_invalid");
+  }
   if (value.schema_version !== 1 || typeof value.enabled !== "boolean" || value.fallback !== "web_notify") {
     throw new Error("wake_policy_version_invalid");
   }
+  const deliveryMode = value.delivery_mode === void 0 ? "strict" : value.delivery_mode === "strict" || value.delivery_mode === "trusted_local" ? value.delivery_mode : null;
+  if (deliveryMode === null) throw new Error("wake_policy_delivery_mode_invalid");
   const taskId = boundedIdentifier(value.task_id);
   const threadId = boundedIdentifier(value.thread_id);
   const model = boundedText(value.model, 256);
@@ -24532,6 +24592,7 @@ function parseWakePolicy(value, nowMs) {
     model_provider: provider,
     reasoning_effort: value.reasoning_effort,
     fallback: "web_notify",
+    delivery_mode: deliveryMode,
     authorization: {
       scope: "one_turn",
       granted_by: "owner",
@@ -24550,11 +24611,16 @@ function safeThreadHint(raw) {
 }
 function wakeMessage(release) {
   return [
-    "[CODEX-ZCODE BRIDGE WAKE]",
-    `Task ${release.task_id} attempt ${release.attempt} completed with status ${release.result_status}.`,
-    `Operation ${release.operation_id} released; result digest ${release.result_digest}.`,
-    "Read the persisted result with zcode_result (view=summary) before deciding the next action.",
-    "This Wake reports delivery only. It does not accept the Task, release Bridge resources, or authorize new work."
+    "[CODEX-ZCODE BRIDGE WAKE - VERIFIED RELEASE FACTS]",
+    `Task: ${release.task_id}`,
+    `Attempt: ${release.attempt}`,
+    `Operation: ${release.operation_id} (released)`,
+    `Result status: ${release.result_status}`,
+    `Result digest: ${release.result_digest}`,
+    `Result commit: ${release.result_commit_ref}`,
+    'Required readback: call zcode_status for this Task and Attempt, then call zcode_result(view="summary") and verify the same Result digest.',
+    "Check Cleanup verified and Operation released before independently checking the Task's acceptance criteria.",
+    "Do not create a duplicate Task. A fixed ACK alone is not acceptance. This Wake does not authorize new work."
   ].join("\n");
 }
 function wakeDeliveryId(release, policyDigest) {
@@ -24855,7 +24921,8 @@ var QueueCommandRunner = class {
           signal: null,
           timed_out: true,
           stdout,
-          stderr
+          stderr,
+          queue_message_id: parseQueueMessageId(stdout)
         });
       }, input.timeoutMs);
       timer.unref?.();
@@ -24877,7 +24944,8 @@ var QueueCommandRunner = class {
           signal: null,
           timed_out: timedOut,
           stdout,
-          stderr
+          stderr,
+          queue_message_id: parseQueueMessageId(stdout)
         });
       });
       child.once("close", (exitCode, signal) => {
@@ -24887,12 +24955,17 @@ var QueueCommandRunner = class {
           signal,
           timed_out: timedOut,
           stdout,
-          stderr
+          stderr,
+          queue_message_id: parseQueueMessageId(stdout)
         });
       });
     });
   }
 };
+function parseQueueMessageId(stdout) {
+  const match = /^Queued message ([A-Za-z0-9._:-]{1,128}) for thread [A-Za-z0-9._:-]{1,128}\.?$/mu.exec(stdout.trim());
+  return match?.[1] ?? null;
+}
 
 // src/executor/production-composition.ts
 async function createHostStartPlanIssuer(options) {

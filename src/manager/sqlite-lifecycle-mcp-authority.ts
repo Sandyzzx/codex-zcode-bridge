@@ -65,6 +65,7 @@ export interface AuthorityExecutorWakeObservationInput {
   readonly policy_digest: string;
   readonly authorization_digest: string;
   readonly reason_code: string;
+  readonly queue_message_id?: string;
 }
 
 export type AuthorityExecutorWakeRecorder = (

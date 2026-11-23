@@ -218,6 +218,8 @@ test("deterministic Async Handoff workflow separates scope, handoff, Wake and ac
     "测试",
     "不是",
     "codex queue",
+    "trusted-local",
+    "trusted_local_turn_start_unverified",
     "task console-url",
     "web_url",
     "真实可访问",

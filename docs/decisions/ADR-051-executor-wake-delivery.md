@@ -3,7 +3,7 @@
 > Status: DECISION
 > Date: 2026-11-22
 > Decision: Accepted for the Async Executor Preview candidate
-> Implementation status: IMPLEMENTED — PARTIAL / BLOCKED
+> Implementation status: IMPLEMENTED — TRUSTED-LOCAL TARGETED / REAL E2E BLOCKED
 > Baseline: `origin/preview` `1bf039fda2ccfd17a992458a871bddd7b48b38c1`
 > PR #131 baseline: `a1bc911ec1b03cd22bbf13e717fc2233284e6183`
 > Acceptance implementation: `7f54531acba0844937bc134609dae840090294ec`
@@ -24,6 +24,19 @@ Result committed -> Cleanup verified -> Operation released
 
 Queue 是已确认 loaded/idle Thread 的首选 Wake Adapter。任何不确定条件都
 fail closed 到 Web Notify，不调用 Queue，不创建模型 Turn。
+
+Wake Policy 有两种互斥的交付模式：
+
+- `strict`：缺少该字段的既有策略和 CLI 默认值都归入此模式；必须取得同一
+  Owner 的实时 loaded/idle 与精确模型配置预检后才能 Queue。
+- `trusted_local`：仅用于单用户、本地可信 Windows Host 的显式 Owner 授权；
+  允许在无法访问 Desktop 私有 stdio App Server 时提交一次 Queue。Owner
+  明确接受目标 Thread 在任务期间改变 Model、Provider 或 Effort 的风险。
+
+`trusted-local` 不是通用绕过开关。它仍要求精确 Task、Attempt、Workspace、
+Thread、未过期的一次性 Owner 授权，以及已提交 Result、Cleanup verified 和
+Operation released。它不改变 Task、Result、Cleanup、Release、Recovery 或
+Executor Authority，也不引入 Daemon、Host Agent、Supervisor 或第二状态机。
 
 ## 授权策略
 
@@ -50,12 +63,18 @@ zcode-bridge task wake-authorize <task_id> \
   --model-provider <exact-provider> \
   --reasoning-effort minimal|low|medium \
   --expires-in-minutes 1..1440 \
+  --delivery-mode strict|trusted-local \
   --confirm-owner
 ```
 
 CLI 先从同一 Executor Control 面确认 Task 存在且 `--attempt` 等于当前 Attempt，
 再从持久 TaskPackage 取得 workspace。`wake-policy.json` 使用排他创建；已有策略
 不会被静默覆盖。该命令不直接写 SQLite，不新增管理服务，也不发送 Queue。
+
+省略 `--delivery-mode` 时写入 `strict`。既有不含该字段的 v1 policy 继续按
+`strict` 读取。`trusted_local` 中记录的 model/provider/effort 是授权时的
+Owner 快照和审计字段，不是投递时的实时校验结论；不得把它们报告为
+`MODEL_MATCH_PROVEN`。
 
 ## 派发前检查
 
@@ -70,6 +89,11 @@ App Server 会话，并同时确认：
 
 任一字段缺失、不匹配、App Server 不可用或 Thread 不 loaded，都记录
 `web_notify`，不得尝试 Queue。
+
+`trusted_local` 不执行上述私有控制面预检。它只验证策略、绑定、授权时间和
+Result/Cleanup/Release，然后先写入唯一 `intent`，再执行一次 Queue。该模式
+不能证明 Thread 当前 loaded/idle、Owner 身份或当前模型与授权快照一致；这些
+事实必须保持 `UNKNOWN`。
 
 CLI 参数不能覆盖原 Thread 的模型或 reasoning effort；因此策略不尝试用
 `codex queue -c` 改配置。预算确认限定为 Owner 的一次性单 Turn 授权和
@@ -93,14 +117,19 @@ codex queue --thread <thread-id> --message <bounded-wake-message>
 | exit 0 | `queued`，不表示 Turn 已启动 |
 | 出现 baseline 之外的新 `inProgress` Turn | `turn_started` |
 | Thread/模型/预算/加载条件不满足 | `web_notify` |
+| trusted-local exit 0、无同 Owner 观察能力 | 先记 `queued`，再记 `web_notify` / `trusted_local_turn_start_unverified` |
 
 Queue 消息只包含 Task、Attempt、Operation、Result digest 和读取
-`zcode_result(view=summary)` 的恢复指令，不复制 Worker 完整输出。
+`zcode_status`、`zcode_result(view="summary")`、Cleanup/Release 核对与独立
+验收指令，不复制 Worker 完整输出。CLI 输出中的官方 Queue message ID 作为
+可选 `queue_message_id` 追加到 `queued` evidence；该字段不改变凭证或公共
+MCP schema，也不提升 SQLite Schema Version。
 
 `QUEUED`、`TURN_STARTED`、`TURN_COMPLETED`、`DESKTOP_VISIBLE` 必须分别报告；
-本 Adapter 没有 Desktop UI acknowledgement，故 Desktop visible 始终为
-`UNKNOWN`。Queue exit 0、消息出现或 Turn 开始都不能冒充 Master 已恢复或
-Task 已验收。
+没有 Desktop UI acknowledgement 时 Desktop visible 始终为 `UNKNOWN`。
+Queue exit 0、消息出现或 Turn 开始都不能冒充 Master 已恢复或 Task 已验收。
+trusted-local 的最终状态可以提高 Web 可发现性，但不能把
+`trusted_local_turn_start_unverified` 改写为 `TURN_STARTED`。
 
 ## SQLite v14 持久化
 
@@ -143,6 +172,10 @@ Wake 计数、提示条和行内 badge；用户不再需要先逐条打开 Event
 - 真实 App Server control socket、真实 Queue 和真实付费模型未在候选测试中
   调用；当前 socket 不存在时真实 probe 固定记录
   `web_notify / app_server_unavailable`，Queue 调用为 0，费用/额度不可观测。
+- 新增 trusted-local 定向测试覆盖显式/旧 policy、过期授权、Task 绑定、
+  单次 Queue、message ID、timeout、Turn 未确认降级和 SQLite v14 evidence；
+  真实自动 Wake Turn、Master Result readback 与 Desktop Visible 仍需要新的
+  Codex 模型预算授权，当前 `BLOCKED_BY_AUTHORIZATION`。
 - 未合入 Preview、未发布；Async Master Skill 只有确定性合同测试，未完成真实
   模型遵循率验收。
 
@@ -156,3 +189,5 @@ Wake 计数、提示条和行内 badge；用户不再需要先逐条打开 Event
 - 不在模型、provider、effort、Thread 加载状态或预算授权未确认时自动 Queue。
 - 不把 `submission_unknown` 自动重发，也不以新 Task/Attempt 掩盖未知提交。
 - 不把 Web Notify、Queue ACK 或 Turn 开始当作结果验收。
+- 不在没有显式 `trusted_local` policy 时跳过严格预检。
+- 不把 trusted-local 推广为远程、多租户或无人值守模型授权机制。

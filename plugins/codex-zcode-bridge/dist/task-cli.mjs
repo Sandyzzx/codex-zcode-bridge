@@ -7009,7 +7009,7 @@ var WAKE_AUTHORIZATION_MAX_MS = 24 * 60 * 60 * 1e3;
 var WAKE_AUTHORIZATION_MIN_MS = 60 * 1e3;
 var WAKE_CONTROL_FRAME_MAX_BYTES = 1024 * 1024;
 var WAKE_CONTROL_STDERR_MAX_BYTES = 8 * 1024;
-var WAKE_POLICY_KEYS = [
+var WAKE_POLICY_BASE_KEYS = [
   "attempt",
   "authorization",
   "enabled",
@@ -7022,6 +7022,7 @@ var WAKE_POLICY_KEYS = [
   "thread_id",
   "workspace"
 ];
+var WAKE_POLICY_KEYS_V2 = ["delivery_mode", ...WAKE_POLICY_BASE_KEYS];
 var WAKE_AUTHORIZATION_KEYS = ["expires_at", "granted_at", "granted_by", "scope"];
 function writeExecutorWakePolicy(authorityRoot, grant, nowMs = Date.now()) {
   if (!Number.isSafeInteger(nowMs) || nowMs < 0) throw new Error("EXECUTOR_WAKE_NOW_INVALID");
@@ -7042,6 +7043,7 @@ function writeExecutorWakePolicy(authorityRoot, grant, nowMs = Date.now()) {
     model_provider: grant.model_provider,
     reasoning_effort: grant.reasoning_effort,
     fallback: "web_notify",
+    delivery_mode: grant.delivery_mode ?? "strict",
     authorization: {
       scope: "one_turn",
       granted_by: "owner",
@@ -7074,10 +7076,14 @@ function writeExecutorWakePolicy(authorityRoot, grant, nowMs = Date.now()) {
   };
 }
 function parseWakePolicy(value, nowMs) {
-  if (!isRecord2(value) || !hasExactKeys(value, WAKE_POLICY_KEYS)) throw new Error("wake_policy_shape_invalid");
+  if (!isRecord2(value) || !hasExactKeys(value, WAKE_POLICY_BASE_KEYS) && !hasExactKeys(value, WAKE_POLICY_KEYS_V2)) {
+    throw new Error("wake_policy_shape_invalid");
+  }
   if (value.schema_version !== 1 || typeof value.enabled !== "boolean" || value.fallback !== "web_notify") {
     throw new Error("wake_policy_version_invalid");
   }
+  const deliveryMode = value.delivery_mode === void 0 ? "strict" : value.delivery_mode === "strict" || value.delivery_mode === "trusted_local" ? value.delivery_mode : null;
+  if (deliveryMode === null) throw new Error("wake_policy_delivery_mode_invalid");
   const taskId = boundedIdentifier(value.task_id);
   const threadId = boundedIdentifier(value.thread_id);
   const model = boundedText(value.model, 256);
@@ -7109,6 +7115,7 @@ function parseWakePolicy(value, nowMs) {
     model_provider: provider,
     reasoning_effort: value.reasoning_effort,
     fallback: "web_notify",
+    delivery_mode: deliveryMode,
     authorization: {
       scope: "one_turn",
       granted_by: "owner",
@@ -7345,7 +7352,8 @@ var TASK_CLI_USAGE = [
   "  task reply <task_id> --request-id ID --decision allow|deny|accept|decline [--reason TEXT] [--answer KEY=VALUE]",
   "  task console-url <task_id> [--no-start] [--timeout-ms 500..60000]",
   "  task wake-authorize <task_id> --attempt N --thread ID --model MODEL --model-provider PROVIDER",
-  "      --reasoning-effort minimal|low|medium --expires-in-minutes 1..1440 --confirm-owner"
+  "      --reasoning-effort minimal|low|medium --expires-in-minutes 1..1440 --confirm-owner",
+  "      [--delivery-mode strict|trusted-local]"
 ].join("\n");
 var CliUsageError = class extends Error {
 };
@@ -7558,7 +7566,8 @@ async function runWakeAuthorize(args, dataRoot, pipeName, io, dependencies) {
       "--model-provider",
       "--reasoning-effort",
       "--expires-in-minutes",
-      "--confirm-owner"
+      "--confirm-owner",
+      "--delivery-mode"
     ]),
     /* @__PURE__ */ new Set(["--confirm-owner"])
   );
@@ -7580,6 +7589,7 @@ async function runWakeAuthorize(args, dataRoot, pipeName, io, dependencies) {
     1,
     1440
   );
+  const deliveryMode = options.single.has("--delivery-mode") ? enumValue("--delivery-mode", options.single.get("--delivery-mode"), ["strict", "trusted-local"]) === "trusted-local" ? "trusted_local" : "strict" : "strict";
   return withClient(dependencies, pipeName, async (client) => {
     const task = await findTask(client, taskId);
     if (task.attempt !== attempt) {
@@ -7596,7 +7606,8 @@ async function runWakeAuthorize(args, dataRoot, pipeName, io, dependencies) {
       model,
       model_provider: provider,
       reasoning_effort: reasoningEffort,
-      expires_in_ms: expiresInMinutes * 6e4
+      expires_in_ms: expiresInMinutes * 6e4,
+      delivery_mode: deliveryMode
     };
     const written = (dependencies.writeWakePolicy ?? writeExecutorWakePolicy)(
       dataRoot,
@@ -7611,6 +7622,7 @@ async function runWakeAuthorize(args, dataRoot, pipeName, io, dependencies) {
       model,
       model_provider: provider,
       reasoning_effort: reasoningEffort,
+      delivery_mode: written.policy.delivery_mode,
       authorization_scope: written.policy.authorization.scope,
       authorization_expires_at: written.policy.authorization.expires_at,
       policy_path: written.path,
