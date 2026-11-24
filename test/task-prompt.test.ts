@@ -237,3 +237,59 @@ test("continue capacity failure is explicit rather than silently dropping constr
       && error.code === "task_prompt_exceeds_capacity",
   );
 });
+
+test("continue bounds feedback to the remaining capacity so an accepted task stays continuable (P2 §4.4)", () => {
+  const nearLimitContext = "x".repeat(MAX_PROMPT_CHARS - 12_000);
+  const task = makeTask({ context: nearLimitContext });
+  const feedback = "y".repeat(30_000);
+  const prompt = buildContinuePrompt({
+    task, feedback, additionalRequirements: [], previousSessionId: null, previousResult: null,
+  });
+  assert.ok(prompt.length <= MAX_PROMPT_CHARS, `continue must stay within capacity (got ${prompt.length})`);
+  assert.match(prompt, /excerpted to fit the prompt capacity/u);
+  assert.match(prompt, /characters omitted/u);
+  assert.match(prompt, /OUTPUT CONTRACT \(mandatory\)/u, "the contract stays present");
+  assert.match(prompt, /OBJECTIVE/u, "the task contract stays present");
+});
+
+test("a failed previous result with empty normalized fields carries a bounded raw-output excerpt with middle error signals", () => {
+  const middle = [
+    "INFO start",
+    ...Array.from({ length: 400 }, (_, index) => `routine line ${index}`),
+    "FATAL Cannot resolve dependency unique-root-cause-marker",
+    ...Array.from({ length: 400 }, (_, index) => `routine tail line ${index}`),
+  ].join("\n");
+  const previousResult: TaskResult = {
+    task_id: "gap", attempt: 1, status: "failed",
+    summary: "", files_changed: [], tests: [], issues: [], needs_master_decision: false,
+    zcode_output: middle, exit_code: 1, session_id: null, started_at: null, finished_at: null,
+  };
+  const prompt = buildContinuePrompt({
+    task: makeTask({}), feedback: "diagnose and fix", additionalRequirements: [],
+    previousSessionId: null, previousResult,
+  });
+  assert.match(prompt, /raw_output_excerpt/u);
+  assert.match(prompt, /unique-root-cause-marker/u, "the middle root cause stays recoverable");
+  assert.match(prompt, /MIDDLE ERROR SIGNALS/u);
+  assert.match(prompt, /characters omitted/u, "the omission stays explicit");
+});
+
+test("long failed-test details keep middle error signals instead of only head and tail", () => {
+  const details = [
+    ...Array.from({ length: 300 }, (_, index) => `ok ${index}`),
+    "Error: assertion failed at deep-middle-sentinel",
+    ...Array.from({ length: 300 }, (_, index) => `tail ${index}`),
+  ].join("\n");
+  const previousResult: TaskResult = {
+    task_id: "details", attempt: 1, status: "failed",
+    summary: "one test failed", files_changed: [], issues: [], needs_master_decision: false,
+    zcode_output: "", exit_code: 1, session_id: null, started_at: null, finished_at: null,
+    tests: [{ command: "npm test", status: "failed", details }],
+  };
+  const prompt = buildContinuePrompt({
+    task: makeTask({}), feedback: "fix the failing test", additionalRequirements: [],
+    previousSessionId: null, previousResult,
+  });
+  assert.match(prompt, /deep-middle-sentinel/u, "the mid-log root cause stays recoverable");
+  assert.match(prompt, /characters omitted/u);
+});

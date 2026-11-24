@@ -214,6 +214,8 @@ test("installed official adapter selects the installed bundle and preserves the 
     });
     const descriptor: OfficialAppServerRuntimeDescriptor = {
       status: "OFFICIAL_RUNTIME_VERIFIED",
+      installation_safety: "OFFICIAL_INSTALLATION_SAFE",
+      installation_fingerprint: "f".repeat(64),
       discount_capability: "OFFICIAL_DISCOUNT_VERIFIED",
       start_plan_static_compatibility: "OFFLINE_COMPATIBLE",
       reason: null,
@@ -323,14 +325,54 @@ test("installed official adapter selects the installed bundle and preserves the 
       && event.details?.discount_capability === "OFFICIAL_DISCOUNT_VERIFIED"));
 
     const managerCount = FakeProcessManager.constructCount;
-    const unverifiedEvents: Array<{ type: string; details?: Record<string, unknown> }> = [];
-    const unverifiedAdapter = new OfficialAppServerWorkerAdapter({
+    const unsafeEvents: Array<{ type: string; details?: Record<string, unknown> }> = [];
+    const unsafeAdapter = new OfficialAppServerWorkerAdapter({
+      officialRuntimeResolver: {
+        inspect: async () => ({
+          ...descriptor,
+          status: "OFFICIAL_RUNTIME_UNVERIFIED",
+          installation_safety: "OFFICIAL_INSTALLATION_UNSAFE",
+          reason: "synthetic unsafe installation",
+        }),
+        resolve: async () => config,
+      },
+      providerCapability: "coding_plan_discount",
+      testOnlyOfficialHostPackagedAssets: hostAssets,
+      testOnlyOfficialHostModule: {
+        ZCODE_PRODUCT_VERSION: "3.18.2",
+        ZCodeAgentProcessManager: FakeProcessManager as never,
+        ZCodeProtocolClient: FakeOfficialProtocolClient as never,
+      },
+      childEnvBase: { PATH: process.env.PATH },
+      timeoutMs: 5_000,
+      probe,
+      verifyTreeClean: async () => ({ clean: true, livePids: [], observedPids: [] }),
+      onEvent: (event) => unsafeEvents.push(event),
+    });
+    const unsafeHandle = await unsafeAdapter.startTask({ task, workspace, attempt: 1 });
+    await assert.rejects(
+      unsafeAdapter.getResult(unsafeHandle),
+      /OFFICIAL_INSTALLATION_UNSAFE: synthetic unsafe installation/u,
+    );
+    assert.equal(
+      FakeProcessManager.constructCount,
+      managerCount,
+      "unsafe installed runtimes must not construct or start the official process manager",
+    );
+    assert.ok(unsafeEvents.some((event) =>
+      event.type === "official_runtime_unverified"
+      && event.details?.installation_safety === "OFFICIAL_INSTALLATION_UNSAFE"));
+
+    FakeProcessManager.reset();
+    FakeProcessManager.client.select("account:bigmodel-individual-coding-plan", "GLM-5.3-Flash");
+    const diagnosticEvents: Array<{ type: string; details?: Record<string, unknown> }> = [];
+    const safeUnverifiedAdapter = new OfficialAppServerWorkerAdapter({
       officialRuntimeResolver: {
         inspect: async () => ({
           ...descriptor,
           status: "OFFICIAL_RUNTIME_UNVERIFIED",
           discount_capability: "OFFICIAL_DISCOUNT_NOT_VERIFIED",
-          reason: "synthetic unknown bundle",
+          reason: "synthetic safe installation outside the manifest",
         }),
         resolve: async () => config,
       },
@@ -345,59 +387,32 @@ test("installed official adapter selects the installed bundle and preserves the 
       timeoutMs: 5_000,
       probe,
       verifyTreeClean: async () => ({ clean: true, livePids: [], observedPids: [] }),
-      onEvent: (event) => unverifiedEvents.push(event),
+      onEvent: (event) => diagnosticEvents.push(event),
     });
-    const unverifiedHandle = await unverifiedAdapter.startTask({ task, workspace, attempt: 1 });
-    await assert.rejects(
-      unverifiedAdapter.getResult(unverifiedHandle),
-      /OFFICIAL_RUNTIME_UNVERIFIED: synthetic unknown bundle/u,
-    );
-    assert.equal(FakeProcessManager.constructCount, managerCount, "unknown installed runtimes must not construct or start the official process manager");
-    assert.ok(unverifiedEvents.some((event) =>
-      event.type === "official_runtime_unverified"
-      && event.details?.discount_capability === "OFFICIAL_DISCOUNT_NOT_VERIFIED"));
-
-    const capabilityEvents: Array<{ type: string; details?: Record<string, unknown> }> = [];
-    const capabilityAdapter = new OfficialAppServerWorkerAdapter({
-      officialRuntimeResolver: {
-        inspect: async () => ({
-          ...descriptor,
-          discount_capability: "OFFICIAL_DISCOUNT_NOT_VERIFIED",
-        }),
-        resolve: async () => config,
-      },
-      providerCapability: "coding_plan_discount",
-      testOnlyOfficialHostPackagedAssets: hostAssets,
-      testOnlyOfficialHostModule: {
-        ZCODE_PRODUCT_VERSION: "3.18.2",
-        ZCodeAgentProcessManager: FakeProcessManager as never,
-        ZCodeProtocolClient: FakeOfficialProtocolClient as never,
-      },
-      childEnvBase: { PATH: process.env.PATH },
-      timeoutMs: 5_000,
-      probe,
-      verifyTreeClean: async () => ({ clean: true, livePids: [], observedPids: [] }),
-      onEvent: (event) => capabilityEvents.push(event),
+    const safeUnverifiedHandle = await safeUnverifiedAdapter.startTask({
+      task,
+      workspace,
+      attempt: 1,
     });
-    const capabilityHandle = await capabilityAdapter.startTask({ task, workspace, attempt: 1 });
-    await assert.rejects(
-      capabilityAdapter.getResult(capabilityHandle),
-      /OFFICIAL_DISCOUNT_NOT_VERIFIED/u,
-    );
-    assert.equal(
-      FakeProcessManager.constructCount,
-      managerCount,
-      "a verified runtime without the provider capability must not start the process manager",
-    );
-    assert.ok(capabilityEvents.some((event) =>
-      event.type === "official_runtime_unverified"
+    const safeUnverifiedOutcome = await safeUnverifiedAdapter.getResult(safeUnverifiedHandle);
+    assert.equal(safeUnverifiedOutcome.exitCode, 0);
+    assert.equal(FakeProcessManager.constructCount, 1);
+    assert.ok(diagnosticEvents.some((event) =>
+      event.type === "official_runtime_capability_diagnostic"
       && event.details?.provider_capability === "coding_plan_discount"));
+    assert.ok(diagnosticEvents.some((event) =>
+      event.type === "official_runtime_manifest_unverified"
+      && event.details?.status === "OFFICIAL_RUNTIME_UNVERIFIED"));
+    assert.equal(
+      diagnosticEvents.some((event) => event.type === "official_runtime_unverified"),
+      false,
+    );
   } finally {
     await removeTempDir(root);
   }
 });
 
-test("implicit runtime Provider selection applies the matching capability gate before session/send", {
+test("implicit runtime Provider selection treats static compatibility as diagnostics before session/send", {
   skip: !WINDOWS_X64,
   timeout: 30_000,
 }, async () => {
@@ -445,6 +460,8 @@ test("implicit runtime Provider selection applies the matching capability gate b
     });
     const descriptor: OfficialAppServerRuntimeDescriptor = {
       status: "OFFICIAL_RUNTIME_VERIFIED",
+      installation_safety: "OFFICIAL_INSTALLATION_SAFE",
+      installation_fingerprint: "f".repeat(64),
       discount_capability: "OFFICIAL_DISCOUNT_VERIFIED",
       start_plan_static_compatibility: "OFFLINE_COMPATIBLE",
       reason: null,
@@ -547,15 +564,15 @@ test("implicit runtime Provider selection applies the matching capability gate b
       };
     };
 
-    const codingRejected = await run(
+    const codingDiagnostic = await run(
       "account:bigmodel-individual-coding-plan",
       "GLM-5.3-Flash",
       { ...descriptor, discount_capability: "OFFICIAL_DISCOUNT_NOT_VERIFIED" },
     );
-    assert.match(codingRejected.error?.message ?? "", /OFFICIAL_DISCOUNT_NOT_VERIFIED/u);
-    assert.equal(codingRejected.sent, false);
-    assert.ok(codingRejected.events.some((event) =>
-      event.type === "official_runtime_unverified"
+    assert.equal(codingDiagnostic.error, null);
+    assert.equal(codingDiagnostic.sent, true);
+    assert.ok(codingDiagnostic.events.some((event) =>
+      event.type === "official_runtime_capability_diagnostic"
       && event.details?.provider_capability === "coding_plan_discount"
       && event.details?.selected_provider_id === "account:bigmodel-individual-coding-plan"));
 
@@ -575,13 +592,16 @@ test("implicit runtime Provider selection applies the matching capability gate b
     assert.equal(startAccepted.error, null);
     assert.equal(startAccepted.sent, true);
 
-    const startRejected = await run(
+    const startDiagnostic = await run(
       "account:bigmodel-start-plan",
       "GLM-5.3-Flash",
       { ...descriptor, start_plan_static_compatibility: null },
     );
-    assert.match(startRejected.error?.message ?? "", /STARTPLAN_RUNTIME_INCOMPATIBLE/u);
-    assert.equal(startRejected.sent, false);
+    assert.equal(startDiagnostic.error, null);
+    assert.equal(startDiagnostic.sent, true);
+    assert.ok(startDiagnostic.events.some((event) =>
+      event.type === "official_runtime_capability_diagnostic"
+      && event.details?.provider_capability === "start_plan_static"));
 
     const otherAccepted = await run(
       "provider-default",

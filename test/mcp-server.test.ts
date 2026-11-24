@@ -6,6 +6,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
+import { summarizeTaskResult } from "../src/result-summary.js";
 import type { CallToolResult } from "@modelcontextprotocol/server";
 import {
   createBridgeServer,
@@ -100,10 +101,40 @@ class FakeTaskManager implements TaskManager {
     return { ...this.statusRecord, task_id: taskId };
   }
 
-  async getResult(taskId: string): Promise<TaskResult> {
-    this.calls.push({ method: "getResult", args: taskId });
+  async getResult(taskId: string, view?: "summary" | "full"): Promise<TaskResult> {
+    this.calls.push({ method: "getResult", args: view === undefined ? taskId : `${taskId}:${view}` });
     if (this.error) throw this.error;
-    return { ...this.result, task_id: taskId };
+    const full = { ...this.result, task_id: taskId };
+    // Mirror the Executor-side projection so summary assertions hold.
+    return view === "summary" ? summarizeTaskResult(full) as unknown as TaskResult : full;
+  }
+
+  async getResultPage(taskId: string, offsetBytes: number, maxBytes: number): Promise<Record<string, unknown>> {
+    this.calls.push({ method: "getResultPage", args: `${taskId}:${offsetBytes}:${maxBytes}` });
+    if (this.error) throw this.error;
+    return {
+      task_id: taskId,
+      attempt: 1,
+      status: "completed",
+      summary: "paged result",
+      files_changed: [],
+      tests: [],
+      issues: [],
+      needs_master_decision: false,
+      exit_code: 0,
+      session_id: null,
+      started_at: null,
+      finished_at: null,
+      result_status: "completed",
+      result_digest: "a".repeat(64),
+      result_commit_ref: "result-" + "a".repeat(64),
+      page: {
+        offset_bytes: offsetBytes,
+        next_offset: null,
+        total_bytes: 12,
+        data: "{\"task_id\":1}",
+      },
+    };
   }
 
   async getFeedback(taskId: string): Promise<TaskFeedbackSnapshotV01> {
@@ -510,7 +541,7 @@ for (const version of ["2025-11-25", "2025-06-18"]) {
       assert.equal(tools.tools.filter((tool) => tool.outputSchema !== undefined).length, 12);
       const schema = tools.tools.find((tool) => tool.name === "zcode_result")!.outputSchema;
       assert.equal(schema?.type, "object");
-      assert.deepEqual(schema?.oneOf, [{ required: ["zcode_output"] }, { required: ["projection"] }]);
+      assert.deepEqual(schema?.oneOf, [{ required: ["zcode_output"] }, { required: ["projection"] }, { required: ["page"] }]);
       const read = (args: Record<string, unknown> = {}) => client.callTool({
         name: "zcode_result", arguments: { task_id: "task_1", ...args },
       }) as Promise<CallToolResult>;
@@ -703,4 +734,51 @@ test("task package fixture matches the frozen shape", () => {
   ] as const) {
     assert.ok(Array.isArray(task[field]));
   }
+});
+
+test("zcode_result paging parameters reach the manager and reject partial combinations (ADR-056)", async () => {
+  await withServer(async (client, manager) => {
+    const paged = (await client.callTool({
+      name: "zcode_result",
+      arguments: { task_id: "task_1", offset_bytes: 0, max_bytes: 1024 },
+    })) as CallToolResult;
+    assert.notEqual(paged.isError, true);
+    const structured = paged.structuredContent as { page?: { next_offset: unknown; data: string } };
+    assert.ok(structured.page, "the paged read returns the page object");
+    assert.deepEqual(manager.calls.filter((call) => call.method === "getResultPage").map((call) => call.args), ["task_1:0:1024"]);
+    const partial = await client.callTool({
+      name: "zcode_result",
+      arguments: { task_id: "task_1", offset_bytes: 0 },
+    }) as CallToolResult;
+    assert.equal(partial.isError, true);
+    const summaryCombo = await client.callTool({
+      name: "zcode_result",
+      arguments: { task_id: "task_1", view: "summary", offset_bytes: 0, max_bytes: 1024 },
+    }) as CallToolResult;
+    assert.equal(summaryCombo.isError, true);
+    // View now reaches the manager instead of being projected client-side.
+    await client.callTool({ name: "zcode_result", arguments: { task_id: "task_1", view: "summary" } });
+    assert.ok(manager.calls.some((call) => call.method === "getResult" && call.args === "task_1:summary"));
+  });
+});
+
+test("an oversized okResult keeps structuredContent authoritative and bounds the text channel (P1 §3.4C)", async () => {
+  await withServer(async (client, manager) => {
+    manager.result = {
+      ...manager.result,
+      zcode_output: "y".repeat(1_200_000),
+    } as typeof manager.result;
+    const result = (await client.callTool({
+      name: "zcode_result",
+      arguments: { task_id: "task_1" },
+    })) as CallToolResult;
+    assert.notEqual(result.isError, true);
+    const text = result.content[0]!.type === "text" ? result.content[0]!.text : "";
+    assert.ok(Buffer.byteLength(text, "utf8") < 2_000, "the duplicated text channel must stay bounded for large payloads");
+    const notice = JSON.parse(text) as { notice: string; text_sha256: string };
+    assert.equal(notice.notice, "response_too_large_for_text_channel");
+    assert.match(notice.text_sha256, /^[0-9a-f]{64}$/u);
+    const structured = result.structuredContent as { zcode_output?: string };
+    assert.equal(structured.zcode_output?.length, 1_200_000, "structuredContent still carries the full payload");
+  });
 });

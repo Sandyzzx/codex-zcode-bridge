@@ -84,8 +84,12 @@ export class RemoteTaskManager implements ProgressTaskManager, ExecutorTaskManag
     return this.#call("getStatus", { task_id: taskId }) as unknown as TaskStatusRecord;
   }
 
-  async getResult(taskId: string): Promise<TaskResult> {
-    return this.#call("getResult", { task_id: taskId }) as unknown as TaskResult;
+  async getResult(taskId: string, view?: "summary" | "full"): Promise<TaskResult> {
+    return this.#call("getResult", { task_id: taskId, ...(view ? { view } : {}) }) as unknown as TaskResult;
+  }
+
+  async getResultPage(taskId: string, offsetBytes: number, maxBytes: number): Promise<Record<string, unknown>> {
+    return this.#call("getResultPage", { task_id: taskId, offset_bytes: offsetBytes, max_bytes: maxBytes }) as unknown as Record<string, unknown>;
   }
 
   async continueTask(input: ContinueTaskInput): Promise<TaskReceipt> {

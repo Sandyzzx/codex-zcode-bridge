@@ -1322,6 +1322,59 @@ export class IsolatedAdmissionStore {
       return {task,projection:{task_id:taskRow.task_id,status:taskRow.status,current_attempt:taskRow.current_attempt,created_at:taskRow.created_at},attempt,operation,result,continuation,...(result_submission_error?{result_submission_error}:{})};
     });
   }
+  /** P1 §3.4: read one bounded page of the exact stored canonical Result
+   * JSON. Byte offsets always land on UTF-8 codepoint boundaries via the
+   * returned next_offset; callers must page with it instead of computing
+   * their own offsets. Concatenating every page's data reproduces the stored
+   * bytes whose SHA-256 is operation.result_digest. */
+  readTaskResultPage(taskId,offsetBytes,maxBytes) {
+    if(!validId(taskId)||!Number.isSafeInteger(offsetBytes)||offsetBytes<0
+      ||!Number.isSafeInteger(maxBytes)||maxBytes<1||maxBytes>4_194_304)fail('invalid_result_page_read');
+    return this.#readConsistent(()=>{
+      const taskRow=this.#db.prepare('SELECT task_id,current_attempt FROM tasks WHERE task_id=?').get(taskId);
+      if(!taskRow||this.#isRetiredHistoricalTask(taskId))fail('task_not_found');
+      const operationRow=this.#db.prepare("SELECT operation_id,result_json,result_digest,result_commit_ref,result_status FROM manager_operations WHERE operation_kind='attempt_lifecycle' AND task_id=? AND attempt=?").get(taskId,taskRow.current_attempt);
+      if(!operationRow||operationRow.result_json===null)fail('result_not_committed');
+      const bytes=Buffer.from(operationRow.result_json,'utf8');
+      if(offsetBytes>bytes.length)fail('invalid_result_page_offset');
+      let end=Math.min(offsetBytes+maxBytes,bytes.length);
+      while(end<bytes.length&&(bytes[end]&0xC0)===0x80)end+=1;
+      if(end>=bytes.length)end=bytes.length;
+      const nextOffset=end<bytes.length?end:null;
+      return {operation_id:operationRow.operation_id,result_digest:operationRow.result_digest,
+        result_commit_ref:operationRow.result_commit_ref,result_status:operationRow.result_status,
+        offset_bytes:offsetBytes,next_offset:nextOffset,total_bytes:bytes.length,
+        data:bytes.subarray(offsetBytes,end).toString('utf8')};
+    });
+  }
+  /** P2 §4.5: latest persisted event time for a Task. Reads one row per event
+   * source (operation events, queued cancels, runtime events), so the cost
+   * never scales with the full history the way a cursor-0 page read did. */
+  readTaskLatestEventAt(taskId) {
+    if(!validId(taskId))fail('invalid_task_id');
+    return this.#readConsistent(()=>{
+      if(!this.#db.prepare('SELECT task_id FROM tasks WHERE task_id=?').get(taskId)
+        ||this.#isRetiredHistoricalTask(taskId))fail('task_not_found');
+      const candidates=[];
+      const operationRow=this.#db.prepare(`SELECT e.at AS at FROM manager_operation_events e
+          JOIN manager_operations o ON o.operation_id=e.operation_id
+          WHERE o.operation_kind='attempt_lifecycle' AND o.task_id=?
+          ORDER BY e.event_cursor DESC LIMIT 1`).get(taskId);
+      if(operationRow)candidates.push(operationRow.at);
+      const cancelRow=this.#db.prepare(`SELECT queued_cancelled_at AS at FROM attempts
+          WHERE task_id=? AND queued_cancel_event_cursor IS NOT NULL
+          ORDER BY queued_cancel_event_cursor DESC LIMIT 1`).get(taskId);
+      if(cancelRow)candidates.push(cancelRow.at);
+      if(this.#db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='runtime_task_events'").get()){
+        const runtimeRow=this.#db.prepare(`SELECT at FROM runtime_task_events WHERE task_id=?
+          ORDER BY event_cursor DESC LIMIT 1`).get(taskId);
+        if(runtimeRow)candidates.push(runtimeRow.at);
+      }
+      if(candidates.length===0)return null;
+      candidates.sort();
+      return {at:candidates[candidates.length-1]};
+    });
+  }
   /** Project Feedback only from this Attempt's persisted runtime observations
    * and a committed Result. */
   readTaskFeedback(taskId) {

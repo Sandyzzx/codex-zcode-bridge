@@ -154,6 +154,14 @@ export async function startExecutorService(options: ExecutorServiceOptions): Pro
         bridgeEntryPath: options.bridgeEntryPath,
         workerEntryPath: workerPath,
         processProbe,
+        // P1 §3.2 Lease Spawn Fence: while Executor lease ownership is unknown,
+        // the Manager may not start any new Worker Spawn. In-flight Workers and
+        // queued Attempts keep their own lifecycle rules.
+        dispatchFence: () => state === "lease_unknown" || !leaseSafe
+          ? "lease_ownership_unknown"
+          : state === "closed" || state === "shutdown_pending"
+            ? "executor_not_dispatching"
+            : null,
         ...(options.testOnlyFakeAdapter ? { testOnlyFakeAdapter: true } : {}),
         ...(options.testBeforeDispatch ? { testBeforeDispatch: options.testBeforeDispatch } : {}),
         ...(options.testOnScheduler ? { testOnScheduler: options.testOnScheduler } : {}),

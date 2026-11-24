@@ -21628,7 +21628,8 @@ var executorControlParamsSchemas = {
   createTask: strictObject({ task: zcodeTaskInputSchema }),
   listTasks: listTasksInputSchema,
   getStatus: strictObject({ task_id: nonEmptyString }),
-  getResult: strictObject({ task_id: nonEmptyString }),
+  getResult: strictObject({ task_id: nonEmptyString, view: _enum(["summary", "full"]).optional() }),
+  getResultPage: strictObject({ task_id: nonEmptyString, offset_bytes: number2().int().nonnegative(), max_bytes: number2().int().min(1024).max(4194304) }),
   continueTask: strictObject({ input: zcodeContinueInputSchema }),
   cancelTask: strictObject({ task_id: nonEmptyString }),
   getEvents: strictObject({ input: zcodeEventsInputSchema }),
@@ -21891,8 +21892,11 @@ var RemoteTaskManager = class {
   async getStatus(taskId) {
     return this.#call("getStatus", { task_id: taskId });
   }
-  async getResult(taskId) {
-    return this.#call("getResult", { task_id: taskId });
+  async getResult(taskId, view) {
+    return this.#call("getResult", { task_id: taskId, ...view ? { view } : {} });
+  }
+  async getResultPage(taskId, offsetBytes, maxBytes) {
+    return this.#call("getResultPage", { task_id: taskId, offset_bytes: offsetBytes, max_bytes: maxBytes });
   }
   async continueTask(input) {
     return this.#call(
@@ -21931,49 +21935,21 @@ function executorPipeName(root) {
   return `\\\\.\\pipe\\codex-zcode-bridge-executor-v1-${authorityRootDigest(root)}`;
 }
 
+// src/mcp/server.ts
+import { createHash as createHash2 } from "node:crypto";
+
 // node_modules/@modelcontextprotocol/server/dist/index.mjs
 var DEFAULT_MAX_REQUEST_BODY_SIZE = 4 * 1024 * 1024;
-
-// src/result-summary.ts
-var INLINE_RESULT_BYTES = 2048;
-var MAX_ITEM_CHARS = 256;
-function summarizeTaskResult(result) {
-  if (result.zcode_output.length <= INLINE_RESULT_BYTES && Buffer.byteLength(JSON.stringify(result)) <= INLINE_RESULT_BYTES) {
-    return result;
-  }
-  const { summary, files_changed, tests, issues, zcode_output, report_candidate, model, usage, timing, ...identity } = result;
-  const omittedFields = ["zcode_output"];
-  const summaryPreview = summary.slice(0, 768).replace(/[\uD800-\uDBFF]$/u, "");
-  if (summaryPreview !== summary) omittedFields.push("summary");
-  const filesPreview = files_changed.slice(0, 12).filter((file) => file.length <= MAX_ITEM_CHARS);
-  if (filesPreview.length !== files_changed.length) omittedFields.push("files_changed");
-  const issuesPreview = issues.slice(0, 8).filter((issue2) => issue2.length <= MAX_ITEM_CHARS);
-  if (issuesPreview.length !== issues.length) omittedFields.push("issues");
-  const testCounts = { passed: 0, failed: 0, not_run: 0 };
-  for (const { status } of tests) testCounts[status] += 1;
-  const testPreview = tests.slice(0, 12).filter(({ command }) => command.length <= MAX_ITEM_CHARS).map(({ command, status }) => ({ command, status }));
-  if (testPreview.length !== tests.length || tests.some(({ details }) => details !== void 0)) {
-    omittedFields.push("tests");
-  }
-  if (report_candidate !== void 0) omittedFields.push("report_candidate");
-  if (model !== void 0) omittedFields.push("model");
-  if (usage !== void 0) omittedFields.push("usage");
-  if (timing !== void 0) omittedFields.push("timing");
-  return {
-    ...identity,
-    summary: summaryPreview,
-    files_changed: filesPreview,
-    tests: testPreview,
-    issues: issuesPreview,
-    projection: { omitted_fields: omittedFields, test_counts: testCounts }
-  };
-}
 
 // src/mcp/schemas.ts
 var stringArray2 = array(string2());
 var zcodeResultInputSchema = taskIdOnlyInputSchema.extend({
   view: _enum(["summary", "full"]).optional(),
-  expected_attempt: number2().int().positive().optional()
+  expected_attempt: number2().int().positive().optional(),
+  // P1 §3.4 / ADR-056: bounded page over the stored canonical Result JSON.
+  // Both must be provided together and cannot be combined with view=summary.
+  offset_bytes: number2().int().nonnegative().optional(),
+  max_bytes: number2().int().min(1024).max(4194304).optional()
 });
 var zcodeFeedbackInputSchema = strictObject({
   task_id: taskIdSchema
@@ -22125,6 +22101,12 @@ var taskResultSchema = object({
   model: executionProfileSchema.nullable().optional(),
   timing: attemptTimingSchema.nullable().optional()
 });
+var zcodeResultPageSchema = object({
+  offset_bytes: number2().int().nonnegative(),
+  next_offset: number2().int().positive().nullable(),
+  total_bytes: number2().int().nonnegative(),
+  data: string2()
+});
 var zcodeResultOutputSchema = taskResultSchema.extend({
   zcode_output: taskResultSchema.shape.zcode_output.optional(),
   projection: object({
@@ -22134,12 +22116,16 @@ var zcodeResultOutputSchema = taskResultSchema.extend({
       failed: number2().int().nonnegative(),
       not_run: number2().int().nonnegative()
     })
-  }).optional()
+  }).optional(),
+  page: zcodeResultPageSchema.optional(),
+  result_status: string2().optional(),
+  result_digest: string2().optional(),
+  result_commit_ref: string2().optional()
 }).refine(
-  (result) => result.zcode_output !== void 0 !== (result.projection !== void 0),
-  "Result must contain either zcode_output or projection"
+  (result) => (result.zcode_output !== void 0 ? 1 : 0) + (result.projection !== void 0 ? 1 : 0) + (result.page !== void 0 ? 1 : 0) === 1,
+  "Result must contain exactly one of zcode_output, projection, or page"
 ).meta({
-  oneOf: [{ required: ["zcode_output"] }, { required: ["projection"] }]
+  oneOf: [{ required: ["zcode_output"] }, { required: ["projection"] }, { required: ["page"] }]
 });
 var taskProgressEventSchema = object({
   seq: number2().int().positive(),
@@ -22249,11 +22235,27 @@ var defaultModelSchema = object({
 
 // src/mcp/server.ts
 var SERVER_NAME = "codex-zcode-bridge";
-var SERVER_VERSION = "2.0.0-preview.14"; // x-release-please-version
+var SERVER_VERSION = "2.0.0-preview.15"; // x-release-please-version
 var EXECUTION_NOT_VERDICT = "Execution only. 'completed' is NOT calling host acceptance. Independently verify the workspace diff and checks.";
+var OK_RESULT_TEXT_CHANNEL_LIMIT_BYTES = 1 << 20;
 function okResult(data) {
+  const text = JSON.stringify(data, null, 2);
+  if (text !== void 0 && Buffer.byteLength(text, "utf8") > OK_RESULT_TEXT_CHANNEL_LIMIT_BYTES) {
+    return {
+      content: [{
+        type: "text",
+        text: JSON.stringify({
+          notice: "response_too_large_for_text_channel",
+          text_bytes: Buffer.byteLength(text, "utf8"),
+          text_sha256: createHash2("sha256").update(text, "utf8").digest("hex"),
+          hint: "The structuredContent channel carries the full payload; use view=summary or offset_bytes/max_bytes paging for bounded reads."
+        })
+      }],
+      structuredContent: data
+    };
+  }
   return {
-    content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+    content: [{ type: "text", text: text ?? "null" }],
     structuredContent: data
   };
 }
@@ -22440,11 +22442,23 @@ function createBridgeServer(options) {
       outputSchema: zcodeResultOutputSchema
     },
     async (args) => runTool(async () => {
-      const result = await manager.getResult(args.task_id);
+      if (args.offset_bytes === void 0 !== (args.max_bytes === void 0)) {
+        throw new TaskManagerError("TASK_INVALID", "offset_bytes and max_bytes must be provided together");
+      }
+      if (args.offset_bytes !== void 0 && args.view === "summary") {
+        throw new TaskManagerError("TASK_INVALID", "paged reads return stored canonical bytes and cannot be combined with view=summary");
+      }
+      if (args.offset_bytes !== void 0) {
+        if (!("getResultPage" in manager) || typeof manager.getResultPage !== "function") {
+          throw new TaskManagerError("TASK_INVALID", "this Task manager does not expose paged Result reads");
+        }
+        return await manager.getResultPage(args.task_id, args.offset_bytes, args.max_bytes);
+      }
+      const result = await manager.getResult(args.task_id, args.view);
       if (args.expected_attempt !== void 0 && result.attempt !== args.expected_attempt) {
         throw new TaskManagerError("TASK_STATE", `Expected Result Attempt ${args.expected_attempt}, found ${result.attempt} for ${args.task_id}`);
       }
-      return args.view === "summary" ? summarizeTaskResult(result) : result;
+      return result;
     })
   );
   server.registerTool(

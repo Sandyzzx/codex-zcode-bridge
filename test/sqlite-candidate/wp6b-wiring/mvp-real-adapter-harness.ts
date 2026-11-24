@@ -177,6 +177,12 @@ function writeFakeRuntime(name: string, variant: RuntimeVariant): FakeRuntimeFix
     : [
       `const task = JSON.parse(fs.readFileSync(${JSON.stringify(taskInput)}, "utf8"));`,
       `const report = ${JSON.stringify(report)}.replace("TASK_ID", task.task_id)${variant === "private-auth-echo" ? '.replace("synthetic MVP real-adapter report", "echo " + receivedCredential)' : ''};`,
+      // P1 §3.1: the real runtime emits a native turn.started before its
+      // terminal event; the fixture mirrors that so the persisted turn_started
+      // fact comes from a real event, not the retired ACK fabrication. All
+      // fixture events take their seq from one monotonic counter so no
+      // emission is dropped by the adapter's seq gate.
+      `process.stdout.write(JSON.stringify({ method: "session/event", params: { sessionId, seq: takeSeq(), turnId: "native-fixture-turn", type: "turn.started", payload: { turnId: "native-fixture-turn" } } }) + "\\n");`,
       ...(floodSpec ? [
         // The ordinary gate emits eight large writes (more than the OS pipe
         // capacity) to prove backpressure without paying the per-event cost of
@@ -186,7 +192,8 @@ function writeFakeRuntime(name: string, variant: RuntimeVariant): FakeRuntimeFix
         `let writeFalseCount = 0;`,
         `let maxWritableLength = 0;`,
         `let bytesWritten = 0;`,
-        `for (let seq = 5; seq <= ${4 + floodSpec.events}; seq++) {`,
+        `for (let floodIndex = 0; floodIndex < ${floodSpec.events}; floodIndex++) {`,
+        `  const seq = takeSeq();`,
         `  const line = JSON.stringify({ method: "session/event", params: { seq, type: "model.streaming", payload: { kind: "text_delta", delta: ${JSON.stringify(floodSpec.delta)} } } }) + "\\n";`,
         `  bytesWritten += Buffer.byteLength(line, "utf8");`,
         `  if (!process.stdout.write(line)) writeFalseCount += 1;`,
@@ -194,7 +201,7 @@ function writeFakeRuntime(name: string, variant: RuntimeVariant): FakeRuntimeFix
         `}`,
         `fs.writeFileSync(${JSON.stringify(backpressureLog)}, JSON.stringify({ events_written: ${floodSpec.events}, delta_bytes: Buffer.byteLength(${JSON.stringify(floodSpec.delta)}, "utf8"), bytes_written: bytesWritten, flood_elapsed_ms: performance.now() - floodStartedAt, high_water_mark: process.stdout.writableHighWaterMark, max_writable_length: maxWritableLength, write_false_count: writeFalseCount }));`,
       ] : []),
-      `process.stdout.write(JSON.stringify({ method: "session/event", params: { seq: ${variant.startsWith("private-auth") ? 2 : floodSpec ? 5 + floodSpec.events : 5}, ${variant.startsWith("private-auth") ? 'sessionId, turnId: "native-fixture-turn",' : ''} type: "turn.completed", payload: { response: report, usage: { totalTokens: 4 }, resultType: "success" } } }) + "\\n");`,
+      `process.stdout.write(JSON.stringify({ method: "session/event", params: { ${variant.startsWith("private-auth") ? "sessionId, " : ""}seq: takeSeq(), ${variant.startsWith("private-auth") ? 'turnId: "native-fixture-turn",' : ''} type: "turn.completed", payload: { response: report, usage: { totalTokens: 4 }, resultType: "success" } } }) + "\\n");`,
     ].join("\n");
   const script = [
     `const readline = require("node:readline");`,
@@ -205,6 +212,11 @@ function writeFakeRuntime(name: string, variant: RuntimeVariant): FakeRuntimeFix
     `let selected = { providerId: "provider-default", modelId: "model-default" };`,
     `let turnFinished = false;`,
     `let interactionSent = false;`,
+    // One monotonic seq source for every fixture event: the adapter drops any
+    // session/event whose seq is not strictly increasing, so duplicated or
+    // regressed hardcoded seqs would silently lose facts (P1 §3.1 follow-up).
+    `let fixtureSeq = 0;`,
+    `function takeSeq() { return ++fixtureSeq; }`,
     `let receivedCredential = null;`,
     `let firstAuthCredential = null;`,
     `let authResponses = 0;`,
@@ -241,17 +253,17 @@ function writeFakeRuntime(name: string, variant: RuntimeVariant): FakeRuntimeFix
     `  } else if (message.method === "session/send") {`,
     `    process.stdout.write(JSON.stringify({ id: message.id, result: {} }) + "\\n");`,
     ...(variant.startsWith("private-auth") ? [
-      `    process.stdout.write(JSON.stringify({ method: "session/event", params: { sessionId, seq: 1, turnId: "native-fixture-turn", type: "turn.started", payload: { turnId: "native-fixture-turn" } } }) + "\\n");`,
+      `    process.stdout.write(JSON.stringify({ method: "session/event", params: { sessionId, seq: takeSeq(), turnId: "native-fixture-turn", type: "turn.started", payload: { turnId: "native-fixture-turn" } } }) + "\\n");`,
       `    for (const rpcId of ${JSON.stringify(variant === "private-auth-concurrent" ? ["private-auth-rpc", "private-auth-rpc-2"] : ["private-auth-rpc"])}) process.stdout.write(JSON.stringify({ id: rpcId, method: "interaction/requestProviderRuntimeHeaders", params: { sessionId, turnId: ${JSON.stringify(variant === "private-auth-wrong-turn" ? "other-turn" : "native-fixture-turn")}, modelSelection: selected } }) + "\\n");`,
       `    return;`,
     ] : []),
     `    if (${variant === "deadline-hang"}) return;`,
     `    if (${variant !== "failure" && variant !== "facts-turn-failure" && !variant.startsWith("deadline-")} && !interactionSent) {`,
-    `      interactionSent = true;`,
-    `      process.stdout.write(JSON.stringify({ method: "session/event", params: { sessionId, seq: 1, turnId: "native-fixture-turn", type: "model.streaming", payload: { kind: "text_start" } } }) + "\\n");`,
-    `      process.stdout.write(JSON.stringify({ method: "session/event", params: { sessionId, seq: 2, turnId: "native-fixture-turn", type: "model.streaming", payload: { kind: "text_delta", delta: "a" + "🙂".repeat(1001) + " Synthetic visible output before tool use." } } }) + "\\n");`,
-    `      process.stdout.write(JSON.stringify({ method: "session/event", params: { sessionId, seq: 3, turnId: "native-fixture-turn", type: "model.streaming", payload: { kind: "tool_call", toolName: "Bash", toolCallId: "call-1" } } }) + "\\n");`,
-    `      process.stdout.write(JSON.stringify({ method: "session/event", params: { sessionId, seq: 4, turnId: "native-fixture-turn", type: "tool.updated", payload: { kind: "completed", toolName: "Bash", toolCallId: "call-1" } } }) + "\\n");`,
+      `      interactionSent = true;`,
+      `      process.stdout.write(JSON.stringify({ method: "session/event", params: { sessionId, seq: takeSeq(), turnId: "native-fixture-turn", type: "model.streaming", payload: { kind: "text_start" } } }) + "\\n");`,
+      `      process.stdout.write(JSON.stringify({ method: "session/event", params: { sessionId, seq: takeSeq(), turnId: "native-fixture-turn", type: "model.streaming", payload: { kind: "text_delta", delta: "a" + "🙂".repeat(1001) + " Synthetic visible output before tool use." } } }) + "\\n");`,
+      `      process.stdout.write(JSON.stringify({ method: "session/event", params: { sessionId, seq: takeSeq(), turnId: "native-fixture-turn", type: "model.streaming", payload: { kind: "tool_call", toolName: "Bash", toolCallId: "call-1" } } }) + "\\n");`,
+      `      process.stdout.write(JSON.stringify({ method: "session/event", params: { sessionId, seq: takeSeq(), turnId: "native-fixture-turn", type: "tool.updated", payload: { kind: "completed", toolName: "Bash", toolCallId: "call-1" } } }) + "\\n");`,
     `      for (const rpcId of ["interaction-rpc-1", "interaction-rpc-2"]) {`,
     `        process.stdout.write(JSON.stringify({ id: rpcId, method: "interaction/requestPermission", params: { requestId: "permission-1", sessionId, toolCallId: "call-1", toolName: "Bash", reason: "Run the synthetic build command", input: { command: "npm run build" }, options: [{ kind: "allow_once" }, { kind: "deny" }] } }) + "\\n");`,
     `      }`,
@@ -277,10 +289,10 @@ function writeFakeRuntime(name: string, variant: RuntimeVariant): FakeRuntimeFix
             : "finishTurn();"}`,
     `    }`,
     ...(variant === "private-auth-eof-recheck" ? [`    if (message.result?.headersApplied === true) { const timer = setInterval(() => { if (!fs.existsSync(${JSON.stringify(path.join(root, "recheck-trigger"))})) return; clearInterval(timer); process.stdout.write(JSON.stringify({ id: "private-auth-recheck", method: "interaction/requestProviderRuntimeHeaders", params: { sessionId, turnId: "native-fixture-turn", modelSelection: selected } }) + "\\n"); }, 20); }`] : []),
-    `    else process.stdout.write(JSON.stringify({ method: "session/event", params: { sessionId, seq: 2, turnId: "native-fixture-turn", type: "turn.failed", payload: { error: { message: "synthetic private auth rejected" } } } }) + "\\n");`,
-    `  } else if (message.id === "private-auth-recheck") {`,
+    `    else process.stdout.write(JSON.stringify({ method: "session/event", params: { sessionId, seq: takeSeq(), turnId: "native-fixture-turn", type: "turn.failed", payload: { error: { message: "synthetic private auth rejected" } } } }) + "\\n");`,
+  `  } else if (message.id === "private-auth-recheck") {`,
     `    fs.appendFileSync(requestLog, JSON.stringify({ recheck_auth_applied: message.result?.headersApplied === true }) + "\\n");`,
-    `    process.stdout.write(JSON.stringify({ method: "session/event", params: { sessionId, seq: 2, turnId: "native-fixture-turn", type: "turn.failed", payload: { error: { message: "synthetic recheck complete" } } } }) + "\\n");`,
+    `    process.stdout.write(JSON.stringify({ method: "session/event", params: { sessionId, seq: takeSeq(), turnId: "native-fixture-turn", type: "turn.failed", payload: { error: { message: "synthetic recheck complete" } } } }) + "\\n");`,
     `  } else if (message.id === "interaction-rpc-1" || message.id === "interaction-rpc-2") {`,
     `    if (message.result && message.result.decision) ${variant === "private-auth-multi-iteration"
       ? 'process.stdout.write(JSON.stringify({ id: "private-auth-rpc-2", method: "interaction/requestProviderRuntimeHeaders", params: { sessionId, turnId: "native-fixture-turn", modelSelection: selected } }) + "\\n");'
@@ -493,6 +505,13 @@ async function withRealAdapterMcp(
     const previousZcodeHome = process.env["ZCODE_HOME"];
     const previousBuiltinConfig = process.env["ZCODE_BUILTIN_PROVIDER_CONFIG_FILE"];
     const previousPersonalConfig = process.env["ZCODE_PERSONAL_PROVIDER_CONFIG_FILE"];
+    // A host session (for example a ZCode Desktop agent shell) may export its
+    // own ZCODE_DATA_BASE_DIR/ZCODE_WINDOWS_APP_INSTALL_DIR; both would fight
+    // the fixture ZCODE_HOME below and redirect install discovery.
+    const previousDataBaseDir = process.env["ZCODE_DATA_BASE_DIR"];
+    const previousAppInstallDir = process.env["ZCODE_WINDOWS_APP_INSTALL_DIR"];
+    delete process.env["ZCODE_DATA_BASE_DIR"];
+    delete process.env["ZCODE_WINDOWS_APP_INSTALL_DIR"];
     process.env["ZCODE_BRIDGE_ZCODE_CJS"] = runtime.entrypoint;
     process.env["ZCODE_BRIDGE_NODE"] = process.execPath;
     process.env["ZCODE_BUILTIN_PROVIDER_CONFIG_FILE"] = runtime.builtinConfig;
@@ -619,6 +638,8 @@ async function withRealAdapterMcp(
       if (previousZcodeHome === undefined) delete process.env["ZCODE_HOME"]; else process.env["ZCODE_HOME"] = previousZcodeHome;
       if (previousBuiltinConfig === undefined) delete process.env["ZCODE_BUILTIN_PROVIDER_CONFIG_FILE"]; else process.env["ZCODE_BUILTIN_PROVIDER_CONFIG_FILE"] = previousBuiltinConfig;
       if (previousPersonalConfig === undefined) delete process.env["ZCODE_PERSONAL_PROVIDER_CONFIG_FILE"]; else process.env["ZCODE_PERSONAL_PROVIDER_CONFIG_FILE"] = previousPersonalConfig;
+      if (previousDataBaseDir === undefined) delete process.env["ZCODE_DATA_BASE_DIR"]; else process.env["ZCODE_DATA_BASE_DIR"] = previousDataBaseDir;
+      if (previousAppInstallDir === undefined) delete process.env["ZCODE_WINDOWS_APP_INSTALL_DIR"]; else process.env["ZCODE_WINDOWS_APP_INSTALL_DIR"] = previousAppInstallDir;
     }
     if (authorityShutdownError !== undefined) throw authorityShutdownError;
     if (runOrCloseFailure !== undefined) throw runOrCloseFailure;

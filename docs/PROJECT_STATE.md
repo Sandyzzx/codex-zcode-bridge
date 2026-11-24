@@ -1,7 +1,7 @@
 # Project State
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-23（Preview.14 released）
+> Last updated: 2026-11-24（Preview.15 candidate；ADR-054/055/056、P0/P1/P2 整改、4.0.0 真实验证）
 > Last verified: 2026-11-23，核对 Preview.14 Release Prep PR #133、合并后 Preview push CI `45130689135`、annotated Tag、GitHub prerelease、回下载 ZIP/SHA256 与隔离 Thin MCP 启动。隔离真实 loaded/idle trusted-local Wake、Native MCP Result readback、Master 生命周期独立验收和 Desktop visible 均为 `PASS — REAL`；严格 C/D、Desktop fully exited、Official Runtime provenance 和非空工程交付验收仍为 `NOT_RUN`。
 > Verified against: `origin/preview@8d58e9e377a0c47d2523cd179e9c814139308e4e`。
 
@@ -21,12 +21,14 @@
 - Preview.13 通过 PR #129 移除 AgentReport 的 400,000 字符固定前缀扫描上限，改用有界内存覆盖完整已捕获响应；通过 PR #130 把 ADR-039 行政释放的终态 Result 范围扩展到 `completed`/`failed`/`waiting_for_master`/`cancelled`，并统一使用一个 `zcode_cancel` 用户流程。新释放证据统一绑定原 Result digest/commit、Claim、Worker identity 与 Recovery evidence；旧 `cancelled` 取消证明只作历史读取兼容。
 - ZCode Desktop `3.19.0.10774`：仅通过 ADR-042 的 `OFFICIAL_RUNTIME_EXPERIMENTAL` 精确指纹授权完成兼容性探测；不是 Preview.14 的发布支持版本，Coding Plan 倍率仍 `INCONCLUSIVE`，Start Plan 因无 active plan 为 `BLOCKED`。
 - 已发布 Preview `2.0.0-preview.14`：Tag `codex-zcode-bridge-preview-v2.0.0-preview.14`，Release commit `8d58e9e377a0c47d2523cd179e9c814139308e4e`，GitHub Prerelease `draft=false` / `prerelease=true`，Latest 仍为 Stable `v1.7.2`。PR #131 的代码基线 `c7bfc28b1112dead95ae4179a00962de76051920` 已合入；Release Prep PR #133 合并后 Preview push CI `45130689135` 的 Windows、Ubuntu、SQLite 资源矩阵和 Cost Lab 均通过。该版本包含独立 Executor、Lifetime Lease、Named Pipe IPC、Thin MCP、Task CLI、Operations Console 与 trusted-local Wake。真实 loaded/idle trusted-local 自动 Wake、Native MCP Result readback、Master 生命周期独立验收和 Desktop visible 为 `PASS — REAL`；严格 C/D、Desktop fully exited、Official Runtime provenance 与非空工程交付验收为 `NOT_RUN`。
+- 已发布 Preview `2.0.0-preview.15`（本候选）：PR #135 的 Whole Task/Staged 派发与 Prompt 合同（ADR-055）、ZCode Desktop 4.0.0 适配与 ADR-054 授权机制退役、P1 可靠性整改（Turn 事实边界、Lease Spawn Fence、Release→Wake 恢复、ADR-056 Result 回读合同）、P2 精简（死代码删除、Status updated_at 修正、Prompt 容量合同、实验 workflow 退役）。
+- ZCode Desktop `4.0.0.10870`（build `3bc8a247`）：`OFFICIAL_INSTALLATION_SAFE`，零模型 Protocol Smoke `PASS`；随包制品真实任务 E2E `PASS — REAL`（真实 Coding Plan/GLM-5.3 回合、Result/Cleanup/Release 闭环、工程产物逐字节核对）。Manifest 诊断位为 UNVERIFIED（ADR-054 下不阻断）。见 [verification](reports/preview15-final-integration-verification-20261124.md)。
 - Operations Console 与 Cost Lab 已随 PR #131 合并到 Preview：Task Web Console 扩展为 Dashboard/Tasks/Cost Lab/Runtime/Settings 的单一 loopback Origin，Cost Lab 仅通过 same-origin API 复用既有服务，Runtime Auto-Learn 按 exact fingerprint 保存兼容性证据。Cost Lab Runner 使用隔离 Authority Root 和独立 Executor 进程；当前通过的是 synthetic Worker/合成账单证据，不能提升为真实 Provider、真实 Desktop 关闭或最终发布结论。
 
 ## 当前生产架构
 
 - 一个 SQLite Task Authority（Schema v14）、一个 Lifecycle Manager、一条 Worker → 官方 Host 生产链。
-- Windows x64 生产 Worker 使用 `OfficialAppServerWorkerAdapter` 与共享 `createInstalledOfficialHostSessionFactory`。固定 Official Host module 提供只读 Start Plan 认证投影，官方 `ZCodeAgentProcessManager` 启动安装版 AppServer；模型目录和任务执行共用 Runtime Resolver、ProcessManager、ProtocolClient、认证回调和 Close 所有权。Bridge 不复制 AgentRuntime、Prompt、Tools 或 Provider。Resolver 先验证安装安全并计算精确指纹；已验证 Manifest 之外的安全安装只有显式授权对应指纹后才进入 `OFFICIAL_RUNTIME_EXPERIMENTAL`，并按 Coding Plan、Start Plan、其他 Provider 分别检查 probe scope。Linux、macOS 与 Windows 非 x64 在 Adapter 构造前以 `unsupported_worker_platform` fail closed；direct stdio 只保留 `ZCodeAppServerTestAdapter` 隔离测试入口。
+- Windows x64 生产 Worker 使用 `OfficialAppServerWorkerAdapter` 与共享 `createInstalledOfficialHostSessionFactory`。固定 Official Host module 提供只读 Start Plan 认证投影，官方 `ZCodeAgentProcessManager` 启动安装版 AppServer；模型目录和任务执行共用 Runtime Resolver、ProcessManager、ProtocolClient、认证回调和 Close 所有权。Bridge 不复制 AgentRuntime、Prompt、Tools 或 Provider。Resolver 先验证安装安全并计算精确指纹；ADR-054 后安装安全是唯一执行门禁，Manifest 匹配降为诊断，未验证版本不阻断调用（`officialProviderCapabilityWarning`），已验证版本由 README 声明。Linux、macOS 与 Windows 非 x64 在 Adapter 构造前以 `unsupported_worker_platform` fail closed；direct stdio 只保留 `ZCodeAppServerTestAdapter` 隔离测试入口。
 - 旧 JSON TaskStore/Manager/Worker、CLI Adapter 和 GitWorktreeProvider 已从 Preview 生产执行链退役；ADR-038 进一步删除旧 JSON 导入 Writer、迁移 Result/Event Reader 与不完整迁移收据专用执行方法。旧 JSON 文件不由 Bridge 读取、导入或删除，旧迁移 Task 不再作为当前查询对象。
 - Project Ledger、固定人类 Markdown 报告、每任务 Codex Rollout Token 采集和 Desktop task-index 私有写镜像已退役。用户已有 `.agent-ledger` 文件不由 Bridge 修改或删除；SQLite Task Authority 保持不变。
 - Result、进程退出、Cleanup 与 Release 是不同事实。官方 close resolved 不能单独授权 Release；exact Worker identity、recorded-tree scan、resource facts、Cleanup Digest 和现有 CAS 仍然必需。
@@ -34,7 +36,7 @@
 - SQLite 支持统一为 `SQLite v14 ONLY`。生产 Lifecycle Gate 保留 Fresh v14、既有 v14、历史迁移记录、Recovery/Cleanup/Release；v13 数据库和未完成升级 Marker 以 `unsupported_sqlite_schema` 非破坏性拒绝。v13 自动/离线升级、冻结 Schema 和升级 CLI 已退役。
 - Recovery Observation 不再有固定 8 条额度。相同材料事实的重复观察在 SQLite 事务内去重，材料事实变化仍追加不可覆盖 Event；超过 8 条 Cleanup/Cancel Hold 的消解使用完整事件集合的 count/root 承诺，旧 digest 数组继续可校验。既有 v14 的精确旧 Cleanup Trigger 可由只读 Recovery 读取，只在实际可写打开时事务升级，不提升 Schema Version。
 - R7 在同一 v14 Authority 内使用 `runtime_task_events`。Worker 只通过一次性 fd14 提交 Runtime observation；Manager 从持久 Task/Attempt/Generation/Claim 派生绑定，SQLite 负责 sequence 幂等、stale-Attempt 拒绝和统一 public cursor。`zcode_events(view="summary")` 可合并相邻安全模型文本，`zcode_feedback` 只提供机器投影，缓存 Usage 与 Result 共用同一持久事实；Lifecycle Event 与 Runtime Event 仍分开。
-- MCP Event 默认页预算为 32 KiB；预算只限制单页输出，不删除 SQLite 历史。消费者必须持续读取 `has_more`/`scan_incomplete`。默认模式允许单条超限 Event 推进 cursor，显式 `max_bytes` 仍为硬预算。已安装 Host 的 16 MiB MCP 行上限不变，超过该边界的完整 Result 仍不能通过 MCP-only 回读。
+- MCP Event 默认页预算为 32 KiB；预算只限制单页输出，不删除 SQLite 历史。消费者必须持续读取 `has_more`/`scan_incomplete`。默认模式允许单条超限 Event 推进 cursor，显式 `max_bytes` 仍为硬预算。已安装 Host 的 16 MiB MCP 行上限下，ADR-056 提供 `zcode_result` 的 `offset_bytes`/`max_bytes` 分页读取：按码点安全的 `next_offset` 翻页，拼接全部 data 的 SHA-256 等于 `result_digest`；大 Result 由此可完整恢复，`okResult` 文本通道超过 1 MiB 改为有界引用。
 
 Preview.7 继承 Preview.6 固定的 ZCode `3.18.2`、commit `fec975905a2abd4c07e35c40d51fa097a2258ec9`、tree `5e90fec80706b8381f94e4eef48cf821b9868916` 和 AppServer `0.17.1`。制品只在 Windows x64、Node `24.16.0` 上完成构建、签名、加载与本地 clean-install 验证；其他 Node 24 patch level 和跨机器复现仍是 `NOT_VERIFIED`。已发布 Preview.5 的 3.18.0 输入作为历史回滚基线保留。Preview.7 的运行时差异来自 ADR-038：删除旧 Runtime 分发资源、退役已退出外围功能、修复 Usage/Context/Events/Recovery 说明与实现、保留 v14 历史字节，并收紧 CI/生成物门禁。
 

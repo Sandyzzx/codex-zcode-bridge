@@ -123,6 +123,10 @@ async function runScenario(scenario: FakeRuntimeOptions["scenario"], requestedMo
 }
 
 test("B2-01: normal, completion-before-start, and completion-then-start all settle exactly once", async () => {
+  // P1 §3.1: only a native turn.started establishes Started. The ACK publishes
+  // turn_accepted instead, so a fresh session whose runtime completes without
+  // ever emitting turn.started settles truthfully with zero start events.
+  const expectedStarts: Record<string, number> = { normal: 1, "complete-before-start": 0, "completion-then-start": 0 };
   for (const scenario of ["normal", "complete-before-start", "completion-then-start"] as const) {
     const run = await runScenario(scenario);
     try {
@@ -130,10 +134,16 @@ test("B2-01: normal, completion-before-start, and completion-then-start all sett
       assert.equal(run.outcome!.errorCode, null, `${scenario}: ${run.outcome!.reportError ?? ""}`);
       assert.equal(run.outcome!.cancelled, false);
       assert.ok(run.outcome!.agentReport, `${scenario}: report parsed`);
-      // Exactly one turn_started published event, one completion.
       const starts = run.events.filter((event) => event.type === "turn_started").length;
       const completions = run.events.filter((event) => event.type === "turn_completed").length;
-      assert.ok(starts >= 1, `${scenario}: at least one start event`);
+      const accepted = run.events.filter((event) => event.type === "turn_accepted").length;
+      assert.equal(starts, expectedStarts[scenario], `${scenario}: exactly the native start events publish`);
+      // The ACK acceptance fact is published once, except when a coalesced
+      // ACK + turn.started chunk settles the native start before the ACK
+      // microtask runs — then the acceptance event is redundant by contract
+      // and stays unemitted (P1 §3.1).
+      assert.ok(accepted <= 1, `${scenario}: the send ACK publishes turn_accepted at most once`);
+      assert.ok(accepted === 1 || starts === 1, `${scenario}: acceptance or the native start must record the send`);
       assert.ok(completions <= 1, `${scenario}: at most one completion event`);
     } finally { run.cleanup(); }
   }

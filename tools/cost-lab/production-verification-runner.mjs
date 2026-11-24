@@ -34,7 +34,6 @@ const CONFIG_KEYS = Object.freeze([
   "ZCODE_BRIDGE_MODE",
   "ZCODE_BRIDGE_PREFER_STARTPLAN",
   "ZCODE_WINDOWS_APP_INSTALL_DIR",
-  "ZCODE_BRIDGE_EXPERIMENTAL_RUNTIME_AUTHORIZATION_FILE",
   "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE",
   "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE",
   "ZCODE_HOME",
@@ -141,10 +140,11 @@ export function createProductionCodingPlanVerificationRunner(options = {}) {
         env: options.env ?? process.env,
         platform: options.platform ?? process.platform,
       });
-      if ((runtime.runtime_status !== "OFFICIAL_RUNTIME_VERIFIED"
-          && runtime.runtime_status !== "OFFICIAL_RUNTIME_EXPERIMENTAL")
-        || !runtime.install_root) {
-        throw new Error("installed_official_runtime_unverified");
+      // ADR-054: the paid experiment gates on installation safety, not on a
+      // compatibility-manifest verdict. The observed runtime_status is still
+      // recorded for evidence grading.
+      if (runtime.installation_safety !== "OFFICIAL_INSTALLATION_SAFE" || !runtime.install_root) {
+        throw new Error("installed_official_runtime_unsafe");
       }
       const official = {
         installRoot: runtime.install_root,
@@ -154,9 +154,7 @@ export function createProductionCodingPlanVerificationRunner(options = {}) {
         builtinProviderConfig: path.join(runtime.install_root, runtime.assets.builtin_provider_config.relative_path),
         personalProviderConfig: path.join(account.dataBaseDir, ".zcode", "v2", "provider_config.json"),
         zcodeHome: path.join(account.dataBaseDir, ".zcode"),
-        experimentalAuthorizationFile: runtime.experimental_authorization?.state === "authorized"
-          ? runtime.experimental_authorization.file_path
-          : null,
+        runtimeStatus: runtime.runtime_status,
       };
       for (const filePath of [
         official.bundle,
@@ -283,8 +281,7 @@ export function createProductionCodingPlanVerificationRunner(options = {}) {
           effective_reasoning: result.model?.effective_reasoning_level ?? null,
           installation_safety: runtime.installation_safety ?? null,
           installation_fingerprint: runtime.installation_fingerprint ?? null,
-          experimental_authorization_state: runtime.experimental_authorization?.state ?? null,
-          experimental_authorization_scopes: runtime.experimental_authorization?.scopes ?? [],
+          runtime_status: runtime.runtime_status ?? null,
           runtime: {
             status: installedRuntimeObserved ? runtime.runtime_status : "WORKER_RUNTIME_UNOBSERVED",
             version: runtime.manifest?.version ?? runtime.desktop_version ?? null,
@@ -755,9 +752,6 @@ function buildRuntimeConfig(layout, official, timeoutMs, provider) {
     ZCODE_PERSONAL_PROVIDER_CONFIG_FILE: official.personalProviderConfig,
     ZCODE_HOME: official.zcodeHome,
     ZCODE_DATA_BASE_DIR: official.dataBaseDir,
-    ...(official.experimentalAuthorizationFile
-      ? { ZCODE_BRIDGE_EXPERIMENTAL_RUNTIME_AUTHORIZATION_FILE: official.experimentalAuthorizationFile }
-      : {}),
   });
 }
 

@@ -5,7 +5,6 @@ import type { ProgressTaskManager } from "../interfaces.js";
 import type { ExecutorTaskManagement, ListTasksInput, TaskListPage } from "../task-list.js";
 import { listTasksInputSchema } from "../task-list.js";
 import { zcodeEventsInputSchema, zcodeInteractionReplyInputSchema } from "../api-schemas.js";
-import { summarizeTaskResult } from "../result-summary.js";
 import type { GetEventsInput, TaskResult, ZCodeInteractionReplyInput } from "../interfaces.js";
 import { OPERATIONS_CONSOLE_HTML } from "./console-ui.js";
 
@@ -350,11 +349,12 @@ export function createTaskConsoleServer(options: TaskConsoleServerOptions): Task
     if (view !== "summary" && view !== "full") {
       throw failure(400, "WEB_INVALID_QUERY", "view must be summary or full");
     }
-    const result = await options.manager.getResult(taskId);
-    const value = view === "full" ? result : summarizeTaskResult(result);
+    // P1 §3.4B: the summary projection runs Executor-side; the Web console
+    // stops transporting the full Result for summary reads.
+    const value = await options.manager.getResult(taskId, view);
     const serialized = JSON.stringify(value);
     if (view === "full" && Buffer.byteLength(serialized) > MAX_FULL_RESULT_BYTES) {
-      throw failure(413, "WEB_RESULT_TOO_LARGE", "full Result exceeds the 2 MiB Web response budget");
+      throw failure(413, "WEB_RESULT_TOO_LARGE", "full Result exceeds the 2 MiB Web response budget; read via the paged zcode_result MCP contract");
     }
     json(response, 200, { ok: true, result: value });
   };

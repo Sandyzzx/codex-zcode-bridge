@@ -563,6 +563,11 @@ test("Thin MCP disconnect leaves the accepted Task in the Executor and reconnect
   };
   delete env.ZCODE_BRIDGE_DATA_DIR;
   delete env.ZCODE_BRIDGE_PLUGIN_MODE;
+  // A host session (for example a ZCode Desktop agent shell) may export its own
+  // ZCODE_DATA_BASE_DIR/ZCODE_WINDOWS_APP_INSTALL_DIR. Both would fight the
+  // fixture's ZCODE_HOME and redirect install discovery at the real Desktop.
+  delete env.ZCODE_DATA_BASE_DIR;
+  delete env.ZCODE_WINDOWS_APP_INSTALL_DIR;
 
   const executor = startExecutor(root, "100", settingsDirectory, {
     workerEntryPath: workerWrapper,
@@ -803,6 +808,11 @@ test("a shipped MCP Host process exit cannot cancel the original Attempt Result,
   };
   delete env.ZCODE_BRIDGE_DATA_DIR;
   delete env.ZCODE_BRIDGE_PLUGIN_MODE;
+  // A host session (for example a ZCode Desktop agent shell) may export its own
+  // ZCODE_DATA_BASE_DIR/ZCODE_WINDOWS_APP_INSTALL_DIR. Both would fight the
+  // fixture's ZCODE_HOME and redirect install discovery at the real Desktop.
+  delete env.ZCODE_DATA_BASE_DIR;
+  delete env.ZCODE_WINDOWS_APP_INSTALL_DIR;
 
   assert.equal(existsSync(shippedBridgeEntry), true, "the shipped MCP Host artifact must exist");
   const executor = startExecutor(root, "100", settingsDirectory, {
@@ -1018,6 +1028,11 @@ test("Thin MCP -> Executor -> Worker -> Official Adapter completes against a con
   };
   delete env.ZCODE_BRIDGE_DATA_DIR;
   delete env.ZCODE_BRIDGE_PLUGIN_MODE;
+  // A host session (for example a ZCode Desktop agent shell) may export its own
+  // ZCODE_DATA_BASE_DIR/ZCODE_WINDOWS_APP_INSTALL_DIR. Both would fight the
+  // fixture's ZCODE_HOME and redirect install discovery at the real Desktop.
+  delete env.ZCODE_DATA_BASE_DIR;
+  delete env.ZCODE_WINDOWS_APP_INSTALL_DIR;
 
   const executor = startExecutor(root, "100", settingsDirectory, {
     workerEntryPath: workerWrapper,

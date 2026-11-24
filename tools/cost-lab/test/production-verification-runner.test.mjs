@@ -49,6 +49,7 @@ function verifiedRuntime(install) {
   return {
     install_root: install,
     runtime_status: "OFFICIAL_RUNTIME_VERIFIED",
+    installation_safety: "OFFICIAL_INSTALLATION_SAFE",
     discount_status: "OFFICIAL_DISCOUNT_VERIFIED",
     manifest: {
       version: "3.18.2.10443",
@@ -62,7 +63,7 @@ function verifiedRuntime(install) {
   };
 }
 
-function experimentalRuntime(install, authorizationFile) {
+function experimentalRuntime(install) {
   return {
     install_root: install,
     runtime_status: "OFFICIAL_RUNTIME_EXPERIMENTAL",
@@ -71,19 +72,6 @@ function experimentalRuntime(install, authorizationFile) {
     desktop_version: "3.19.0.10774",
     desktop_app_version: "3.19.0",
     desktop_build_commit_id: "a7ed1054",
-    experimental_authorization: {
-      state: "authorized",
-      file_path: authorizationFile,
-      reason: null,
-      record: {
-        installation_fingerprint: "d".repeat(64),
-        desktop_version: "3.19.0.10774",
-        authorized_at: "2026-11-20T00:00:00.000Z",
-        authorized_by: "synthetic-test",
-        scopes: ["coding_plan_probe"],
-      },
-      scopes: ["coding_plan_probe"],
-    },
     discount_status: "OFFICIAL_DISCOUNT_NOT_VERIFIED",
     manifest: null,
     assets: {
@@ -332,8 +320,6 @@ test("production runner records an experimental runtime without promoting it to 
   await mkdir(RUN_ROOT, { recursive: true });
   const root = await mkdtemp(path.join(RUN_ROOT, "production-runner-experimental-"));
   const synthetic = await fixtureFiles(root);
-  const authorizationFile = path.join(root, "experimental-runtime-authorization.json");
-  await writeFile(authorizationFile, "{}\n", "utf8");
   const stateRootParent = path.join(RUN_ROOT, "production-runner-experimental-state");
   let statusCalls = 0;
   try {
@@ -350,26 +336,10 @@ test("production runner records an experimental runtime without promoting it to 
         ZCODE_WINDOWS_APP_INSTALL_DIR: synthetic.install,
         ProgramFiles: "C:\\Program Files",
       },
-      inspectRuntime: async () => experimentalRuntime(synthetic.install, authorizationFile),
+      // ADR-054: manifest-experimental is recorded as diagnostics; the runner
+      // no longer forwards any authorization file to the isolated runtime.
+      inspectRuntime: async () => experimentalRuntime(synthetic.install),
       connectClient: async (options) => {
-        const runtimeConfig = JSON.parse(await readFile(
-          path.join(
-            root,
-            ".run",
-            "cost-lab-web",
-            "verifications",
-            FIXED_ID,
-            "home",
-            ".codex",
-            "codex-zcode-bridge",
-            "runtime-config.json",
-          ),
-          "utf8",
-        ));
-        assert.equal(
-          runtimeConfig.ZCODE_BRIDGE_EXPERIMENTAL_RUNTIME_AUTHORIZATION_FILE,
-          authorizationFile,
-        );
         return {
           client: {
             callTool: async ({ name, arguments: args }) => {
@@ -466,8 +436,9 @@ test("production runner records an experimental runtime without promoting it to 
     assert.equal(result.runtime_evidence.runtime.desktop_build_commit_id, "a7ed1054");
     assert.equal(result.runtime_evidence.installation_safety, "OFFICIAL_INSTALLATION_SAFE");
     assert.equal(result.runtime_evidence.installation_fingerprint, "d".repeat(64));
-    assert.equal(result.runtime_evidence.experimental_authorization_state, "authorized");
-    assert.deepEqual(result.runtime_evidence.experimental_authorization_scopes, ["coding_plan_probe"]);
+    // ADR-054: no authorization machinery remains; the manifest-experimental
+    // status is recorded as diagnostics only.
+    assert.equal(result.runtime_evidence.runtime_status, "OFFICIAL_RUNTIME_EXPERIMENTAL");
     assert.equal(result.runtime_evidence.request_security.installed_bundle_verified, true);
     assert.equal(result.runtime_evidence.runtime.request_security_capability, "UNKNOWN");
   } finally {
@@ -819,8 +790,11 @@ test("production runner fails before model dispatch when the installed runtime i
         USERPROFILE: synthetic.userHome,
         ZCODE_WINDOWS_APP_INSTALL_DIR: synthetic.install,
       },
+      // ADR-054: manifest-unverified but installation-safe runtimes may run;
+      // the pre-dispatch rejection is reserved for unsafe installations.
       inspectRuntime: async () => ({
         runtime_status: "OFFICIAL_RUNTIME_UNVERIFIED",
+        installation_safety: "OFFICIAL_INSTALLATION_UNSAFE",
         discount_status: "OFFICIAL_DISCOUNT_NOT_VERIFIED",
       }),
       connectClient: async () => {
@@ -835,7 +809,7 @@ test("production runner fails before model dispatch when the installed runtime i
         reasoning: "low",
         beforeSnapshot: beforeSnapshot(),
       }),
-      /installed_official_runtime_unverified/u,
+      /installed_official_runtime_unsafe/u,
     );
     assert.equal(connected, 0);
     await assert.rejects(lstat(stateRoot), { code: "ENOENT" });

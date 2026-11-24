@@ -12,7 +12,6 @@ import {
   EXECUTOR_LEASE_RELEASED_FILE,
   inspectExecutorLease,
 } from "../src/executor/lease.js";
-import { LeaseGuardedTaskManager } from "../src/executor/lease-guarded-task-manager.js";
 import { PROCESS_IDENTITY_VERSION, type ProcessIdentity, type ProcessProbe, type ProbeRequest, type ProbeVerdict } from "../src/runtime/process-probe.js";
 import type { ProgressTaskManager, TaskPackage } from "../src/interfaces.js";
 
@@ -319,45 +318,6 @@ test("transition acknowledgement cannot bypass an exact live old owner", async (
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
-});
-
-test("legacy MCP lease uncertainty fences mutations but preserves reads", async () => {
-  let safe = false;
-  let created = 0;
-  const getStatus = async (taskId: string) => ({
-    task_id: taskId,
-    status: "queued" as const,
-    attempt: 1,
-    created_at: "2026-01-01T00:00:00Z",
-    updated_at: "2026-01-01T00:00:00Z",
-    started_at: null,
-    finished_at: null,
-    worker_pid: null,
-    zcode_session_id: null,
-    exit_code: null,
-  });
-  const delegate: ProgressTaskManager = {
-    async createTask(task: TaskPackage) {
-      created += 1;
-      return { task_id: task.task_id, status: "queued" as const, created_at: "2026-01-01T00:00:00Z" };
-    },
-    getStatus,
-    async getResult() { throw new Error("TASK_NOT_FINISHED"); },
-    async continueTask() { throw new Error("TASK_STATE"); },
-    async cancelTask(taskId: string) { return getStatus(taskId); },
-    async getEvents() { return { task_id: "task-1", status: "queued" as const, events: [], next_seq: 0, has_more: false }; },
-    async replyToInteraction() { throw new Error("TASK_STATE"); },
-  };
-  const guarded = new LeaseGuardedTaskManager(delegate, () => safe);
-  const task: TaskPackage = {
-    task_id: "task-1", workspace: process.cwd(), objective: "ACK", requirements: [],
-    allowed_paths: [], forbidden_paths: [], acceptance_criteria: [], test_commands: [],
-  };
-  await assert.rejects(() => guarded.createTask(task), /lease ownership is unknown/u);
-  assert.equal((await guarded.getStatus("task-1")).task_id, "task-1");
-  safe = true;
-  assert.equal((await guarded.createTask(task)).task_id, "task-1");
-  assert.equal(created, 1);
 });
 
 test("a malformed lease fails closed before ownership", async () => {

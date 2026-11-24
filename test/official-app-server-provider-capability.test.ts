@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { officialProviderCapabilityFailure } from "../src/adapters/official-app-server-adapter.js";
+import { officialProviderCapabilityWarning } from "../src/adapters/official-app-server-adapter.js";
 import type { OfficialAppServerRuntimeDescriptor } from "../src/runtime/official-app-server-runtime.js";
 
 function descriptor(overrides: Partial<OfficialAppServerRuntimeDescriptor> = {}): OfficialAppServerRuntimeDescriptor {
@@ -29,20 +29,19 @@ function descriptor(overrides: Partial<OfficialAppServerRuntimeDescriptor> = {})
   };
 }
 
-test("Coding Plan requires its verified discount capability", () => {
-  assert.equal(officialProviderCapabilityFailure(descriptor(), "coding_plan_discount"), null);
-  assert.match(
-    officialProviderCapabilityFailure(
-      descriptor({ discount_capability: "OFFICIAL_DISCOUNT_NOT_VERIFIED" }),
-      "coding_plan_discount",
-    ) ?? "",
-    /OFFICIAL_DISCOUNT_NOT_VERIFIED/u,
+test("Coding Plan discount evidence is diagnostic, not an execution gate", () => {
+  assert.equal(officialProviderCapabilityWarning(descriptor(), "coding_plan_discount"), null);
+  const warning = officialProviderCapabilityWarning(
+    descriptor({ discount_capability: "OFFICIAL_DISCOUNT_NOT_VERIFIED" }),
+    "coding_plan_discount",
   );
+  assert.match(warning ?? "", /OFFICIAL_DISCOUNT_DIAGNOSTIC/u);
+  assert.match(warning ?? "", /OFFICIAL_DISCOUNT_NOT_VERIFIED/u);
 });
 
-test("Start Plan requires offline compatibility and never depends on the Coding Plan discount", () => {
+test("Start Plan static compatibility is diagnostic and never depends on the Coding Plan discount", () => {
   assert.equal(
-    officialProviderCapabilityFailure(
+    officialProviderCapabilityWarning(
       descriptor({ discount_capability: "OFFICIAL_DISCOUNT_NOT_VERIFIED" }),
       "start_plan_static",
     ),
@@ -50,18 +49,18 @@ test("Start Plan requires offline compatibility and never depends on the Coding 
   );
   for (const compatibility of ["OFFLINE_INCOMPATIBLE", "OFFLINE_RESEARCH_PENDING", null] as const) {
     assert.match(
-      officialProviderCapabilityFailure(
+      officialProviderCapabilityWarning(
         descriptor({ start_plan_static_compatibility: compatibility }),
         "start_plan_static",
       ) ?? "",
-      /STARTPLAN_RUNTIME_INCOMPATIBLE/u,
+      /STARTPLAN_STATIC_DIAGNOSTIC/u,
     );
   }
 });
 
-test("other Providers require runtime identity without inheriting plan-specific gates", () => {
+test("other Providers warn for an unverified manifest but do not inherit plan-specific diagnostics", () => {
   assert.equal(
-    officialProviderCapabilityFailure(
+    officialProviderCapabilityWarning(
       descriptor({
         discount_capability: "OFFICIAL_DISCOUNT_NOT_VERIFIED",
         start_plan_static_compatibility: null,
@@ -71,105 +70,46 @@ test("other Providers require runtime identity without inheriting plan-specific 
     null,
   );
   assert.match(
-    officialProviderCapabilityFailure(
+    officialProviderCapabilityWarning(
       descriptor({ status: "OFFICIAL_RUNTIME_UNVERIFIED", reason: "synthetic identity mismatch" }),
       "installed_runtime",
     ) ?? "",
-    /OFFICIAL_RUNTIME_UNVERIFIED/u,
+    /OFFICIAL_RUNTIME_MANIFEST_UNVERIFIED/u,
   );
 });
 
-test("unverified runtime descriptors cannot satisfy either provider capability", () => {
+test("safe unverified runtimes produce warnings without authorization failures", () => {
   const unverified = descriptor({
     status: "OFFICIAL_RUNTIME_UNVERIFIED",
+    installation_safety: "OFFICIAL_INSTALLATION_SAFE",
     discount_capability: "OFFICIAL_DISCOUNT_NOT_VERIFIED",
     start_plan_static_compatibility: null,
-    reason: "synthetic identity mismatch",
+    reason: "SAFE_INSTALLATION_MANIFEST_UNVERIFIED: synthetic identity mismatch",
   });
-  assert.notEqual(officialProviderCapabilityFailure(unverified, "coding_plan_discount"), null);
-  assert.notEqual(officialProviderCapabilityFailure(unverified, "start_plan_static"), null);
+  const warnings = [
+    officialProviderCapabilityWarning(unverified, "coding_plan_discount"),
+    officialProviderCapabilityWarning(unverified, "start_plan_static"),
+    officialProviderCapabilityWarning(unverified, "installed_runtime"),
+  ];
+  assert.ok(warnings.every((warning) => warning !== null));
+  assert.ok(warnings.every((warning) => !/AUTHORIZATION/u.test(warning ?? "")));
+  assert.ok(warnings.every((warning) => /DIAGNOSTIC|MANIFEST_UNVERIFIED/u.test(warning ?? "")));
 });
 
-test("experimental runtime authorization is Provider-scoped and does not claim verification", () => {
+test("experimental manifest annotations do not create Provider-scoped authorization requirements", () => {
   const experimental = descriptor({
     status: "OFFICIAL_RUNTIME_EXPERIMENTAL",
     installation_safety: "OFFICIAL_INSTALLATION_SAFE",
     installation_fingerprint: "a".repeat(64),
-    experimental_authorization: {
-      state: "authorized",
-      file_path: "C:\\synthetic-authorization.json",
-      reason: null,
-      record: {
-        installation_fingerprint: "a".repeat(64),
-        desktop_version: "3.19.0.10774",
-        authorized_at: "2026-11-20T00:00:00.000Z",
-        authorized_by: "owner",
-        scopes: ["coding_plan_probe"],
-      },
-      scopes: ["coding_plan_probe"],
-    },
     discount_capability: "OFFICIAL_DISCOUNT_NOT_VERIFIED",
     start_plan_static_compatibility: "OFFLINE_RESEARCH_PENDING",
-    reason: "explicit experimental authorization accepted",
+    reason: "SAFE_INSTALLATION_EXPERIMENTAL_MANIFEST",
   });
-  assert.equal(officialProviderCapabilityFailure(experimental, "coding_plan_discount"), null);
-  assert.match(
-    officialProviderCapabilityFailure(experimental, "start_plan_static") ?? "",
-    /start_plan_probe/u,
-  );
-  assert.match(
-    officialProviderCapabilityFailure(experimental, "installed_runtime") ?? "",
-    /other_provider_probe/u,
-  );
-  assert.equal(experimental.discount_capability, "OFFICIAL_DISCOUNT_NOT_VERIFIED");
-});
-
-test("experimental status without a matching authorization record cannot satisfy any Provider gate", () => {
-  const experimental = descriptor({
-    status: "OFFICIAL_RUNTIME_EXPERIMENTAL",
-    installation_safety: "OFFICIAL_INSTALLATION_SAFE",
-    installation_fingerprint: "b".repeat(64),
-    experimental_authorization: {
-      state: "required",
-      file_path: "C:\\synthetic-authorization.json",
-      reason: null,
-      record: null,
-      scopes: [],
-    },
-    discount_capability: "OFFICIAL_DISCOUNT_NOT_VERIFIED",
-    start_plan_static_compatibility: "OFFLINE_RESEARCH_PENDING",
-  });
-  for (const capability of ["coding_plan_discount", "start_plan_static", "installed_runtime"] as const) {
-    assert.match(
-      officialProviderCapabilityFailure(experimental, capability) ?? "",
-      /EXPERIMENTAL_AUTHORIZATION_MISSING/u,
-    );
-  }
-});
-
-test("experimental scope does not elevate a Provider to a verified capability label", () => {
-  const experimental = descriptor({
-    status: "OFFICIAL_RUNTIME_EXPERIMENTAL",
-    installation_safety: "OFFICIAL_INSTALLATION_SAFE",
-    installation_fingerprint: "c".repeat(64),
-    experimental_authorization: {
-      state: "authorized",
-      file_path: "C:\\synthetic-authorization.json",
-      reason: null,
-      record: {
-        installation_fingerprint: "c".repeat(64),
-        desktop_version: "3.20.0.1",
-        authorized_at: "2026-11-20T00:00:00.000Z",
-        authorized_by: "owner",
-        scopes: ["other_provider_probe"],
-      },
-      scopes: ["other_provider_probe"],
-    },
-    discount_capability: "OFFICIAL_DISCOUNT_NOT_VERIFIED",
-    start_plan_static_compatibility: "OFFLINE_RESEARCH_PENDING",
-  });
-  assert.equal(officialProviderCapabilityFailure(experimental, "installed_runtime"), null);
-  assert.equal(experimental.status, "OFFICIAL_RUNTIME_EXPERIMENTAL");
-  assert.equal(experimental.discount_capability, "OFFICIAL_DISCOUNT_NOT_VERIFIED");
-  assert.equal(experimental.start_plan_static_compatibility, "OFFLINE_RESEARCH_PENDING");
+  const warnings = [
+    officialProviderCapabilityWarning(experimental, "coding_plan_discount"),
+    officialProviderCapabilityWarning(experimental, "start_plan_static"),
+    officialProviderCapabilityWarning(experimental, "installed_runtime"),
+  ];
+  assert.ok(warnings.every((warning) => !/AUTHORIZATION/u.test(warning ?? "")));
+  assert.equal(warnings[2], null);
 });

@@ -34,10 +34,6 @@ export interface RuntimeInstallationIdentity {
   readonly installation_safety: string;
   readonly runtime_status: string;
   readonly manifest_status: string;
-  readonly experimental_authorization: {
-    readonly state: string;
-    readonly scopes: readonly string[];
-  };
   readonly assets: Readonly<Record<string, RuntimeAssetIdentity>>;
 }
 
@@ -104,7 +100,6 @@ export class RuntimeCompatibilityError extends Error {
       | "RUNTIME_INSPECTION_FAILED"
       | "RUNTIME_FINGERPRINT_UNAVAILABLE"
       | "RUNTIME_UNSAFE"
-      | "RUNTIME_PROBE_AUTHORIZATION_REQUIRED"
       | "RUNTIME_PROBE_UNAVAILABLE"
       | "RUNTIME_EVIDENCE_STORE_INVALID",
     message: string,
@@ -184,16 +179,6 @@ export class RuntimeCompatibilityService {
       throw new RuntimeCompatibilityError(
         "RUNTIME_UNSAFE",
         "Protocol probing is unavailable until the installation passes the safety gate.",
-        403,
-      );
-    }
-    const runtimeStatus = installation.runtime_status;
-    const authorizationState = installation.experimental_authorization.state;
-    if (runtimeStatus !== "OFFICIAL_RUNTIME_VERIFIED"
-      && !(runtimeStatus === "OFFICIAL_RUNTIME_EXPERIMENTAL" && authorizationState === "authorized")) {
-      throw new RuntimeCompatibilityError(
-        "RUNTIME_PROBE_AUTHORIZATION_REQUIRED",
-        "A verified manifest match or exact-fingerprint experimental authorization is required.",
         403,
       );
     }
@@ -438,7 +423,6 @@ function installationIdentity(environment: Record<string, unknown>): RuntimeInst
   const zcode = recordValue(environment.zcode);
   const host = recordValue(environment.host);
   const manifest = recordValue(zcode.manifest);
-  const authorization = recordValue(zcode.experimental_authorization);
   const assets = recordValue(zcode.assets);
   const desktopExecutable = recordValue(zcode.desktop_executable);
   const desktopArchive = recordValue(zcode.desktop_archive);
@@ -471,12 +455,6 @@ function installationIdentity(environment: Record<string, unknown>): RuntimeInst
       : runtimeStatus === "OFFICIAL_RUNTIME_EXPERIMENTAL"
         ? "EXPERIMENTAL"
         : "UNVERIFIED",
-    experimental_authorization: {
-      state: stringValue(authorization, "state") ?? "not_configured",
-      scopes: Array.isArray(authorization.scopes)
-        ? authorization.scopes.filter((item): item is string => typeof item === "string")
-        : [],
-    },
     assets: normalizedAssets,
   };
 }

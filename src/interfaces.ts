@@ -398,7 +398,9 @@ export interface GetEventsInput {
 export interface TaskManager {
   createTask(task: TaskPackage): Promise<TaskReceipt>;
   getStatus(taskId: string): Promise<TaskStatusRecord>;
-  getResult(taskId: string): Promise<TaskResult>;
+  /** P1 §3.4: view="summary" runs the ADR-047 projection Executor-side; the
+   * omitted (default) view keeps the frozen full-Result contract. */
+  getResult(taskId: string, view?: "summary" | "full"): Promise<TaskResult>;
   continueTask(input: ContinueTaskInput): Promise<TaskReceipt>;
   cancelTask(taskId: string): Promise<TaskStatusRecord>;
 }

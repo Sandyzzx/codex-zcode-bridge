@@ -20,6 +20,7 @@ import type {
 import type { ClaimOnlyDriverOptions, CandidateTaskPackage, ClaimOnlyRunResult } from "../store/lifecycle-gate.js";
 import { openClaimOnlyDriver } from "../store/lifecycle-gate.js";
 import { TaskManagerError } from "./errors.js";
+import { summarizeTaskResult } from "../result-summary.js";
 import { waitForAttentionSnapshot } from "../attention/wait.js";
 import { parseTaskAttentionSnapshot } from "../attention/snapshot.js";
 import { createPlatformProbe, PROCESS_IDENTITY_VERSION, type ProcessIdentity, type ProcessProbe } from "../runtime/process-probe.js";
@@ -92,6 +93,12 @@ export type SqliteAuthorityOptions = ClaimOnlyDriverOptions & {
     fact: ExecutorWakeReleaseFact,
     recorder: AuthorityExecutorWakeRecorder,
   ) => Promise<void>;
+  /** P1 §3.2 Lease Spawn Fence. While it returns a blocker reason, the
+   * Manager may not start any new Worker Spawn (pump, retry timers, and
+   * post-recovery redispatch all route through the same gate). Already
+   * dispatched Workers keep settling under their own lifecycle rules and
+   * queued Attempts stay durable in SQLite for a future owner. */
+  readonly dispatchFence?: () => string | null;
 };
 
 /** SQLite Lifecycle Manager. Owns scheduling; the bound driver owns durable facts. */
@@ -129,6 +136,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
   readonly #testOnlyFakeAdapter: boolean;
   readonly #routeTaskModel?: TaskModelRouter;
   readonly #onOperationReleased?: SqliteAuthorityOptions["onOperationReleased"];
+  readonly #dispatchFence?: SqliteAuthorityOptions["dispatchFence"];
 
   private constructor(driver: Driver, context: NonNullable<ClaimOnlyDriverOptions["trustedLocalContext"]>, processProbe: ProcessProbe,
     testBeforeDispatch?: () => Promise<void>, testOnScheduler?: SqliteAuthorityOptions["testOnScheduler"],
@@ -136,7 +144,8 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     routeTaskModel?: TaskModelRouter,
     startPlanAuthInjected = false,
     startPlanPrivateAuthFactory?: () => Promise<NonNullable<ClaimOnlyDriverOptions["startPlanPrivateAuth"]> | null>,
-    onOperationReleased?: SqliteAuthorityOptions["onOperationReleased"]) {
+    onOperationReleased?: SqliteAuthorityOptions["onOperationReleased"],
+    dispatchFence?: SqliteAuthorityOptions["dispatchFence"]) {
     this.#driver = driver;
     this.#context = context;
     this.#processProbe = processProbe;
@@ -149,6 +158,11 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     this.#testOnlyFakeAdapter = testOnlyFakeAdapter;
     this.#routeTaskModel = routeTaskModel;
     this.#onOperationReleased = onOperationReleased;
+    this.#dispatchFence = dispatchFence;
+  }
+
+  #spawnFenceReason(): string | null {
+    return this.#dispatchFence?.() ?? null;
   }
 
   async createTask(task: TaskPackage): Promise<TaskReceipt> {
@@ -228,13 +242,22 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     const snapshot = this.#readSnapshot(taskId);
     const projection = asRecord(snapshot.projection);
     if (this.#pumpFailure && projection.status === "queued") {
-      throw new TaskManagerError("TASK_STATE", `SQLite dispatch is blocked after ${this.#pumpFailure.reason}; queued lifecycle facts remain persisted while automatic Recovery retry is pending or exhausted`);
+      throw new TaskManagerError("TASK_STATE", `SQLite dispatch is blocked after ${this.#pumpFailure.reason}; ${this.#queue.length} queued attempt(s) remain persisted while automatic Recovery retry is pending or exhausted; resolve the dispatch cause and restart the Executor to clear the latch`);
     }
     const attempt = asRecord(snapshot.attempt);
     const operation = snapshot.operation ? asRecord(snapshot.operation) : null;
     const result = snapshot.result ? asRecord(snapshot.result) : null;
-    const events = this.#driver.readTaskEvents(taskId, { afterCursor: 0, limit: 200 }) as { events?: readonly Record<string, unknown>[] };
-    const lastAt = events.events?.at(-1)?.at;
+    // P2 §4.5: updated_at must reflect the latest persisted event, not the
+    // tail of an arbitrary first page. The dedicated read touches one row per
+    // event source and falls back to the page read only when unavailable.
+    let lastAt: unknown;
+    try {
+      const latest = asRecord(this.#driver.readTaskLatestEventAt(taskId));
+      lastAt = latest?.at;
+    } catch {
+      const events = this.#driver.readTaskEvents(taskId, { afterCursor: 0, limit: 200 }) as { events?: readonly Record<string, unknown>[] };
+      lastAt = events.events?.at(-1)?.at;
+    }
     const createdAt = string(projection.created_at, "task_created_at_missing");
     const status = taskStatus(projection.status);
     const dispatchBlocker = status === "queued"
@@ -319,10 +342,62 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     return parseTaskAttentionSnapshot(value, taskId);
   }
 
-  async getResult(taskId: string): Promise<TaskResult> {
+  async getResult(taskId: string, view?: "summary" | "full"): Promise<TaskResult> {
     const snapshot = this.#readSnapshot(taskId);
     if (!snapshot.result) throw new TaskManagerError("TASK_NOT_FINISHED", `task ${taskId} has no committed SQLite Result${snapshot.result_submission_error ? `: ${String(snapshot.result_submission_error)}; Recovery required; no automatic retry` : ""}`);
+    // P1 §3.4B: the summary projection runs Executor-side on the same Attempt
+    // snapshot so MCP/CLI/Web summary reads stop transporting the full Result.
+    if (view === "summary") return summarizeTaskResult(snapshot.result as unknown as TaskResult) as unknown as TaskResult;
     return snapshot.result as unknown as TaskResult;
+  }
+
+  /** P1 §3.4A: bounded page over the exact stored canonical Result JSON. The
+   * returned next_offset always lands on a UTF-8 codepoint boundary;
+   * concatenating every page's data reproduces the stored bytes whose SHA-256
+   * equals the operation's result_digest. */
+  async getResultPage(taskId: string, offsetBytes: number, maxBytes: number): Promise<Record<string, unknown>> {
+    this.#assertOpen();
+    if (!Number.isSafeInteger(offsetBytes) || offsetBytes < 0
+      || !Number.isSafeInteger(maxBytes) || maxBytes < 1_024 || maxBytes > 4_194_304) {
+      throw new TaskManagerError("TASK_INVALID", "offset_bytes must be a non-negative integer and max_bytes must be between 1024 and 4194304");
+    }
+    const snapshot = this.#readSnapshot(taskId);
+    if (!snapshot.result) throw new TaskManagerError("TASK_NOT_FINISHED", `task ${taskId} has no committed SQLite Result`);
+    let page: Record<string, unknown>;
+    try {
+      page = this.#driver.readTaskResultPage(taskId, offsetBytes, maxBytes) as Record<string, unknown>;
+    } catch (error) {
+      const code = errorCode(error);
+      if (code === "invalid_result_page_offset") throw new TaskManagerError("TASK_INVALID", "offset_bytes is beyond the stored Result");
+      throw error;
+    }
+    const committed = snapshot.result as unknown as TaskResult;
+    return {
+      // Core committed-Result identity fields (bounded by the storage
+      // contract; the large zcode_output stays behind the page cursor).
+      task_id: committed.task_id,
+      attempt: committed.attempt,
+      status: committed.status,
+      summary: committed.summary,
+      files_changed: committed.files_changed,
+      tests: committed.tests,
+      issues: committed.issues,
+      needs_master_decision: committed.needs_master_decision,
+      exit_code: committed.exit_code,
+      session_id: committed.session_id,
+      started_at: committed.started_at,
+      finished_at: committed.finished_at,
+      ...(committed.error_code ? { error_code: committed.error_code } : {}),
+      result_status: page.result_status,
+      result_digest: page.result_digest,
+      result_commit_ref: page.result_commit_ref,
+      page: {
+        offset_bytes: page.offset_bytes,
+        next_offset: page.next_offset,
+        total_bytes: page.total_bytes,
+        data: page.data,
+      },
+    };
   }
 
   recordExecutorWakeObservation(input: AuthorityExecutorWakeObservationInput): {
@@ -925,6 +1000,12 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       this.#pumpFailure = null;
       this.#schedulerStage("recovery_complete", { recoverable_queued_attempts: queued.filter((value) => value.dispatchable === true).length,
         root_read_only: false });
+      // P1 §3.3: an Executor can exit between the durable Release commit and
+      // the Wake intent write. Recovery re-runs the notification for released
+      // operations that carry a committed Result but no executor_wake
+      // observation at all; operations with any recorded wake fact keep their
+      // existing dedup/visibility contract and are never re-queued.
+      await this.#recoverUnnotifiedReleases(snapshot);
       this.#schedulePump();
     } catch (error) {
       this.#recoveryBlocked = error instanceof Error ? error.message : String(error);
@@ -994,6 +1075,8 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
 
   #validateRecoverySnapshot(value: unknown): {
     readonly operations: readonly unknown[];
+    readonly events: readonly unknown[];
+    readonly taskProjections: readonly unknown[];
     readonly capacity: Readonly<{ capacity_limit: number }>;
   } {
     const snapshot = asRecord(value);
@@ -1007,7 +1090,12 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       const blockers = Array.isArray(snapshot.root_blockers) ? snapshot.root_blockers.map(String).join(",") : "recovery_snapshot_invalid";
       throw new TaskManagerError("TASK_STATE", `SQLite Recovery is blocked (${blockers || "root_not_consistent"}); no lifecycle side effect was attempted`);
     }
-    return { operations: snapshot.operations, capacity: { capacity_limit: Number(capacity.capacity_limit) } };
+    return {
+      operations: snapshot.operations,
+      events: Array.isArray(snapshot.events) ? snapshot.events : [],
+      taskProjections: Array.isArray(snapshot.task_projections) ? snapshot.task_projections : [],
+      capacity: { capacity_limit: Number(capacity.capacity_limit) },
+    };
   }
 
   #driverTrustedPolicy(): NonNullable<ClaimOnlyDriverOptions["trustedLocalContext"]>["policy"] {
@@ -1018,7 +1106,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
   static async create(options: SqliteAuthorityOptions): Promise<SqliteLifecycleMcpAuthority> {
     if (!options.trustedLocalContext) throw new TaskManagerError("TASK_STATE", "trusted local context is required");
     const {
-      testBeforeDispatch, testOnScheduler, testShutdownWaitMs, routeTaskModel, onOperationReleased, ...driverOptions
+      testBeforeDispatch, testOnScheduler, testShutdownWaitMs, routeTaskModel, onOperationReleased, dispatchFence, ...driverOptions
     } = options;
     const shutdownWaitMs = testShutdownWaitMs ?? DEFAULT_HOST_SHUTDOWN_WAIT_MS;
     if (!Number.isSafeInteger(shutdownWaitMs) || shutdownWaitMs < 1 || shutdownWaitMs > DEFAULT_HOST_SHUTDOWN_WAIT_MS) {
@@ -1029,7 +1117,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       processProbe, testBeforeDispatch, testOnScheduler, shutdownWaitMs,
       options.startPlanPrivateAuth !== undefined || options.startPlanPrivateAuthFactory !== undefined,
       options.testOnlyFakeAdapter === true, routeTaskModel,
-      options.startPlanPrivateAuth !== undefined, options.startPlanPrivateAuthFactory, onOperationReleased);
+      options.startPlanPrivateAuth !== undefined, options.startPlanPrivateAuthFactory, onOperationReleased, dispatchFence);
     try {
       await authority.recoverTasks();
       return authority;
@@ -1094,6 +1182,14 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     if (this.#closed || this.#shuttingDown || !this.#recoveryComplete || this.#pumpFailure || this.#pumpPending || this.#queue.length === 0) {
       this.#schedulerStage("schedule_skipped", { closed: this.#closed, recovery_complete: this.#recoveryComplete,
         pump_failure: this.#pumpFailure?.reason ?? null, pump_pending: this.#pumpPending, active: this.#active, queue_depth: this.#queue.length });
+      return;
+    }
+    const fenceReason = this.#spawnFenceReason();
+    if (fenceReason !== null) {
+      // Lease ownership is unknown (P1 §3.2): no new Spawn may leave this
+      // Manager through any timer or recovery path. Queued Attempts stay
+      // durable; a future lease owner re-collects them.
+      this.#schedulerStage("schedule_fenced", { reason: fenceReason, queue_depth: this.#queue.length });
       return;
     }
     if (this.#pumpRetryTimer || this.#workspaceRetryTimer) {
@@ -1166,6 +1262,11 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       this.#schedulerStage("pump_skipped", { closed: this.#closed, shutting_down: this.#shuttingDown, active: this.#active, queue_depth: this.#queue.length });
       return;
     }
+    const initialFence = this.#spawnFenceReason();
+    if (initialFence !== null) {
+      this.#schedulerStage("pump_fenced", { reason: initialFence, queue_depth: this.#queue.length });
+      return;
+    }
     this.#active += 1;
     this.#schedulerStage("pump_started", { queue_depth: this.#queue.length });
     let capacityBlocked = false;
@@ -1200,6 +1301,13 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
         // pending. The durable queued Attempt remains authoritative; never
         // start a Worker after this Manager has closed its SQLite handle.
         if (this.#closed || this.#shuttingDown) break;
+        const dispatchFenceReason = this.#spawnFenceReason();
+        if (dispatchFenceReason !== null) {
+          this.#schedulerStage("dispatch_fenced", { task_id: next.taskId, attempt: next.attempt, reason: dispatchFenceReason });
+          this.#queue.unshift(next);
+          this.#queued.add(nextKey);
+          break;
+        }
         const dispatchPathKey = normalizeExecutionPath(executionPath);
         this.#dispatchingPaths.add(dispatchPathKey);
         const runPromise = this.#driver.run({
@@ -1221,7 +1329,6 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
           this.#dispatchingPaths.delete(dispatchPathKey);
         }
         this.#schedulerStage("driver_run_returned", { task_id: next.taskId, attempt: next.attempt, state: run.state, queue_depth: this.#queue.length });
-        this.#acceptRunOutcome(run);
         await this.#recoverAfterRun(next, run);
         const after = this.#readSnapshot(next.taskId);
         await this.#notifyOperationReleased(after);
@@ -1266,11 +1373,6 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
         this.#scheduleWorkspaceRetry();
       } else this.#schedulePump();
     }
-  }
-
-  #acceptRunOutcome(_run: ClaimOnlyRunResult): void {
-    // Authority facts are read from the SQLite projection on every MCP call.
-    // The in-memory return value is never used to claim a Result commit.
   }
 
   async #recoverAfterRun(item: { readonly taskId: string; readonly attempt: number }, run: ClaimOnlyRunResult): Promise<void> {
@@ -1358,6 +1460,75 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
         operation_id: fact.operation_id,
         reason: errorCode(error) ?? "executor_wake_failed",
       });
+    }
+  }
+
+  /** P1 §3.3: restart-safe Release→Wake recovery. Selects released operations
+   * with a committed Result and zero executor_wake observations, and re-runs
+   * the single notification hook for each. The Wake coordinator and the
+   * observation state machine remain the dedup authority: an operation with
+   * any recorded wake fact (intent, queued, submission_unknown, turn_started,
+   * web_notify) is deliberately skipped so recovery never duplicates a Queue
+   * submission whose acknowledgement outcome is unknown. */
+  async #recoverUnnotifiedReleases(snapshot: {
+    readonly operations: readonly unknown[];
+    readonly events: readonly unknown[];
+    readonly taskProjections: readonly unknown[];
+  }): Promise<void> {
+    if (!this.#onOperationReleased) return;
+    const wakeNotified = new Set<string>();
+    for (const value of snapshot.events) {
+      const event = asRecord(value);
+      if (String(event.event_type) !== "observation_recorded" || typeof event.operation_id !== "string") continue;
+      try {
+        const evidence = asRecord(JSON.parse(String(event.evidence_json)));
+        if (evidence.reason === "executor_wake") wakeNotified.add(event.operation_id);
+      } catch {
+        // Malformed evidence cannot prove a prior notification; the operation
+        // stays selected and the fresh notification records new facts.
+      }
+    }
+    const taskProjectionByTaskId = new Map<string, Record<string, unknown>>();
+    for (const value of snapshot.taskProjections) {
+      const projection = asRecord(value);
+      if (typeof projection.task_id === "string") taskProjectionByTaskId.set(projection.task_id, projection);
+    }
+    for (const value of snapshot.operations) {
+      const operation = asRecord(value);
+      const operationId = operation.operation_id;
+      if (typeof operationId !== "string" || String(operation.phase) !== "released"
+        || wakeNotified.has(operationId)) continue;
+      if (typeof operation.result_digest !== "string" || typeof operation.result_commit_ref !== "string") continue;
+      if (String(operation.result_status) === "cancelled") continue;
+      const taskId = operation.task_id;
+      const attempt = Number(operation.attempt);
+      const generation = Number(operation.generation);
+      const projection = typeof taskId === "string" ? taskProjectionByTaskId.get(taskId) : undefined;
+      const workspace = typeof projection?.workspace === "string" ? projection.workspace : null;
+      if (typeof taskId !== "string" || !Number.isSafeInteger(attempt) || attempt < 1
+        || !Number.isSafeInteger(generation) || generation < 1 || !workspace) continue;
+      const fact: ExecutorWakeReleaseFact = {
+        task_id: taskId,
+        attempt,
+        operation_id: operationId,
+        generation,
+        task_status: taskStatus(projection!.status),
+        result_status: String(operation.result_status) as ExecutorWakeReleaseFact["result_status"],
+        result_digest: operation.result_digest,
+        result_commit_ref: operation.result_commit_ref,
+        workspace,
+      };
+      this.#schedulerStage("release_wake_recovery_selected", {
+        task_id: taskId, attempt, operation_id: operationId,
+      });
+      try {
+        await this.#onOperationReleased(fact, (input) => this.recordExecutorWakeObservation(input));
+      } catch (error) {
+        this.#schedulerStage("release_wake_recovery_failed", {
+          task_id: taskId, attempt, operation_id: operationId,
+          reason: errorCode(error) ?? "executor_wake_failed",
+        });
+      }
     }
   }
 

@@ -61,6 +61,10 @@ export interface ProductionAuthorityCompositionOptions {
   readonly testBeforeDispatch?: () => Promise<void>;
   readonly testOnScheduler?: (stage: string, detail: Readonly<Record<string, unknown>>) => void;
   readonly onWorkerDiagnosticLine?: (line: string) => void;
+  /** P1 §3.2 Lease Spawn Fence forwarded to the Manager. A non-null reason
+   * blocks every new Worker Spawn path (pump, retry timers, recovery
+   * redispatch) while Executor lease ownership is unknown. */
+  readonly dispatchFence?: () => string | null;
 }
 
 export interface ProductionAuthorityComposition {
@@ -230,6 +234,7 @@ export async function createProductionAuthorityComposition(
     ...(options.testOnlyFakeAdapter === true ? { testOnlyFakeAdapter: true as const } : {}),
     ...(options.testBeforeDispatch ? { testBeforeDispatch: options.testBeforeDispatch } : {}),
     ...(options.testOnScheduler ? { testOnScheduler: options.testOnScheduler } : {}),
+    ...(options.dispatchFence ? { dispatchFence: options.dispatchFence } : {}),
   });
   const modelSettings = new ZCodeModelSettings(env, {
     homeDir,

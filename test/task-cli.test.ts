@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { startExecutorControlServer } from "../src/executor/control-server.js";
 import { ExecutorControlClient } from "../src/executor/control-client.js";
+import { summarizeTaskResult } from "../src/result-summary.js";
 import type {
   ExecutorControlMethod,
   ExecutorControlParamsByMethod,
@@ -301,8 +302,13 @@ test("Task CLI keeps full Results off stdout unless explicitly bounded to a file
   const root = mkdtempSync(path.join(tmpdir(), "task-cli-result-"));
   try {
     const summaryIo = io();
+    // The Executor now applies the summary projection server-side (ADR-056);
+    // the fake client mirrors that for view=summary requests.
     const summaryCode = await runTaskCli(["task", "result", "task-a", "--data-root", root], summaryIo.stream, {
-      createClient: () => fakeClient(() => response(result("task-a", 4_096))),
+      createClient: () => fakeClient((method, params) => response(
+        method === "getResult" && (params as { view?: string }).view === "summary"
+          ? summarizeTaskResult(result("task-a", 4_096)) as ReturnType<typeof result>
+          : result("task-a", 4_096))),
     });
     assert.equal(summaryCode, 0);
     const summary = JSON.parse(summaryIo.stdout()) as { projection?: { omitted_fields?: string[] } };

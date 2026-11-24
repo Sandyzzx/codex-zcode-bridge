@@ -1,71 +1,32 @@
 # ZCode 运行配置边界
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-21（ADR-043 SQLite v14 ONLY）
+> Last updated: 2026-11-24（ADR-054 授权机制退役）
 > Last verified: 2026-11-21，核对 v13 只读拒绝、未完成升级 Marker 保留、v14 Fresh/Existing 启动和 v13 CLI/Schema 分发删除；真实模型、OAuth 与 Billing E2E 为 `NOT_RUN`。
-> Verified against: ADR-043 candidate based on `c1245a02f8f9d4b6e1102eabac230b657d85de9b`；ADR-042 implementation `15abe6becb13f383fee676a4ae20510d51f817fc`
+> Verified against: `codex/final-integration-20261124`（ADR-054 适配集成后逐项核对 Resolver/factory/console/cost-lab 源码）
 
 当前生产路径是 `node <installed-runtime>/resources/glm/zcode.cjs app-server --stdio --surface desktop`，不是历史 CLI `--prompt --json`。任务 Adapter 与模型目录探测共用 `createInstalledOfficialHostSessionFactory` 的同一启动合同；安装版兼容性由 `OfficialAppServerRuntimeResolver` 精确校验，配置项与用户设置方法见仓库 README。
 
 ADR-038 后，插件资源目录只保留固定 ZCode 3.18.2 Official Host；ZCode 3.18.0 的整套 Runtime 不再随新制品分发，Preview.5 回滚继续使用其历史发布包。生产 Adapter 选择在构造前只接受 Windows x64 的 `official_host`；Linux、macOS、Windows 非 x64 与未知架构返回 `unsupported_worker_platform`。direct Adapter 只用于隔离测试注入，不是其他平台的生产回退。
 
-ADR-040/ADR-041 将安装版 Runtime 扩展为所有 Provider 的统一模型执行来源；Resolver 必须从现有路径发现取得同一安装根下的 `resources/glm/zcode.cjs`、`resources/config/provider/zcode-builtin.json` 与 `resources/tools/runtime-host/zcode-runtime-host.exe`。发布验证仍精确匹配 Desktop `3.18.2.10443`、文件大小、SHA-256、Windows x64 和 Node `>=24.16.0 <25`。ADR-042 将“安装安全”和“Manifest 生产兼容”分开：未知但安全的安装先返回可审查的完整指纹，只有显式授权匹配后才进入 `OFFICIAL_RUNTIME_EXPERIMENTAL`；不安全安装仍 hard block。任何状态都不会静默使用打包 Runtime，也不会由安装校验自动产生 Provider 或折扣声明。
+ADR-040/ADR-041 将安装版 Runtime 扩展为所有 Provider 的统一模型执行来源；Resolver 必须从现有路径发现取得同一安装根下的 `resources/glm/zcode.cjs`、`resources/config/provider/zcode-builtin.json` 与 `resources/tools/runtime-host/zcode-runtime-host.exe`。发布验证仍精确匹配 Desktop `3.18.2.10443`、文件大小、SHA-256、Windows x64 和 Node `>=24.16.0 <25`。ADR-042 曾把“安装安全”和“Manifest 生产兼容”分开并要求显式授权;ADR-054 已退役该授权机制：安全安装不再因版本、摘要、签名、指纹或授权缺失而阻断调用，静态 Manifest 匹配只作诊断。任何状态都不会静默使用打包 Runtime，也不会由安装校验自动产生 Provider 或折扣声明。
 
-## 未知版本实验授权（ADR-042）
+## 安装安全与静态诊断（ADR-040/042/054）
 
 Resolver 的基础安全检查包括：Windows x64、支持的 Node、绝对 canonical 安装根、同根普通文件、无 symlink escape、`ZCode.exe` 与 runtime-host 的有效 Authenticode 和官方发行主体、x64 PE、Desktop/ASAR/AppServer identity 一致，以及 AppServer、builtin config、runtime-host、Desktop EXE 和 ASAR 的精确 bytes/SHA-256。
 
-未知安全安装的状态流为：
+ADR-054 退役了 ADR-042 的版本授权机制（`ZCODE_BRIDGE_EXPERIMENTAL_RUNTIME_AUTHORIZATION_FILE`、
+authorize-official-runtime 工具、probe scopes 与 `RUNTIME_PROBE_AUTHORIZATION_REQUIRED` 均已删除）：
 
-```text
-OFFICIAL_RUNTIME_UNVERIFIED
-  + installation_safety = OFFICIAL_INSTALLATION_SAFE
-  + installation_fingerprint = <sha256>
-  + experimental_authorization.state = required
+- 安装安全检查仍然存在且是唯一执行门禁；`OFFICIAL_INSTALLATION_SAFE` 之外的安装不启动；
+- 未验证版本不阻断调用：`OFFICIAL_RUNTIME_UNVERIFIED` 只表示 Manifest 无记录，`resolve()` 照常返回；
+- 已验证版本由 README 声明（当前 3.18.2.10443、3.19.0.10774、4.0.0.10870 均通过安全检查，
+  其中 4.0.0 完成零模型 Protocol Smoke 与真实任务 E2E 的验证见发布报告）；
+- Runtime 失败通过真实错误和诊断信息反馈，安装指纹仍是兼容性证据的绑定键。
 
-exact fingerprint authorized
-  -> OFFICIAL_RUNTIME_EXPERIMENTAL
-```
+实验状态与历史结论：3.19.0.10774 通过零模型协议 Smoke 并完成过一次 Coding Plan 真实执行；其官方小时桶未完成请求级 Token/Credits 对账，倍率保持 `INCONCLUSIVE`。Start Plan 因账户无 active plan 而保持 `BLOCKED / NO_ACTIVE_PLAN`。
 
-授权至少包含 `installation_fingerprint`、`desktop_version`、`authorized_at`、
-`authorized_by` 和显式 scopes。任一 AppServer、builtin config、runtime-host、
-Desktop EXE、ASAR、签名 thumbprint 或 Node 版本变化都会使旧授权失效。
-授权文件必须为绝对普通文件、合法 JSON、无重复记录、最大 64 KiB；未知 scope
-或 malformed record 直接 fail closed。
-`ZCODE_BRIDGE_EXPERIMENTAL_RUNTIME_AUTHORIZATION_FILE` 是显式非秘密配置键，
-会随 detached Worker 环境转发；不得依赖 Worker 默认设置目录猜测用户选择。
-
-Provider scope 独立：
-
-- `coding_plan_probe`：允许 Coding Plan 执行探测，但仍为
-  `OFFICIAL_DISCOUNT_NOT_VERIFIED`；
-- `start_plan_probe`：允许 Start Plan 探测，但不产生
-  `OFFLINE_COMPATIBLE` 结论，Live Entitlement、Lease、绑定和 Cleanup
-  门禁不变；
-- `other_provider_probe`：允许其他 Provider 探测，但不产生生产兼容声明。
-
-实验状态与结果不会自动写入 VERIFIED Manifest。3.19.0.10774 当前通过
-零模型协议 Smoke，并完成过一次 Coding Plan 真实执行；其官方小时桶未完成
-请求级 Token/Credits 对账，倍率保持 `INCONCLUSIVE`。Start Plan 因账户无
-active plan 而保持 `BLOCKED / NO_ACTIVE_PLAN`。
-
-编码/权益能力门禁仍分离：Coding Plan 要求
-`OFFICIAL_DISCOUNT_VERIFIED`；Start Plan 要求
-`start_plan_static_compatibility = OFFLINE_COMPATIBLE`，不依赖 Coding Plan
-折扣字段；其他 Provider 走 `installed_runtime` 的官方配置/认证边界。Runtime 在
-`session/create` 后报告的 Provider/Model 是最终 capability 分类输入；Bridge 同时
-核对官方 Provider registry、当前账户配置和已注册模型，并在
-`session/subscribe`/`session/send` 前 fail closed。所有 Provider 共用安装版
-AppServer、Official Host Process Manager、Session/Turn 和 Cleanup 生命周期。
-生产 Provider Runtime Auth 的 resolver 缺失或失败时不回退到持久化 API Key；
-静态回包只允许显式 Test Adapter。Start Plan 的真实权益、认证、账单和模型 E2E
-仍为 `NOT_RUN`。
-
-若固定 AppServer 源旁存在安装版 Desktop `app.asar`，Bridge 只读解析其版本与 build metadata，并以这一对 `ZCODE_APP_VERSION` / `ZCODE_BUILD_COMMIT_ID` 为最高优先级。独立 Host 没有相邻 `app.asar` 时，`ZCODE_APP_VERSION` 取自校验后的 Official Host `ZCODE_PRODUCT_VERSION`；`ZCODE_BUILD_COMMIT_ID` 保持缺失，不从源码提交号或 AppServer CLI 版本推导。损坏 ASAR、非法或不完整身份、非法产品版本按 `provider_config_invalid` fail-closed。Bridge 不硬编码 Desktop 版本，不修改 Desktop 安装，也不伪造 HTTP Header。
-
-Windows x64 的 `zcode-runtime-host.exe` 采用随 Bridge 固定分发的官方签名产物，不在用户机器上动态发现、下载、安装或重新构建。Preview.7 保留 Preview.6 固定来源：本机官方 Desktop `3.18.2.10443` 的 `resources/tools/runtime-host/zcode-runtime-host.exe`：179,608 bytes、SHA-256 `C2C8FF5FF28CBDDC4F177C094AA67C322830889612251BD173BAAABC89379AB4`、PE x64、Authenticode Valid，签名主体为北京智谱华章科技股份有限公司。后续版本升级必须从合格的本机官方安装或经过校验的官方发行包取得，并同步更新 BOM、Build Provenance、运行时资源常量和测试；不得静默接受未知版本。安装器专用 helper 与 fixture 不属于 Bridge 运行闭包。
-
-发布支持声明仍限定为 Windows x64、Node.js `24.16.0` 和用户已安装的官方 ZCode Desktop `3.18.2.10443`。Desktop `3.19.0.10774` 只处于 ADR-042 实验授权范围，不是发布支持版本。Desktop `3.18.0`/`3.18.1` 保持 `NOT_VERIFIED`，不代表不兼容。真实 OAuth refresh/账户轮换与跨机器制品复现同样保持 `NOT_VERIFIED`，其风险仅在 Preview 渠道接受。
+编码/权益能力门禁仍分离：Coding Plan 折扣与 Start Plan 静态兼容现在是诊断（`officialProviderCapabilityWarning`），不再阻断执行；Live Entitlement、认证、账单与 Cleanup 门禁不变。
 
 ## 执行与清理期限（ADR-027）
 

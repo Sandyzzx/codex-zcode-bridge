@@ -18,18 +18,10 @@ test("Windows shard plan is complete, disjoint, automatic-only, and duration-bal
   assert.equal(automaticTestEntries(map, "linux", { includeStress: false }).some((entry: { file: string }) => entry.file.includes("mvp-real-adapter-stream-stress")), false);
 });
 
-test("Windows shard workflow scopes runner temp expressions to steps", () => {
-  const workflow = readFileSync(".github/workflows/windows-shard-experiment.yml", "utf8").replace(/\r\n/gu, "\n");
-  assert.match(workflow, /push:\n {4}branches:\n {6}- codex\/ci-performance-test-optimization-20261120\n {4}paths:\n {6}- \.github\/workflows\/windows-shard-experiment\.yml/u,
-    "hosted experiment pushes must stay confined to this research branch and workflow file");
-  const shardStart = workflow.indexOf("  shard:");
-  const stepsStart = workflow.indexOf("    steps:", shardStart);
-  assert.ok(shardStart >= 0 && stepsStart > shardStart, "the shard job header must be identifiable");
-  assert.doesNotMatch(workflow.slice(shardStart, stepsStart), /runner\.temp/u,
-    "the runner context is not available in job-level env");
-  assert.match(workflow, /- name: Prepare isolated shard directories[\s\S]*?SHARD_TEMP: \$\{\{ runner\.temp \}\}/u);
-  assert.match(workflow, /- name: Run Windows shard[\s\S]*?WP6_TEST_FIXTURE_ROOT: \$\{\{ runner\.temp \}\}/u);
-});
+// The hosted windows-shard-experiment workflow was retired on 2026-11-24
+// (not a required check on either protected branch, no release dependency,
+// and its trigger branch no longer exists). The guard that validated its
+// runner-temp scoping retired together with the file.
 
 test("production CI gates the protected Windows check on both isolated shards", () => {
   const workflow = readFileSync(".github/workflows/ci.yml", "utf8").replace(/\r\n/gu, "\n");

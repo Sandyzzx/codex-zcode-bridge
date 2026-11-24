@@ -4,15 +4,17 @@
   "generator": "npm run test:inventory",
   "summary": {
     "executable_or_manual_files": 111,
-    "declarations": 1020,
+    "declarations": 1046,
     "by_type": {
-      "Unit": 269,
+      "Unit": 273,
       "Integration": 747,
+      "Unclassified": 22,
       "Stress": 4
     },
     "by_gate": {
-      "T1": 308,
-      "T2": 708,
+      "T1": 310,
+      "T2": 710,
+      "CONSERVATIVE_REVIEW_REQUIRED": 22,
       "T3": 4
     },
     "stress_tests": 2,
@@ -3751,10 +3753,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-F589BE7FD24239CA",
+      "test_id": "TII-A65F71F15E47BD73",
       "test_name": "Windows child environments keep the Program Files directories in common casings",
       "test_file": "test/child-env.test.ts",
-      "test_line": 57,
+      "test_line": 52,
       "test_type": "Unit",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -5988,6 +5990,130 @@
       "stress_boundary": null
     },
     {
+      "test_id": "TII-3818725AD063C647",
+      "test_name": "queued attempts never spawn while the lease fence reports unknown ownership",
+      "test_file": "test/executor-lease-spawn-fence.test.ts",
+      "test_line": 179,
+      "test_type": "Unclassified",
+      "gate": "CONSERVATIVE_REVIEW_REQUIRED",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Memory"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/interfaces.ts",
+          "src/manager/sqlite-lifecycle-mcp-authority.ts",
+          "src/store/lifecycle-gate.ts"
+        ],
+        "impact_domains": []
+      },
+      "trigger_source_paths": [],
+      "trigger_test_files": [
+        "test/executor-lease-spawn-fence.test.ts"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-1F38F52AB3159089",
+      "test_name": "a capacity retry timer cannot bypass the lease fence",
+      "test_file": "test/executor-lease-spawn-fence.test.ts",
+      "test_line": 194,
+      "test_type": "Unclassified",
+      "gate": "CONSERVATIVE_REVIEW_REQUIRED",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Memory"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/interfaces.ts",
+          "src/manager/sqlite-lifecycle-mcp-authority.ts",
+          "src/store/lifecycle-gate.ts"
+        ],
+        "impact_domains": []
+      },
+      "trigger_source_paths": [],
+      "trigger_test_files": [
+        "test/executor-lease-spawn-fence.test.ts"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-0EB31BFBEF93A68D",
+      "test_name": "an in-flight Worker result still settles while the fence blocks the next dispatch",
+      "test_file": "test/executor-lease-spawn-fence.test.ts",
+      "test_line": 213,
+      "test_type": "Unclassified",
+      "gate": "CONSERVATIVE_REVIEW_REQUIRED",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Memory"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/interfaces.ts",
+          "src/manager/sqlite-lifecycle-mcp-authority.ts",
+          "src/store/lifecycle-gate.ts"
+        ],
+        "impact_domains": []
+      },
+      "trigger_source_paths": [],
+      "trigger_test_files": [
+        "test/executor-lease-spawn-fence.test.ts"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-648D5F35A35325A0",
+      "test_name": "clearing the fence lets the ordinary queue machinery dispatch again",
+      "test_file": "test/executor-lease-spawn-fence.test.ts",
+      "test_line": 262,
+      "test_type": "Unclassified",
+      "gate": "CONSERVATIVE_REVIEW_REQUIRED",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Memory"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/interfaces.ts",
+          "src/manager/sqlite-lifecycle-mcp-authority.ts",
+          "src/store/lifecycle-gate.ts"
+        ],
+        "impact_domains": []
+      },
+      "trigger_source_paths": [],
+      "trigger_test_files": [
+        "test/executor-lease-spawn-fence.test.ts"
+      ],
+      "stress_boundary": null
+    },
+    {
       "test_id": "TII-2EC66C67AF153EFC",
       "test_name": "acquire atomically creates an active exact-process lease",
       "test_file": "test/executor-lease.test.ts",
@@ -7583,10 +7709,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-A093573C1FA38AEB",
+      "test_id": "TII-C871C0B9D58B5EED",
       "test_name": "a shipped MCP Host process exit cannot cancel the original Attempt Result, Cleanup, or Release",
       "test_file": "test/executor-process.test.ts",
-      "test_line": 757,
+      "test_line": 762,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -7683,10 +7809,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-AECD23ABEA8D1D9D",
+      "test_id": "TII-ABAF9EED7713F8F7",
       "test_name": "Thin MCP -> Executor -> Worker -> Official Adapter completes against a controlled app-server",
       "test_file": "test/executor-process.test.ts",
-      "test_line": 976,
+      "test_line": 986,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -7783,10 +7909,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-5FB25791DD8AAB3B",
+      "test_id": "TII-44A137E789E4ABD9",
       "test_name": "a real Executor commits a synthetic Worker Result, Cleanup, and Release across processes",
       "test_file": "test/executor-process.test.ts",
-      "test_line": 1183,
+      "test_line": 1198,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -8183,10 +8309,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-C5EC2193C402FB89",
+      "test_id": "TII-DE33EDBCFA77759A",
       "test_name": "trusted-local policy still fails closed for expired authorization and Task binding mismatch",
       "test_file": "test/executor-wake.test.ts",
-      "test_line": 375,
+      "test_line": 379,
       "test_type": "Unit",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -8258,10 +8384,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-3DE501D9B19836D9",
+      "test_id": "TII-6687164819E661BC",
       "test_name": "trusted-local Queue timeout remains submission_unknown with no retry or Web resubmission",
       "test_file": "test/executor-wake.test.ts",
-      "test_line": 427,
+      "test_line": 431,
       "test_type": "Unit",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -8333,10 +8459,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-521115108C635FB2",
+      "test_id": "TII-DA9CD5D9F9C7DFF7",
       "test_name": "App Server proxy transport performs JSON-RPC preflight and new-Turn observation",
       "test_file": "test/executor-wake.test.ts",
-      "test_line": 455,
+      "test_line": 459,
       "test_type": "Unit",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -8408,10 +8534,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-AD96841B9705A763",
+      "test_id": "TII-02A225D410BBE772",
       "test_name": "Queue timeout or lost acknowledgement records submission_unknown exactly once and never retries",
       "test_file": "test/executor-wake.test.ts",
-      "test_line": 500,
+      "test_line": 504,
       "test_type": "Unit",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -8483,10 +8609,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-456200D1C3805186",
+      "test_id": "TII-B282F648CE3F5D5F",
       "test_name": "Queue runner extracts the official message ID from the bounded CLI acknowledgement",
       "test_file": "test/executor-wake.test.ts",
-      "test_line": 532,
+      "test_line": 536,
       "test_type": "Unit",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -8558,10 +8684,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-9C82F6739A364B8C",
+      "test_id": "TII-A86A97658BF692E2",
       "test_name": "a Queue process that never starts records Web Notify rather than a Queue delivery",
       "test_file": "test/executor-wake.test.ts",
-      "test_line": 551,
+      "test_line": 555,
       "test_type": "Unit",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -8633,10 +8759,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-655BA9ABDEB18074",
+      "test_id": "TII-AEFF7B8FCAEE0C04",
       "test_name": "a prior intent is one-shot and cannot submit Queue again",
       "test_file": "test/executor-wake.test.ts",
-      "test_line": 578,
+      "test_line": 582,
       "test_type": "Unit",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -8708,10 +8834,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-D04FA7D2B7D92FC5",
+      "test_id": "TII-042028E33E66B374",
       "test_name": "a previous Wake history blocks a new Queue submission",
       "test_file": "test/executor-wake.test.ts",
-      "test_line": 601,
+      "test_line": 605,
       "test_type": "Unit",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -11997,10 +12123,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-0F89D0A785AA0447",
+      "test_id": "TII-1AF24D6474D718FE",
       "test_name": "the frozen tools and additive progress, feedback, interaction, and doctor tools are registered",
       "test_file": "test/mcp-server.test.ts",
-      "test_line": 178,
+      "test_line": 197,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -12063,10 +12189,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-5F47E73FEBCA4F9F",
+      "test_id": "TII-E3DC7BEB3DE19871",
       "test_name": "the public MCP tool schemas match the frozen compatibility snapshot",
       "test_file": "test/mcp-server.test.ts",
-      "test_line": 194,
+      "test_line": 213,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -12129,10 +12255,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-DFA14B73EE547C1E",
+      "test_id": "TII-E6970B290467FEDE",
       "test_name": "zcode_doctor returns read-only setup diagnostics",
       "test_file": "test/mcp-server.test.ts",
-      "test_line": 209,
+      "test_line": 228,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -12195,10 +12321,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-434AD1DCC525AA74",
+      "test_id": "TII-2686709EBFF7047D",
       "test_name": "the four model tools delegate to the injected settings service",
       "test_file": "test/mcp-server.test.ts",
-      "test_line": 225,
+      "test_line": 244,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -12261,10 +12387,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-912B28DDFF1B003E",
+      "test_id": "TII-BA3CB3CF2E54A2FC",
       "test_name": "zcode_events maps the optional attention wait and returns the nested snapshot",
       "test_file": "test/mcp-server.test.ts",
-      "test_line": 263,
+      "test_line": 282,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -12327,10 +12453,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-516F385572A542D4",
+      "test_id": "TII-1BBEC26937F6E8E9",
       "test_name": "zcode_events attention mode propagates uncertain reply state, never an empty success",
       "test_file": "test/mcp-server.test.ts",
-      "test_line": 286,
+      "test_line": 305,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -12393,10 +12519,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-6BE4CDCABBF486F1",
+      "test_id": "TII-2D442C922954D918",
       "test_name": "zcode_events rejects an unknown wait_for value before the manager runs",
       "test_file": "test/mcp-server.test.ts",
-      "test_line": 303,
+      "test_line": 322,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -12459,10 +12585,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-22B858C82375A99F",
+      "test_id": "TII-CA6DC2AC0477F64B",
       "test_name": "zcode_interaction_reply forwards a bounded explicit decision",
       "test_file": "test/mcp-server.test.ts",
-      "test_line": 314,
+      "test_line": 333,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -12525,10 +12651,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-97F51E88B7D3DFA7",
+      "test_id": "TII-DC2217F8FE3B6176",
       "test_name": "zcode_task maps the full TaskPackage and returns a receipt as structured content",
       "test_file": "test/mcp-server.test.ts",
-      "test_line": 332,
+      "test_line": 351,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -12591,10 +12717,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-706DFB5AEE82022A",
+      "test_id": "TII-0743145D80D9D220",
       "test_name": "zcode_task accepts empty arrays and an optional context",
       "test_file": "test/mcp-server.test.ts",
-      "test_line": 359,
+      "test_line": 378,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -12657,10 +12783,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-07050CEC8DDC96C2",
+      "test_id": "TII-BCDD7BF648DDD47A",
       "test_name": "zcode_task accepts and forwards an optional provider/model selection",
       "test_file": "test/mcp-server.test.ts",
-      "test_line": 370,
+      "test_line": 389,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -12723,10 +12849,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-A246FAA0CAE361F4",
+      "test_id": "TII-733A610B7CDE0B87",
       "test_name": "zcode_task rejects malformed model selections before the manager runs",
       "test_file": "test/mcp-server.test.ts",
-      "test_line": 382,
+      "test_line": 401,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -12789,10 +12915,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-20B36B6DC7F236AE",
+      "test_id": "TII-DE15B3E0186AE32B",
       "test_name": "zcode_task rejects unknown fields, missing arrays, and invalid task ids before the manager runs",
       "test_file": "test/mcp-server.test.ts",
-      "test_line": 393,
+      "test_line": 412,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -12855,10 +12981,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-4F490DB467A98488",
+      "test_id": "TII-3C3ED9116C3AC95A",
       "test_name": "zcode_status returns the TaskStatusRecord and maps the argument",
       "test_file": "test/mcp-server.test.ts",
-      "test_line": 423,
+      "test_line": 442,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -12921,10 +13047,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-F2484E0E19A76E04",
+      "test_id": "TII-88E3411289C4CE13",
       "test_name": "zcode_status accepts the additive execution observation",
       "test_file": "test/mcp-server.test.ts",
-      "test_line": 439,
+      "test_line": 458,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -12987,10 +13113,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-0B35FF9679237648",
+      "test_id": "TII-67806AC433E4335F",
       "test_name": "zcode_feedback returns the additive v0.1 snapshot",
       "test_file": "test/mcp-server.test.ts",
-      "test_line": 461,
+      "test_line": 480,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -13053,10 +13179,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-453CF539948D8BCD",
+      "test_id": "TII-08D1FEACA888FC4E",
       "test_name": "zcode_result returns TASK_NOT_FINISHED as a tool error with a stable code",
       "test_file": "test/mcp-server.test.ts",
-      "test_line": 485,
+      "test_line": 504,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -13119,10 +13245,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-DF19A69E93AB9472",
+      "test_id": "TII-FF6CF1245EC8BC16",
       "test_name": "<dynamic-name>`zcode_result preserves full evidence and adds an object-root summary (${version})`@test/mcp-server.test.ts",
       "test_file": "test/mcp-server.test.ts",
-      "test_line": 506,
+      "test_line": 525,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -13185,10 +13311,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-61D4B86B1751A302",
+      "test_id": "TII-9059C3DEF08DDDAF",
       "test_name": "zcode_result for waiting_for_master surfaces the subordinate decision verbatim",
       "test_file": "test/mcp-server.test.ts",
-      "test_line": 565,
+      "test_line": 584,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -13251,10 +13377,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-63C89A258EDB4CBA",
+      "test_id": "TII-28E206055D8F019B",
       "test_name": "zcode_continue passes snake_case fields through unchanged",
       "test_file": "test/mcp-server.test.ts",
-      "test_line": 585,
+      "test_line": 604,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -13317,10 +13443,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-1F973E3E0DCCC0CD",
+      "test_id": "TII-9D4E11F659D82057",
       "test_name": "zcode_cancel returns the updated status record",
       "test_file": "test/mcp-server.test.ts",
-      "test_line": 619,
+      "test_line": 638,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -13383,10 +13509,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-0E67669F2D29DEC7",
+      "test_id": "TII-FF81668CC9D60819",
       "test_name": "TASK_ALREADY_EXISTS and TASK_NOT_FOUND become tool errors with their stable codes",
       "test_file": "test/mcp-server.test.ts",
-      "test_line": 633,
+      "test_line": 652,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -13449,10 +13575,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-8CEEEC186FCFB5A7",
+      "test_id": "TII-F97613E7A2AD68AD",
       "test_name": "calling an unregistered tool is rejected by the MCP protocol",
       "test_file": "test/mcp-server.test.ts",
-      "test_line": 655,
+      "test_line": 674,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -13515,74 +13641,8 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-5B469C6B728EDF8F",
+      "test_id": "TII-FCAD786BCB17B01A",
       "test_name": "large zcode_result payloads retain both the compatible text and structured representation",
-      "test_file": "test/mcp-server.test.ts",
-      "test_line": 664,
-      "test_type": "Integration",
-      "gate": "T2",
-      "runtime": "NOT_MEASURED",
-      "runtime_evidence": {
-        "actual_runtime_milliseconds": null,
-        "timeout_milliseconds": null,
-        "historical_baseline": null
-      },
-      "resource": [
-        "CPU",
-        "Memory"
-      ],
-      "dependency": {
-        "static_source_imports": [
-          "src/interfaces.ts",
-          "src/mcp/server.ts",
-          "src/task-errors.ts"
-        ],
-        "impact_domains": [
-          "mcp-host",
-          "manager-lifecycle",
-          "interface-contract"
-        ]
-      },
-      "trigger_source_paths": [
-        "src/mcp/main.ts",
-        "src/mcp/server.ts",
-        "src/mcp/schemas.ts",
-        "src/mcp/contracts.ts",
-        "src/mcp/result-summary.ts",
-        "src/host/stdio.ts",
-        "src/api-schemas.ts",
-        "src/executor/control-client.ts",
-        "src/executor/pipe.ts",
-        "src/executor/remote-model-settings.ts",
-        "src/executor/remote-task-manager.ts",
-        "src/task-errors.ts",
-        "src/manager/errors.ts",
-        "src/manager/normalize.ts",
-        "src/runtime/process-probe.ts",
-        "src/manager/sqlite-lifecycle-mcp-authority.ts",
-        "src/executor/**",
-        "src/cli/main.ts",
-        "src/web/**",
-        "src/runtime/cost-lab-official-dependencies.ts",
-        "src/task-list.ts",
-        "src/result-summary.ts",
-        "src/runtime/host-profile.ts",
-        "src/task-errors.ts",
-        "src/core.ts",
-        "src/interfaces.ts",
-        "src/api-schemas.ts",
-        "src/task-errors.ts",
-        "src/mcp/schemas.ts",
-        "src/result-contract.mjs"
-      ],
-      "trigger_test_files": [
-        "test/mcp-server.test.ts"
-      ],
-      "stress_boundary": null
-    },
-    {
-      "test_id": "TII-9346F0ECD096746C",
-      "test_name": "server info matches the frozen project identity",
       "test_file": "test/mcp-server.test.ts",
       "test_line": 683,
       "test_type": "Integration",
@@ -13647,10 +13707,208 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-14E9234E6394C286",
+      "test_id": "TII-A92CE0E62C8C4959",
+      "test_name": "server info matches the frozen project identity",
+      "test_file": "test/mcp-server.test.ts",
+      "test_line": 702,
+      "test_type": "Integration",
+      "gate": "T2",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Memory"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/interfaces.ts",
+          "src/mcp/server.ts",
+          "src/task-errors.ts"
+        ],
+        "impact_domains": [
+          "mcp-host",
+          "manager-lifecycle",
+          "interface-contract"
+        ]
+      },
+      "trigger_source_paths": [
+        "src/mcp/main.ts",
+        "src/mcp/server.ts",
+        "src/mcp/schemas.ts",
+        "src/mcp/contracts.ts",
+        "src/mcp/result-summary.ts",
+        "src/host/stdio.ts",
+        "src/api-schemas.ts",
+        "src/executor/control-client.ts",
+        "src/executor/pipe.ts",
+        "src/executor/remote-model-settings.ts",
+        "src/executor/remote-task-manager.ts",
+        "src/task-errors.ts",
+        "src/manager/errors.ts",
+        "src/manager/normalize.ts",
+        "src/runtime/process-probe.ts",
+        "src/manager/sqlite-lifecycle-mcp-authority.ts",
+        "src/executor/**",
+        "src/cli/main.ts",
+        "src/web/**",
+        "src/runtime/cost-lab-official-dependencies.ts",
+        "src/task-list.ts",
+        "src/result-summary.ts",
+        "src/runtime/host-profile.ts",
+        "src/task-errors.ts",
+        "src/core.ts",
+        "src/interfaces.ts",
+        "src/api-schemas.ts",
+        "src/task-errors.ts",
+        "src/mcp/schemas.ts",
+        "src/result-contract.mjs"
+      ],
+      "trigger_test_files": [
+        "test/mcp-server.test.ts"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-9FE58E0CEB109DA0",
       "test_name": "task package fixture matches the frozen shape",
       "test_file": "test/mcp-server.test.ts",
-      "test_line": 695,
+      "test_line": 714,
+      "test_type": "Integration",
+      "gate": "T2",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Memory"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/interfaces.ts",
+          "src/mcp/server.ts",
+          "src/task-errors.ts"
+        ],
+        "impact_domains": [
+          "mcp-host",
+          "manager-lifecycle",
+          "interface-contract"
+        ]
+      },
+      "trigger_source_paths": [
+        "src/mcp/main.ts",
+        "src/mcp/server.ts",
+        "src/mcp/schemas.ts",
+        "src/mcp/contracts.ts",
+        "src/mcp/result-summary.ts",
+        "src/host/stdio.ts",
+        "src/api-schemas.ts",
+        "src/executor/control-client.ts",
+        "src/executor/pipe.ts",
+        "src/executor/remote-model-settings.ts",
+        "src/executor/remote-task-manager.ts",
+        "src/task-errors.ts",
+        "src/manager/errors.ts",
+        "src/manager/normalize.ts",
+        "src/runtime/process-probe.ts",
+        "src/manager/sqlite-lifecycle-mcp-authority.ts",
+        "src/executor/**",
+        "src/cli/main.ts",
+        "src/web/**",
+        "src/runtime/cost-lab-official-dependencies.ts",
+        "src/task-list.ts",
+        "src/result-summary.ts",
+        "src/runtime/host-profile.ts",
+        "src/task-errors.ts",
+        "src/core.ts",
+        "src/interfaces.ts",
+        "src/api-schemas.ts",
+        "src/task-errors.ts",
+        "src/mcp/schemas.ts",
+        "src/result-contract.mjs"
+      ],
+      "trigger_test_files": [
+        "test/mcp-server.test.ts"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-339968B6E937A0A1",
+      "test_name": "zcode_result paging parameters reach the manager and reject partial combinations (ADR-056)",
+      "test_file": "test/mcp-server.test.ts",
+      "test_line": 727,
+      "test_type": "Integration",
+      "gate": "T2",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Memory"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/interfaces.ts",
+          "src/mcp/server.ts",
+          "src/task-errors.ts"
+        ],
+        "impact_domains": [
+          "mcp-host",
+          "manager-lifecycle",
+          "interface-contract"
+        ]
+      },
+      "trigger_source_paths": [
+        "src/mcp/main.ts",
+        "src/mcp/server.ts",
+        "src/mcp/schemas.ts",
+        "src/mcp/contracts.ts",
+        "src/mcp/result-summary.ts",
+        "src/host/stdio.ts",
+        "src/api-schemas.ts",
+        "src/executor/control-client.ts",
+        "src/executor/pipe.ts",
+        "src/executor/remote-model-settings.ts",
+        "src/executor/remote-task-manager.ts",
+        "src/task-errors.ts",
+        "src/manager/errors.ts",
+        "src/manager/normalize.ts",
+        "src/runtime/process-probe.ts",
+        "src/manager/sqlite-lifecycle-mcp-authority.ts",
+        "src/executor/**",
+        "src/cli/main.ts",
+        "src/web/**",
+        "src/runtime/cost-lab-official-dependencies.ts",
+        "src/task-list.ts",
+        "src/result-summary.ts",
+        "src/runtime/host-profile.ts",
+        "src/task-errors.ts",
+        "src/core.ts",
+        "src/interfaces.ts",
+        "src/api-schemas.ts",
+        "src/task-errors.ts",
+        "src/mcp/schemas.ts",
+        "src/result-contract.mjs"
+      ],
+      "trigger_test_files": [
+        "test/mcp-server.test.ts"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-DFC2D747AC9B6038",
+      "test_name": "an oversized okResult keeps structuredContent authoritative and bounds the text channel (P1 §3.4C)",
+      "test_file": "test/mcp-server.test.ts",
+      "test_line": 753,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -15612,10 +15870,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-D46520FBCF9A9AA1",
-      "test_name": "implicit runtime Provider selection applies the matching capability gate before session/send",
+      "test_id": "TII-18A2ED4B19C4ADC9",
+      "test_name": "implicit runtime Provider selection treats static compatibility as diagnostics before session/send",
       "test_file": "test/official-app-server-adapter.test.ts",
-      "test_line": 400,
+      "test_line": 415,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -15695,8 +15953,8 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-496D6B67565F0A42",
-      "test_name": "Coding Plan requires its verified discount capability",
+      "test_id": "TII-3EF4E581F000B950",
+      "test_name": "Coding Plan discount evidence is diagnostic, not an execution gate",
       "test_file": "test/official-app-server-provider-capability.test.ts",
       "test_line": 32,
       "test_type": "Unit",
@@ -15767,10 +16025,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-E41D2DE5F36EA6FA",
-      "test_name": "Start Plan requires offline compatibility and never depends on the Coding Plan discount",
+      "test_id": "TII-42AE57B02A730EB2",
+      "test_name": "Start Plan static compatibility is diagnostic and never depends on the Coding Plan discount",
       "test_file": "test/official-app-server-provider-capability.test.ts",
-      "test_line": 43,
+      "test_line": 42,
       "test_type": "Unit",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -15839,10 +16097,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-EF19E72529D97361",
-      "test_name": "other Providers require runtime identity without inheriting plan-specific gates",
+      "test_id": "TII-59BD14C4832F506B",
+      "test_name": "other Providers warn for an unverified manifest but do not inherit plan-specific diagnostics",
       "test_file": "test/official-app-server-provider-capability.test.ts",
-      "test_line": 62,
+      "test_line": 61,
       "test_type": "Unit",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -15911,10 +16169,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-6CB35E5A3922597D",
-      "test_name": "unverified runtime descriptors cannot satisfy either provider capability",
+      "test_id": "TII-A40BF9994B06BFCB",
+      "test_name": "safe unverified runtimes produce warnings without authorization failures",
       "test_file": "test/official-app-server-provider-capability.test.ts",
-      "test_line": 82,
+      "test_line": 81,
       "test_type": "Unit",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -15983,10 +16241,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-87223A16BE12E2A8",
-      "test_name": "experimental runtime authorization is Provider-scoped and does not claim verification",
+      "test_id": "TII-473BAE62FC65D22B",
+      "test_name": "experimental manifest annotations do not create Provider-scoped authorization requirements",
       "test_file": "test/official-app-server-provider-capability.test.ts",
-      "test_line": 93,
+      "test_line": 99,
       "test_type": "Unit",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -16055,154 +16313,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-EDDEE020B08626A4",
-      "test_name": "experimental status without a matching authorization record cannot satisfy any Provider gate",
-      "test_file": "test/official-app-server-provider-capability.test.ts",
-      "test_line": 127,
-      "test_type": "Unit",
-      "gate": "T1",
-      "runtime": "NOT_MEASURED",
-      "runtime_evidence": {
-        "actual_runtime_milliseconds": null,
-        "timeout_milliseconds": null,
-        "historical_baseline": null
-      },
-      "resource": [
-        "CPU",
-        "Memory"
-      ],
-      "dependency": {
-        "static_source_imports": [
-          "src/adapters/official-app-server-adapter.ts",
-          "src/runtime/official-app-server-runtime.ts"
-        ],
-        "impact_domains": [
-          "appserver-adapter",
-          "provider-catalog",
-          "worker-launch",
-          "zcode-path-discovery"
-        ]
-      },
-      "trigger_source_paths": [
-        "src/adapters/zcode-app-server-adapter.ts",
-        "src/adapters/official-host-adapter.ts",
-        "src/adapters/official-app-server-adapter.ts",
-        "src/runtime/official-provider-runtime-auth.ts",
-        "src/runtime/desktop-host-launch.ts",
-        "src/runtime/task-timeout.ts",
-        "src/runtime/errors.ts",
-        "src/diagnostics/failure-facts.ts",
-        "src/runtime/start-plan-secret-redactor.ts",
-        "src/runtime/account-provider.ts",
-        "src/runtime/model-routing.ts",
-        "src/runtime/model-settings.ts",
-        "src/runtime/official-provider-runtime-auth.ts",
-        "src/runtime/session-preferences.ts",
-        "src/runtime/start-plan-production-auth.ts",
-        "src/executor/production-composition.ts",
-        "src/manager/spawn-worker.ts",
-        "src/runtime/build-provenance.ts",
-        "src/runtime/child-env.ts",
-        "src/runtime/node-runtime.ts",
-        "src/worker/production-adapter-selection.ts",
-        "src/worker/worker-main.ts",
-        "src/runtime/start-plan-private-channel.ts",
-        "src/runtime/start-plan-private-frame.ts",
-        "src/runtime/start-plan-private-lease.ts",
-        "src/runtime/start-plan-handle-gate.ts",
-        "src/runtime/paths.ts",
-        "src/runtime/resolver.ts",
-        "src/runtime/child-env.ts",
-        "src/runtime/desktop-host-launch.ts",
-        "src/runtime/doctor.ts",
-        "src/runtime/node-runtime.ts",
-        "src/runtime/official-app-server-runtime.ts",
-        "src/runtime/official-runtime-authorization.ts",
-        "plugins/codex-zcode-bridge/launch-node24.mjs",
-        "tools/compatibility/**"
-      ],
-      "trigger_test_files": [
-        "test/official-app-server-provider-capability.test.ts"
-      ],
-      "stress_boundary": null
-    },
-    {
-      "test_id": "TII-E16908565C42F4F3",
-      "test_name": "experimental scope does not elevate a Provider to a verified capability label",
-      "test_file": "test/official-app-server-provider-capability.test.ts",
-      "test_line": 150,
-      "test_type": "Unit",
-      "gate": "T1",
-      "runtime": "NOT_MEASURED",
-      "runtime_evidence": {
-        "actual_runtime_milliseconds": null,
-        "timeout_milliseconds": null,
-        "historical_baseline": null
-      },
-      "resource": [
-        "CPU",
-        "Memory"
-      ],
-      "dependency": {
-        "static_source_imports": [
-          "src/adapters/official-app-server-adapter.ts",
-          "src/runtime/official-app-server-runtime.ts"
-        ],
-        "impact_domains": [
-          "appserver-adapter",
-          "provider-catalog",
-          "worker-launch",
-          "zcode-path-discovery"
-        ]
-      },
-      "trigger_source_paths": [
-        "src/adapters/zcode-app-server-adapter.ts",
-        "src/adapters/official-host-adapter.ts",
-        "src/adapters/official-app-server-adapter.ts",
-        "src/runtime/official-provider-runtime-auth.ts",
-        "src/runtime/desktop-host-launch.ts",
-        "src/runtime/task-timeout.ts",
-        "src/runtime/errors.ts",
-        "src/diagnostics/failure-facts.ts",
-        "src/runtime/start-plan-secret-redactor.ts",
-        "src/runtime/account-provider.ts",
-        "src/runtime/model-routing.ts",
-        "src/runtime/model-settings.ts",
-        "src/runtime/official-provider-runtime-auth.ts",
-        "src/runtime/session-preferences.ts",
-        "src/runtime/start-plan-production-auth.ts",
-        "src/executor/production-composition.ts",
-        "src/manager/spawn-worker.ts",
-        "src/runtime/build-provenance.ts",
-        "src/runtime/child-env.ts",
-        "src/runtime/node-runtime.ts",
-        "src/worker/production-adapter-selection.ts",
-        "src/worker/worker-main.ts",
-        "src/runtime/start-plan-private-channel.ts",
-        "src/runtime/start-plan-private-frame.ts",
-        "src/runtime/start-plan-private-lease.ts",
-        "src/runtime/start-plan-handle-gate.ts",
-        "src/runtime/paths.ts",
-        "src/runtime/resolver.ts",
-        "src/runtime/child-env.ts",
-        "src/runtime/desktop-host-launch.ts",
-        "src/runtime/doctor.ts",
-        "src/runtime/node-runtime.ts",
-        "src/runtime/official-app-server-runtime.ts",
-        "src/runtime/official-runtime-authorization.ts",
-        "plugins/codex-zcode-bridge/launch-node24.mjs",
-        "tools/compatibility/**"
-      ],
-      "trigger_test_files": [
-        "test/official-app-server-provider-capability.test.ts"
-      ],
-      "stress_boundary": null
-    },
-    {
-      "test_id": "TII-3D1E9A8F4BE64937",
+      "test_id": "TII-028E78BBDD8D0CC4",
       "test_name": "resolver verifies same-root installed assets and returns installed runtime config",
       "test_file": "test/official-app-server-runtime.test.ts",
-      "test_line": 123,
+      "test_line": 128,
       "test_type": "Integration",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -16221,8 +16335,7 @@
         "static_source_imports": [
           "src/interfaces.ts",
           "src/runtime/errors.ts",
-          "src/runtime/official-app-server-runtime.ts",
-          "src/runtime/official-runtime-authorization.ts"
+          "src/runtime/official-app-server-runtime.ts"
         ],
         "impact_domains": [
           "zcode-path-discovery",
@@ -16257,10 +16370,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-A1EC69374009C245",
+      "test_id": "TII-01A22E5AD0EC45E6",
       "test_name": "manifest distinguishes the legacy 3.18 safety boundary from full 3.19 pinning",
       "test_file": "test/official-app-server-runtime.test.ts",
-      "test_line": 146,
+      "test_line": 151,
       "test_type": "Integration",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -16279,8 +16392,7 @@
         "static_source_imports": [
           "src/interfaces.ts",
           "src/runtime/errors.ts",
-          "src/runtime/official-app-server-runtime.ts",
-          "src/runtime/official-runtime-authorization.ts"
+          "src/runtime/official-app-server-runtime.ts"
         ],
         "impact_domains": [
           "zcode-path-discovery",
@@ -16315,10 +16427,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-54706F329A6935AB",
+      "test_id": "TII-E450C92F6344E3F1",
       "test_name": "resolver honors persisted Bridge runtime settings without a process environment override",
       "test_file": "test/official-app-server-runtime.test.ts",
-      "test_line": 159,
+      "test_line": 164,
       "test_type": "Integration",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -16337,8 +16449,7 @@
         "static_source_imports": [
           "src/interfaces.ts",
           "src/runtime/errors.ts",
-          "src/runtime/official-app-server-runtime.ts",
-          "src/runtime/official-runtime-authorization.ts"
+          "src/runtime/official-app-server-runtime.ts"
         ],
         "impact_domains": [
           "zcode-path-discovery",
@@ -16373,10 +16484,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-AAE0745B3450E6E9",
+      "test_id": "TII-AF18C727C093F2F4",
       "test_name": "unsupported platforms cannot select an installed runtime",
       "test_file": "test/official-app-server-runtime.test.ts",
-      "test_line": 175,
+      "test_line": 180,
       "test_type": "Integration",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -16395,8 +16506,7 @@
         "static_source_imports": [
           "src/interfaces.ts",
           "src/runtime/errors.ts",
-          "src/runtime/official-app-server-runtime.ts",
-          "src/runtime/official-runtime-authorization.ts"
+          "src/runtime/official-app-server-runtime.ts"
         ],
         "impact_domains": [
           "zcode-path-discovery",
@@ -16431,10 +16541,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-6EF3F3D8B9BE9D27",
-      "test_name": "unknown bundle identity fails closed as OFFICIAL_RUNTIME_UNVERIFIED",
+      "test_id": "TII-707F99166724B4D4",
+      "test_name": "unknown bundle identity remains unverified but is executable",
       "test_file": "test/official-app-server-runtime.test.ts",
-      "test_line": 188,
+      "test_line": 193,
       "test_type": "Integration",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -16453,8 +16563,7 @@
         "static_source_imports": [
           "src/interfaces.ts",
           "src/runtime/errors.ts",
-          "src/runtime/official-app-server-runtime.ts",
-          "src/runtime/official-runtime-authorization.ts"
+          "src/runtime/official-app-server-runtime.ts"
         ],
         "impact_domains": [
           "zcode-path-discovery",
@@ -16489,10 +16598,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-CB916E4E38F53324",
-      "test_name": "unknown Desktop version and incompatible Node never inherit verified discount state",
+      "test_id": "TII-DE54C231C3E53285",
+      "test_name": "unknown Desktop version and incompatible Node remain diagnostics rather than execution gates",
       "test_file": "test/official-app-server-runtime.test.ts",
-      "test_line": 207,
+      "test_line": 211,
       "test_type": "Integration",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -16511,8 +16620,7 @@
         "static_source_imports": [
           "src/interfaces.ts",
           "src/runtime/errors.ts",
-          "src/runtime/official-app-server-runtime.ts",
-          "src/runtime/official-runtime-authorization.ts"
+          "src/runtime/official-app-server-runtime.ts"
         ],
         "impact_domains": [
           "zcode-path-discovery",
@@ -16547,10 +16655,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-9DED2E44E8346AC8",
-      "test_name": "mixed Desktop archive identity fails closed even when the executable and AppServer match",
+      "test_id": "TII-B788BD53DB277474",
+      "test_name": "mixed Desktop launch identity changes compatibility diagnostics without blocking startup",
       "test_file": "test/official-app-server-runtime.test.ts",
-      "test_line": 222,
+      "test_line": 228,
       "test_type": "Integration",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -16569,8 +16677,7 @@
         "static_source_imports": [
           "src/interfaces.ts",
           "src/runtime/errors.ts",
-          "src/runtime/official-app-server-runtime.ts",
-          "src/runtime/official-runtime-authorization.ts"
+          "src/runtime/official-app-server-runtime.ts"
         ],
         "impact_domains": [
           "zcode-path-discovery",
@@ -16605,10 +16712,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-7DE88BD2B76386D5",
+      "test_id": "TII-7551597CB52723B4",
       "test_name": "missing installation, relative install roots, and missing runtime-host fail closed",
       "test_file": "test/official-app-server-runtime.test.ts",
-      "test_line": 238,
+      "test_line": 247,
       "test_type": "Integration",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -16627,8 +16734,7 @@
         "static_source_imports": [
           "src/interfaces.ts",
           "src/runtime/errors.ts",
-          "src/runtime/official-app-server-runtime.ts",
-          "src/runtime/official-runtime-authorization.ts"
+          "src/runtime/official-app-server-runtime.ts"
         ],
         "impact_domains": [
           "zcode-path-discovery",
@@ -16663,10 +16769,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-AA0BB42F53B9841E",
-      "test_name": "a safe unknown installation is exposed by fingerprint but remains blocked without explicit authorization",
+      "test_id": "TII-C5B3DBC8BCB9795B",
+      "test_name": "a safe unknown installation is executable without an authorization file",
       "test_file": "test/official-app-server-runtime.test.ts",
-      "test_line": 276,
+      "test_line": 288,
       "test_type": "Integration",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -16685,8 +16791,7 @@
         "static_source_imports": [
           "src/interfaces.ts",
           "src/runtime/errors.ts",
-          "src/runtime/official-app-server-runtime.ts",
-          "src/runtime/official-runtime-authorization.ts"
+          "src/runtime/official-app-server-runtime.ts"
         ],
         "impact_domains": [
           "zcode-path-discovery",
@@ -16721,10 +16826,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-3BCD51460D1B83EC",
-      "test_name": "exact fingerprint authorization enables only experimental status and never promotes Provider capabilities",
+      "test_id": "TII-9CDA2A7402453884",
+      "test_name": "non-x64 executables remain a hard installation-safety failure",
       "test_file": "test/official-app-server-runtime.test.ts",
-      "test_line": 292,
+      "test_line": 312,
       "test_type": "Integration",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -16743,8 +16848,7 @@
         "static_source_imports": [
           "src/interfaces.ts",
           "src/runtime/errors.ts",
-          "src/runtime/official-app-server-runtime.ts",
-          "src/runtime/official-runtime-authorization.ts"
+          "src/runtime/official-app-server-runtime.ts"
         ],
         "impact_domains": [
           "zcode-path-discovery",
@@ -16779,10 +16883,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-95DC56B4FF2D01E0",
-      "test_name": "changing any fingerprinted asset invalidates a prior experimental authorization",
+      "test_id": "TII-9CE83D7DE22332A6",
+      "test_name": "signature state and publisher are diagnostic for an x64 executable",
       "test_file": "test/official-app-server-runtime.test.ts",
-      "test_line": 328,
+      "test_line": 334,
       "test_type": "Integration",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -16801,8 +16905,7 @@
         "static_source_imports": [
           "src/interfaces.ts",
           "src/runtime/errors.ts",
-          "src/runtime/official-app-server-runtime.ts",
-          "src/runtime/official-runtime-authorization.ts"
+          "src/runtime/official-app-server-runtime.ts"
         ],
         "impact_domains": [
           "zcode-path-discovery",
@@ -16837,10 +16940,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-1B3BD5466CEDB725",
-      "test_name": "malformed, unsupported-scope, and duplicate authorization records fail closed",
+      "test_id": "TII-EC4F4DE0DFFB2CD8",
+      "test_name": "hash, launch metadata, Desktop version and Node probe failures remain diagnostic",
       "test_file": "test/official-app-server-runtime.test.ts",
-      "test_line": 347,
+      "test_line": 356,
       "test_type": "Integration",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -16859,8 +16962,7 @@
         "static_source_imports": [
           "src/interfaces.ts",
           "src/runtime/errors.ts",
-          "src/runtime/official-app-server-runtime.ts",
-          "src/runtime/official-runtime-authorization.ts"
+          "src/runtime/official-app-server-runtime.ts"
         ],
         "impact_domains": [
           "zcode-path-discovery",
@@ -16895,10 +16997,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-A04EB01718884F8C",
-      "test_name": "unsafe executable identity is hard-blocked even when its fingerprint is authorized",
+      "test_id": "TII-634FC4C26A6F5BDA",
+      "test_name": "an experimental manifest annotation does not require authorization",
       "test_file": "test/official-app-server-runtime.test.ts",
-      "test_line": 409,
+      "test_line": 389,
       "test_type": "Integration",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -16917,124 +17019,7 @@
         "static_source_imports": [
           "src/interfaces.ts",
           "src/runtime/errors.ts",
-          "src/runtime/official-app-server-runtime.ts",
-          "src/runtime/official-runtime-authorization.ts"
-        ],
-        "impact_domains": [
-          "zcode-path-discovery",
-          "worker-launch"
-        ]
-      },
-      "trigger_source_paths": [
-        "src/runtime/paths.ts",
-        "src/runtime/resolver.ts",
-        "src/runtime/child-env.ts",
-        "src/runtime/desktop-host-launch.ts",
-        "src/runtime/doctor.ts",
-        "src/runtime/node-runtime.ts",
-        "src/runtime/official-app-server-runtime.ts",
-        "src/runtime/official-runtime-authorization.ts",
-        "plugins/codex-zcode-bridge/launch-node24.mjs",
-        "tools/compatibility/**",
-        "src/manager/spawn-worker.ts",
-        "src/runtime/build-provenance.ts",
-        "src/runtime/child-env.ts",
-        "src/runtime/node-runtime.ts",
-        "src/worker/production-adapter-selection.ts",
-        "src/worker/worker-main.ts",
-        "src/runtime/start-plan-private-channel.ts",
-        "src/runtime/start-plan-private-frame.ts",
-        "src/runtime/start-plan-private-lease.ts",
-        "src/runtime/start-plan-handle-gate.ts"
-      ],
-      "trigger_test_files": [
-        "test/official-app-server-runtime.test.ts"
-      ],
-      "stress_boundary": null
-    },
-    {
-      "test_id": "TII-D6A2D1216E408502",
-      "test_name": "a valid signature from an unexpected publisher is hard-blocked",
-      "test_file": "test/official-app-server-runtime.test.ts",
-      "test_line": 448,
-      "test_type": "Integration",
-      "gate": "T1",
-      "runtime": "NOT_MEASURED",
-      "runtime_evidence": {
-        "actual_runtime_milliseconds": null,
-        "timeout_milliseconds": null,
-        "historical_baseline": null
-      },
-      "resource": [
-        "CPU",
-        "Disk",
-        "Memory",
-        "Process"
-      ],
-      "dependency": {
-        "static_source_imports": [
-          "src/interfaces.ts",
-          "src/runtime/errors.ts",
-          "src/runtime/official-app-server-runtime.ts",
-          "src/runtime/official-runtime-authorization.ts"
-        ],
-        "impact_domains": [
-          "zcode-path-discovery",
-          "worker-launch"
-        ]
-      },
-      "trigger_source_paths": [
-        "src/runtime/paths.ts",
-        "src/runtime/resolver.ts",
-        "src/runtime/child-env.ts",
-        "src/runtime/desktop-host-launch.ts",
-        "src/runtime/doctor.ts",
-        "src/runtime/node-runtime.ts",
-        "src/runtime/official-app-server-runtime.ts",
-        "src/runtime/official-runtime-authorization.ts",
-        "plugins/codex-zcode-bridge/launch-node24.mjs",
-        "tools/compatibility/**",
-        "src/manager/spawn-worker.ts",
-        "src/runtime/build-provenance.ts",
-        "src/runtime/child-env.ts",
-        "src/runtime/node-runtime.ts",
-        "src/worker/production-adapter-selection.ts",
-        "src/worker/worker-main.ts",
-        "src/runtime/start-plan-private-channel.ts",
-        "src/runtime/start-plan-private-frame.ts",
-        "src/runtime/start-plan-private-lease.ts",
-        "src/runtime/start-plan-handle-gate.ts"
-      ],
-      "trigger_test_files": [
-        "test/official-app-server-runtime.test.ts"
-      ],
-      "stress_boundary": null
-    },
-    {
-      "test_id": "TII-AC30DD587F865A42",
-      "test_name": "experimental manifest candidates still require authorization and retain pending Provider status",
-      "test_file": "test/official-app-server-runtime.test.ts",
-      "test_line": 485,
-      "test_type": "Integration",
-      "gate": "T1",
-      "runtime": "NOT_MEASURED",
-      "runtime_evidence": {
-        "actual_runtime_milliseconds": null,
-        "timeout_milliseconds": null,
-        "historical_baseline": null
-      },
-      "resource": [
-        "CPU",
-        "Disk",
-        "Memory",
-        "Process"
-      ],
-      "dependency": {
-        "static_source_imports": [
-          "src/interfaces.ts",
-          "src/runtime/errors.ts",
-          "src/runtime/official-app-server-runtime.ts",
-          "src/runtime/official-runtime-authorization.ts"
+          "src/runtime/official-app-server-runtime.ts"
         ],
         "impact_domains": [
           "zcode-path-discovery",
@@ -20250,6 +20235,312 @@
       "stress_boundary": null
     },
     {
+      "test_id": "TII-9A73097DD81A016D",
+      "test_name": "a Release that never produced a Wake intent is re-notified exactly once by Recovery",
+      "test_file": "test/release-wake-recovery.test.ts",
+      "test_line": 179,
+      "test_type": "Unclassified",
+      "gate": "CONSERVATIVE_REVIEW_REQUIRED",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Memory"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/interfaces.ts",
+          "src/manager/sqlite-lifecycle-mcp-authority.ts",
+          "src/store/lifecycle-gate.ts"
+        ],
+        "impact_domains": []
+      },
+      "trigger_source_paths": [],
+      "trigger_test_files": [
+        "test/release-wake-recovery.test.ts"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-07EE93253F304E4D",
+      "test_name": "an existing executor_wake observation keeps its dedup contract and is never re-notified",
+      "test_file": "test/release-wake-recovery.test.ts",
+      "test_line": 195,
+      "test_type": "Unclassified",
+      "gate": "CONSERVATIVE_REVIEW_REQUIRED",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Memory"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/interfaces.ts",
+          "src/manager/sqlite-lifecycle-mcp-authority.ts",
+          "src/store/lifecycle-gate.ts"
+        ],
+        "impact_domains": []
+      },
+      "trigger_source_paths": [],
+      "trigger_test_files": [
+        "test/release-wake-recovery.test.ts"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-308B2C6F43FEA1A1",
+      "test_name": "repeated Recovery passes do not duplicate the recovered notification",
+      "test_file": "test/release-wake-recovery.test.ts",
+      "test_line": 229,
+      "test_type": "Unclassified",
+      "gate": "CONSERVATIVE_REVIEW_REQUIRED",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Memory"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/interfaces.ts",
+          "src/manager/sqlite-lifecycle-mcp-authority.ts",
+          "src/store/lifecycle-gate.ts"
+        ],
+        "impact_domains": []
+      },
+      "trigger_source_paths": [],
+      "trigger_test_files": [
+        "test/release-wake-recovery.test.ts"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-E2571D01C5EDC416",
+      "test_name": "two parallel Releases are both recovered independently",
+      "test_file": "test/release-wake-recovery.test.ts",
+      "test_line": 264,
+      "test_type": "Unclassified",
+      "gate": "CONSERVATIVE_REVIEW_REQUIRED",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Memory"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/interfaces.ts",
+          "src/manager/sqlite-lifecycle-mcp-authority.ts",
+          "src/store/lifecycle-gate.ts"
+        ],
+        "impact_domains": []
+      },
+      "trigger_source_paths": [],
+      "trigger_test_files": [
+        "test/release-wake-recovery.test.ts"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-E77CE8B0F258C63C",
+      "test_name": "a cancelled Result is never selected for wake recovery",
+      "test_file": "test/release-wake-recovery.test.ts",
+      "test_line": 277,
+      "test_type": "Unclassified",
+      "gate": "CONSERVATIVE_REVIEW_REQUIRED",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Memory"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/interfaces.ts",
+          "src/manager/sqlite-lifecycle-mcp-authority.ts",
+          "src/store/lifecycle-gate.ts"
+        ],
+        "impact_domains": []
+      },
+      "trigger_source_paths": [],
+      "trigger_test_files": [
+        "test/release-wake-recovery.test.ts"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-84308A07311EF380",
+      "test_name": "an unreleased or Result-less operation is not selected",
+      "test_file": "test/release-wake-recovery.test.ts",
+      "test_line": 290,
+      "test_type": "Unclassified",
+      "gate": "CONSERVATIVE_REVIEW_REQUIRED",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Memory"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/interfaces.ts",
+          "src/manager/sqlite-lifecycle-mcp-authority.ts",
+          "src/store/lifecycle-gate.ts"
+        ],
+        "impact_domains": []
+      },
+      "trigger_source_paths": [],
+      "trigger_test_files": [
+        "test/release-wake-recovery.test.ts"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-AB8EEBD778091003",
+      "test_name": "paged reads reproduce the stored canonical bytes and digest exactly",
+      "test_file": "test/result-readback-integrity.test.mjs",
+      "test_line": 13,
+      "test_type": "Unclassified",
+      "gate": "CONSERVATIVE_REVIEW_REQUIRED",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Memory"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/result-contract.ts",
+          "src/sqlite-candidate/wp6b2b1/store.ts"
+        ],
+        "impact_domains": []
+      },
+      "trigger_source_paths": [],
+      "trigger_test_files": [
+        "test/result-readback-integrity.test.mjs"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-C9FE4103210C49F9",
+      "test_name": "codepoint boundaries survive mid-multibyte slicing and the final page closes cleanly",
+      "test_file": "test/result-readback-integrity.test.mjs",
+      "test_line": 39,
+      "test_type": "Unclassified",
+      "gate": "CONSERVATIVE_REVIEW_REQUIRED",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Memory"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/result-contract.ts",
+          "src/sqlite-candidate/wp6b2b1/store.ts"
+        ],
+        "impact_domains": []
+      },
+      "trigger_source_paths": [],
+      "trigger_test_files": [
+        "test/result-readback-integrity.test.mjs"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-36090270E3E2D5DB",
+      "test_name": "out-of-range offsets and oversized page requests fail explicitly",
+      "test_file": "test/result-readback-integrity.test.mjs",
+      "test_line": 56,
+      "test_type": "Unclassified",
+      "gate": "CONSERVATIVE_REVIEW_REQUIRED",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Memory"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/result-contract.ts",
+          "src/sqlite-candidate/wp6b2b1/store.ts"
+        ],
+        "impact_domains": []
+      },
+      "trigger_source_paths": [],
+      "trigger_test_files": [
+        "test/result-readback-integrity.test.mjs"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-316EDD7F3ED71504",
+      "test_name": "a task without a committed Result has no page to read",
+      "test_file": "test/result-readback-integrity.test.mjs",
+      "test_line": 71,
+      "test_type": "Unclassified",
+      "gate": "CONSERVATIVE_REVIEW_REQUIRED",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Memory"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/result-contract.ts",
+          "src/sqlite-candidate/wp6b2b1/store.ts"
+        ],
+        "impact_domains": []
+      },
+      "trigger_source_paths": [],
+      "trigger_test_files": [
+        "test/result-readback-integrity.test.mjs"
+      ],
+      "stress_boundary": null
+    },
+    {
       "test_id": "TII-E6215E4195CD8654",
       "test_name": "the compiled worker shell rejects missing arguments without any task access",
       "test_file": "test/run-worker-task.test.ts",
@@ -20307,10 +20598,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-8618835D32BC972E",
+      "test_id": "TII-55B4FAABD7B17BCD",
       "test_name": "Runtime static evidence is fingerprint-bound, deduplicated, and never changes the manifest",
       "test_file": "test/runtime-compatibility.test.ts",
-      "test_line": 85,
+      "test_line": 83,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -20364,10 +20655,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-B8F3AF9923874DCA",
-      "test_name": "Unknown and unsafe Runtimes cannot run the protocol probe",
+      "test_id": "TII-58D5C7C263A46214",
+      "test_name": "A safe unverified Runtime can run the protocol probe while an unsafe Runtime remains blocked",
       "test_file": "test/runtime-compatibility.test.ts",
-      "test_line": 120,
+      "test_line": 118,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -20421,10 +20712,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-3EAAABE9240B7559",
-      "test_name": "Exact Fingerprint authorization permits a zero-model protocol probe without elevating providers",
+      "test_id": "TII-513C970A5A824906",
+      "test_name": "A safe installation permits a zero-model protocol probe without elevating providers",
       "test_file": "test/runtime-compatibility.test.ts",
-      "test_line": 159,
+      "test_line": 156,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -20478,10 +20769,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-6E499F5B876511A7",
+      "test_id": "TII-5F41EED560855574",
       "test_name": "Fingerprint transitions are reported once and preserve separate evidence histories",
       "test_file": "test/runtime-compatibility.test.ts",
-      "test_line": 200,
+      "test_line": 194,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -20535,10 +20826,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-8B3F3E51944E2F9D",
+      "test_id": "TII-BF54EEF689C18C99",
       "test_name": "Billing evidence remains INCONCLUSIVE unless its own verification says VERIFIED",
       "test_file": "test/runtime-compatibility.test.ts",
-      "test_line": 229,
+      "test_line": 223,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -20592,10 +20883,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-0BDB83A88EF93C97",
+      "test_id": "TII-8D8867FF944ACA8E",
       "test_name": "Coding Plan execution evidence cannot elevate Start Plan or another Provider",
       "test_file": "test/runtime-compatibility.test.ts",
-      "test_line": 266,
+      "test_line": 260,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -20649,10 +20940,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-0224D9A1C458CDD0",
+      "test_id": "TII-B93E17EFA0AFDB01",
       "test_name": "Corrupt compatibility evidence fails closed instead of becoming a compatibility claim",
       "test_file": "test/runtime-compatibility.test.ts",
-      "test_line": 306,
+      "test_line": 300,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -22956,8 +23247,8 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-C1C9655C007DE312",
-      "test_name": "auto chooses whole-task or a bounded stage without adding a tool field",
+      "test_id": "TII-350849BAAEC73329",
+      "test_name": "whole-task is the default and staged is reserved for a real gate",
       "test_file": "test/skill-policy.test.ts",
       "test_line": 35,
       "test_type": "Unit",
@@ -22990,10 +23281,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-432356A5493A09BC",
+      "test_id": "TII-00D9136F3A128753",
       "test_name": "approval, quota-stop and independent acceptance survive progressive disclosure",
       "test_file": "test/skill-policy.test.ts",
-      "test_line": 50,
+      "test_line": 53,
       "test_type": "Unit",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -23024,10 +23315,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-6232A9827C52AD44",
+      "test_id": "TII-87A7B5EF6F19B1B0",
       "test_name": "Master proactively reports known cleanup Holds and gates Recovery on authorization",
       "test_file": "test/skill-policy.test.ts",
-      "test_line": 57,
+      "test_line": 60,
       "test_type": "Unit",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -23058,10 +23349,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-DDA35F555AA29981",
+      "test_id": "TII-B1FA6C0FCDA107D2",
       "test_name": "Skill does not claim SQLite or unmerged release-intent behavior is deployed",
       "test_file": "test/skill-policy.test.ts",
-      "test_line": 77,
+      "test_line": 81,
       "test_type": "Unit",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -23092,10 +23383,44 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-40B9A28D28C4B989",
+      "test_id": "TII-DF3B111AF0958AA1",
+      "test_name": "Async Handoff is default, bounded, and uses Events for lifecycle proof",
+      "test_file": "test/skill-policy.test.ts",
+      "test_line": 91,
+      "test_type": "Unit",
+      "gate": "T1",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Memory"
+      ],
+      "dependency": {
+        "static_source_imports": [],
+        "impact_domains": [
+          "plugin-skill-metadata"
+        ]
+      },
+      "trigger_source_paths": [
+        "plugins/codex-zcode-bridge/plugin.json",
+        "plugins/codex-zcode-bridge/.codex-plugin/plugin.json",
+        "plugins/codex-zcode-bridge/skills/**",
+        "plugins/codex-zcode-bridge/README.md"
+      ],
+      "trigger_test_files": [
+        "test/skill-policy.test.ts"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-A2D71B0E62D68AC3",
       "test_name": "deterministic Async Handoff workflow separates scope, handoff, Wake and acceptance",
       "test_file": "test/skill-policy.test.ts",
-      "test_line": 157,
+      "test_line": 184,
       "test_type": "Unit",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -23126,10 +23451,44 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-0267A8D222B5DC4B",
+      "test_id": "TII-9C90061C09973F3E",
+      "test_name": "Wake readback uses native Host MCP rather than a sandboxed shell child",
+      "test_file": "test/skill-policy.test.ts",
+      "test_line": 263,
+      "test_type": "Unit",
+      "gate": "T1",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Memory"
+      ],
+      "dependency": {
+        "static_source_imports": [],
+        "impact_domains": [
+          "plugin-skill-metadata"
+        ]
+      },
+      "trigger_source_paths": [
+        "plugins/codex-zcode-bridge/plugin.json",
+        "plugins/codex-zcode-bridge/.codex-plugin/plugin.json",
+        "plugins/codex-zcode-bridge/skills/**",
+        "plugins/codex-zcode-bridge/README.md"
+      ],
+      "trigger_test_files": [
+        "test/skill-policy.test.ts"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-A3E8513BEDC61D05",
       "test_name": "Master Skill offline evaluation is paired and covers the required scenarios",
       "test_file": "test/skill-policy.test.ts",
-      "test_line": 250,
+      "test_line": 288,
       "test_type": "Unit",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -23160,10 +23519,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-9C8E43062D9930E4",
+      "test_id": "TII-25E54C20313AC4D6",
       "test_name": "Every new-version offline scenario scores at least 7/8 without a zero dimension",
       "test_file": "test/skill-policy.test.ts",
-      "test_line": 282,
+      "test_line": 320,
       "test_type": "Unit",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -54707,10 +55066,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-E626949081208642",
+      "test_id": "TII-D223C4A9AD685F15",
       "test_name": "task prompt contains the package and the output contract",
       "test_file": "test/task-prompt.test.ts",
-      "test_line": 9,
+      "test_line": 11,
       "test_type": "Unit",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -54745,10 +55104,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-80B01F2191F38D42",
-      "test_name": "the worker prompt assigns whole-task delivery ownership",
+      "test_id": "TII-0D9D679FA46EF11D",
+      "test_name": "stable worker rules precede the dynamic task identifier",
       "test_file": "test/task-prompt.test.ts",
-      "test_line": 24,
+      "test_line": 26,
       "test_type": "Unit",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -54783,10 +55142,48 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-384092BCFCA2D363",
+      "test_id": "TII-4BF5C514FA6A8E4B",
+      "test_name": "different first dispatches share a stable prefix before task-specific data",
+      "test_file": "test/task-prompt.test.ts",
+      "test_line": 42,
+      "test_type": "Unit",
+      "gate": "T1",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Memory"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/adapters/agent-report.ts",
+          "src/interfaces.ts",
+          "src/prompts/task-prompt.ts"
+        ],
+        "impact_domains": [
+          "task-prompt-and-report"
+        ]
+      },
+      "trigger_source_paths": [
+        "src/prompts/task-prompt.ts",
+        "src/adapters/agent-report.ts",
+        "src/adapters/run-outcome.ts",
+        "src/manager/normalize.ts"
+      ],
+      "trigger_test_files": [
+        "test/task-prompt.test.ts"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-6AC26823FE69E3FA",
       "test_name": "mandatory output example is valid JSON with all required fields",
       "test_file": "test/task-prompt.test.ts",
-      "test_line": 33,
+      "test_line": 59,
       "test_type": "Unit",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -54821,10 +55218,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-E1F35E351F86206C",
-      "test_name": "report-only continuation preserves candidate claims without repeating the implementation task",
+      "test_id": "TII-B06ACC7C700CF1E7",
+      "test_name": "report-only continuation preserves candidate claims and a bounded response tail without implementation instructions",
       "test_file": "test/task-prompt.test.ts",
-      "test_line": 40,
+      "test_line": 66,
       "test_type": "Unit",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -54859,10 +55256,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-13214A685003DE3B",
+      "test_id": "TII-57955125C251BDE6",
       "test_name": "empty arrays render as explicit none",
       "test_file": "test/task-prompt.test.ts",
-      "test_line": 58,
+      "test_line": 89,
       "test_type": "Unit",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -54897,10 +55294,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-EAA78C93DC78158E",
+      "test_id": "TII-CFD7B979C1062C44",
       "test_name": "an explicitly selected ZCode model is recorded in the bounded prompt",
       "test_file": "test/task-prompt.test.ts",
-      "test_line": 65,
+      "test_line": 96,
       "test_type": "Unit",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -54935,10 +55332,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-40740B1CD735BEA2",
+      "test_id": "TII-09D3C11097CA2683",
       "test_name": "accepted task context is preserved without a hidden character cap",
       "test_file": "test/task-prompt.test.ts",
-      "test_line": 70,
+      "test_line": 101,
       "test_type": "Unit",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -54973,10 +55370,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-B936CD191848A3E0",
+      "test_id": "TII-A85A5D3D2E75B1C1",
       "test_name": "task context boundary is enforced by the total prompt capacity",
       "test_file": "test/task-prompt.test.ts",
-      "test_line": 77,
+      "test_line": 108,
       "test_type": "Unit",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -55011,10 +55408,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-4719A30F24AFE4FE",
+      "test_id": "TII-E0CAB5B189C7F78B",
       "test_name": "over-capacity Chinese and Unicode context fails instead of truncating",
       "test_file": "test/task-prompt.test.ts",
-      "test_line": 90,
+      "test_line": 121,
       "test_type": "Unit",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -55049,10 +55446,124 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-4C35C5D59D1048C9",
-      "test_name": "continue prompt carries feedback, additional requirements, and prior result",
+      "test_id": "TII-8B511C9389520C64",
+      "test_name": "continue prompt keeps the task contract once and projects only actionable prior evidence",
       "test_file": "test/task-prompt.test.ts",
-      "test_line": 95,
+      "test_line": 126,
+      "test_type": "Unit",
+      "gate": "T1",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Memory"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/adapters/agent-report.ts",
+          "src/interfaces.ts",
+          "src/prompts/task-prompt.ts"
+        ],
+        "impact_domains": [
+          "task-prompt-and-report"
+        ]
+      },
+      "trigger_source_paths": [
+        "src/prompts/task-prompt.ts",
+        "src/adapters/agent-report.ts",
+        "src/adapters/run-outcome.ts",
+        "src/manager/normalize.ts"
+      ],
+      "trigger_test_files": [
+        "test/task-prompt.test.ts"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-C3ECBA9C81053AC2",
+      "test_name": "continue without a session still carries the full effective task contract",
+      "test_file": "test/task-prompt.test.ts",
+      "test_line": 170,
+      "test_type": "Unit",
+      "gate": "T1",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Memory"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/adapters/agent-report.ts",
+          "src/interfaces.ts",
+          "src/prompts/task-prompt.ts"
+        ],
+        "impact_domains": [
+          "task-prompt-and-report"
+        ]
+      },
+      "trigger_source_paths": [
+        "src/prompts/task-prompt.ts",
+        "src/adapters/agent-report.ts",
+        "src/adapters/run-outcome.ts",
+        "src/manager/normalize.ts"
+      ],
+      "trigger_test_files": [
+        "test/task-prompt.test.ts"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-C136E2204056B9F3",
+      "test_name": "later continuations do not accumulate older result text",
+      "test_file": "test/task-prompt.test.ts",
+      "test_line": 200,
+      "test_type": "Unit",
+      "gate": "T1",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Memory"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/adapters/agent-report.ts",
+          "src/interfaces.ts",
+          "src/prompts/task-prompt.ts"
+        ],
+        "impact_domains": [
+          "task-prompt-and-report"
+        ]
+      },
+      "trigger_source_paths": [
+        "src/prompts/task-prompt.ts",
+        "src/adapters/agent-report.ts",
+        "src/adapters/run-outcome.ts",
+        "src/manager/normalize.ts"
+      ],
+      "trigger_test_files": [
+        "test/task-prompt.test.ts"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-295E2604F6B7194F",
+      "test_name": "continue capacity failure is explicit rather than silently dropping constraints",
+      "test_file": "test/task-prompt.test.ts",
+      "test_line": 227,
       "test_type": "Unit",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -56638,6 +57149,262 @@
       ],
       "trigger_test_files": [
         "test/test-shard-plan.test.ts"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-B1108E96158A59FB",
+      "test_name": "ack followed by native started and completed establishes Started only from the native event",
+      "test_file": "test/turn-lifecycle-truthfulness.test.ts",
+      "test_line": 162,
+      "test_type": "Unclassified",
+      "gate": "CONSERVATIVE_REVIEW_REQUIRED",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Disk",
+        "Memory",
+        "Process"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/adapters/zcode-app-server-adapter.ts",
+          "src/interfaces.ts"
+        ],
+        "impact_domains": []
+      },
+      "trigger_source_paths": [],
+      "trigger_test_files": [
+        "test/turn-lifecycle-truthfulness.test.ts"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-B205835FB02CF176",
+      "test_name": "completed before started on a fresh session settles immediately without fabricating Started",
+      "test_file": "test/turn-lifecycle-truthfulness.test.ts",
+      "test_line": 185,
+      "test_type": "Unclassified",
+      "gate": "CONSERVATIVE_REVIEW_REQUIRED",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Disk",
+        "Memory",
+        "Process"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/adapters/zcode-app-server-adapter.ts",
+          "src/interfaces.ts"
+        ],
+        "impact_domains": []
+      },
+      "trigger_source_paths": [],
+      "trigger_test_files": [
+        "test/turn-lifecycle-truthfulness.test.ts"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-A8AB09CE5D09EF91",
+      "test_name": "started and completed in the same coalesced batch settle exactly once",
+      "test_file": "test/turn-lifecycle-truthfulness.test.ts",
+      "test_line": 204,
+      "test_type": "Unclassified",
+      "gate": "CONSERVATIVE_REVIEW_REQUIRED",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Disk",
+        "Memory",
+        "Process"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/adapters/zcode-app-server-adapter.ts",
+          "src/interfaces.ts"
+        ],
+        "impact_domains": []
+      },
+      "trigger_source_paths": [],
+      "trigger_test_files": [
+        "test/turn-lifecycle-truthfulness.test.ts"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-DF03CB9D07F59667",
+      "test_name": "a session with prior events holds a completion that races turn.started instead of dropping it",
+      "test_file": "test/turn-lifecycle-truthfulness.test.ts",
+      "test_line": 218,
+      "test_type": "Unclassified",
+      "gate": "CONSERVATIVE_REVIEW_REQUIRED",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Disk",
+        "Memory",
+        "Process"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/adapters/zcode-app-server-adapter.ts",
+          "src/interfaces.ts"
+        ],
+        "impact_domains": []
+      },
+      "trigger_source_paths": [],
+      "trigger_test_files": [
+        "test/turn-lifecycle-truthfulness.test.ts"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-FE25481528A6B231",
+      "test_name": "a missing started degrades through the bounded compat window with an explicit event and no fabricated Started",
+      "test_file": "test/turn-lifecycle-truthfulness.test.ts",
+      "test_line": 233,
+      "test_type": "Unclassified",
+      "gate": "CONSERVATIVE_REVIEW_REQUIRED",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Disk",
+        "Memory",
+        "Process"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/adapters/zcode-app-server-adapter.ts",
+          "src/interfaces.ts"
+        ],
+        "impact_domains": []
+      },
+      "trigger_source_paths": [],
+      "trigger_test_files": [
+        "test/turn-lifecycle-truthfulness.test.ts"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-368DF9F1CE275561",
+      "test_name": "turn.failed while awaiting turn.started settles the failure instead of being dropped",
+      "test_file": "test/turn-lifecycle-truthfulness.test.ts",
+      "test_line": 251,
+      "test_type": "Unclassified",
+      "gate": "CONSERVATIVE_REVIEW_REQUIRED",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Disk",
+        "Memory",
+        "Process"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/adapters/zcode-app-server-adapter.ts",
+          "src/interfaces.ts"
+        ],
+        "impact_domains": []
+      },
+      "trigger_source_paths": [],
+      "trigger_test_files": [
+        "test/turn-lifecycle-truthfulness.test.ts"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-FB8F3AC09111B388",
+      "test_name": "duplicate terminal events settle the attempt exactly once",
+      "test_file": "test/turn-lifecycle-truthfulness.test.ts",
+      "test_line": 266,
+      "test_type": "Unclassified",
+      "gate": "CONSERVATIVE_REVIEW_REQUIRED",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Disk",
+        "Memory",
+        "Process"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/adapters/zcode-app-server-adapter.ts",
+          "src/interfaces.ts"
+        ],
+        "impact_domains": []
+      },
+      "trigger_source_paths": [],
+      "trigger_test_files": [
+        "test/turn-lifecycle-truthfulness.test.ts"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-F774AFBB1A91A374",
+      "test_name": "a stale started from another turn never establishes Started for the current attempt",
+      "test_file": "test/turn-lifecycle-truthfulness.test.ts",
+      "test_line": 280,
+      "test_type": "Unclassified",
+      "gate": "CONSERVATIVE_REVIEW_REQUIRED",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Disk",
+        "Memory",
+        "Process"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/adapters/zcode-app-server-adapter.ts",
+          "src/interfaces.ts"
+        ],
+        "impact_domains": []
+      },
+      "trigger_source_paths": [],
+      "trigger_test_files": [
+        "test/turn-lifecycle-truthfulness.test.ts"
       ],
       "stress_boundary": null
     },

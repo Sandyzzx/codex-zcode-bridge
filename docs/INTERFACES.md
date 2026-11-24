@@ -1,7 +1,7 @@
 # 当前接口与兼容边界
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-22（ADR-048 默认 Event 页预算；ADR-039 终态 Result 行政释放）
+> Last updated: 2026-11-24（ADR-056 Result 回读合同：Executor 侧摘要、有界文本通道、分页全量读取）
 > Last verified: 2026-11-22，核对 PR #116 的 opt-in Result 摘要/默认完整 Result、PR #129 的完整已捕获响应 AgentReport 扫描、Event Attempt 归属、ADR-039 持久 Spawn 证据、活动 Worker 与四种终态统一绑定保护、ADR-048 默认 Event 分页和现有 SQLite/生命周期合同。
 > Verified against: Preview `3daffe476b12b3eb16cec957d18422c3ff4c775e` + terminal-admin-release candidate
 > ADR-039 Last verified: 2026-11-22，隔离 SQLite/MCP 覆盖 Receipt 保护、live descendant、活动 Worker、终止失败、completed/failed/waiting_for_master/cancelled 终态绑定、并发重复取消与 SQLite 历史校验；生产取消未重试。
@@ -41,7 +41,7 @@ Running 取消遇到 `cleanup_identity_unknown` / `cleanup_incomplete` Hold 时�
 
 [ADR-047](decisions/ADR-047-compatible-result-summary.md)：`zcode_result({task_id})` 和 `view: "full"` 返回同一完整 Result。`view: "summary"` 对不超过 2 KiB 的 JSON 直接返回原结果。更大的结果包含 `projection.omitted_fields` 和全部测试声明的 `projection.test_counts`。用 `view: "full", expected_attempt: <摘要的 attempt>` 读取缺失字段及原文。`expected_attempt` 只核对当前已提交 Result，其他 Attempt 返回 `TASK_STATE`，未提交返回 `TASK_NOT_FINISHED`。Cleanup、Hold 和 Release 通过 Status/Events 核对。
 
-安装版 Codex Host/AppServer 的 MCP 单行上限为 **16,777,216 bytes**。超过该边界的 Result 仍完整持久化在 SQLite，但当前 `view: "full"` 无法通过一次 MCP-only 响应回读；Host 会丢弃该行，不能把摘要或本地数据库存在误报为已取齐完整证据。该边界是已知 Host transport 限制，本轮不新增 Chunk、Artifact 或第二 MCP 工具。需要原文的验收在证据不可回读时必须保持未决。
+安装版 Codex Host/AppServer 的 MCP 单行上限为 **16,777,216 bytes**。超过该边界的 Result 仍完整持久化在 SQLite；[ADR-056](decisions/ADR-056-result-readback-contract.md) 起，`zcode_result` 提供可选 `offset_bytes`+`max_bytes`（成对提供，1,024–4,194,304 字节）分页读取存储的 canonical JSON：响应为 `{core identity, result_digest, page:{offset_bytes,next_offset,total_bytes,data}}`，`next_offset` 保证 UTF-8 码点边界，拼接全部 `data` 的 SHA-256 等于 `result_digest`。大 Result 由此可完整恢复；`okResult` 文本通道超过 1 MiB 时改为有界引用，structuredContent 仍为权威载荷。不能把摘要或本地数据库存在误报为已取齐完整证据。
 
 AgentReport 必须包含布尔 needs_master_decision，不补造缺失字段。非法或超限报告形成明确的基础设施失败 Result（invalid_result_payload/result_too_large），标明原报告未提交，不裁剪为成功，不重派。完整合法帧先落 SQLite，再验证 Worker close/树/资源；已提交 Result 不因晚退出被丢弃。
 

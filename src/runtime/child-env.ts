@@ -49,7 +49,6 @@ export function createWorkerEnv(source: NodeJS.ProcessEnv, options: MinimalOsEnv
     "ZCODE_BRIDGE_DEFAULT_PROVIDER_ID", "ZCODE_BRIDGE_DEFAULT_MODEL_ID",
     "ZCODE_BRIDGE_DEFAULT_REASONING_LEVEL", "ZCODE_BRIDGE_MODE",
     "ZCODE_BRIDGE_TIMEOUT_MS",
-    "ZCODE_BRIDGE_EXPERIMENTAL_RUNTIME_AUTHORIZATION_FILE",
     // Env-only browser configuration (ADR-007): non-secret strings the worker's
     // adapter reads from its own environment when no persisted setting exists.
     "ZCODE_BRIDGE_BROWSER_USE", "ZCODE_BRIDGE_BROWSER_EXECUTABLE",

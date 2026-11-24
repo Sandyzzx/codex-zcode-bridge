@@ -126,3 +126,19 @@ Host 才会自动重派发。普通执行过程中断仍保留历史与占用，
 无法确认 OS 身份、进程树、交互状态、Adapter 资源、执行副作用或 Cleanup 的场景
 仍不能自动恢复。
 这些边界是数据安全取舍，不用更激进的清理换自动恢复率。
+
+## 2026-11-24 附注：生产不可达裁定（Master 执行裁决）
+
+独立审计（2026-11-24）确认：生产 Adapter（`testOnlyFakeAdapter !== true`）在
+Recovery 的 running-无-Result 分支恒定返回 `adapter_cleanup_unverified` Hold；
+本 ADR 的自动中断重派链仅在测试 Fake Adapter 下可达。结合既定产品方向
+（不增加自动取消/自动重派，用户授权 `zcode_cancel` 是堵塞任务的主要人工恢复
+入口），裁定如下：
+
+1. 生产不启用 Result-less 自动重派；该路径继续以显式 `testOnlyFakeAdapter`
+   门禁保留，只服务合成恢复套件对身份/tree/资源/CAS 证明的验证价值。
+2. 保留必要的用户授权取消与资源释放能力不变。
+3. interruption-requeue 持久化合同（Store `interruptAndRequeue`、Attempt 中断
+   历史与 `interrupted_by_upgrade` 语义）的完整退役，连同其专属测试迁移，
+   排期至下一个整改周期单独执行；不在本轮发布末端混入恢复合同变更。
+4. 本附注是明确决策记录，不是对生产重派能力的声明。
