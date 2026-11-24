@@ -5,6 +5,8 @@ import path from 'node:path';
 import {Client} from '@modelcontextprotocol/client';
 import {StdioClientTransport} from '@modelcontextprotocol/client/stdio';
 import {canonical,MAX_TASK_RESULT_BYTES} from '../src/result-contract.mjs';
+import {createHash} from 'node:crypto';
+import {summarizeTaskResult} from '../dist-test/src/result-summary.js';
 import {fixture,running,result} from './sqlite-v14-fixture.mjs';
 
 test('maximum persisted Result survives real MCP stdio with both structuredContent and text JSON', {timeout:60000},async()=>{
@@ -18,12 +20,16 @@ test('maximum persisted Result survives real MCP stdio with both structuredConte
   const {pathToFileURL}=await import('node:url');
   const serverUrl=pathToFileURL(path.join(project,'dist-test/src/mcp/server.js')).href;
   const storeUrl=pathToFileURL(path.join(project,'src/sqlite-candidate/wp6b2b1/store.mjs')).href;
+  const summaryUrl=pathToFileURL(path.join(project,'dist-test/src/result-summary.js')).href;
   const sdkUrl=import.meta.resolve('@modelcontextprotocol/server/stdio');
   writeFileSync(serverEntry,`import {createBridgeServer} from ${JSON.stringify(serverUrl)};
 import {IsolatedAdmissionStore} from ${JSON.stringify(storeUrl)};
+import {summarizeTaskResult} from ${JSON.stringify(summaryUrl)};
 import {StdioServerTransport} from ${JSON.stringify(sdkUrl)};
 const store=IsolatedAdmissionStore.openForRecovery(${JSON.stringify(root)},{managedDataDirectory:true});
-const manager={async getResult(taskId){return store.readTaskLifecycle(taskId).result;}};
+// ADR-056: the summary projection runs Executor-side; the fake manager
+// mirrors the production contract for view='summary'.
+const manager={async getResult(taskId,view){const stored=store.readTaskLifecycle(taskId).result;return view==='summary'?summarizeTaskResult(stored):stored;}};
 await createBridgeServer({taskManager:manager}).connect(new StdioServerTransport());
 `);
   // The SDK client defaults to a 10 MiB read buffer. Prove that this consumer
@@ -51,8 +57,14 @@ await createBridgeServer({taskManager:manager}).connect(new StdioServerTransport
     const response=await client.callTool({name:'zcode_result',arguments:{task_id:value.task_id}},undefined,{timeout:30000});
     assert.equal(response.isError,undefined,stderr);
     assert.equal(response.structuredContent.zcode_output,value.zcode_output);
+    // ADR-056: the full payload stays authoritative in structuredContent;
+    // the duplicated text channel becomes a bounded reference with the
+    // SHA-256 of the omitted text instead of a second full serialization.
     assert.equal(response.content[0].type,'text');
-    assert.deepEqual(JSON.parse(response.content[0].text),response.structuredContent);
+    const textNotice=JSON.parse(response.content[0].text);
+    assert.equal(textNotice.notice,'response_too_large_for_text_channel');
+    const fullText=JSON.stringify(response.structuredContent,null,2);
+    assert.equal(textNotice.text_sha256,createHash('sha256').update(fullText,'utf8').digest('hex'));
     console.log('R2_MCP_STDIO_RESOURCE',JSON.stringify({canonical_result_bytes:MAX_TASK_RESULT_BYTES,call_tool_result_bytes:Buffer.byteLength(JSON.stringify(response)),max_rss_kib:process.resourceUsage().maxRSS}));
   }finally{await client.close();}
 });
