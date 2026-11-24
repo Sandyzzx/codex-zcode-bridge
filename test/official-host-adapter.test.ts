@@ -769,7 +769,7 @@ test("private Start Plan auth rejects a foreign turn and injects the secret only
     const adapter = makeAdapter(host, {
       resolver: { resolve: async () => config },
       homeDir: root,
-      startPlanProviderEntitled: true,
+
       resolveStartPlanRuntimeAuth: async (scope) => {
         authCalls += 1;
         assert.deepEqual(scope, {

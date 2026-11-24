@@ -10709,7 +10709,8 @@ function calculateCreditBreakdown({
   cachedInputTokens,
   outputTokens,
   offPeak,
-  actualCredits
+  actualCredits,
+  discountRatio = null
 }) {
   for (const [name, value] of Object.entries({
     uncachedInputTokens,
@@ -10721,27 +10722,28 @@ function calculateCreditBreakdown({
   if (actualCredits !== null && (!Number.isFinite(actualCredits) || actualCredits < 0)) {
     throw new Error("credit_actualCredits_invalid");
   }
+  const discountProvided = Number.isFinite(discountRatio) && discountRatio > 0 && discountRatio < 1;
   const baseCredits = (uncachedInputTokens * 2.3 + cachedInputTokens * 0.56 + outputTokens * 8) / 1e4;
   const timeMultiplier = offPeak ? 0.5 : 1;
   const expectedNormal = baseCredits * timeMultiplier;
-  const expectedWithZeroPointSixSeven = expectedNormal * 0.67;
+  const expectedDiscount = discountProvided ? expectedNormal * discountRatio : null;
   return {
     base_credits: baseCredits,
     time_multiplier: timeMultiplier,
     expected_normal: expectedNormal,
-    expected_with_0_67: expectedWithZeroPointSixSeven,
+    ...discountProvided ? { expected_with_discount: expectedDiscount, discount_ratio: discountRatio } : {},
     actual_credits: actualCredits,
     effective_extra_ratio: expectedNormal > 0 && actualCredits !== null ? actualCredits / expectedNormal : null
   };
 }
-function classifyCredit(actual, normal, withDiscount, tolerance) {
+function classifyCredit(actual, normal, withDiscount, discountRatio, tolerance) {
   if (actual === null) return "INCONCLUSIVE";
   if (actual === 0) return "ZERO_CHARGE";
   const normalMatch = Math.abs(actual - normal) <= tolerance;
-  const discountMatch = Math.abs(actual - withDiscount) <= tolerance;
+  const discountMatch = withDiscount !== null && Math.abs(actual - withDiscount) <= tolerance;
   if (normalMatch && discountMatch) return "INCONCLUSIVE";
   if (normalMatch) return "NORMAL";
-  if (discountMatch) return "EXTRA_0_67";
+  if (discountMatch) return `EXTRA_DISCOUNT_${discountRatio}`;
   return "OTHER";
 }
 function reconcileBillingSnapshots(before, after, rawUsage, options = {}) {
@@ -10823,16 +10825,18 @@ function reconcileBillingSnapshots(before, after, rawUsage, options = {}) {
     cachedInputTokens: usage.cached_input_tokens,
     outputTokens: usage.output_tokens,
     offPeak: isOffPeakShanghai(bucketInstant),
-    actualCredits: tokenMatch && (creditsObserved || settledZero) ? diff.total_credits : null
+    actualCredits: tokenMatch && (creditsObserved || settledZero) ? diff.total_credits : null,
+    discountRatio: options.discountRatio ?? null
   });
   const tolerance = options.creditTolerance ?? 5e-4;
   const creditClass = classifyCredit(
     calculation.actual_credits,
     calculation.expected_normal,
-    calculation.expected_with_0_67,
+    calculation.expected_with_discount ?? null,
+    calculation.discount_ratio ?? null,
     tolerance
   );
-  const reconciliationStatus = tokenMatch && ["NORMAL", "EXTRA_0_67", "ZERO_CHARGE"].includes(creditClass) ? "PASS" : "INCONCLUSIVE";
+  const reconciliationStatus = tokenMatch && (creditClass === "NORMAL" || creditClass === "ZERO_CHARGE" || creditClass.startsWith("EXTRA_DISCOUNT_")) ? "PASS" : "INCONCLUSIVE";
   let settlementStatus = "NO_OBSERVED_CREDIT_DELTA";
   if (!complete) settlementStatus = "INVALID_BILLING_DATA";
   else if (settledZero) settlementStatus = "ZERO_CHARGE_OBSERVED";

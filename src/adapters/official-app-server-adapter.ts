@@ -135,34 +135,18 @@ export class OfficialAppServerWorkerAdapter extends ZCodeAppServerAdapter {
             "The Official AppServer runtime identity was not verified before provider capability validation.",
           );
         }
-        if (!resolved.failure) {
-          const warning = officialProviderCapabilityWarning(descriptor, resolved.capability);
-          if (warning) {
-            try {
-              options.onEvent?.({
-                type: "official_runtime_capability_diagnostic",
-                summary: warning,
-                details: {
-                  status: descriptor.status,
-                  discount_capability: descriptor.discount_capability,
-                  start_plan_static_compatibility: descriptor.start_plan_static_compatibility,
-                  provider_capability: resolved.capability,
-                  selected_provider_id: selection.providerId,
-                  selected_model_id: selection.modelId,
-                  reason: warning,
-                },
-              });
-            } catch {
-              // Diagnostics cannot change execution.
-            }
-          }
-          return;
-        }
-        const failure = resolved.failure;
+        // ADR-058: provider/plan facts are diagnostics, never an execution
+        // gate. Registry mismatches and unverified discount/compatibility
+        // observations are reported; the official server enforces the actual
+        // plan scope at request time and its rejection surfaces as the real
+        // error through the normal turn failure path.
+        const reason = resolved.failure
+          ?? officialProviderCapabilityWarning(descriptor, resolved.capability);
+        if (!reason) return;
         try {
           options.onEvent?.({
-            type: "official_runtime_unverified",
-            summary: failure,
+            type: "official_runtime_capability_diagnostic",
+            summary: reason,
             details: {
               status: descriptor.status,
               discount_capability: descriptor.discount_capability,
@@ -170,13 +154,12 @@ export class OfficialAppServerWorkerAdapter extends ZCodeAppServerAdapter {
               provider_capability: resolved.capability,
               selected_provider_id: selection.providerId,
               selected_model_id: selection.modelId,
-              reason: failure,
+              reason,
             },
           });
         } catch {
-          // Observation cannot alter the fail-closed decision.
+          // Diagnostics cannot change execution.
         }
-        throw new BridgeError("provider_config_invalid", failure);
       },
     });
   }

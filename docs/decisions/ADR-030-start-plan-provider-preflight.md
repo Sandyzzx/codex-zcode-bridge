@@ -3,6 +3,7 @@
 > Applicability: ACTIVE, AMENDED — Preview.3 的已批准合同为每个 Start Plan Issuer/Task 一次权威 Billing GET；`issue()` 复用完全相同的 account/provider/model/device/credential 绑定 verdict，身份变化拒绝复用，需新任务重新授权。原第 5 条“交付前第二次新鲜 Billing”已被任务级 verdict 绑定取代；fail-closed、Private Lease/HANDLE/ACK 与不跨任务缓存语义不变。来源：PR #71 / 当前 PROJECT_STATE；不改变原历史正文。
 
 > Status: DECISION
+> Applicability (2026-11-24, ADR-058): Billing verdicts no longer gate admission or execution; the official server enforces entitlement and its rejection is the real error. The preflight/Billing-verdict machinery remains as evidence and official-auth plumbing only.
 > Date: 2026-11-07
 > Decision: ACCEPTED — Owner 授权 Preview 2.0 Start Plan Provider 就绪性收口
 > Observed runtime: ZCode CLI/AppServer 0.17.1

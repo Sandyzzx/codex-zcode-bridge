@@ -345,7 +345,9 @@ test("real verification is explicit, reconciles mocked before/after billing, and
     }
     assert.equal(record.status, "SUCCEEDED", JSON.stringify(record.error));
     assert.equal(record.reconciliation.token_match, true);
-    assert.equal(record.reconciliation.credit_class, "EXTRA_0_67");
+    assert.equal(record.reconciliation.credit_class, "OTHER");
+    assert.equal(record.reconciliation.billing_reconciliation, "INCONCLUSIVE");
+    assert.equal(record.reconciliation.calculation.effective_extra_ratio, 0.67);
     assert.equal(record.request_usage.access_token, "<redacted>");
     assert.equal(record.runtime_evidence.temporary_path, "<redacted-path>");
     assert.equal(runnerCalls, 1);
@@ -432,7 +434,9 @@ test("failed runner evidence is retained and still reconciled for billing attrib
     assert.equal(record.request_usage.total_tokens, 13_402);
     assert.equal(record.runtime_evidence.workspace_evidence.content_match, false);
     assert.equal(record.reconciliation.token_match, true);
-    assert.equal(record.reconciliation.credit_class, "EXTRA_0_67");
+    assert.equal(record.reconciliation.credit_class, "OTHER");
+    assert.equal(record.reconciliation.billing_reconciliation, "INCONCLUSIVE");
+    assert.equal(record.reconciliation.calculation.effective_extra_ratio, 0.67);
     assert.equal(observedTaskMode, "code_edit");
     assert.equal(captureCalls, 2);
   } finally {
@@ -595,7 +599,7 @@ test("persisted legacy history cannot confirm a charge from padded display data"
       schema_version: 1,
       hour: "10:00:00",
       billing_reconciliation: "PASS",
-      credit_class: "EXTRA_0_67",
+      credit_class: "OTHER",
       calculation: { actual_credits: 0.7705, effective_extra_ratio: 0.67 },
     },
   }]);

@@ -290,22 +290,36 @@ test("Shanghai timezone and peak windows use Asia/Shanghai", () => {
   assert.equal(isOffPeakShanghai(new Date("2026-11-21T07:00:00.000Z")), true);
 });
 
-test("credit calculation separates base, time multiplier and 0.67", () => {
+test("credit calculation separates base, time multiplier and an explicitly supplied discount expectation", () => {
   const calculation = calculateCreditBreakdown({
     cachedInputTokens: 64,
     uncachedInputTokens: 13_291,
     outputTokens: 47,
     offPeak: true,
     actualCredits: 1.03786819,
+    discountRatio: 0.67,
   });
   assert.equal(calculation.base_credits, 3.098114);
   assert.equal(calculation.time_multiplier, 0.5);
   assert.equal(calculation.expected_normal, 1.549057);
-  assert.equal(calculation.expected_with_0_67, 1.03786819);
+  assert.equal(calculation.expected_with_discount, 1.03786819);
+  assert.equal(calculation.discount_ratio, 0.67);
   assert.equal(calculation.effective_extra_ratio, 0.67);
+  // ADR-058: no campaign ratio is assumed by default; the effective ratio is
+  // always measured from the actual charge.
+  const withoutDiscount = calculateCreditBreakdown({
+    cachedInputTokens: 64,
+    uncachedInputTokens: 13_291,
+    outputTokens: 47,
+    offPeak: true,
+    actualCredits: 1.03786819,
+  });
+  assert.equal(withoutDiscount.expected_with_discount, undefined);
+  assert.equal(withoutDiscount.discount_ratio, undefined);
+  assert.equal(withoutDiscount.effective_extra_ratio, 0.67);
 });
 
-test("reconciliation identifies normal and 0.67 credits without inventing request attribution", () => {
+test("reconciliation identifies normal credits without inventing request attribution; a discount expectation applies only when supplied", () => {
   const usage = {
     model: "GLM-5.3-Flash",
     timestamp: "2026-11-17T02:00:00.000Z",
@@ -341,8 +355,13 @@ test("reconciliation identifies normal and 0.67 credits without inventing reques
       outputCredits: 0.012596,
     }),
   );
-  const discounted = reconcileBillingSnapshots(before, discountedAfter, usage);
-  assert.equal(discounted.credit_class, "EXTRA_0_67");
+  // ADR-058: without a supplied campaign ratio the observed charge stays
+  // unclassified rather than being matched against a fixed 0.67 default.
+  const discountedNoRatio = reconcileBillingSnapshots(before, discountedAfter, usage);
+  assert.equal(discountedNoRatio.credit_class, "OTHER");
+  assert.equal(discountedNoRatio.billing_reconciliation, "INCONCLUSIVE");
+  const discounted = reconcileBillingSnapshots(before, discountedAfter, usage, { discountRatio: 0.67 });
+  assert.equal(discounted.credit_class, "EXTRA_DISCOUNT_0.67");
   assert.equal(discounted.billing_reconciliation, "PASS");
 
   const peakUsage = {

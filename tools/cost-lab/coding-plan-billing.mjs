@@ -489,6 +489,7 @@ export function calculateCreditBreakdown({
   outputTokens,
   offPeak,
   actualCredits,
+  discountRatio = null,
 }) {
   for (const [name, value] of Object.entries({
     uncachedInputTokens,
@@ -500,29 +501,33 @@ export function calculateCreditBreakdown({
   if (actualCredits !== null && (!Number.isFinite(actualCredits) || actualCredits < 0)) {
     throw new Error("credit_actualCredits_invalid");
   }
+  // ADR-058: no fixed promotional multiplier is assumed. A discount
+  // expectation exists only when the caller supplies the observed campaign
+  // ratio; the effective ratio is always measured from actual credits.
+  const discountProvided = Number.isFinite(discountRatio) && discountRatio > 0 && discountRatio < 1;
   const baseCredits =
     (uncachedInputTokens * 2.3 + cachedInputTokens * 0.56 + outputTokens * 8) / 10_000;
   const timeMultiplier = offPeak ? 0.5 : 1;
   const expectedNormal = baseCredits * timeMultiplier;
-  const expectedWithZeroPointSixSeven = expectedNormal * 0.67;
+  const expectedDiscount = discountProvided ? expectedNormal * discountRatio : null;
   return {
     base_credits: baseCredits,
     time_multiplier: timeMultiplier,
     expected_normal: expectedNormal,
-    expected_with_0_67: expectedWithZeroPointSixSeven,
+    ...(discountProvided ? { expected_with_discount: expectedDiscount, discount_ratio: discountRatio } : {}),
     actual_credits: actualCredits,
     effective_extra_ratio: expectedNormal > 0 && actualCredits !== null ? actualCredits / expectedNormal : null,
   };
 }
 
-function classifyCredit(actual, normal, withDiscount, tolerance) {
+function classifyCredit(actual, normal, withDiscount, discountRatio, tolerance) {
   if (actual === null) return "INCONCLUSIVE";
   if (actual === 0) return "ZERO_CHARGE";
   const normalMatch = Math.abs(actual - normal) <= tolerance;
-  const discountMatch = Math.abs(actual - withDiscount) <= tolerance;
+  const discountMatch = withDiscount !== null && Math.abs(actual - withDiscount) <= tolerance;
   if (normalMatch && discountMatch) return "INCONCLUSIVE";
   if (normalMatch) return "NORMAL";
-  if (discountMatch) return "EXTRA_0_67";
+  if (discountMatch) return `EXTRA_DISCOUNT_${discountRatio}`;
   return "OTHER";
 }
 
@@ -613,13 +618,19 @@ export function reconcileBillingSnapshots(before, after, rawUsage, options = {})
     outputTokens: usage.output_tokens,
     offPeak: isOffPeakShanghai(bucketInstant),
     actualCredits: tokenMatch && (creditsObserved || settledZero) ? diff.total_credits : null,
+    discountRatio: options.discountRatio ?? null,
   });
   const tolerance = options.creditTolerance ?? 0.0005;
   const creditClass = classifyCredit(
-    calculation.actual_credits, calculation.expected_normal, calculation.expected_with_0_67, tolerance,
+    calculation.actual_credits,
+    calculation.expected_normal,
+    calculation.expected_with_discount ?? null,
+    calculation.discount_ratio ?? null,
+    tolerance,
   );
   const reconciliationStatus =
-    tokenMatch && ["NORMAL", "EXTRA_0_67", "ZERO_CHARGE"].includes(creditClass)
+    tokenMatch && (creditClass === "NORMAL" || creditClass === "ZERO_CHARGE"
+      || creditClass.startsWith("EXTRA_DISCOUNT_"))
       ? "PASS"
       : "INCONCLUSIVE";
   let settlementStatus = "NO_OBSERVED_CREDIT_DELTA";

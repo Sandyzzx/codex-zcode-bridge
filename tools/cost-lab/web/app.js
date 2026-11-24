@@ -92,13 +92,13 @@ function renderEnvironment(environment) {
   const zcode = environment.zcode ?? {};
   const runtimePassed = zcode.runtime_status === "OFFICIAL_RUNTIME_VERIFIED";
   const runtimeExperimental = zcode.runtime_status === "OFFICIAL_RUNTIME_EXPERIMENTAL";
-  const discountPassed = zcode.discount_status === "OFFICIAL_DISCOUNT_VERIFIED";
+  const discountObserved = zcode.discount_status === "OFFICIAL_DISCOUNT_VERIFIED";
   $("#dash-runtime").textContent = runtimePassed
     ? "VERIFIED"
     : runtimeExperimental
       ? "EXPERIMENTAL"
       : "UNVERIFIED";
-  $("#dash-discount").textContent = discountPassed ? "0.67 VERIFIED" : "NOT VERIFIED";
+  $("#dash-discount").textContent = discountObserved ? "OBSERVED" : "NOT OBSERVED";
   $("#dash-billing").textContent = environment.billing_reader?.status ?? "UNKNOWN";
   $("#runtime-version").textContent = zcode.version ?? "UNVERIFIED";
   $("#runtime-version").className = `tag ${runtimePassed ? "pass" : runtimeExperimental ? "experimental" : "fail"}`;
@@ -283,13 +283,16 @@ function renderVerificationResult(record) {
     statusTag(reconciliation.billing_reconciliation ?? "INCONCLUSIVE"),
   );
   const metrics = element("div", "metric-grid");
+  const discountExpectation = calculation.expected_with_discount !== undefined
+    ? [metric("Expected with discount " + calculation.discount_ratio, formatNumber(calculation.expected_with_discount))]
+    : [];
   metrics.append(
     metric(
       "Actual credits",
       Number.isFinite(actualCredits) ? formatNumber(actualCredits) : creditDisplay,
     ),
     metric("Expected normal", formatNumber(calculation.expected_normal)),
-    metric("Expected with 0.67", formatNumber(calculation.expected_with_0_67)),
+    ...discountExpectation,
     metric(
       "Effective extra ratio",
       formatExtraRatio({
@@ -309,7 +312,7 @@ function renderVerificationResult(record) {
   panel.append(title, metrics);
   const details = element("dl", "fact-grid");
   details.append(
-    fact("Time multiplier", formatNumber(calculation.time_multiplier), "off-peak 0.5 is separate from campaign 0.67"),
+    fact("Time multiplier", formatNumber(calculation.time_multiplier), "off-peak 0.5 is separate from any campaign multiplier"),
     fact(
       "Settlement",
       settlementStatus,
