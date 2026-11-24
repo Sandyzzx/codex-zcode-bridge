@@ -2,8 +2,8 @@
 
 > Status: AUTHORITATIVE
 > Last updated: 2026-11-24（ADR-054 授权机制退役；Task Console 自动启动开关）
-> Last verified: 2026-11-21，核对 v13 只读拒绝、未完成升级 Marker 保留、v14 Fresh/Existing 启动和 v13 CLI/Schema 分发删除；真实模型、OAuth 与 Billing E2E 为 `NOT_RUN`。
-> Verified against: `codex/final-integration-20261124`（ADR-054 适配集成后逐项核对 Resolver/factory/console/cost-lab 源码）
+> Last verified: 2026-11-24，核对 v13 只读拒绝、未完成升级 Marker 保留、v14 Fresh/Existing 启动、v13 CLI/Schema 分发删除与 `ZCODE_BRIDGE_TASK_CONSOLE` 的持久配置路径（单测 + Cost Lab 全量 90/90）；真实模型、OAuth 与 Billing E2E 为 `NOT_RUN`。
+> Verified against: `codex/preview16-async-handoff-20261124`（Preview.16 candidate；ADR-054 适配集成后核对 Resolver/factory/console/cost-lab 源码，并核对 Console 自动启动开关）
 
 当前生产路径是 `node <installed-runtime>/resources/glm/zcode.cjs app-server --stdio --surface desktop`，不是历史 CLI `--prompt --json`。任务 Adapter 与模型目录探测共用 `createInstalledOfficialHostSessionFactory` 的同一启动合同；安装版兼容性由 `OfficialAppServerRuntimeResolver` 精确校验，配置项与用户设置方法见仓库 README。
 

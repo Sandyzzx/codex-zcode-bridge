@@ -118,7 +118,7 @@ Operation 的 delivery 不得用另一个 `delivery_id` 覆盖。
 - 定向实现测试：`PASS`（Owner Binding 持久化/隔离/Continue/重开、
   Auto Wake 默认开启与关闭、无 `wake-policy.json` 的 Queue、ACK 与 Turn
   Started 分离、Late Wake 不改写历史）。
-- 完整 `npm test`：`PASS`（1131 tests / 1129 pass / 2 platform skip /
+- 完整 `npm test`：`PASS`（1132 tests / 1130 pass / 2 platform skip /
   0 fail，2026-11-24；含 schema-integrity 并发写锁与真实 Chromium
   Web Console）。
 - Preview.15 库隔离副本无感升级：`PASS`（39 Tasks / 42 Attempts / 482

@@ -2,8 +2,8 @@
 
 > Status: AUTHORITATIVE
 > Last updated: 2026-11-24（Preview.16 candidate；ADR-059 Owner Binding、安装即生效 Auto Wake、Late Wake Compensation、Console receipt link）
-> Last verified: 2026-11-24，核对 Preview.15 发布记录、Preview.16 实现、隔离 MCP `_meta.threadId` 探针与真实 Host Completion Wake E2E。Owner Binding 持久化、A/B/C 并发隔离、无 `wake-policy.json` 的 Queue、ACK/Turn Started 分离、Late Wake 不改写历史与 Preview.15 库无感升级为 `PASS`；完整 `npm test` 为 `PASS`（1131 tests / 1129 pass / 2 platform skip / 0 fail）。真实安装制品 + 真实 Codex Host + 真实 ZCode Runtime 的非空工程 Auto Wake 闭环为 `PASS — REAL`（Thread `01a20dfc-c2c0-77f0-9b38-5bf4caed941d`，Queue 触发新 Turn `01a20e01-495a-7d43-98cc-e9febbc75966`）。严格 C/D、Desktop fully exited 与 Official Runtime provenance 仍为 `NOT_RUN`。
-> Verified against: `codex/preview16-async-handoff-20261124@fc9fb6758`（合并后更新为 Preview 合并提交）。
+> Last verified: 2026-11-24，核对 Preview.15 发布记录、Preview.16 实现、隔离 MCP `_meta.threadId` 探针与真实 Host Completion Wake E2E。Owner Binding 持久化、A/B/C 并发隔离、无 `wake-policy.json` 的 Queue、ACK/Turn Started 分离、Late Wake 不改写历史与 Preview.15 库无感升级为 `PASS`；完整 `npm test` 为 `PASS`（1132 tests / 1130 pass / 2 platform skip / 0 fail）。真实安装制品 + 真实 Codex Host + 真实 ZCode Runtime 的非空工程 Auto Wake 闭环为 `PASS — REAL`（Thread `01a20dfc-c2c0-77f0-9b38-5bf4caed941d`，Queue 触发新 Turn `01a20e01-495a-7d43-98cc-e9febbc75966`）。严格 C/D、Desktop fully exited 与 Official Runtime provenance 仍为 `NOT_RUN`。
+> Verified against: `codex/preview16-async-handoff-20261124`（Preview.16 candidate；合并后更新为 Preview 合并提交）。
 
 当前发布状态：
 
