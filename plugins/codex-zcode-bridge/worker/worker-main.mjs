@@ -28737,7 +28737,7 @@ var init_zcode_app_server_adapter = __esm({
             if (upgrade === "yes") entry.acceptedEvidence = "yes";
           }
           if (turnId) entry.boundTurnIds.add(turnId);
-          const terminalTurnEvent = type === "turn.completed" || type === "turn.failed";
+          const terminalTurnEvent = (type === "turn.completed" || type === "turn.failed") && entry.sendAcknowledged;
           if (!entry.acceptingTurn && !(type === "turn.started" && entry.pendingCompletion)) return;
           if (entry.awaitingTurnStart && type !== "turn.started" && !terminalTurnEvent) return;
           if (entry.turnId && turnId && entry.turnId !== turnId) return;

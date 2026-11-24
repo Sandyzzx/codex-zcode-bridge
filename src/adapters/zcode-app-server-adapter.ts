@@ -2164,12 +2164,19 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       }
       if (turnId) entry.boundTurnIds.add(turnId);
       // Terminal events and the binding turn.started must survive the progress
-      // filters below. Dropping a terminal while turn binding is still pending
-      // (session with prior events, or a runtime that emits completed/failed
-      // before started) would strand a finished turn until timeout whenever
-      // replay cannot backfill turn.started; dropping a late turn.started would
-      // make the held-completion strict settle path unreachable.
-      const terminalTurnEvent = type === "turn.completed" || type === "turn.failed";
+      // filters below once this attempt's send has been acknowledged. Dropping
+      // a terminal while turn binding is still pending (a session with prior
+      // events, or a runtime that emits completed/failed before started) would
+      // strand a finished turn until timeout whenever replay cannot backfill
+      // turn.started; dropping a late turn.started would make the
+      // held-completion strict settle path unreachable. The discriminator is
+      // the observed send ACK, not merely a written send: the runtime answers
+      // session/send before any turn activity for that send, so a terminal
+      // processed before the ACK — a subscribe snapshot or replay baseline
+      // from a previous turn — keeps the old drop semantics regardless of
+      // chunk timing. Holding such a pre-ACK event would bind this attempt to
+      // a stale completion and its seq could shadow the real turn.started.
+      const terminalTurnEvent = (type === "turn.completed" || type === "turn.failed") && entry.sendAcknowledged;
       if (!entry.acceptingTurn && !(type === "turn.started" && entry.pendingCompletion)) return;
       if (entry.awaitingTurnStart && type !== "turn.started" && !terminalTurnEvent) return;
       if (entry.turnId && turnId && entry.turnId !== turnId) return;
