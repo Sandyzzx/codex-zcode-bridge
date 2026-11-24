@@ -1,7 +1,7 @@
 # Bridge Async Execution Architecture v1
 
-> Status: IMPLEMENTED — PREVIEW.14 RELEASE CANDIDATE；loaded/idle trusted-local Wake 为 `PASS — REAL`，严格 C/D、Desktop fully exited、Official Runtime provenance 与非空工程交付为 `NOT_RUN`
-> Decision status: [ADR-045](../decisions/ADR-045-async-executor-ownership.md) = ACCEPTED；[ADR-051](../decisions/ADR-051-executor-wake-delivery.md) = ACCEPTED；[ADR-052](../decisions/ADR-052-async-master-handoff.md) = ACCEPTED；本文档记录目标合同与当前实现边界
+> Status: IMPLEMENTED — PREVIEW.16 CANDIDATE；Owner Binding、安装即生效的 Auto Wake、Console receipt link 已实现；真实 ZCode Desktop Host Completion Wake E2E、严格 C/D、Desktop fully exited、Official Runtime provenance 与非空工程交付为 `NOT_RUN`
+> Decision status: [ADR-045](../decisions/ADR-045-async-executor-ownership.md) = ACCEPTED；[ADR-051](../decisions/ADR-051-executor-wake-delivery.md) = ACCEPTED（授权门禁部分由 ADR-059 替代）；[ADR-052](../decisions/ADR-052-async-master-handoff.md) = ACCEPTED；[ADR-059](../decisions/ADR-059-owner-binding-and-installed-auto-wake.md) = ACCEPTED；本文档记录目标合同与当前实现边界
 > Date: 2026-11-23（Asia/Shanghai）
 > Baseline: `origin/preview` `89ca334802f6e5c1e88b8284863f8151bf4be134`（ADR-055 审计基线）；historical full-matrix candidate `c75c34330287266702cab5949662bf897b74ed5a`；PR 2 base `f330b511270934fa40014006333aa7747dad684c`
 > Evidence classification: 文中逐项标注 `VERIFIED`、`INFERRED`、`UNVERIFIED`；证据见 [PR 2 report](../reports/async-executor-pr2-20261122.md)、[PR 2.5 report](../reports/async-executor-pr2.5-20261122.md)、[PR 5 report](../reports/async-executor-pr5-20261122.md)、[PR 6 report](../reports/async-executor-pr6-20261122.md)、[统一 RC report](../reports/async-executor-release-candidate-20261122.md)、[Web real-process E2E](../reports/async-executor-web-real-host-e2e-20261122.md) 与 [trusted-local Wake evidence](../reports/trusted-local-wake-20261123.md)
@@ -177,10 +177,16 @@ Named pipe 仍可作为客户端连接提示，但**不是所有权证据**。SQ
 | 客户端 | 职责 | 禁止 |
 |---|---|---|
 | MCP | 派发、查询、Continue、Cancel、交互回复的协议适配 | 不创建 Manager，不因连接断开取消 Task |
-| CLI | `list/status/events/result/cancel/reply/wake-authorize` 管理客户端，以及 `executor start/status/stop` | 不直接打开可写 Store，不实现恢复；`wake-authorize` 只写精确 Owner policy |
+| CLI | `list/status/events/result/cancel/reply/console-url` 管理客户端，以及 `executor start/status/stop` | 不直接打开可写 Store，不实现恢复；`console-url` 只返回经 live session/lease 验证的实际地址 |
 | Web | 本地任务可视化、Deep Link、状态通知；经干净发现记录复用同一 Console；仅 loopback + Origin/CSRF | 不创建 Task、不调用模型、不写 SQLite、不暴露 Shell/SQLite/文件接口、不控制 Executor 生命周期 |
 
 公共 MCP 工具名和 Schema 保持不变；IPC 是 Bridge 内部协议，不新增公共 MCP 工具。
+
+Owner Thread 只来自 MCP handler 的 `ctx.mcpReq._meta.threadId`，不是
+TaskPackage 字段。Task、首个 Attempt 与 Owner Binding 在同一 SQLite 事务
+内写入；Continue 保持 Task 级归属。`zcode_task` / `zcode_continue` 的
+receipt 在受理后附加经 Executor lease 与 live `/api/session` 验证的
+`console_link`；链接失败不撤销已受理 Task。
 
 #### 3.2.1 Task Console 发现与 Deep Link
 
@@ -383,9 +389,10 @@ Recovery；真实 Desktop UI acknowledgement 仍是 `UNKNOWN`。
 | Web Console 发现 | 同 Authority Root 二进程复用同一实际 URL；异常/未知/lease mismatch fail closed；发现文件不是 Task/Result Authority |
 | Web Task Deep Link | `task_id` 自动选择、URL 同步、刷新保留、跨页 summary 可取、URL 不含 CSRF/凭据 |
 | Web 未完成 Result | Status/Events 独立显示；`TASK_NOT_FINISHED` 只显示 pending，不掩盖其他有效证据 |
-| Wake 授权入口 | 当前 Attempt 校验后排他创建 `wake-policy.json`；已有策略不覆盖 |
-| trusted-local Wake | 仅显式 Owner policy；精确 Task/Attempt/Workspace、Result/Cleanup/Release、一次性 intent 后单次 Queue；当前模型风险由 Owner 接受 |
-| trusted-local Turn 未知 | Queue ACK 后仍记录 `trusted_local_turn_start_unverified`，不把 Web fallback 当成 Queue 重试 |
+| Wake 授权 | 无 `wake-policy.json`、Owner Grant、模型/Provider/Effort 匹配、Control Socket 或 loaded/idle 前置门禁；安装并启用插件即接受本机 Auto Wake，默认开启，可在 WebUI Settings 关闭 |
+| Auto Wake | Binding 为 `bound` 时 Result/Cleanup/Release 后写 `intent` 并调用一次官方 `codex queue`；Binding 缺失只写 `web_notify` + `owner_thread_unavailable`，不得使用 Runtime Session ID |
+| Queue / Turn 语义 | `queued` 含 `queue_message_id` 但 ACK 不等于 `turn_started`；观察到新 in-progress Turn 才记 `turn_started`，否则保留 Queue 事实并写 `turn_start_unverified` Web fallback |
+| Late Wake Compensation | 历史仅 `web_notify` 的已释放 Operation 可写独立 `executor_late_wake_compensation` 事实；不重跑 Worker，不改写历史，不批量唤醒 |
 | Web Notify 可发现性 | CLI/Web 从现有 SQLite `executor_wake` Event 投影 state/reason/at，不新增通知权威 |
 | Async Handoff 决策合同 | 授权、Scope、Mechanism、受理、未知回执、Pending、Turn end、Wake 与验收分别判定 |
 | Async Handoff 负例 | 断连/Turn end 不取消；Wake identity mismatch 不验收；静默合同测试不能冒充真实模型遵循 |

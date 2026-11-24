@@ -52,10 +52,29 @@ const testReportSchema = z.object({
   details: z.string().optional(),
 });
 
+const taskOwnerBindingSchema = z.object({
+  task_id: z.string(),
+  state: z.enum(["bound", "unavailable"]),
+  owner_thread_id: z.string().nullable(),
+  source: z.enum(["mcp_meta", "mcp_meta_missing", "mcp_meta_invalid", "non_host_admission", "legacy_unavailable"]),
+  bound_at: z.string().nullable(),
+  reason_code: z.literal("owner_thread_unavailable").nullable(),
+});
+
+const taskConsoleLinkSchema = z.object({
+  available: z.boolean(),
+  web_url: z.string().nullable(),
+  console_id: z.string().nullable(),
+  console_reused: z.boolean().nullable(),
+  reason_code: z.string().nullable(),
+});
+
 export const taskReceiptSchema = z.object({
   task_id: z.string(),
   status: z.enum(["queued", "running"]),
   created_at: z.string(),
+  owner_binding: taskOwnerBindingSchema.optional(),
+  console_link: taskConsoleLinkSchema.optional(),
 });
 
 const taskObservationSchema = z.object({
@@ -122,6 +141,7 @@ export const taskStatusRecordSchema = z.object({
   observation: taskObservationSchema.optional(),
   execution_observation: executionObservationSchema.optional(),
   dispatch_blocker: dispatchBlockerSchema.optional(),
+  owner_binding: taskOwnerBindingSchema.optional(),
 });
 
 export const taskAttentionSnapshotSchema = z.strictObject({

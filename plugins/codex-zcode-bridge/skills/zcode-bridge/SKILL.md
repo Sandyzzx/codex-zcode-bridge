@@ -30,7 +30,7 @@ description: 用户明确要求使用 ZCode/Codex ZCode Bridge、查询或继续
 - Single Dispatch 只表示一次有边界的委派，不是第三种派发方式，也不是 MCP、TaskPackage 或运行时字段。
 - 不按文件数、代码规模、执行时间、Token 消耗、模型名称、价格或能力未知机械拆分，也不为普通工程新增确认点。同一任务返工保持原范围；新独立目标重新判断授权和策略。
 
-Task Scope 与 Handoff Mechanism 分开决定。`whole_task`/`staged` 只定义交付和验收边界；`async_wake`/`foreground` 只定义当前 Master Turn 是否等待。它们都不是 MCP/TaskPackage 字段。只有 Task 已可靠受理且没有已知 Pending Interaction 时才可采用 Async Handoff；Queue 路径还须核实 Executor、Thread 绑定和一次性 Wake 授权。默认 `strict` 模式必须由 Executor 取得同 Owner 实时 loaded/idle 与模型配置证据；显式 `trusted-local` Owner 策略才允许在没有私有 control socket 时提交一次 Queue。trusted-local Adapter 本身不得声称模型匹配或 loaded 状态已证明；Turn Started、Master Result readback 与 Desktop Visible 只能在独立观察有证据时分别报告。仅 Thread/Wake 绑定不可用时使用 Web Notify 回退并结束 Turn；回执未知、启动错误、清理未决或 Authority/授权边界无法确认时留在当前 Turn 或保持未决，不得宣称交接完成。
+Task Scope 与 Handoff Mechanism 分开决定。`whole_task`/`staged` 只定义交付和验收边界；`async_wake`/`foreground` 只定义当前 Master Turn 是否等待。它们都不是 MCP/TaskPackage 字段。只有 Task 已可靠受理且没有已知 Pending Interaction 时才可采用 Async Handoff。Auto Wake 由安装并启用插件即生效，默认开启，不需要 `wake-policy.json`、Owner Grant 或逐任务授权；Executor 只使用受理时持久化的可信 Owner Thread，并在 Release 后调用一次官方 Queue。用户可在 WebUI Settings 关闭 Auto Wake，此时只保留 Web Notify。Queue ACK 不等于 Turn Started；Turn Started、Master Result readback 与 Desktop Visible 只能在独立观察有证据时分别报告。仅 Owner Binding 不可用（`owner_thread_unavailable`）或 Auto Wake 关闭时使用 Web Notify 回退并结束 Turn；回执未知、启动错误、清理未决或 Authority 边界无法确认时留在当前 Turn 或保持未决，不得宣称交接完成。
 
 ## 执行与验收边界
 
@@ -40,7 +40,7 @@ Task Scope 与 Handoff Mechanism 分开决定。`whole_task`/`staged` 只定义�
 - Worker 不得擅自决定重大未决公共 API、持久化、安全或外部行为事项；继续不依赖该决定的工作并请求 Master。
 - `completed`、Worker 自报和部分测试都不替代独立验收。Master 基于实际 diff、文件、适用验证和执行证据分别报告执行状态、验收状态和接收状态。
 - `zcode_continue` 只用于同任务验收返工、关键决定补充、受控中断恢复或报告修复，不用于推进下一阶段或新目标。
-- Async Handoff 只以可靠 Task 受理为交接点，默认采用。提交前完成 Ready Gate；受理后只做必要的有界受理/路径/Pending 核对，记录可核实的 Task/Attempt、Authority 和 Thread，取得经 `task console-url`/Executor 验证的 Task Console `web_url`（不可用则说明安全查询替代方式），向用户简洁报告，然后结束 Turn 并停止轮询；仅 Thread/Wake 绑定不可用时先说明 Web Notify 回退。不要等待 `turn_started`，不要恢复 MCP 前台轮询，不要调用 `codex queue`、`--resume` 或自行制造 Wake。只有已知 Pending Interaction、必须即时处理的审批或用户明确要求时才使用 `foreground`。
+- Async Handoff 只以可靠 Task 受理为交接点，默认采用。提交前完成 Ready Gate；受理后只做必要的有界受理/路径/Pending 核对，记录可核实的 Task/Attempt、Authority 和 Thread。优先使用 `zcode_task`/`zcode_continue` receipt 的 `console_link.web_url`；`available=false` 时只报告 `reason_code` 并用 `task status` 作为安全替代，不要自行拼接地址。向用户简洁报告，然后结束 Turn 并停止轮询；仅 `owner_thread_unavailable` 或 `auto_wake_disabled` 时说明 Web Notify 回退。不要等待 `turn_started`，不要恢复 MCP 前台轮询，不要调用 `codex queue`、`--resume` 或自行制造 Wake。只有已知 Pending Interaction、必须即时处理的审批或用户明确要求时才使用 `foreground`。
 - Task Console 链接只携带 `task_id`，不包含 CSRF 或凭据；不得拼接、猜测或伪造地址。链接可用不等于 Turn、Result、Cleanup 或验收已完成，页面轮询或关闭不影响 Executor。
 - Turn 结束、客户端断连、MCP 停止或调用超时不取消已受理 Task。只有用户明确授权具体取消时才走 `zcode_cancel`；回执未知时先以原 `task_id` 对账，不换 ID 重派。
 - Wake 只表示有持久 Result 可读，不表示 Master 已恢复、Task 已验收或资源已释放。恢复时直接调用 Host 已注册的原生 `zcode_status`，再用同 Task 的 `zcode_events(include_attempt: true, wait_ms: 0)` 核对 `result_committed` 的 digest/commit ref、同归属的 `cleanup_verified` 与 `released`，最后用 `zcode_result(view="summary", expected_attempt=<Attempt>)` 读取必要 Result 摘要并独立检查实际 diff、文件与测试。摘要不提供 digest 或 Release 证明。不要在受限 Thread 中通过 `exec_command`/PowerShell/Node 启动 Thin MCP 或 Task CLI 读取 Named Pipe。固定 ACK 仍不是验收。

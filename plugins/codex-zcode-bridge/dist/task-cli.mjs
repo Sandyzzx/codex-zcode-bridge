@@ -6,11 +6,11 @@ var __export = (target, all) => {
 };
 
 // src/cli/main.ts
-import { spawn as spawn2 } from "node:child_process";
-import { existsSync as existsSync6, writeFileSync as writeFileSync2 } from "node:fs";
-import path7 from "node:path";
+import { spawn as spawn3 } from "node:child_process";
+import { existsSync as existsSync6, writeFileSync } from "node:fs";
+import path6 from "node:path";
 import process2 from "node:process";
-import { fileURLToPath as fileURLToPath3 } from "node:url";
+import { fileURLToPath as fileURLToPath4 } from "node:url";
 
 // src/runtime/sqlite-install-config.ts
 import { existsSync as existsSync2, lstatSync, mkdirSync, readFileSync as readFileSync2, realpathSync } from "node:fs";
@@ -55,7 +55,7 @@ function validateHostProfile(host) {
 function findPackageRoot(startDir) {
   let current = startDir ?? path2.dirname(fileURLToPath(import.meta.url));
   for (let depth = 0; depth < 10; depth++) {
-    if (existsSync(path2.join(current, "package.json"))) {
+    if (existsSync(path2.join(current, "package.json")) || existsSync(path2.join(current, "plugin.json")) && existsSync(path2.join(current, "dist")) && existsSync(path2.join(current, "worker"))) {
       return current;
     }
     const parent = path2.dirname(current);
@@ -63,7 +63,7 @@ function findPackageRoot(startDir) {
     current = parent;
   }
   throw new Error(
-    `Cannot locate the Bridge package root (no package.json above ${startDir ?? "module directory"})`
+    `Cannot locate the Bridge package root (no package.json or installed plugin markers above ${startDir ?? "module directory"})`
   );
 }
 
@@ -628,10 +628,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path8) {
-  if (!path8)
+function getElementAtPath(obj, path7) {
+  if (!path7)
     return obj;
-  return path8.reduce((acc, key) => acc?.[key], obj);
+  return path7.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -971,11 +971,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path8, issues) {
+function prefixIssues(path7, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path8);
+    iss.path.unshift(path7);
     return iss;
   });
 }
@@ -1421,16 +1421,16 @@ function flattenError(error2, mapper = (issue2) => issue2.message) {
 }
 function formatError(error2, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error3, path8 = []) => {
+  const processError = (error3, path7 = []) => {
     for (const issue2 of error3.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path8, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path7, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path8, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path7, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path8, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path7, ...issue2.path]);
       } else {
-        const fullpath = [...path8, ...issue2.path];
+        const fullpath = [...path7, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -6635,8 +6635,15 @@ var EXECUTOR_CONTROL_PROTOCOL_VERSION = 1;
 var EXECUTOR_CONTROL_FRAME_LIMIT_BYTES = 33 * 1024 * 1024;
 var nonEmptyString = string2().min(1);
 var emptyParams = strictObject({});
+var taskAdmissionSchema = strictObject({
+  owner_thread_id: string2().nullable(),
+  source: _enum(["mcp_meta", "mcp_meta_missing", "mcp_meta_invalid", "non_host_admission"])
+}).refine(
+  (value) => value.source === "mcp_meta" === (value.owner_thread_id !== null),
+  { message: "owner_thread_id must be present only for mcp_meta admission" }
+);
 var executorControlParamsSchemas = {
-  createTask: strictObject({ task: zcodeTaskInputSchema }),
+  createTask: strictObject({ task: zcodeTaskInputSchema, admission: taskAdmissionSchema.optional() }),
   listTasks: listTasksInputSchema,
   getStatus: strictObject({ task_id: nonEmptyString }),
   getResult: strictObject({ task_id: nonEmptyString, view: _enum(["summary", "full"]).optional() }),
@@ -6959,196 +6966,23 @@ function executorPipeName(root) {
   return `\\\\.\\pipe\\codex-zcode-bridge-executor-v1-${authorityRootDigest(root)}`;
 }
 
-// src/executor/wake.ts
-import { createHash as createHash2 } from "node:crypto";
-import {
-  existsSync as existsSync4,
-  lstatSync as lstatSync3,
-  readFileSync as readFileSync4,
-  realpathSync as realpathSync2,
-  writeFileSync
-} from "node:fs";
-import path5 from "node:path";
-var WAKE_POLICY_FILE = "wake-policy.json";
-var WAKE_POLICY_MAX_BYTES = 16 * 1024;
-var WAKE_AUTHORIZATION_MAX_MS = 24 * 60 * 60 * 1e3;
-var WAKE_AUTHORIZATION_MIN_MS = 60 * 1e3;
-var WAKE_CONTROL_FRAME_MAX_BYTES = 1024 * 1024;
-var WAKE_CONTROL_STDERR_MAX_BYTES = 8 * 1024;
-var WAKE_POLICY_BASE_KEYS = [
-  "attempt",
-  "authorization",
-  "enabled",
-  "fallback",
-  "model",
-  "model_provider",
-  "reasoning_effort",
-  "schema_version",
-  "task_id",
-  "thread_id",
-  "workspace"
-];
-var WAKE_POLICY_KEYS_V2 = ["delivery_mode", ...WAKE_POLICY_BASE_KEYS];
-var WAKE_AUTHORIZATION_KEYS = ["expires_at", "granted_at", "granted_by", "scope"];
-function writeExecutorWakePolicy(authorityRoot, grant, nowMs = Date.now()) {
-  if (!Number.isSafeInteger(nowMs) || nowMs < 0) throw new Error("EXECUTOR_WAKE_NOW_INVALID");
-  if (!Number.isSafeInteger(grant.expires_in_ms) || grant.expires_in_ms < WAKE_AUTHORIZATION_MIN_MS || grant.expires_in_ms > WAKE_AUTHORIZATION_MAX_MS) {
-    throw new Error("EXECUTOR_WAKE_AUTHORIZATION_DURATION_INVALID");
-  }
-  const root = path5.resolve(authorityRoot);
-  if (!lstatSync3(root).isDirectory()) throw new Error("EXECUTOR_WAKE_AUTHORITY_ROOT_INVALID");
-  const policyPath = path5.join(root, WAKE_POLICY_FILE);
-  const value = {
-    schema_version: 1,
-    enabled: true,
-    task_id: grant.task_id,
-    attempt: grant.attempt,
-    thread_id: grant.thread_id,
-    workspace: grant.workspace,
-    model: grant.model,
-    model_provider: grant.model_provider,
-    reasoning_effort: grant.reasoning_effort,
-    fallback: "web_notify",
-    delivery_mode: grant.delivery_mode ?? "strict",
-    authorization: {
-      scope: "one_turn",
-      granted_by: "owner",
-      granted_at: new Date(nowMs).toISOString(),
-      expires_at: new Date(nowMs + grant.expires_in_ms).toISOString()
-    }
-  };
-  const policy = parseWakePolicy(value, nowMs);
-  try {
-    writeFileSync(policyPath, `${JSON.stringify(policy, null, 2)}
-`, {
-      encoding: "utf8",
-      flag: "wx",
-      mode: 384
-    });
-  } catch (error2) {
-    if (errorCode(error2) === "EEXIST") {
-      throw Object.assign(
-        new Error("A Wake policy already exists; refusing to overwrite Owner authorization"),
-        { code: "WAKE_POLICY_EXISTS" }
-      );
-    }
-    throw error2;
-  }
-  return {
-    path: policyPath,
-    policy,
-    policy_digest: wakeDigest(policy),
-    authorization_digest: wakeDigest(policy.authorization)
-  };
-}
-function parseWakePolicy(value, nowMs) {
-  if (!isRecord2(value) || !hasExactKeys(value, WAKE_POLICY_BASE_KEYS) && !hasExactKeys(value, WAKE_POLICY_KEYS_V2)) {
-    throw new Error("wake_policy_shape_invalid");
-  }
-  if (value.schema_version !== 1 || typeof value.enabled !== "boolean" || value.fallback !== "web_notify") {
-    throw new Error("wake_policy_version_invalid");
-  }
-  const deliveryMode = value.delivery_mode === void 0 ? "strict" : value.delivery_mode === "strict" || value.delivery_mode === "trusted_local" ? value.delivery_mode : null;
-  if (deliveryMode === null) throw new Error("wake_policy_delivery_mode_invalid");
-  const taskId = boundedIdentifier(value.task_id);
-  const threadId = boundedIdentifier(value.thread_id);
-  const model = boundedText(value.model, 256);
-  const provider = boundedText(value.model_provider, 256);
-  if (!Number.isSafeInteger(value.attempt) || Number(value.attempt) < 1) throw new Error("wake_policy_attempt_invalid");
-  if (typeof value.workspace !== "string" || !path5.isAbsolute(value.workspace)) throw new Error("wake_policy_workspace_invalid");
-  if (value.reasoning_effort !== "minimal" && value.reasoning_effort !== "low" && value.reasoning_effort !== "medium") {
-    throw new Error("wake_policy_reasoning_invalid");
-  }
-  if (!isRecord2(value.authorization) || !hasExactKeys(value.authorization, WAKE_AUTHORIZATION_KEYS)) {
-    throw new Error("wake_authorization_shape_invalid");
-  }
-  if (value.authorization.scope !== "one_turn" || value.authorization.granted_by !== "owner") {
-    throw new Error("wake_authorization_scope_invalid");
-  }
-  const grantedAt = Date.parse(String(value.authorization.granted_at));
-  const expiresAt = Date.parse(String(value.authorization.expires_at));
-  if (!Number.isFinite(grantedAt) || !Number.isFinite(expiresAt) || grantedAt > nowMs || expiresAt <= nowMs || expiresAt <= grantedAt || expiresAt - grantedAt > WAKE_AUTHORIZATION_MAX_MS) {
-    throw new Error("wake_authorization_time_invalid");
-  }
-  return {
-    schema_version: 1,
-    enabled: value.enabled,
-    task_id: taskId,
-    attempt: Number(value.attempt),
-    thread_id: threadId,
-    workspace: normalizeWorkspace(value.workspace),
-    model,
-    model_provider: provider,
-    reasoning_effort: value.reasoning_effort,
-    fallback: "web_notify",
-    delivery_mode: deliveryMode,
-    authorization: {
-      scope: "one_turn",
-      granted_by: "owner",
-      granted_at: String(value.authorization.granted_at),
-      expires_at: String(value.authorization.expires_at)
-    }
-  };
-}
-function normalizeWorkspace(value) {
-  const resolved = path5.resolve(value);
-  try {
-    const canonical = realpathSync2.native(resolved);
-    return process.platform === "win32" ? canonical.toLowerCase() : canonical;
-  } catch {
-    return process.platform === "win32" ? resolved.toLowerCase() : resolved;
-  }
-}
-function boundedIdentifier(value) {
-  if (!isIdentifier(value)) throw new Error("wake_identifier_invalid");
-  return value;
-}
-function isIdentifier(value) {
-  return typeof value === "string" && value.length > 0 && value.length <= 128 && /^[A-Za-z0-9._:-]+$/u.test(value) && value === value.normalize("NFC");
-}
-function boundedText(value, maxBytes) {
-  if (typeof value !== "string" || !value.trim() || Buffer.byteLength(value, "utf8") > maxBytes || value !== value.normalize("NFC")) {
-    throw new Error("wake_text_invalid");
-  }
-  return value;
-}
-function hasExactKeys(value, expected) {
-  return Object.keys(value).sort().join("|") === [...expected].sort().join("|");
-}
-function isRecord2(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function wakeDigest(value) {
-  return createHash2("sha256").update(canonicalJson2(value), "utf8").digest("hex");
-}
-function canonicalJson2(value) {
-  if (value === null || typeof value === "boolean" || typeof value === "string") return JSON.stringify(value);
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) throw new Error("wake_digest_number_invalid");
-    return JSON.stringify(value);
-  }
-  if (Array.isArray(value)) return `[${value.map(canonicalJson2).join(",")}]`;
-  if (isRecord2(value)) {
-    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson2(value[key])}`).join(",")}}`;
-  }
-  throw new Error("wake_digest_value_invalid");
-}
-function errorCode(error2) {
-  return isRecord2(error2) && typeof error2.code === "string" ? error2.code : null;
-}
+// src/web/console-link.ts
+import { spawn as spawn2 } from "node:child_process";
+import { existsSync as existsSync5 } from "node:fs";
+import { fileURLToPath as fileURLToPath3 } from "node:url";
 
 // src/web/discovery.ts
-import { createHash as createHash3 } from "node:crypto";
+import { createHash as createHash2 } from "node:crypto";
 import {
   closeSync as closeSync2,
-  existsSync as existsSync5,
-  lstatSync as lstatSync4,
+  existsSync as existsSync4,
+  lstatSync as lstatSync3,
   openSync as openSync2,
-  readFileSync as readFileSync5,
+  readFileSync as readFileSync4,
   unlinkSync as unlinkSync2,
   writeSync as writeSync2
 } from "node:fs";
-import path6 from "node:path";
+import path5 from "node:path";
 var TASK_CONSOLE_DISCOVERY_FILE = "task-console.json";
 var TASK_CONSOLE_PROTOCOL_VERSION = 1;
 var DISCOVERY_LIMIT_BYTES = 16 * 1024;
@@ -7162,7 +6996,7 @@ var TaskConsoleDiscoveryError = class extends Error {
   }
   code;
 };
-function canonicalJson3(value) {
+function canonicalJson2(value) {
   return JSON.stringify(sortObject2(value)) ?? "null";
 }
 function sortObject2(value) {
@@ -7172,13 +7006,13 @@ function sortObject2(value) {
   return Object.fromEntries(Object.entries(value).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0).map(([key, item]) => [key, sortObject2(item)]));
 }
 function recordDigest(record2) {
-  return createHash3("sha256").update(canonicalJson3(record2), "utf8").digest("hex");
+  return createHash2("sha256").update(canonicalJson2(record2), "utf8").digest("hex");
 }
 function discoveryRoot(dataRoot) {
   let root;
   try {
-    root = path6.resolve(dataRoot);
-    const stat = lstatSync4(root);
+    root = path5.resolve(dataRoot);
+    const stat = lstatSync3(root);
     if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("not_plain_directory");
   } catch {
     throw new TaskConsoleDiscoveryError("WEB_CONSOLE_ROOT_UNSAFE");
@@ -7186,7 +7020,7 @@ function discoveryRoot(dataRoot) {
   return root;
 }
 function taskConsoleDiscoveryPath(dataRoot) {
-  return path6.join(discoveryRoot(dataRoot), TASK_CONSOLE_DISCOVERY_FILE);
+  return path5.join(discoveryRoot(dataRoot), TASK_CONSOLE_DISCOVERY_FILE);
 }
 function parseRecord(value) {
   let parsed;
@@ -7221,13 +7055,13 @@ function parseRecord(value) {
 }
 function readTaskConsoleDiscovery(dataRoot) {
   const file = taskConsoleDiscoveryPath(dataRoot);
-  if (!existsSync5(file)) return null;
+  if (!existsSync4(file)) return null;
   try {
-    const stat = lstatSync4(file);
+    const stat = lstatSync3(file);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size > DISCOVERY_LIMIT_BYTES) {
       throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_INVALID");
     }
-    const record2 = parseRecord(readFileSync5(file, "utf8"));
+    const record2 = parseRecord(readFileSync4(file, "utf8"));
     if (record2.authority_root_digest !== authorityRootDigest(dataRoot)) {
       throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_INVALID");
     }
@@ -7300,6 +7134,93 @@ async function fetchTaskConsoleSession(record2, timeoutMs = 2e3) {
   }
 }
 
+// src/web/console-link.ts
+function sleep(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+function resolveTaskConsoleEntry() {
+  const bundled = fileURLToPath3(new URL("./web-console.mjs", import.meta.url));
+  return existsSync5(bundled) ? bundled : fileURLToPath3(new URL("../web/main.js", import.meta.url));
+}
+function spawnTaskConsole(input) {
+  const child = spawn2(process.execPath, [
+    resolveTaskConsoleEntry(),
+    "--data-root",
+    input.dataRoot,
+    "--settings-directory",
+    input.settingsDirectory,
+    "--port",
+    "0"
+  ], {
+    detached: true,
+    windowsHide: true,
+    stdio: "ignore",
+    cwd: input.dataRoot
+  });
+  child.unref();
+  return { pid: child.pid };
+}
+async function waitForTaskConsole(dataRoot, leaseId, timeoutMs, processProbe, wait) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError;
+  while (Date.now() <= deadline) {
+    const inspection = await inspectTaskConsoleDiscovery(dataRoot, processProbe);
+    if (inspection.state === "active_owner" && inspection.record) {
+      try {
+        const session = await fetchTaskConsoleSession(inspection.record);
+        if (session.executor.lease_id === leaseId) return { record: inspection.record };
+        lastError = Object.assign(new Error("Task Console is bound to a different Executor lease"), {
+          code: "WEB_CONSOLE_LEASE_MISMATCH"
+        });
+      } catch (error2) {
+        lastError = error2;
+      }
+    } else if (inspection.state === "stale_owner" && inspection.record) {
+      removeTaskConsoleDiscovery(dataRoot, inspection.record);
+    } else if (inspection.state === "owner_unknown") {
+      throw Object.assign(new Error("Task Console owner state is unknown"), {
+        code: "WEB_CONSOLE_OWNER_UNKNOWN"
+      });
+    }
+    await wait(250);
+  }
+  throw lastError instanceof Error ? lastError : Object.assign(new Error("Task Console did not become ready"), { code: "WEB_CONSOLE_UNAVAILABLE" });
+}
+async function resolveTaskConsoleLink(options) {
+  const timeoutMs = options.timeoutMs ?? 5e3;
+  const processProbe = options.processProbe ?? createPlatformProbe();
+  const wait = options.sleep ?? sleep;
+  let discovery = await inspectTaskConsoleDiscovery(options.dataRoot, processProbe);
+  if (discovery.state === "stale_owner" && discovery.record) {
+    removeTaskConsoleDiscovery(options.dataRoot, discovery.record);
+    discovery = await inspectTaskConsoleDiscovery(options.dataRoot, processProbe);
+  }
+  const reused = discovery.state === "active_owner";
+  if (!reused) {
+    if (options.noStart) {
+      throw Object.assign(new Error("Task Console is not available and --no-start was requested"), {
+        code: "WEB_CONSOLE_UNAVAILABLE"
+      });
+    }
+    const spawned = (options.spawnConsole ?? spawnTaskConsole)({
+      dataRoot: options.dataRoot,
+      settingsDirectory: options.settingsDirectory
+    });
+    if (!spawned.pid) {
+      console.error("zcode-bridge: Task Console process has no PID; discovery verification will still run\n");
+    }
+  }
+  const found = await waitForTaskConsole(options.dataRoot, options.leaseId, timeoutMs, processProbe, wait);
+  return {
+    web_url: `${found.record.url}?task_id=${encodeURIComponent(options.taskId)}`,
+    console_id: found.record.console_id,
+    console_pid: found.record.pid,
+    console_reused: reused,
+    executor_lease_id: options.leaseId,
+    authority_root_digest: authorityRootDigest(options.dataRoot)
+  };
+}
+
 // src/cli/main.ts
 var TASK_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/u;
 var RESULT_STDOUT_LIMIT_BYTES = 1024 * 1024;
@@ -7316,10 +7237,7 @@ var TASK_CLI_USAGE = [
   "  task result <task_id> [--view summary|full] [--output ABS_PATH]",
   "  task cancel <task_id>",
   "  task reply <task_id> --request-id ID --decision allow|deny|accept|decline [--reason TEXT] [--answer KEY=VALUE]",
-  "  task console-url <task_id> [--no-start] [--timeout-ms 500..60000]",
-  "  task wake-authorize <task_id> --attempt N --thread ID --model MODEL --model-provider PROVIDER",
-  "      --reasoning-effort minimal|low|medium --expires-in-minutes 1..1440 --confirm-owner",
-  "      [--delivery-mode strict|trusted-local]"
+  "  task console-url <task_id> [--no-start] [--timeout-ms 500..60000]"
 ].join("\n");
 var CliUsageError = class extends Error {
 };
@@ -7372,13 +7290,13 @@ function parseGlobalOptions(argv) {
     if (argument === "--data-root" || argument === "--settings-directory") {
       const value = argv[++index];
       if (!value) throw new CliUsageError(`${argument} requires an absolute path`);
-      if (!path7.isAbsolute(value)) throw new CliUsageError(`${argument} requires an absolute path`);
+      if (!path6.isAbsolute(value)) throw new CliUsageError(`${argument} requires an absolute path`);
       if (argument === "--data-root") {
         if (dataRoot !== null) throw new CliUsageError("--data-root may appear only once");
-        dataRoot = path7.normalize(value);
+        dataRoot = path6.normalize(value);
       } else {
         if (settingsDirectory !== null) throw new CliUsageError("--settings-directory may appear only once");
-        settingsDirectory = path7.normalize(value);
+        settingsDirectory = path6.normalize(value);
       }
       continue;
     }
@@ -7411,9 +7329,6 @@ async function runTaskCommand(args, dataRoot, pipeName, settingsDirectory, io, d
       writeJson(io, (await requestOk(client, "listTasks", input)).result);
       return 0;
     });
-  }
-  if (subcommand === "wake-authorize") {
-    return runWakeAuthorize(args.slice(1), dataRoot, pipeName, io, dependencies);
   }
   if (subcommand === "console-url") {
     return runTaskConsoleUrl(args.slice(1), dataRoot, pipeName, settingsDirectory, io, dependencies);
@@ -7458,15 +7373,15 @@ async function runTaskCommand(args, dataRoot, pipeName, settingsDirectory, io, d
       const options = parseFlags(args.slice(2), /* @__PURE__ */ new Set(["--view", "--output"]));
       const view = options.single.has("--view") ? enumValue("--view", options.single.get("--view"), ["summary", "full"]) : "summary";
       const output = options.single.get("--output");
-      if (output !== void 0 && !path7.isAbsolute(output)) throw new CliUsageError("--output requires an absolute path");
+      if (output !== void 0 && !path6.isAbsolute(output)) throw new CliUsageError("--output requires an absolute path");
       return withClient(dependencies, pipeName, async (client) => {
         const result = (await requestOk(client, "getResult", { task_id: taskId, ...view ? { view } : {} })).result;
         const value = result;
         const serialized = `${JSON.stringify(value, null, 2)}
 `;
         if (output !== void 0) {
-          writeFileSync2(path7.normalize(output), serialized, { encoding: "utf8", flag: "wx" });
-          writeJson(io, { task_id: result.task_id, attempt: result.attempt, output: path7.normalize(output), bytes: Buffer.byteLength(serialized) });
+          writeFileSync(path6.normalize(output), serialized, { encoding: "utf8", flag: "wx" });
+          writeJson(io, { task_id: result.task_id, attempt: result.attempt, output: path6.normalize(output), bytes: Buffer.byteLength(serialized) });
           return 0;
         }
         if (Buffer.byteLength(serialized) > RESULT_STDOUT_LIMIT_BYTES) {
@@ -7520,84 +7435,6 @@ async function runTaskCommand(args, dataRoot, pipeName, settingsDirectory, io, d
   }
   throw new CliUsageError("unknown or invalid task command");
 }
-async function runWakeAuthorize(args, dataRoot, pipeName, io, dependencies) {
-  const taskId = args[0];
-  if (!TASK_ID.test(taskId ?? "")) throw new CliUsageError("wake-authorize requires a valid task_id");
-  const options = parseFlags(
-    args.slice(1),
-    /* @__PURE__ */ new Set([
-      "--attempt",
-      "--thread",
-      "--model",
-      "--model-provider",
-      "--reasoning-effort",
-      "--expires-in-minutes",
-      "--confirm-owner",
-      "--delivery-mode"
-    ]),
-    /* @__PURE__ */ new Set(["--confirm-owner"])
-  );
-  if (!options.boolean.has("--confirm-owner")) {
-    throw new CliUsageError("wake-authorize requires --confirm-owner");
-  }
-  const attempt = integer2("--attempt", required2(options.single, "--attempt"), 1, Number.MAX_SAFE_INTEGER);
-  const threadId = required2(options.single, "--thread").trim();
-  const model = required2(options.single, "--model").trim();
-  const provider = required2(options.single, "--model-provider").trim();
-  const reasoningEffort = enumValue(
-    "--reasoning-effort",
-    required2(options.single, "--reasoning-effort"),
-    ["minimal", "low", "medium"]
-  );
-  const expiresInMinutes = integer2(
-    "--expires-in-minutes",
-    required2(options.single, "--expires-in-minutes"),
-    1,
-    1440
-  );
-  const deliveryMode = options.single.has("--delivery-mode") ? enumValue("--delivery-mode", options.single.get("--delivery-mode"), ["strict", "trusted-local"]) === "trusted-local" ? "trusted_local" : "strict" : "strict";
-  return withClient(dependencies, pipeName, async (client) => {
-    const task = await findTask(client, taskId);
-    if (task.attempt !== attempt) {
-      throw Object.assign(
-        new Error(`Task ${taskId} is at Attempt ${task.attempt}, not ${attempt}`),
-        { code: "WAKE_ATTEMPT_MISMATCH" }
-      );
-    }
-    const grant = {
-      task_id: taskId,
-      attempt,
-      thread_id: threadId,
-      workspace: task.workspace,
-      model,
-      model_provider: provider,
-      reasoning_effort: reasoningEffort,
-      expires_in_ms: expiresInMinutes * 6e4,
-      delivery_mode: deliveryMode
-    };
-    const written = (dependencies.writeWakePolicy ?? writeExecutorWakePolicy)(
-      dataRoot,
-      grant,
-      dependencies.now?.() ?? Date.now()
-    );
-    writeJson(io, {
-      task_id: taskId,
-      attempt,
-      thread_id: threadId,
-      workspace: written.policy.workspace,
-      model,
-      model_provider: provider,
-      reasoning_effort: reasoningEffort,
-      delivery_mode: written.policy.delivery_mode,
-      authorization_scope: written.policy.authorization.scope,
-      authorization_expires_at: written.policy.authorization.expires_at,
-      policy_path: written.path,
-      policy_digest: written.policy_digest,
-      authorization_digest: written.authorization_digest
-    });
-    return 0;
-  });
-}
 async function runTaskConsoleUrl(args, dataRoot, pipeName, settingsDirectory, io, dependencies) {
   const taskId = args[0];
   if (!TASK_ID.test(taskId ?? "")) throw new CliUsageError("console-url requires a valid task_id");
@@ -7617,93 +7454,24 @@ async function runTaskConsoleUrl(args, dataRoot, pipeName, settingsDirectory, io
         code: "EXECUTOR_LEASE_UNKNOWN"
       });
     }
-    const probe = createPlatformProbe();
-    let discovery = await inspectTaskConsoleDiscovery(dataRoot, probe);
-    if (discovery.state === "stale_owner" && discovery.record) {
-      removeTaskConsoleDiscovery(dataRoot, discovery.record);
-      discovery = await inspectTaskConsoleDiscovery(dataRoot, probe);
-    }
-    const reused = discovery.state === "active_owner";
-    if (!reused) {
-      if (noStart) {
-        throw Object.assign(new Error("Task Console is not available and --no-start was requested"), {
-          code: "WEB_CONSOLE_UNAVAILABLE"
-        });
-      }
-      const spawned = (dependencies.spawnTaskConsole ?? spawnTaskConsole)({
-        dataRoot,
-        settingsDirectory
-      });
-      if (!spawned.pid) console.error("zcode-bridge: Task Console process has no PID; discovery verification will still run\n");
-    }
-    const found = await waitForTaskConsole(
+    const link = await resolveTaskConsoleLink({
       dataRoot,
+      settingsDirectory,
+      taskId,
       leaseId,
       timeoutMs,
-      probe,
-      dependencies.sleep ?? sleep
-    );
-    const url = `${found.record.url}?task_id=${encodeURIComponent(taskId)}`;
+      noStart,
+      ...dependencies.spawnTaskConsole ? { spawnConsole: dependencies.spawnTaskConsole } : {},
+      ...dependencies.sleep ? { sleep: dependencies.sleep } : {}
+    });
     writeJson(io, {
       task_id: taskId,
       status: taskStatus.status ?? "unknown",
       attempt: taskStatus.attempt ?? null,
-      web_url: url,
-      console_id: found.record.console_id,
-      console_pid: found.record.pid,
-      console_reused: reused,
-      executor_lease_id: leaseId,
-      authority_root_digest: authorityRootDigest(dataRoot)
+      ...link
     });
     return 0;
   });
-}
-async function waitForTaskConsole(dataRoot, leaseId, timeoutMs, processProbe, sleep2) {
-  const deadline = Date.now() + timeoutMs;
-  let lastError;
-  while (Date.now() <= deadline) {
-    try {
-      const inspection = await inspectTaskConsoleDiscovery(dataRoot, processProbe);
-      if (inspection.state === "active_owner" && inspection.record) {
-        const session = await fetchTaskConsoleSession(inspection.record);
-        if (session.executor.lease_id === leaseId) {
-          return { record: inspection.record, session };
-        }
-        lastError = Object.assign(new Error("Task Console is bound to a different Executor lease"), {
-          code: "WEB_CONSOLE_LEASE_MISMATCH"
-        });
-      } else if (inspection.state === "stale_owner" && inspection.record) {
-        removeTaskConsoleDiscovery(dataRoot, inspection.record);
-      } else if (inspection.state === "owner_unknown") {
-        throw Object.assign(new Error("Task Console owner state is unknown"), {
-          code: "WEB_CONSOLE_OWNER_UNKNOWN"
-        });
-      }
-    } catch (error3) {
-      lastError = error3;
-    }
-    if (Date.now() + 100 > deadline) break;
-    await sleep2(100);
-  }
-  const error2 = Object.assign(
-    new Error(lastError instanceof Error ? lastError.message : "Task Console did not become discoverable"),
-    { code: "WEB_CONSOLE_UNAVAILABLE", cause: lastError }
-  );
-  throw error2;
-}
-async function findTask(client, taskId) {
-  let after = null;
-  for (let pageNumber = 0; pageNumber < 100; pageNumber += 1) {
-    const page = (await requestOk(client, "listTasks", {
-      limit: 100,
-      ...after === null ? {} : { after_task_id: after }
-    })).result;
-    const found = page.tasks.find((task) => task.task_id === taskId);
-    if (found) return found;
-    if (!page.has_more || page.next_task_id === null) break;
-    after = page.next_task_id;
-  }
-  throw Object.assign(new Error(`unknown SQLite task: ${taskId}`), { code: "TASK_NOT_FOUND" });
 }
 async function runExecutorCommand(args, context, io, dependencies) {
   const command = args[0];
@@ -7805,7 +7573,7 @@ function defaultClient(pipeName, connectTimeoutMs) {
 function spawnExecutor(input) {
   const executorEntry = resolveExecutorEntry();
   const bridgeEntry = resolveBridgeEntry();
-  const child = spawn2(process2.execPath, [
+  const child = spawn3(process2.execPath, [
     executorEntry,
     "--data-root",
     input.dataRoot,
@@ -7826,34 +7594,13 @@ function spawnExecutor(input) {
   child.unref();
   return { pid: child.pid };
 }
-function spawnTaskConsole(input) {
-  const child = spawn2(process2.execPath, [
-    resolveTaskConsoleEntry(),
-    "--data-root",
-    input.dataRoot,
-    "--settings-directory",
-    input.settingsDirectory,
-    "--port",
-    "0"
-  ], {
-    detached: true,
-    windowsHide: true,
-    stdio: "ignore"
-  });
-  child.unref();
-  return { pid: child.pid };
-}
 function resolveExecutorEntry() {
-  const bundled = fileURLToPath3(new URL("./executor.mjs", import.meta.url));
-  return existsSync6(bundled) ? bundled : fileURLToPath3(new URL("../executor/main.js", import.meta.url));
-}
-function resolveTaskConsoleEntry() {
-  const bundled = fileURLToPath3(new URL("./web-console.mjs", import.meta.url));
-  return existsSync6(bundled) ? bundled : fileURLToPath3(new URL("../web/main.js", import.meta.url));
+  const bundled = fileURLToPath4(new URL("./executor.mjs", import.meta.url));
+  return existsSync6(bundled) ? bundled : fileURLToPath4(new URL("../executor/main.js", import.meta.url));
 }
 function resolveBridgeEntry() {
-  const bundled = fileURLToPath3(new URL("./bridge.mjs", import.meta.url));
-  return existsSync6(bundled) ? bundled : fileURLToPath3(new URL("../mcp/main.js", import.meta.url));
+  const bundled = fileURLToPath4(new URL("./bridge.mjs", import.meta.url));
+  return existsSync6(bundled) ? bundled : fileURLToPath4(new URL("../mcp/main.js", import.meta.url));
 }
 async function tryExecutorStatus(pipeName, dependencies) {
   const client = (dependencies.createClient ?? defaultClient)(pipeName, 250);
@@ -7879,7 +7626,7 @@ async function waitForExecutorStatus(pipeName, dependencies, timeoutMs) {
     } finally {
       client.close();
     }
-    await (dependencies.sleep ?? sleep)(250);
+    await (dependencies.sleep ?? sleep2)(250);
   }
   throw Object.assign(new Error("Executor did not become ready before the bounded timeout"), {
     code: "EXECUTOR_START_TIMEOUT"
@@ -7889,7 +7636,7 @@ async function waitForExecutorDown(pipeName, dependencies, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   let lastStatus = null;
   while (Date.now() < deadline) {
-    await (dependencies.sleep ?? sleep)(100);
+    await (dependencies.sleep ?? sleep2)(100);
     const client = (dependencies.createClient ?? defaultClient)(pipeName, 250);
     try {
       await client.connect();
@@ -7960,10 +7707,10 @@ function writeJson(io, value) {
   io.stdout(`${JSON.stringify(value, null, 2)}
 `);
 }
-function sleep(milliseconds) {
+function sleep2(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
-if (process2.argv[1] && path7.resolve(process2.argv[1]) === path7.resolve(fileURLToPath3(import.meta.url))) {
+if (process2.argv[1] && path6.resolve(process2.argv[1]) === path6.resolve(fileURLToPath4(import.meta.url))) {
   process2.exitCode = await runTaskCli(process2.argv.slice(2));
 }
 export {

@@ -333,6 +333,63 @@
             "blocked_duration_ms"
           ],
           "additionalProperties": false
+        },
+        "owner_binding": {
+          "type": "object",
+          "properties": {
+            "task_id": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string",
+              "enum": [
+                "bound",
+                "unavailable"
+              ]
+            },
+            "owner_thread_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "source": {
+              "type": "string",
+              "enum": [
+                "mcp_meta",
+                "mcp_meta_missing",
+                "mcp_meta_invalid",
+                "non_host_admission",
+                "legacy_unavailable"
+              ]
+            },
+            "bound_at": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reason_code": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "const": "owner_thread_unavailable"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "task_id",
+            "state",
+            "owner_thread_id",
+            "source",
+            "bound_at",
+            "reason_code"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [
@@ -446,6 +503,103 @@
         },
         "created_at": {
           "type": "string"
+        },
+        "owner_binding": {
+          "type": "object",
+          "properties": {
+            "task_id": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string",
+              "enum": [
+                "bound",
+                "unavailable"
+              ]
+            },
+            "owner_thread_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "source": {
+              "type": "string",
+              "enum": [
+                "mcp_meta",
+                "mcp_meta_missing",
+                "mcp_meta_invalid",
+                "non_host_admission",
+                "legacy_unavailable"
+              ]
+            },
+            "bound_at": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reason_code": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "const": "owner_thread_unavailable"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "task_id",
+            "state",
+            "owner_thread_id",
+            "source",
+            "bound_at",
+            "reason_code"
+          ],
+          "additionalProperties": false
+        },
+        "console_link": {
+          "type": "object",
+          "properties": {
+            "available": {
+              "type": "boolean"
+            },
+            "web_url": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "console_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "console_reused": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "reason_code": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "available",
+            "web_url",
+            "console_id",
+            "console_reused",
+            "reason_code"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [
@@ -2451,6 +2605,63 @@
             "blocked_duration_ms"
           ],
           "additionalProperties": false
+        },
+        "owner_binding": {
+          "type": "object",
+          "properties": {
+            "task_id": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string",
+              "enum": [
+                "bound",
+                "unavailable"
+              ]
+            },
+            "owner_thread_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "source": {
+              "type": "string",
+              "enum": [
+                "mcp_meta",
+                "mcp_meta_missing",
+                "mcp_meta_invalid",
+                "non_host_admission",
+                "legacy_unavailable"
+              ]
+            },
+            "bound_at": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reason_code": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "const": "owner_thread_unavailable"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "task_id",
+            "state",
+            "owner_thread_id",
+            "source",
+            "bound_at",
+            "reason_code"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [
@@ -2579,6 +2790,103 @@
         },
         "created_at": {
           "type": "string"
+        },
+        "owner_binding": {
+          "type": "object",
+          "properties": {
+            "task_id": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string",
+              "enum": [
+                "bound",
+                "unavailable"
+              ]
+            },
+            "owner_thread_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "source": {
+              "type": "string",
+              "enum": [
+                "mcp_meta",
+                "mcp_meta_missing",
+                "mcp_meta_invalid",
+                "non_host_admission",
+                "legacy_unavailable"
+              ]
+            },
+            "bound_at": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reason_code": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "const": "owner_thread_unavailable"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "task_id",
+            "state",
+            "owner_thread_id",
+            "source",
+            "bound_at",
+            "reason_code"
+          ],
+          "additionalProperties": false
+        },
+        "console_link": {
+          "type": "object",
+          "properties": {
+            "available": {
+              "type": "boolean"
+            },
+            "web_url": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "console_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "console_reused": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "reason_code": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "available",
+            "web_url",
+            "console_id",
+            "console_reused",
+            "reason_code"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [

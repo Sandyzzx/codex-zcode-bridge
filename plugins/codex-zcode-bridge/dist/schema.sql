@@ -10,6 +10,39 @@ CREATE TABLE tasks (
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 ) STRICT;
 
+-- Owner Binding is an admission fact, not part of the model-controlled
+-- TaskPackage. The trusted MCP host context supplies the Codex Thread ID;
+-- a task admitted without trusted host identity is explicitly unavailable.
+CREATE TABLE task_owner_bindings (
+  task_id TEXT PRIMARY KEY,
+  binding_state TEXT NOT NULL CHECK(binding_state IN ('bound','unavailable')),
+  owner_thread_id TEXT CHECK(
+    owner_thread_id IS NULL OR (
+      length(owner_thread_id) BETWEEN 1 AND 128
+      AND owner_thread_id=trim(owner_thread_id)
+      AND instr(owner_thread_id,char(0))=0
+      AND owner_thread_id=owner_thread_id COLLATE BINARY
+    )
+  ),
+  binding_source TEXT NOT NULL CHECK(binding_source IN (
+    'mcp_meta','mcp_meta_missing','mcp_meta_invalid','non_host_admission','legacy_unavailable'
+  )),
+  bound_at TEXT NOT NULL CHECK(length(bound_at) BETWEEN 1 AND 64),
+  FOREIGN KEY(task_id) REFERENCES tasks(task_id),
+  CHECK (
+    (binding_state='bound' AND owner_thread_id IS NOT NULL AND binding_source='mcp_meta')
+    OR (binding_state='unavailable' AND owner_thread_id IS NULL
+      AND binding_source IN ('mcp_meta_missing','mcp_meta_invalid','non_host_admission','legacy_unavailable'))
+  )
+) STRICT;
+
+CREATE INDEX task_owner_bindings_thread ON task_owner_bindings(owner_thread_id)
+  WHERE owner_thread_id IS NOT NULL;
+CREATE TRIGGER task_owner_bindings_no_update BEFORE UPDATE ON task_owner_bindings
+BEGIN SELECT RAISE(ABORT,'task owner binding is immutable'); END;
+CREATE TRIGGER task_owner_bindings_no_delete BEFORE DELETE ON task_owner_bindings
+BEGIN SELECT RAISE(ABORT,'task owner binding is immutable'); END;
+
 CREATE TABLE attempts (
   task_id TEXT NOT NULL,
   attempt INTEGER NOT NULL CHECK(attempt>=1),

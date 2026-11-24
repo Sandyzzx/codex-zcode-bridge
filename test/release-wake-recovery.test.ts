@@ -162,7 +162,20 @@ function releasedOperation(operationId: string, taskId: string, resultStatus = "
 }
 
 function taskProjection(taskId: string, status: string): Detail {
-  return { task_id: taskId, status, workspace: `D:\\${taskId}`, execution_workspace: `D:\\${taskId}` };
+  return {
+    task_id: taskId,
+    status,
+    workspace: `D:\\${taskId}`,
+    execution_workspace: `D:\\${taskId}`,
+    owner_binding: {
+      task_id: taskId,
+      state: "bound",
+      owner_thread_id: "019c0000-0000-7000-8000-0000000000ad",
+      source: "mcp_meta",
+      bound_at: "2026-11-24T00:00:00.000Z",
+      reason_code: null,
+    },
+  };
 }
 
 function lifecycleSnapshotFor(taskId: string): Detail {
@@ -187,6 +200,8 @@ test("a Release that never produced a Wake intent is re-notified exactly once by
   await manager.recoverTasks();
   assert.equal(harness.wakeFacts.length, 1, "the interrupted notification must be re-run");
   assert.equal(harness.wakeFacts[0]?.operation_id, "op-gap");
+  assert.equal(harness.wakeFacts[0]?.owner_thread_id, "019c0000-0000-7000-8000-0000000000ad");
+  assert.equal(harness.wakeFacts[0]?.owner_binding_state, "bound");
   assert.equal(harness.observations.length, 1, "the re-run notification records its observation");
   assert.ok(harness.stages.some((entry) => entry.stage === "release_wake_recovery_selected"));
   await manager.shutdown();
@@ -223,6 +238,40 @@ test("an existing executor_wake observation keeps its dedup contract and is neve
   await manager.recoverTasks();
   assert.equal(harness.wakeFacts.length, 0,
     "a queue submission with unknown acknowledgement outcome must not be duplicated");
+  await manager.shutdown();
+});
+
+test("an existing web_notify fallback is never re-notified by Recovery", async () => {
+  const priorEvidence = {
+    reason: "executor_wake",
+    state: "web_notify",
+    task_id: "web-notified",
+    attempt: 1,
+    operation_id: "op-web-notified",
+    generation: 1,
+    result_digest: "a".repeat(64),
+    result_commit_ref: "result-" + "a".repeat(64),
+    thread_id: null,
+    delivery_id: "delivery-web-notified",
+    policy_digest: "0".repeat(64),
+    authorization_digest: "1".repeat(64),
+    reason_code: "owner_thread_unavailable",
+    evidence_digest: "2".repeat(64),
+  };
+  const harness = makeRecoveryHarness({
+    operations: [releasedOperation("op-web-notified", "web-notified")],
+    events: [{
+      operation_id: "op-web-notified",
+      event_type: "observation_recorded",
+      evidence_json: JSON.stringify(priorEvidence),
+    }],
+    taskProjections: [taskProjection("web-notified", "completed")],
+    tasks: { "web-notified": lifecycleSnapshotFor("web-notified") },
+  });
+  const manager = await harness.manager();
+  await manager.recoverTasks();
+  assert.equal(harness.wakeFacts.length, 0,
+    "a persisted fallback observation is already a Wake fact and must not be replayed");
   await manager.shutdown();
 });
 

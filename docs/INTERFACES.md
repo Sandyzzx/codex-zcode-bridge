@@ -1,8 +1,8 @@
 # 当前接口与兼容边界
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-24（ADR-056 Result 回读合同：Executor 侧摘要、有界文本通道、分页全量读取）
-> Last verified: 2026-11-22，核对 PR #116 的 opt-in Result 摘要/默认完整 Result、PR #129 的完整已捕获响应 AgentReport 扫描、Event Attempt 归属、ADR-039 持久 Spawn 证据、活动 Worker 与四种终态统一绑定保护、ADR-048 默认 Event 分页和现有 SQLite/生命周期合同。
+> Last updated: 2026-11-24（ADR-059 Owner Binding、Auto Wake 与 receipt Console link）
+> Last verified: 2026-11-24，核对 ADR-059 的 `_meta.threadId` 身份来源、Task/Attempt/Binding 同事务、`owner_binding`/`console_link` additive receipt 字段、ADR-056 Result 回读、ADR-039 持久 Spawn 证据与 ADR-048 默认 Event 分页；真实 Codex Host 已观察到 `owner_binding` 与 Queue 触发的原 Thread 新 Turn，`console_link` 在 receipt 中实际返回。
 > Verified against: Preview `3daffe476b12b3eb16cec957d18422c3ff4c775e` + terminal-admin-release candidate
 > ADR-039 Last verified: 2026-11-22，隔离 SQLite/MCP 覆盖 Receipt 保护、live descendant、活动 Worker、终止失败、completed/failed/waiting_for_master/cancelled 终态绑定、并发重复取消与 SQLite 历史校验；生产取消未重试。
 > ADR-047/048: Accepted for Preview；默认 `zcode_result` 保持完整，Summary 仍为显式 opt-in。
@@ -18,6 +18,8 @@ TaskPackage 的 requirements、allowed_paths、forbidden_paths、acceptance_crit
 相同 task_id 和相同内容可重放原回执，不同内容返回 TASK_ID_CONFLICT。Continuation 的 operation_id 同样绑定规范化请求；相同 key/内容重放，不同内容冲突。未知执行结果必须查询原 task_id，不能换 ID 重派。
 
 公开状态为 queued/running/completed/failed/cancelled/waiting_for_master；后四者结束当前 Attempt。completed 只表示执行及报告归一化结束，不表示 Owner 验收。Continue 接受完成、失败或待主机决定且已 Release 的前序 Attempt，保持 task ID 并创建新 Attempt；永久 Claim 不重放。
+
+[ADR-059](decisions/ADR-059-owner-binding-and-installed-auto-wake.md)：Owner Thread 只来自 MCP handler 的 `ctx.mcpReq._meta.threadId`，不是 TaskPackage 输入；输入中出现 Owner 身份键返回 `TASK_INVALID`。Task、首个 Attempt 与 `task_owner_bindings` 在同一 SQLite 事务写入；Binding 为 `bound|unavailable`，缺失时 reason 为 `owner_thread_unavailable`，ZCode Runtime Session ID 不得替代。`zcode_task`/`zcode_continue` receipt 以可选 `owner_binding` 与 `console_link` 加性返回；`console_link.available=false` 不影响已受理 Task，`reason_code` 说明安全查询回退。
 
 ## Authority 与 Recovery
 

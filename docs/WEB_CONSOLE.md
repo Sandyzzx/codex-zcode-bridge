@@ -1,9 +1,9 @@
 # Bridge Operations Console
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-23
-> Last verified: 2026-11-23，核对 unified Console、Cost Lab same-origin 挂载、i18n/theme、Deep Link、Runtime Auto-Learn、真实 Chromium 和 synthetic Worker 定向路径；真实 Desktop 全退、严格 Wake C/D 与真实 Provider 仍不在已验证范围。
-> Verified against: `origin/preview@8ee7ec93a82c2093dce74707a9d1937c1c567887` + code candidate `3baf91c65`
+> Last updated: 2026-11-24（Auto Wake Settings 与 receipt Console link）
+> Last verified: 2026-11-24，核对 unified Console、Cost Lab same-origin 挂载、i18n/theme、Deep Link、Runtime Auto-Learn、Auto Wake 默认开启/CSRF Settings、`console_link` receipt、真实 Chromium 定向路径与真实 Host Completion Wake E2E（Master 在回复中输出可点击的 Task Deep Link）；真实 Desktop 全退与真实 Provider 不在已验证范围。
+> Verified against: `codex/preview16-async-handoff-20261124`（Preview.16 candidate，基于 `origin/preview@fa44b901`）
 
 Operations Console 是 Executor Control Pipe 的本地可视化 Adapter。它只使用
 一个 loopback Origin 和一个 HTTP Server，不创建 Task、Manager、Worker 或
@@ -20,7 +20,9 @@ node dist/task-cli.mjs executor start
 node dist/task-cli.mjs task console-url <task_id>
 ```
 
-`task console-url` 会验证 Task、live `/api/session`、Executor Lease 和
+`zcode_task` / `zcode_continue` 的 receipt 也会返回经同一验证的
+`console_link`；链接失败只记 `available=false` 与 `reason_code`，不会撤销
+已受理 Task。CLI 的 `task console-url` 仍会验证 Task、live `/api/session`、Executor Lease 和
 Authority Root discovery。若 Console 尚未运行，它会启动 `dist/web-console.mjs`；
 已有安全 Owner 时复用同一实际端口。返回值示例：
 
@@ -53,7 +55,9 @@ node dist/web-console.mjs --data-root <absolute-state-dir>
   Start Plan、Usage、History、导出和显式验证实现。
 - **Runtime**：当前安装、安全状态、Fingerprint、Manifest、资产变化、
   Capability Matrix、证据历史、授权缺项和 Candidate Report。
-- **Settings**：`zh-CN`/`en` 语言与 Light/Dark/System 主题偏好。
+- **Settings**：`zh-CN`/`en` 语言、Light/Dark/System 主题偏好，以及 Auto Wake
+  开关（默认开启；关闭后 Worker 完成只记录 `web_notify` / `auto_wake_disabled`，
+  不调用官方 Queue）。
 
 Task Status、Events 和 Result 独立读取。未完成 Task 的
 `TASK_NOT_FINISHED` Result 只显示 pending/inconclusive，不掩盖有效 Status

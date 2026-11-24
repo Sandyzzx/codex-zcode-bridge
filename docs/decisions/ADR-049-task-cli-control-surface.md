@@ -5,6 +5,7 @@
 > Decision: Accepted for the Async Executor Preview candidate
 > Baseline: `origin/preview` `1bf039fda2ccfd17a992458a871bddd7b48b38c1`
 > Related architecture: [BRIDGE_ASYNC_EXECUTION_V1.md](../architecture/BRIDGE_ASYNC_EXECUTION_V1.md)
+> Superseded in part: [ADR-059](ADR-059-owner-binding-and-installed-auto-wake.md) 移除 `task wake-authorize`；`task console-url`、Control 客户端边界与只读/显式写入规则继续有效。
 
 ## 决定
 

@@ -9,7 +9,7 @@ import { ExecutorControlClient } from "../src/executor/control-client.js";
 import { encodeExecutorFrame } from "../src/executor/frame.js";
 import { RemoteTaskManager } from "../src/executor/remote-task-manager.js";
 import { TaskManagerError } from "../src/task-errors.js";
-import type { ProgressTaskManager, TaskPackage, TaskReceipt } from "../src/interfaces.js";
+import type { ProgressTaskManager, TaskAdmission, TaskPackage, TaskReceipt } from "../src/interfaces.js";
 
 function pipeName(root: string, suffix: string): string {
   return `\\\\.\\pipe\\codex-zcode-bridge-executor-test-${process.pid}-${suffix}`;
@@ -392,6 +392,103 @@ test("oversized frames are rejected without dispatching a manager call", async (
     assert.throws(() => encodeExecutorFrame({ giant: "x".repeat(34 * 1024 * 1024) }), /FRAME_TOO_LARGE/u);
     client.close();
   } finally {
+    await server.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Executor control forwards trusted admission instead of dropping it", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "executor-ipc-"));
+  const seen: Array<TaskAdmission | undefined> = [];
+  const manager = managerWith();
+  const createTask = manager.createTask.bind(manager);
+  manager.createTask = async (task: TaskPackage, admission?: TaskAdmission) => {
+    seen.push(admission);
+    return createTask(task);
+  };
+  const server = await startExecutorControlServer({ pipeName: pipeName(root, "admission"), manager, leaseId: "lease-1" });
+  const client = new ExecutorControlClient({ pipeName: pipeName(root, "admission") });
+  try {
+    const remote = new RemoteTaskManager(client);
+    await remote.createTask({
+      task_id: "task-admission",
+      workspace: root,
+      objective: "ACK",
+      requirements: [],
+      allowed_paths: [],
+      forbidden_paths: [],
+      acceptance_criteria: [],
+      test_commands: [],
+    }, {
+      owner_thread_id: "01a1a405-13b5-7083-8c4f-0160a761c598",
+      source: "mcp_meta",
+    });
+    assert.deepEqual(seen, [{
+      owner_thread_id: "01a1a405-13b5-7083-8c4f-0160a761c598",
+      source: "mcp_meta",
+    }]);
+  } finally {
+    client.close();
+    await server.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("receipt console link is additive and a link failure never rejects an accepted Task", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "executor-ipc-"));
+  const manager = managerWith();
+  const server = await startExecutorControlServer({ pipeName: pipeName(root, "console-link"), manager, leaseId: "lease-1" });
+  const client = new ExecutorControlClient({ pipeName: pipeName(root, "console-link") });
+  try {
+    const linked = new RemoteTaskManager(client, {
+      taskConsoleLink: async (taskId) => ({
+        available: true,
+        web_url: `http://127.0.0.1:43127/?task_id=${taskId}`,
+        console_id: "console-test",
+        console_reused: true,
+        reason_code: null,
+      }),
+    });
+    const receipt = await linked.createTask({
+      task_id: "task-linked",
+      workspace: root,
+      objective: "ACK",
+      requirements: [],
+      allowed_paths: [],
+      forbidden_paths: [],
+      acceptance_criteria: [],
+      test_commands: [],
+    });
+    assert.equal(receipt.status, "queued");
+    assert.equal(receipt.console_link?.available, true);
+    assert.equal(receipt.console_link?.web_url, "http://127.0.0.1:43127/?task_id=task-linked");
+    assert.equal(receipt.console_link?.console_reused, true);
+
+    const degraded = new RemoteTaskManager(client, {
+      taskConsoleLink: async () => {
+        throw Object.assign(new Error("Task Console is unavailable"), { code: "WEB_CONSOLE_UNAVAILABLE" });
+      },
+    });
+    const accepted = await degraded.createTask({
+      task_id: "task-degraded",
+      workspace: root,
+      objective: "ACK",
+      requirements: [],
+      allowed_paths: [],
+      forbidden_paths: [],
+      acceptance_criteria: [],
+      test_commands: [],
+    });
+    assert.equal(accepted.status, "queued");
+    assert.deepEqual(accepted.console_link, {
+      available: false,
+      web_url: null,
+      console_id: null,
+      console_reused: null,
+      reason_code: "WEB_CONSOLE_UNAVAILABLE",
+    });
+  } finally {
+    client.close();
     await server.close();
     rmSync(root, { recursive: true, force: true });
   }

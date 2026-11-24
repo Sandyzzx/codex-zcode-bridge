@@ -8,6 +8,7 @@
 > PR #131 baseline / acceptance implementation: `a1bc911ec1b03cd22bbf13e717fc2233284e6183` / `7f54531acba0844937bc134609dae840090294ec`
 > Current integration: PR #131 merged as `origin/preview@c7bfc28b1112dead95ae4179a00962de76051920`; Preview.14 Release preparation in progress
 > Related architecture: [BRIDGE_ASYNC_EXECUTION_V1.md](../architecture/BRIDGE_ASYNC_EXECUTION_V1.md)
+> Superseded in part: [ADR-059](ADR-059-owner-binding-and-installed-auto-wake.md) 退役 `task wake-authorize` / `wake-policy.json` 授权路径；Executor 所有权、Thin MCP 与 Control IPC 继续有效。
 
 ## Context
 

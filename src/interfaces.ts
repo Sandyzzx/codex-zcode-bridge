@@ -105,6 +105,34 @@ export interface TaskPackage {
   context?: string;
 }
 
+/** Trusted admission context supplied by the Host boundary, never by a TaskPackage. */
+export interface TaskAdmission {
+  readonly owner_thread_id: string | null;
+  readonly source: "mcp_meta" | "mcp_meta_missing" | "mcp_meta_invalid" | "non_host_admission";
+}
+
+export interface TaskOwnerBinding {
+  readonly task_id: string;
+  readonly state: "bound" | "unavailable";
+  readonly owner_thread_id: string | null;
+  readonly source: "mcp_meta" | "mcp_meta_missing" | "mcp_meta_invalid" | "non_host_admission" | "legacy_unavailable";
+  readonly bound_at: string | null;
+  readonly reason_code: "owner_thread_unavailable" | null;
+}
+
+/**
+ * Additive receipt evidence for the verified Task Console deep link. A link
+ * failure never rejects an accepted Task; it is reported as unavailable with
+ * a stable reason code so the Master can fall back to `task status`.
+ */
+export interface TaskConsoleLink {
+  readonly available: boolean;
+  readonly web_url: string | null;
+  readonly console_id: string | null;
+  readonly console_reused: boolean | null;
+  readonly reason_code: string | null;
+}
+
 export interface ZCodeModelSelection {
   provider_id: string;
   model_id: string;
@@ -226,6 +254,8 @@ export interface TaskReceipt {
   task_id: string;
   status: "queued" | "running";
   created_at: string;
+  owner_binding?: TaskOwnerBinding;
+  console_link?: TaskConsoleLink;
 }
 
 export interface TaskStatusRecord {
@@ -248,6 +278,8 @@ export interface TaskStatusRecord {
   /** Present only for a queued current Attempt whose dispatch is fenced by
    * another occupied Operation; read-only projection, not a retry command. */
   dispatch_blocker?: DispatchBlocker;
+  /** Admission-time Codex Thread binding. Missing only for older projections. */
+  owner_binding?: TaskOwnerBinding;
 }
 
 /** Read-only current-attempt view for hosts that only need to know whether the task needs attention. */
@@ -396,7 +428,7 @@ export interface GetEventsInput {
 }
 
 export interface TaskManager {
-  createTask(task: TaskPackage): Promise<TaskReceipt>;
+  createTask(task: TaskPackage, admission?: TaskAdmission): Promise<TaskReceipt>;
   getStatus(taskId: string): Promise<TaskStatusRecord>;
   /** P1 §3.4: view="summary" runs the ADR-047 projection Executor-side; the
    * omitted (default) view keeps the frozen full-Result contract. */

@@ -12,6 +12,7 @@ const TEMP=process.env.WP6C_TEST_TEMP_ROOT
 mkdirSync(TEMP,{recursive:true});
 let serial=0;
 const stores=new Set();
+const OWNER_THREAD_ID='019c0000-0000-7000-8000-000000000001';
 
 function root(label){
   const value=path.join(TEMP,`${label}-${++serial}`);
@@ -23,7 +24,7 @@ function failWith(fn,code){
   assert.throws(fn,error=>error instanceof AdmissionError&&error.code===code);
 }
 
-function makeReleased(label='wake'){
+function makeReleased(label='wake',admission){
   const dataRoot=root(label);
   const workspace=path.join(TEMP,`workspace-${label}-${serial}`);
   mkdirSync(workspace,{recursive:true});
@@ -35,7 +36,8 @@ function makeReleased(label='wake'){
   store.provisionCapacity({operation_id:`policy-${label}`,capacity_limit:2,expected_generation:0,
     maintenance:{dispatch_blocked:true,writers_drained:true}});
   store.createTask({task_id:taskId,workspace,objective:'synthetic Executor Wake lifecycle fixture',
-    requirements:[],allowed_paths:[],forbidden_paths:[],acceptance_criteria:[],test_commands:[]},'2026-11-22T00:00:00.000Z');
+    requirements:[],allowed_paths:[],forbidden_paths:[],acceptance_criteria:[],test_commands:[]},
+    admission??'2026-11-22T00:00:00.000Z');
   const allow=()=>({state:'allow',fixture:true});
   const admitted=store.admitOperation({operation_id:operationId,task_id:taskId,attempt:1,workspace_ref:workspace},
     {workspaceValidator:allow,executionPermissionCheck:allow});
@@ -75,7 +77,7 @@ function makeReleased(label='wake'){
 
 function wakeInput(ref,state,overrides={}){
   return {operation_id:ref.operation_id,task_id:ref.task_id,attempt:ref.attempt,generation:ref.generation,
-    state,thread_id:'019c0000-0000-7000-8000-000000000001',delivery_id:digest({
+    state,thread_id:OWNER_THREAD_ID,delivery_id:digest({
       contract:'executor-wake-delivery-v1',task_id:ref.task_id,attempt:ref.attempt,
       operation_id:ref.operation_id,result_digest:'result-bound-by-store',
     }),policy_digest:digest({policy:'test-v1',model:'flash',provider:'deepseek',effort:'low'}),
@@ -180,6 +182,53 @@ test('Web Notify fallback needs no Thread binding and is terminal for one delive
   }finally{
     f.store.close();
     stores.delete(f.store);
+  }
+});
+
+test('Late Wake Compensation is a separate auditable fact and never rewrites web_notify',()=>{
+  const f=makeReleased('late-compensation',{owner_thread_id:OWNER_THREAD_ID,source:'mcp_meta'});
+  try{
+    const fallback=wakeInput(f.ref,'web_notify',{reason_code:'owner_thread_unavailable'});
+    f.store.recordExecutorWakeObservation(fallback);
+    const before=f.store.readTaskLifecycle(f.ref.task_id);
+    const compensationDelivery=digest({contract:'late-wake-compensation-v1',operation_id:f.ref.operation_id});
+    const intent=wakeInput(f.ref,'intent',{delivery_id:compensationDelivery,reason_code:'late_wake_compensation_intent'});
+    const first=f.store.recordLateWakeCompensation(intent);
+    const queued=f.store.recordLateWakeCompensation({...intent,state:'queued',reason_code:'queue_command_accepted',
+      queue_message_id:'019c0000-0000-7000-8000-000000000099'});
+    assert.equal(first.duplicate,false);
+    assert.equal(queued.state,'queued');
+    const after=f.store.readTaskLifecycle(f.ref.task_id);
+    assert.deepEqual(after.result,before.result);
+    assert.equal(after.projection.status,before.projection.status);
+    assert.equal(after.attempt.attempt,before.attempt.attempt);
+    assert.equal(after.attempt.status,before.attempt.status);
+    assert.equal(after.operation.claim_worker_identity_json,before.operation.claim_worker_identity_json);
+    assert.equal(after.operation.phase,'released');
+    const events=f.store.readLifecycleEvents(f.ref.operation_id)
+      .filter(event=>event.event_type==='observation_recorded')
+      .map(event=>JSON.parse(event.evidence_json));
+    assert.deepEqual(events.map(event=>event.state),['web_notify','intent','queued']);
+    assert.equal(events[0].reason,'executor_wake');
+    assert.equal(events[1].reason,'executor_late_wake_compensation');
+    assert.equal(events[2].queue_message_id,'019c0000-0000-7000-8000-000000000099');
+    failWith(()=>f.store.recordExecutorWakeObservation(wakeInput(f.ref,'queued',{
+      delivery_id:fallback.delivery_id,reason_code:'rewrite_attempt',
+    })),'executor_wake_ack_transition_invalid');
+    failWith(()=>f.store.recordLateWakeCompensation({...intent,state:'intent',reason_code:'second_intent',
+      delivery_id:digest({contract:'late-wake-compensation-v2',operation_id:f.ref.operation_id})}),
+      'late_wake_intent_not_first');
+  }finally{
+    f.store.close();
+    stores.delete(f.store);
+  }
+  const reopened=IsolatedAdmissionStore.open(f.dataRoot);
+  try{
+    assert.equal(reopened.readTaskLifecycle(f.ref.task_id).operation.phase,'released');
+    assert.equal(reopened.readLifecycleEvents(f.ref.operation_id)
+      .filter(event=>JSON.parse(event.evidence_json).reason==='executor_late_wake_compensation').length,2);
+  }finally{
+    reopened.close();
   }
 });
 

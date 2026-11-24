@@ -139,6 +139,11 @@ export interface CandidateTaskPackage {
   readonly context?: string;
 }
 
+export interface CandidateTaskAdmission {
+  readonly owner_thread_id: string | null;
+  readonly source: "mcp_meta" | "mcp_meta_missing" | "mcp_meta_invalid" | "non_host_admission";
+}
+
 type LifecycleEventsPage = Readonly<{
   events: readonly Readonly<Record<string, unknown>>[];
   nextCursor: number;
@@ -147,7 +152,7 @@ type LifecycleEventsPage = Readonly<{
 
 interface ClaimOnlyPort {
   provisionCapacity(input: unknown): unknown;
-  createTask(task: CandidateTaskPackage): unknown;
+  createTask(task: CandidateTaskPackage, admission?: CandidateTaskAdmission): unknown;
   admitOperation(input: unknown, gates: unknown): unknown;
   readOperation(operationId: string): unknown;
   createLaunchIntent(request: LaunchRequest): unknown;
@@ -1412,7 +1417,7 @@ function removeOwnedBootstrapFile(file: string): void {
  */
 export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Promise<{
   provisionCapacity(input: unknown): unknown;
-  createTask(task: CandidateTaskPackage): unknown;
+  createTask(task: CandidateTaskPackage, admission?: CandidateTaskAdmission): unknown;
   readTaskLifecycle(taskId: string): unknown;
   readTaskProjections(options?: {
     readonly afterTaskId?: string | null;
@@ -2282,7 +2287,7 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
         throw error;
       }
     },
-    createTask: (task) => port.createTask(task),
+    createTask: (task, admission) => port.createTask(task, admission),
     readTaskLifecycle: (taskId) => port.readTaskLifecycle(taskId),
     readTaskProjections: (options) => port.readTaskProjections(options),
     readTaskAttention: (taskId) => port.readTaskAttention(taskId),

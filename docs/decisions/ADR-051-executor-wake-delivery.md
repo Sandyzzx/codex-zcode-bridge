@@ -10,6 +10,7 @@
 > Acceptance implementation: `7f54531acba0844937bc134609dae840090294ec`
 > Readback diagnosis baseline: `f88e0919259b17862f012f6549b57f2b2608cfc6`
 > Related architecture: [BRIDGE_ASYNC_EXECUTION_V1.md](../architecture/BRIDGE_ASYNC_EXECUTION_V1.md)
+> Superseded in part: [ADR-059](ADR-059-owner-binding-and-installed-auto-wake.md) 退役 `wake-policy.json`、Owner Grant、模型/Provider/Effort 匹配、Control Socket 存在性与 loaded/idle 前置门禁；交付顺序、Observation 不可改写、幂等与 `submission_unknown` 保护继续有效。
 
 ## 决定
 

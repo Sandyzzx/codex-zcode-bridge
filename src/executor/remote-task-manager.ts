@@ -2,7 +2,9 @@ import type {
   ContinueTaskInput,
   GetEventsInput,
   ProgressTaskManager,
+  TaskAdmission,
   TaskAttentionSnapshot,
+  TaskConsoleLink,
   TaskFeedbackSnapshotV01,
   TaskPackage,
   TaskProgressPage,
@@ -40,9 +42,13 @@ const TASK_MANAGER_ERROR_CODES = new Set<TaskManagerErrorCode>([
 
 export class RemoteTaskManager implements ProgressTaskManager, ExecutorTaskManagement {
   readonly #client: ExecutorControlClient;
+  readonly #taskConsoleLink: ((taskId: string) => Promise<TaskConsoleLink>) | undefined;
 
-  constructor(client: ExecutorControlClient) {
+  constructor(client: ExecutorControlClient, options: {
+    readonly taskConsoleLink?: (taskId: string) => Promise<TaskConsoleLink>;
+  } = {}) {
     this.#client = client;
+    this.#taskConsoleLink = options.taskConsoleLink;
   }
 
   async #call<M extends ExecutorControlMethod>(
@@ -72,8 +78,34 @@ export class RemoteTaskManager implements ProgressTaskManager, ExecutorTaskManag
     return response.result ?? {};
   }
 
-  async createTask(task: TaskPackage): Promise<TaskReceipt> {
-    return this.#call("createTask", { task }, task.task_id) as unknown as TaskReceipt;
+  async #withConsoleLink(receipt: TaskReceipt): Promise<TaskReceipt> {
+    if (!this.#taskConsoleLink) return receipt;
+    try {
+      return { ...receipt, console_link: await this.#taskConsoleLink(receipt.task_id) };
+    } catch (error) {
+      const reason = error instanceof Error && "code" in error && typeof error.code === "string"
+        ? error.code
+        : "WEB_CONSOLE_UNAVAILABLE";
+      return {
+        ...receipt,
+        console_link: {
+          available: false,
+          web_url: null,
+          console_id: null,
+          console_reused: null,
+          reason_code: reason,
+        },
+      };
+    }
+  }
+
+  async createTask(task: TaskPackage, admission?: TaskAdmission): Promise<TaskReceipt> {
+    const receipt = await this.#call(
+      "createTask",
+      { task, ...(admission ? { admission } : {}) },
+      task.task_id,
+    ) as unknown as TaskReceipt;
+    return this.#withConsoleLink(receipt);
   }
 
   async listTasks(input: ListTasksInput = {}): Promise<TaskListPage> {
@@ -93,11 +125,12 @@ export class RemoteTaskManager implements ProgressTaskManager, ExecutorTaskManag
   }
 
   async continueTask(input: ContinueTaskInput): Promise<TaskReceipt> {
-    return this.#call(
+    const receipt = await this.#call(
       "continueTask",
       { input },
       input.operation_id ?? `${input.task_id}:continue`,
     ) as unknown as TaskReceipt;
+    return this.#withConsoleLink(receipt);
   }
 
   async cancelTask(taskId: string): Promise<TaskStatusRecord> {

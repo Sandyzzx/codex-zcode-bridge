@@ -6,6 +6,7 @@ import type { ExecutorTaskManagement, ListTasksInput, TaskListPage } from "../ta
 import { listTasksInputSchema } from "../task-list.js";
 import { zcodeEventsInputSchema, zcodeInteractionReplyInputSchema } from "../api-schemas.js";
 import type { GetEventsInput, TaskResult, ZCodeInteractionReplyInput } from "../interfaces.js";
+import { readAutoWakeSetting, writeAutoWakeSetting } from "../runtime/auto-wake-setting.js";
 import { OPERATIONS_CONSOLE_HTML } from "./console-ui.js";
 
 const LOOPBACK_HOST = "127.0.0.1";
@@ -29,6 +30,8 @@ export interface TaskConsoleServerOptions {
   /** Local discovery identity; never a credential or CSRF token. */
   readonly consoleId?: string;
   readonly authorityRootDigest?: string;
+  /** Canonical per-host settings directory. Omitted servers expose no settings mutations. */
+  readonly settingsDirectory?: string;
   readonly now?: () => number;
 }
 
@@ -190,6 +193,7 @@ function taskErrorStatus(error: unknown): number {
     : "";
   if (code === "TASK_NOT_FOUND" || code === "NOT_FOUND") return 404;
   if (code === "TASK_NOT_FINISHED" || code === "TASK_STATE" || code === "TASK_CANCEL_REQUESTED") return 409;
+  if (code === "provider_config_invalid" || code === "PROVIDER_CONFIG_INVALID") return 400;
   if (code === "EXECUTOR_UNAVAILABLE" || code === "SUBMISSION_UNKNOWN") return 503;
   if (code === "REQUEST_CANCELLED") return 408;
   return 500;
@@ -312,6 +316,16 @@ export function createTaskConsoleServer(options: TaskConsoleServerOptions): Task
       json(response, 200, { ok: true, result: await options.runtimeCompatibility.candidateReport() });
       return;
     }
+    if (url.pathname === "/api/settings") {
+      if (!options.settingsDirectory) {
+        throw failure(503, "SETTINGS_UNAVAILABLE", "Bridge settings are not configured");
+      }
+      json(response, 200, {
+        ok: true,
+        result: { auto_wake: { enabled: await readAutoWakeSetting(options.settingsDirectory) } },
+      });
+      return;
+    }
     if (url.pathname === "/api/tasks") {
       if (!options.manager.listTasks) throw failure(501, "WEB_LIST_UNAVAILABLE", "task listing is unavailable");
       const input = parseListQuery(url.searchParams);
@@ -382,6 +396,21 @@ export function createTaskConsoleServer(options: TaskConsoleServerOptions): Task
     }
     if (request.headers["content-type"]?.split(";")[0]?.trim().toLowerCase() !== "application/json") {
       throw failure(415, "WEB_CONTENT_TYPE_REQUIRED", "mutations require application/json");
+    }
+    if (url.pathname === "/api/settings/auto-wake") {
+      if (!options.settingsDirectory) {
+        throw failure(503, "SETTINGS_UNAVAILABLE", "Bridge settings are not configured");
+      }
+      const body = await readJson(request);
+      if (typeof body.enabled !== "boolean") {
+        throw failure(400, "WEB_INVALID_SETTING", "enabled must be a boolean");
+      }
+      await writeAutoWakeSetting(options.settingsDirectory, body.enabled);
+      json(response, 200, {
+        ok: true,
+        result: { auto_wake: { enabled: body.enabled } },
+      });
+      return;
     }
     const match = /^\/api\/tasks\/([^/]+)\/(cancel|reply)$/u.exec(url.pathname);
     if (!match) throw failure(404, "WEB_NOT_FOUND", "route not found");

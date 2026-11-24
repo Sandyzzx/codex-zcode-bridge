@@ -6,8 +6,8 @@ var __export = (target, all) => {
 };
 
 // src/web/main.ts
-import { randomUUID as randomUUID8 } from "node:crypto";
-import path21 from "node:path";
+import { randomUUID as randomUUID10 } from "node:crypto";
+import path23 from "node:path";
 import process2 from "node:process";
 import { fileURLToPath as fileURLToPath9 } from "node:url";
 
@@ -208,8 +208,8 @@ function createPlatformProbe(options = {}) {
         const map = /* @__PURE__ */ new Map();
         for (const pid of distinct) {
           try {
-            const stat4 = await readFile(`/proc/${pid}/stat`, "utf8");
-            const afterComm = stat4.slice(stat4.lastIndexOf(")") + 2);
+            const stat5 = await readFile(`/proc/${pid}/stat`, "utf8");
+            const afterComm = stat5.slice(stat5.lastIndexOf(")") + 2);
             const fields = afterComm.split(" ");
             const starttime = fields[19];
             if (starttime) map.set(pid, starttime.trim());
@@ -248,8 +248,8 @@ function createPlatformProbe(options = {}) {
       if (process.platform === "linux") {
         const map = /* @__PURE__ */ new Map();
         try {
-          const stat4 = await readFile(`/proc/${pid}/stat`, "utf8");
-          const afterComm = stat4.slice(stat4.lastIndexOf(")") + 2);
+          const stat5 = await readFile(`/proc/${pid}/stat`, "utf8");
+          const afterComm = stat5.slice(stat5.lastIndexOf(")") + 2);
           const starttime = afterComm.split(" ")[19];
           if (starttime) map.set(pid, starttime.trim());
         } catch {
@@ -341,7 +341,7 @@ function resolveUserHome(env, options = {}) {
 function discoverZCodeData(env, options = {}) {
   const platform = options.platform ?? process.platform;
   const pathImpl = platform === "win32" ? path2.win32 : path2.posix;
-  const readFile6 = options.readFile ?? ((filePath) => readFileSync(filePath, "utf8"));
+  const readFile7 = options.readFile ?? ((filePath) => readFileSync(filePath, "utf8"));
   const fileExists = options.fileExists ?? existsSync;
   const home = resolveUserHome(env, options);
   const settingFile = pathImpl.join(home.userHome, ".zcode", "v2", "setting.json");
@@ -353,7 +353,7 @@ function discoverZCodeData(env, options = {}) {
   } else {
     let text;
     try {
-      text = readFile6(settingFile);
+      text = readFile7(settingFile);
     } catch (error2) {
       settingStatus = isPermissionDeniedCode(error2) ? "permission_denied" : "unreadable";
       settingError = error2 instanceof Error ? error2.message : String(error2);
@@ -477,7 +477,9 @@ var PERSISTED_RUNTIME_KEYS = [
   "ZCODE_BRIDGE_MAX_CONCURRENT_WORKERS",
   "ZCODE_BRIDGE_TIMEOUT_MS",
   "ZCODE_BRIDGE_BROWSER_USE",
-  "ZCODE_BRIDGE_BROWSER_EXECUTABLE"
+  "ZCODE_BRIDGE_BROWSER_EXECUTABLE",
+  "ZCODE_BRIDGE_AUTO_WAKE",
+  "ZCODE_BRIDGE_TASK_CONSOLE"
 ];
 function loadPersistedRuntimeEnvironment(source, homeDir = homedir2(), host = codexHostProfile(homeDir)) {
   validateHostProfile(host);
@@ -773,7 +775,7 @@ function isReadableFile(filePath) {
 function findPackageRoot(startDir) {
   let current = startDir ?? path3.dirname(fileURLToPath(import.meta.url));
   for (let depth = 0; depth < 10; depth++) {
-    if (existsSync2(path3.join(current, "package.json"))) {
+    if (existsSync2(path3.join(current, "package.json")) || existsSync2(path3.join(current, "plugin.json")) && existsSync2(path3.join(current, "dist")) && existsSync2(path3.join(current, "worker"))) {
       return current;
     }
     const parent = path3.dirname(current);
@@ -781,7 +783,7 @@ function findPackageRoot(startDir) {
     current = parent;
   }
   throw new Error(
-    `Cannot locate the Bridge package root (no package.json above ${startDir ?? "module directory"})`
+    `Cannot locate the Bridge package root (no package.json or installed plugin markers above ${startDir ?? "module directory"})`
   );
 }
 function isPlainObject(value) {
@@ -813,9 +815,9 @@ function loadInstallAuthoritySelection(host) {
   validateHostProfile(host);
   const configPath = path4.join(host.settingsDirectory, CONFIG_FILE);
   try {
-    const stat4 = lstatSync(configPath);
-    if (!stat4.isFile() || stat4.isSymbolicLink()) throw new SqliteInstallConfigurationError("authority_config_not_regular_file");
-    if (stat4.size > CONFIG_LIMIT) throw new SqliteInstallConfigurationError("authority_config_too_large");
+    const stat5 = lstatSync(configPath);
+    if (!stat5.isFile() || stat5.isSymbolicLink()) throw new SqliteInstallConfigurationError("authority_config_not_regular_file");
+    if (stat5.size > CONFIG_LIMIT) throw new SqliteInstallConfigurationError("authority_config_too_large");
     const parsed = JSON.parse(readFileSync3(configPath, "utf8"));
     if (!isRecord(parsed)) throw new SqliteInstallConfigurationError("authority_config_invalid_shape");
     const keys = Object.keys(parsed).sort().join("|");
@@ -1139,10 +1141,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path22) {
-  if (!path22)
+function getElementAtPath(obj, path24) {
+  if (!path24)
     return obj;
-  return path22.reduce((acc, key) => acc?.[key], obj);
+  return path24.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -1482,11 +1484,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path22, issues) {
+function prefixIssues(path24, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path22);
+    iss.path.unshift(path24);
     return iss;
   });
 }
@@ -1932,16 +1934,16 @@ function flattenError(error2, mapper = (issue2) => issue2.message) {
 }
 function formatError(error2, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error3, path22 = []) => {
+  const processError = (error3, path24 = []) => {
     for (const issue2 of error3.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path22, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path24, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path22, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path24, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path22, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path24, ...issue2.path]);
       } else {
-        const fullpath = [...path22, ...issue2.path];
+        const fullpath = [...path24, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -7146,8 +7148,15 @@ var EXECUTOR_CONTROL_PROTOCOL_VERSION = 1;
 var EXECUTOR_CONTROL_FRAME_LIMIT_BYTES = 33 * 1024 * 1024;
 var nonEmptyString = string2().min(1);
 var emptyParams = strictObject({});
+var taskAdmissionSchema = strictObject({
+  owner_thread_id: string2().nullable(),
+  source: _enum(["mcp_meta", "mcp_meta_missing", "mcp_meta_invalid", "non_host_admission"])
+}).refine(
+  (value) => value.source === "mcp_meta" === (value.owner_thread_id !== null),
+  { message: "owner_thread_id must be present only for mcp_meta admission" }
+);
 var executorControlParamsSchemas = {
-  createTask: strictObject({ task: zcodeTaskInputSchema }),
+  createTask: strictObject({ task: zcodeTaskInputSchema, admission: taskAdmissionSchema.optional() }),
   listTasks: listTasksInputSchema,
   getStatus: strictObject({ task_id: nonEmptyString }),
   getResult: strictObject({ task_id: nonEmptyString, view: _enum(["summary", "full"]).optional() }),
@@ -7350,8 +7359,10 @@ var TASK_MANAGER_ERROR_CODES = /* @__PURE__ */ new Set([
 ]);
 var RemoteTaskManager = class {
   #client;
-  constructor(client) {
+  #taskConsoleLink;
+  constructor(client, options = {}) {
     this.#client = client;
+    this.#taskConsoleLink = options.taskConsoleLink;
   }
   async #call(method, params, idempotencyKey) {
     await this.#client.connect();
@@ -7375,8 +7386,31 @@ var RemoteTaskManager = class {
     }
     return response.result ?? {};
   }
-  async createTask(task) {
-    return this.#call("createTask", { task }, task.task_id);
+  async #withConsoleLink(receipt) {
+    if (!this.#taskConsoleLink) return receipt;
+    try {
+      return { ...receipt, console_link: await this.#taskConsoleLink(receipt.task_id) };
+    } catch (error2) {
+      const reason = error2 instanceof Error && "code" in error2 && typeof error2.code === "string" ? error2.code : "WEB_CONSOLE_UNAVAILABLE";
+      return {
+        ...receipt,
+        console_link: {
+          available: false,
+          web_url: null,
+          console_id: null,
+          console_reused: null,
+          reason_code: reason
+        }
+      };
+    }
+  }
+  async createTask(task, admission) {
+    const receipt = await this.#call(
+      "createTask",
+      { task, ...admission ? { admission } : {} },
+      task.task_id
+    );
+    return this.#withConsoleLink(receipt);
   }
   async listTasks(input = {}) {
     return this.#call("listTasks", input);
@@ -7391,11 +7425,12 @@ var RemoteTaskManager = class {
     return this.#call("getResultPage", { task_id: taskId, offset_bytes: offsetBytes, max_bytes: maxBytes });
   }
   async continueTask(input) {
-    return this.#call(
+    const receipt = await this.#call(
       "continueTask",
       { input },
       input.operation_id ?? `${input.task_id}:continue`
     );
+    return this.#withConsoleLink(receipt);
   }
   async cancelTask(taskId) {
     return this.#call("cancelTask", { task_id: taskId });
@@ -8130,13 +8165,13 @@ function readPortableExecutableArchitecture(filePath) {
   }
 }
 async function canonicalDirectory(candidate) {
-  const stat4 = await lstat(candidate);
-  if (!stat4.isDirectory() || stat4.isSymbolicLink()) throw new Error("installed ZCode root is not a real directory");
+  const stat5 = await lstat(candidate);
+  if (!stat5.isDirectory() || stat5.isSymbolicLink()) throw new Error("installed ZCode root is not a real directory");
   return realpath(candidate);
 }
 async function canonicalFileInside(root, candidate, label) {
-  const stat4 = await lstat(candidate);
-  if (!stat4.isFile() || stat4.isSymbolicLink()) throw new Error(`${label} is not a regular file`);
+  const stat5 = await lstat(candidate);
+  if (!stat5.isFile() || stat5.isSymbolicLink()) throw new Error(`${label} is not a regular file`);
   const resolved = await realpath(candidate);
   const relative = path7.relative(root, resolved);
   if (!relative || relative === ".." || relative.startsWith(`..${path7.sep}`) || path7.isAbsolute(relative)) {
@@ -8811,7 +8846,7 @@ function discoverZCodeData2({
   platform = process.platform,
   fallbackHomeDir = null,
   fileExists = existsSync4,
-  readFile: readFile6 = (filePath) => readFileSync4(filePath, "utf8")
+  readFile: readFile7 = (filePath) => readFileSync4(filePath, "utf8")
 } = {}) {
   const pathImpl = platform === "win32" ? path9.win32 : path9.posix;
   const home = resolveUserHome2({ env, platform, fallbackHomeDir });
@@ -8824,7 +8859,7 @@ function discoverZCodeData2({
   } else {
     let text;
     try {
-      text = readFile6(settingFile);
+      text = readFile7(settingFile);
     } catch (error2) {
       settingStatus = isPermissionDenied(error2) ? "permission_denied" : "unreadable";
       settingError = error2 instanceof Error ? error2.message : String(error2);
@@ -12832,6 +12867,306 @@ function shaString(value) {
 import { randomBytes as randomBytes2 } from "node:crypto";
 import http2 from "node:http";
 
+// src/runtime/auto-wake-setting.ts
+import { randomUUID as randomUUID9 } from "node:crypto";
+import { mkdir as mkdir4, readFile as readFile6, rm as rm3, stat as stat4, writeFile as writeFile2 } from "node:fs/promises";
+import path21 from "node:path";
+
+// src/store/atomic-rename.ts
+import { rename as rename2 } from "node:fs/promises";
+function retryable(error2, deadline) {
+  return process.platform === "win32" && Date.now() < deadline && ["EPERM", "EBUSY", "EACCES"].includes(error2.code ?? "");
+}
+async function atomicRename(source, target) {
+  const deadline = Date.now() + 2e3;
+  while (true) {
+    try {
+      await rename2(source, target);
+      return;
+    } catch (error2) {
+      if (!retryable(error2, deadline)) throw error2;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+}
+
+// src/store/process-lock.ts
+import { existsSync as existsSync8, mkdirSync as mkdirSync3, readFileSync as readFileSync6, renameSync as renameSync2, rmdirSync, statSync as statSync2, unlinkSync, writeFileSync as writeFileSync2 } from "node:fs";
+import { randomUUID as randomUUID8 } from "node:crypto";
+import path20 from "node:path";
+var selfIdentity = null;
+var TRANSIENT_LOCK_FS_CODES = /* @__PURE__ */ new Set(["EEXIST", "EPERM", "EACCES", "EBUSY", "ENOTEMPTY"]);
+var DESTINATION_PRESENT_CONTENTION_CODES = /* @__PURE__ */ new Set(["EEXIST", "ENOTEMPTY"]);
+var PUBLICATION_RETRY_PAUSE_MS = 50;
+var PUBLICATION_RETRY_MS = 5e3;
+var WITHDRAW_RETRY_MS = 5e3;
+var SHARED_GUARD_RETRY_MS = 2e3;
+var PRIVATE_CLEANUP_RETRY_MS = 1e3;
+var RETRY_PAUSE_MS = 10;
+function isTransientLockFsError(error2) {
+  return TRANSIENT_LOCK_FS_CODES.has(error2?.code ?? "");
+}
+function pauseBriefly(delayMs = RETRY_PAUSE_MS) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
+}
+async function withProcessLock(directory, operation, timeoutMs = 3e4) {
+  const deadline = Date.now() + timeoutMs;
+  let release;
+  while (!(release = tryAcquireProcessLock(directory))) {
+    if (Date.now() >= deadline) {
+      const owner = describeLockOwner(directory);
+      throw new Error(`timed out waiting for process lock: ${directory}${owner ? ` (live owner: ${owner})` : ""}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  try {
+    return await operation();
+  } finally {
+    release();
+  }
+}
+function describeLockOwner(directory) {
+  try {
+    const owner = JSON.parse(readFileSync6(path20.join(directory, "owner.json"), "utf8"));
+    if (!Number.isSafeInteger(owner.pid)) return null;
+    return `pid ${String(owner.pid)}${owner.started_at ? `, started ${owner.started_at}` : ""}`;
+  } catch {
+    return null;
+  }
+}
+function tryAcquireProcessLock(directory) {
+  return tryAcquireProcessLockWithRetry(directory, Date.now() + PUBLICATION_RETRY_MS);
+}
+function tryAcquireProcessLockWithRetry(directory, deadline) {
+  const token = randomUUID8();
+  if (existsSync8(directory)) return acquireExistingLock(directory);
+  const staging = `${directory}.${process.pid}.${token}.pending`;
+  const ownerRecord = {
+    pid: process.pid,
+    token,
+    started_at: (/* @__PURE__ */ new Date()).toISOString(),
+    // Fingerprint may be null before the async self-identity probe finishes;
+    // null never authorizes binding a recycled PID to a prior owner.
+    identity: selfIdentity ? { fingerprint: selfIdentity.fingerprint, identity_version: selfIdentity.identity_version, platform: selfIdentity.platform } : null
+  };
+  try {
+    mkdirSync3(staging, { mode: 448 });
+    writeFileSync2(path20.join(staging, "owner.json"), JSON.stringify(ownerRecord), { mode: 384, flag: "wx" });
+    try {
+      renameSync2(staging, directory);
+    } catch (error2) {
+      removeStagedLock(staging);
+      const code = error2.code;
+      if (!isTransientLockFsError(error2)) throw error2;
+      if (DESTINATION_PRESENT_CONTENTION_CODES.has(code ?? "") || existsSync8(directory)) {
+        return acquireExistingLock(directory);
+      }
+      if (Date.now() < deadline) {
+        pauseBriefly(PUBLICATION_RETRY_PAUSE_MS);
+        return tryAcquireProcessLockWithRetry(directory, deadline);
+      }
+      throw error2;
+    }
+  } catch (error2) {
+    removeStagedLock(staging);
+    throw error2;
+  }
+  return () => {
+    const owner = JSON.parse(readFileSync6(path20.join(directory, "owner.json"), "utf8"));
+    if (owner.token !== token) throw new Error("process lock ownership changed");
+    const retired = `${directory}.${token}.retired`;
+    renameWithTransientRetry(directory, retired);
+    removeStagedLock(retired);
+  };
+}
+function renameWithTransientRetry(source, target) {
+  const deadline = Date.now() + WITHDRAW_RETRY_MS;
+  while (true) {
+    try {
+      renameSync2(source, target);
+      return;
+    } catch (error2) {
+      if (!isTransientLockFsError(error2) || Date.now() >= deadline) throw error2;
+      pauseBriefly();
+    }
+  }
+}
+function acquireExistingLock(directory) {
+  let owner;
+  try {
+    owner = JSON.parse(readFileSync6(path20.join(directory, "owner.json"), "utf8"));
+    if (!Number.isSafeInteger(owner.pid) || owner.pid <= 0) throw new Error("invalid lock owner");
+  } catch {
+    try {
+      if (Date.now() - statSync2(directory).mtimeMs > 3e4) throw new Error(`unreadable lock owner: ${directory}`);
+    } catch (failure3) {
+      if (failure3.code !== "ENOENT") throw failure3;
+    }
+    return null;
+  }
+  try {
+    process.kill(owner.pid, 0);
+  } catch (failure3) {
+    if (failure3.code === "ESRCH") {
+      if (reclaimDeadOwner(directory)) return tryAcquireProcessLock(directory);
+    }
+  }
+  return null;
+}
+function removeStagedLock(directory) {
+  removePrivateFile(path20.join(directory, "owner.json"));
+  removePrivateDirectory(directory);
+}
+function removePrivateFile(file) {
+  const deadline = Date.now() + PRIVATE_CLEANUP_RETRY_MS;
+  while (true) {
+    try {
+      unlinkSync(file);
+      return;
+    } catch (error2) {
+      const code = error2?.code;
+      if (code === "ENOENT" || !isTransientLockFsError(error2) || Date.now() >= deadline) return;
+      pauseBriefly();
+    }
+  }
+}
+function removePrivateDirectory(directory) {
+  const deadline = Date.now() + PRIVATE_CLEANUP_RETRY_MS;
+  while (true) {
+    try {
+      rmdirSync(directory);
+      return;
+    } catch (error2) {
+      const code = error2?.code;
+      if (code === "ENOENT" || !isTransientLockFsError(error2) || Date.now() >= deadline) return;
+      pauseBriefly();
+    }
+  }
+}
+function reclaimDeadOwner(directory) {
+  const guard = `${directory}.reclaim`;
+  try {
+    mkdirSync3(guard);
+  } catch (error2) {
+    if (error2.code === "EEXIST") return false;
+    throw error2;
+  }
+  let outcome;
+  try {
+    const owner = JSON.parse(readFileSync6(path20.join(directory, "owner.json"), "utf8"));
+    if (!Number.isSafeInteger(owner.pid) || owner.pid <= 0) {
+      outcome = { kind: "busy" };
+    } else {
+      try {
+        process.kill(owner.pid, 0);
+        outcome = { kind: "busy" };
+      } catch (failure3) {
+        if (failure3.code !== "ESRCH") {
+          outcome = { kind: "busy" };
+        } else {
+          const retired = `${directory}.${randomUUID8()}.retired`;
+          renameWithTransientRetry(directory, retired);
+          removeStagedLock(retired);
+          outcome = { kind: "reclaimed" };
+        }
+      }
+    }
+  } catch (error2) {
+    outcome = error2.code === "ENOENT" ? { kind: "busy" } : { kind: "error", error: error2 };
+  }
+  let guardCleanupError = null;
+  try {
+    removeSharedGuard(guard);
+  } catch (error2) {
+    guardCleanupError = error2;
+  }
+  if (outcome.kind === "error") throw outcome.error;
+  if (guardCleanupError !== null) throw guardCleanupError;
+  return outcome.kind === "reclaimed";
+}
+function removeSharedGuard(guard) {
+  const deadline = Date.now() + SHARED_GUARD_RETRY_MS;
+  while (true) {
+    try {
+      rmdirSync(guard);
+      return;
+    } catch (error2) {
+      const code = error2?.code;
+      if (code === "ENOENT") return;
+      if (!isTransientLockFsError(error2) || Date.now() >= deadline) {
+        throw new Error(
+          `could not remove the lock reclaim guard at ${guard} (${code ?? "unknown error"}); a leftover guard blocks all future dead-owner reclaims of this lock and needs manual diagnosis`,
+          { cause: error2 }
+        );
+      }
+      pauseBriefly();
+    }
+  }
+}
+
+// src/runtime/auto-wake-setting.ts
+var AUTO_WAKE_RUNTIME_KEY = "ZCODE_BRIDGE_AUTO_WAKE";
+var SETTINGS_LIMIT_BYTES = 64 * 1024;
+function autoWakeEnabledFromEnvironment(env) {
+  const raw = env[AUTO_WAKE_RUNTIME_KEY]?.trim().toLowerCase();
+  return raw !== "false" && raw !== "0" && raw !== "off" && raw !== "no";
+}
+async function readAutoWakeSetting(settingsDirectory) {
+  const config2 = await readRuntimeConfig(settingsDirectory);
+  const value = config2[AUTO_WAKE_RUNTIME_KEY];
+  if (value === void 0 || value === null || value === "") return true;
+  if (typeof value !== "string") {
+    throw new BridgeError("provider_config_invalid", `${AUTO_WAKE_RUNTIME_KEY} must be "true" or "false"`);
+  }
+  return autoWakeEnabledFromEnvironment({ [AUTO_WAKE_RUNTIME_KEY]: value });
+}
+async function writeAutoWakeSetting(settingsDirectory, enabled) {
+  if (typeof enabled !== "boolean") {
+    throw new BridgeError("provider_config_invalid", "auto_wake must be a boolean");
+  }
+  await mkdir4(settingsDirectory, { recursive: true });
+  await withProcessLock(path21.join(settingsDirectory, ".settings.lock"), async () => {
+    const config2 = await readRuntimeConfig(settingsDirectory);
+    config2[AUTO_WAKE_RUNTIME_KEY] = enabled ? "true" : "false";
+    const serialized = `${JSON.stringify(config2, null, 2)}
+`;
+    if (Buffer.byteLength(serialized, "utf8") > SETTINGS_LIMIT_BYTES) {
+      throw new BridgeError("provider_config_invalid", "Updated Bridge runtime config would exceed 64 KiB");
+    }
+    const configPath = path21.join(settingsDirectory, "runtime-config.json");
+    const tempPath = `${configPath}.${process.pid}.${randomUUID9()}.tmp`;
+    try {
+      await writeFile2(tempPath, serialized, { encoding: "utf8", flag: "wx", mode: 384 });
+      await atomicRename(tempPath, configPath);
+    } catch (error2) {
+      await rm3(tempPath, { force: true }).catch(() => void 0);
+      throw new BridgeError(
+        "provider_config_invalid",
+        `Could not save Bridge runtime config: ${error2 instanceof Error ? error2.message : String(error2)}`,
+        { cause: error2 }
+      );
+    }
+  });
+}
+async function readRuntimeConfig(settingsDirectory) {
+  const configPath = path21.join(settingsDirectory, "runtime-config.json");
+  try {
+    const info = await stat4(configPath);
+    if (!info.isFile() || info.size > SETTINGS_LIMIT_BYTES) {
+      throw new BridgeError("provider_config_invalid", "Bridge runtime config is not a small regular JSON file");
+    }
+    const parsed = JSON.parse(await readFile6(configPath, "utf8"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new BridgeError("provider_config_invalid", "Bridge runtime config must contain a JSON object");
+    }
+    return parsed;
+  } catch (error2) {
+    if (error2.code === "ENOENT") return {};
+    if (error2 instanceof BridgeError) throw error2;
+    throw new BridgeError("provider_config_invalid", "Could not read Bridge runtime config", { cause: error2 });
+  }
+}
+
 // src/web/console-ui.ts
 var OPERATIONS_CONSOLE_HTML = String.raw`<!doctype html>
 <html lang="en" data-theme="system">
@@ -13012,6 +13347,7 @@ var OPERATIONS_CONSOLE_HTML = String.raw`<!doctype html>
         <article class="card"><small data-i18n="theme">Theme</small><strong class="big" id="settings-theme">--</strong><p data-i18n="themeBoundary">Light, Dark, or browser System.</p></article>
         <article class="card"><small data-i18n="serverOrigin">Server origin</small><strong class="big" id="settings-origin">LOOPBACK</strong><p data-i18n="loopbackOnly">IPv4 loopback only; exact Host and CSRF checks remain active.</p></article>
         <article class="card"><small data-i18n="dataBoundary">Data boundary</small><strong class="big">SQLite v14</strong><p data-i18n="dataBoundaryText">Cost Lab and compatibility evidence never become a second task authority.</p></article>
+        <article class="card accent"><small data-i18n="autoWake">Auto Wake</small><strong class="big" id="settings-auto-wake">ON</strong><p data-i18n="autoWakeBoundary">When a Worker releases a Task, the Executor may submit one official Codex Queue message to the original Thread.</p><label class="consent"><input type="checkbox" id="settings-auto-wake-toggle" checked><span data-i18n="autoWakeToggle">Enable Auto Wake for future releases</span></label><div class="status-line" id="settings-auto-wake-status"></div></article>
       </div>
       <div class="notice section ok-note"><strong data-i18n="systemBoundary">System boundary.</strong> <span data-i18n="systemBoundaryText">Opening pages, switching language/theme, loading Tasks, or reading local history performs no model request and no official billing refresh. Real Provider execution, Queue Wake, Desktop shutdown, and compatibility promotion require separate authorization.</span></div>
     </section>
@@ -13041,7 +13377,17 @@ const I18N={
     footerLoopback:"仅本机 Loopback / 当前账户会话",footerDurability:"关闭页面不会取消 Executor 持有的任务。",requestFailed:"请求失败",yes:"是",no:"否",running:"运行中",pending:"待生成"
   }
 };
-const state={session:null,costSession:null,costSessionPromise:null,tasks:[],selected:null,status:null,summary:null,events:null,result:null,attention:null,resultPending:false,errors:{},executor:null,detailGeneration:0,refreshInFlight:false,costLoaded:false,runtime:null,runtimeLoaded:false,startPlan:null,costHistory:[],verificationId:null,verificationTimer:null};
+Object.assign(I18N.en,{
+  settingsLede:"Language and theme are browser preferences. Auto Wake is a local Executor setting stored in the canonical Bridge runtime config; it never changes SQLite history, credentials, billing authorization, or model routing.",
+  systemBoundaryText:"Opening pages, switching language/theme, loading Tasks, or reading local history performs no model request and no official billing refresh. Auto Wake uses only the official Codex Queue and records each delivery fact; installing and enabling the plugin is the local Auto Wake contract.",
+  autoWake:"Auto Wake",autoWakeBoundary:"When a Worker releases a Task, the Executor may submit one official Codex Queue message to the original Thread.",autoWakeToggle:"Enable Auto Wake for future releases",autoWakeOn:"ON",autoWakeOff:"OFF",autoWakeDefaultNote:"Default ON. Applies only to later Wake attempts.",autoWakeSaved:"Auto Wake setting saved.",autoWakeSaveFailed:"Auto Wake setting could not be saved."
+});
+Object.assign(I18N["zh-CN"],{
+  settingsLede:"语言和主题是浏览器偏好。Auto Wake 是保存在 Bridge 规范 Runtime 配置中的本地 Executor 设置，不改变 SQLite 历史、凭据、Billing 授权或模型路由。",
+  systemBoundaryText:"打开页面、切换语言/主题、读取任务或本地历史，都不会发送模型请求或刷新官方账单。Auto Wake 只使用官方 Codex Queue 并记录每次投递事实；安装并启用插件即接受本机 Auto Wake 合同。",
+  autoWake:"Auto Wake",autoWakeBoundary:"Worker 释放任务后，Executor 可以向原 Thread 提交一条官方 Codex Queue 消息。",autoWakeToggle:"为后续 Release 启用 Auto Wake",autoWakeOn:"开启",autoWakeOff:"关闭",autoWakeDefaultNote:"默认开启，仅影响之后的 Wake 尝试。",autoWakeSaved:"Auto Wake 设置已保存。",autoWakeSaveFailed:"Auto Wake 设置保存失败。"
+});
+const state={session:null,costSession:null,costSessionPromise:null,tasks:[],selected:null,status:null,summary:null,events:null,result:null,attention:null,resultPending:false,errors:{},executor:null,detailGeneration:0,refreshInFlight:false,costLoaded:false,runtime:null,runtimeLoaded:false,startPlan:null,costHistory:[],verificationId:null,verificationTimer:null,autoWake:null,settingsLoaded:false};
 const $=selector=>document.querySelector(selector), $$=selector=>[...document.querySelectorAll(selector)];
 function prefLanguage(){const stored=localStorage.getItem("bridge.ui.language");if(stored==="zh-CN"||stored==="en")return stored;return navigator.language&&navigator.language.toLowerCase().startsWith("zh")?"zh-CN":"en"}
 function prefTheme(){const stored=localStorage.getItem("bridge.ui.theme");return ["light","dark","system"].includes(stored)?stored:"system"}
@@ -13058,7 +13404,7 @@ async function loadCostSession(){if(state.costSession)return state.costSession;i
 function validTaskId(value){return /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/u.test(String(value||""))}
 function taskIdFromLocation(){const value=new URL(location.href).searchParams.get("task_id");return validTaskId(value)?value:null}
 function setTaskInLocation(id){const url=new URL(location.href);if(id)url.searchParams.set("task_id",id);else url.searchParams.delete("task_id");const next=url.pathname+url.search+(location.hash||"#tasks");const current=location.pathname+location.search+location.hash;if(next!==current)history.replaceState(null,"",next)}
-function navigate(page){const valid=$$(".page").some(node=>node.id==="page-"+page);if(!valid)return;for(const node of $$(".page"))node.classList.toggle("active",node.id==="page-"+page);for(const node of $$(".tab"))node.classList.toggle("active",node.dataset.page===page);history.replaceState(null,"",location.pathname+location.search+"#"+page);window.scrollTo({top:0,behavior:"smooth"});if(page==="cost-lab")void ensureCostLab();if(page==="runtime")void ensureRuntime()}
+function navigate(page){const valid=$$(".page").some(node=>node.id==="page-"+page);if(!valid)return;for(const node of $$(".page"))node.classList.toggle("active",node.id==="page-"+page);for(const node of $$(".tab"))node.classList.toggle("active",node.dataset.page===page);history.replaceState(null,"",location.pathname+location.search+"#"+page);window.scrollTo({top:0,behavior:"smooth"});if(page==="cost-lab")void ensureCostLab();if(page==="runtime")void ensureRuntime();if(page==="settings")void ensureSettings()}
 function currentPage(){const hash=location.hash.slice(1);return ["dashboard","tasks","cost-lab","runtime","settings"].includes(hash)?hash:"dashboard"}
 function statusClass(status){return String(status||"unknown").toLowerCase().replace(/[^a-z_]/g,"")}
 function tag(status){const node=document.createElement("span");node.className="tag "+statusClass(status);node.textContent=String(status||"UNKNOWN");return node}
@@ -13067,9 +13413,12 @@ function fact(label,value){const node=element("div","fact");node.append(element(
 function section(title,value){const head=element("div","section-head");head.append(element("h2","",title));const pre=element("pre","pre",typeof value==="string"?value:JSON.stringify(value,null,2));const wrapper=document.createElement("div");wrapper.append(head,pre);return wrapper}
 function empty(text){return element("div","empty","",text)}
 function renderAll(){renderTasks();if(state.runtime)renderRuntime(state.runtime);if(state.startPlan)renderStartPlan(state.startPlan);applyStaticFacts()}
-function applyStaticFacts(){const origin=$("#settings-origin");if(origin)origin.textContent=new URL(location.href).origin;const lang=$("#settings-language"),themeNode=$("#settings-theme");if(lang)lang.textContent=language==="zh-CN"?"简体中文":"English";if(themeNode)themeNode.textContent=theme.toUpperCase()}
+function applyStaticFacts(){const origin=$("#settings-origin");if(origin)origin.textContent=new URL(location.href).origin;const lang=$("#settings-language"),themeNode=$("#settings-theme");if(lang)lang.textContent=language==="zh-CN"?"简体中文":"English";if(themeNode)themeNode.textContent=theme.toUpperCase();renderAutoWake()}
+function renderAutoWake(){const node=$("#settings-auto-wake"),toggle=$("#settings-auto-wake-toggle"),status=$("#settings-auto-wake-status");if(node)node.textContent=state.autoWake===null?"--":state.autoWake?t("autoWakeOn"):t("autoWakeOff");if(toggle){toggle.checked=state.autoWake!==false;toggle.disabled=state.autoWake===null}if(status&&state.autoWake!==null)status.textContent=t("autoWakeDefaultNote")}
+async function ensureSettings(){if(state.settingsLoaded)return;try{const result=await taskApi("/api/settings");state.autoWake=Boolean(result.auto_wake&&result.auto_wake.enabled);state.settingsLoaded=true;renderAutoWake()}catch(error){state.settingsLoaded=false;const status=$("#settings-auto-wake-status");if(status)status.textContent=errorMessage(error);toast(errorMessage(error),true)}}
+async function saveAutoWake(enabled){const toggle=$("#settings-auto-wake-toggle"),status=$("#settings-auto-wake-status");if(toggle)toggle.disabled=true;try{const result=await taskApi("/api/settings/auto-wake",{method:"POST",body:JSON.stringify({enabled}),csrf:true,origin:true});state.autoWake=Boolean(result.auto_wake&&result.auto_wake.enabled);state.settingsLoaded=true;renderAutoWake();if(status)status.textContent=t("autoWakeSaved");toast(t("autoWakeSaved"))}catch(error){if(toggle)toggle.checked=state.autoWake!==false;if(status)status.textContent=t("autoWakeSaveFailed")+" "+errorMessage(error);toast(errorMessage(error),true)}finally{if(toggle)toggle.disabled=state.autoWake===null}}
 async function bootstrap(){dialogs();theme=prefTheme();language=prefLanguage();applyTheme();applyLanguage();try{await refreshTasks();const target=taskIdFromLocation();if(target){navigate("tasks");await selectTask(target)}else navigate(currentPage());setInterval(()=>{if(document.hidden||state.refreshInFlight)return;void refreshTasks().catch(error=>{markOffline();setError(errorMessage(error))})},5000)}catch(error){setError(errorMessage(error));markOffline()}}
-function dialogs(){for(const node of $$(".tab"))node.addEventListener("click",()=>navigate(node.dataset.page));for(const node of $$("[data-go]"))node.addEventListener("click",()=>navigate(node.dataset.go));$("#language").addEventListener("change",event=>{language=event.target.value;localStorage.setItem("bridge.ui.language",language);applyLanguage()});$("#theme").addEventListener("change",event=>{theme=event.target.value;localStorage.setItem("bridge.ui.theme",theme);applyTheme()});$("#refresh-tasks").addEventListener("click",()=>void refreshTasks());$("#task-filter").addEventListener("input",renderTasks);$("#task-status").addEventListener("change",()=>void refreshTasks());$("#capture-billing").addEventListener("click",()=>void captureBilling());$("#refresh-startplan").addEventListener("click",()=>void refreshStartPlan());$("#compare-startplan").addEventListener("click",()=>void compareStartPlan());$("#refresh-cost-history").addEventListener("click",()=>void loadCostHistory());$("#load-usage").addEventListener("click",()=>void loadTaskUsage());$("#verification-consent").addEventListener("change",event=>{$("#start-verification").disabled=!event.target.checked});$("#start-verification").addEventListener("click",()=>void startVerification());$("#run-static-check").addEventListener("click",()=>void runRuntimeCheck(false));$("#run-protocol-probe").addEventListener("click",()=>void runRuntimeCheck(true));window.addEventListener("hashchange",()=>{const page=currentPage();navigate(page)})}
+function dialogs(){for(const node of $$(".tab"))node.addEventListener("click",()=>navigate(node.dataset.page));for(const node of $$("[data-go]"))node.addEventListener("click",()=>navigate(node.dataset.go));$("#language").addEventListener("change",event=>{language=event.target.value;localStorage.setItem("bridge.ui.language",language);applyLanguage()});$("#theme").addEventListener("change",event=>{theme=event.target.value;localStorage.setItem("bridge.ui.theme",theme);applyTheme()});$("#settings-auto-wake-toggle").addEventListener("change",event=>void saveAutoWake(event.target.checked));$("#refresh-tasks").addEventListener("click",()=>void refreshTasks());$("#task-filter").addEventListener("input",renderTasks);$("#task-status").addEventListener("change",()=>void refreshTasks());$("#capture-billing").addEventListener("click",()=>void captureBilling());$("#refresh-startplan").addEventListener("click",()=>void refreshStartPlan());$("#compare-startplan").addEventListener("click",()=>void compareStartPlan());$("#refresh-cost-history").addEventListener("click",()=>void loadCostHistory());$("#load-usage").addEventListener("click",()=>void loadTaskUsage());$("#verification-consent").addEventListener("change",event=>{$("#start-verification").disabled=!event.target.checked});$("#start-verification").addEventListener("click",()=>void startVerification());$("#run-static-check").addEventListener("click",()=>void runRuntimeCheck(false));$("#run-protocol-probe").addEventListener("click",()=>void runRuntimeCheck(true));window.addEventListener("hashchange",()=>{const page=currentPage();navigate(page)})}
 function markOffline(){const stateNode=$("#executor-state"),dot=$("#executor-dot");if(stateNode)stateNode.textContent="UNAVAILABLE";if(dot)dot.className="dot offline";for(const id of ["tasks-executor","tasks-dot"]){const node=document.getElementById(id);if(node)node.textContent=id.endsWith("dot")?"":'UNAVAILABLE'}}
 async function refreshTasks(){if(state.refreshInFlight)return;state.refreshInFlight=true;try{state.session=await taskApi("/api/session");state.executor=state.session.executor||{};const statusFilter=$("#task-status").value;const page=await taskApi("/api/tasks?limit=100"+(statusFilter?"&status="+encodeURIComponent(statusFilter):""));state.tasks=Array.isArray(page.tasks)?page.tasks:[];const stateText=String(state.executor.state||"unknown").toUpperCase();$("#executor-state").textContent=stateText;$("#tasks-executor").textContent=stateText;$("#executor-dot").className="dot "+(stateText==="ACTIVE"?"online":"offline");$("#tasks-dot").className="dot "+(stateText==="ACTIVE"?"online":"offline");$("#lease-id").textContent="lease: "+(state.executor.lease_id||"--");$("#last-refresh").textContent=new Date().toLocaleTimeString();renderTasks();const target=state.selected||taskIdFromLocation();if(target&&validTaskId(target)){state.selected=target;await loadDetail(target)}}catch(error){markOffline();throw error}finally{state.refreshInFlight=false}}
 function renderTasks(){const list=$("#task-list");if(!list)return;const filter=$("#task-filter").value.trim().toLowerCase();const status=$("#task-status").value;const rows=state.tasks.filter(task=>(!status||task.status===status)&&(!filter||(task.task_id+" "+(task.objective||"")).toLowerCase().includes(filter)));$("#count-total").textContent=String(rows.length);$("#count-running").textContent=String(rows.filter(task=>task.status==="running").length);$("#count-waiting").textContent=String(rows.filter(task=>task.status==="waiting_for_master").length);$("#count-wake").textContent=String(rows.filter(task=>task.wake).length);$("#dash-latest-task").textContent=rows[0]?rows[0].task_id:"--";const banner=$("#dashboard-wake"),taskBanner=$("#task-wake"),wakeRows=rows.filter(task=>task.wake);if(banner){banner.hidden=wakeRows.length===0;banner.textContent=wakeRows.length?wakeRows.length+" "+t("wakeBanner"):""}if(taskBanner){taskBanner.hidden=wakeRows.length===0;taskBanner.textContent=wakeRows.length?wakeRows.length+" "+t("wakeBanner"):""}list.replaceChildren();if(!rows.length){list.append(empty(t("noMatch")));return}for(const task of rows){const button=element("button","task-row"+(state.selected===task.task_id?" selected":""));button.type="button";button.addEventListener("click",()=>void selectTask(task.task_id));const left=element("span");left.append(element("span","task-id",task.task_id),element("span","task-objective",task.objective||""));const badges=element("span","badges");badges.append(tag(task.status));if(task.wake)badges.append(tag("wake: "+task.wake.state));button.append(left,badges);list.append(button)}}
@@ -13218,6 +13567,7 @@ function taskErrorStatus(error2) {
   const code = error2 && typeof error2 === "object" && "code" in error2 && typeof error2.code === "string" ? error2.code : "";
   if (code === "TASK_NOT_FOUND" || code === "NOT_FOUND") return 404;
   if (code === "TASK_NOT_FINISHED" || code === "TASK_STATE" || code === "TASK_CANCEL_REQUESTED") return 409;
+  if (code === "provider_config_invalid" || code === "PROVIDER_CONFIG_INVALID") return 400;
   if (code === "EXECUTOR_UNAVAILABLE" || code === "SUBMISSION_UNKNOWN") return 503;
   if (code === "REQUEST_CANCELLED") return 408;
   return 500;
@@ -13327,6 +13677,16 @@ function createTaskConsoleServer(options) {
       json(response, 200, { ok: true, result: await options.runtimeCompatibility.candidateReport() });
       return;
     }
+    if (url.pathname === "/api/settings") {
+      if (!options.settingsDirectory) {
+        throw failure2(503, "SETTINGS_UNAVAILABLE", "Bridge settings are not configured");
+      }
+      json(response, 200, {
+        ok: true,
+        result: { auto_wake: { enabled: await readAutoWakeSetting(options.settingsDirectory) } }
+      });
+      return;
+    }
     if (url.pathname === "/api/tasks") {
       if (!options.manager.listTasks) throw failure2(501, "WEB_LIST_UNAVAILABLE", "task listing is unavailable");
       const input = parseListQuery(url.searchParams);
@@ -13390,6 +13750,21 @@ function createTaskConsoleServer(options) {
     }
     if (request.headers["content-type"]?.split(";")[0]?.trim().toLowerCase() !== "application/json") {
       throw failure2(415, "WEB_CONTENT_TYPE_REQUIRED", "mutations require application/json");
+    }
+    if (url.pathname === "/api/settings/auto-wake") {
+      if (!options.settingsDirectory) {
+        throw failure2(503, "SETTINGS_UNAVAILABLE", "Bridge settings are not configured");
+      }
+      const body2 = await readJson2(request);
+      if (typeof body2.enabled !== "boolean") {
+        throw failure2(400, "WEB_INVALID_SETTING", "enabled must be a boolean");
+      }
+      await writeAutoWakeSetting(options.settingsDirectory, body2.enabled);
+      json(response, 200, {
+        ok: true,
+        result: { auto_wake: { enabled: body2.enabled } }
+      });
+      return;
     }
     const match = /^\/api\/tasks\/([^/]+)\/(cancel|reply)$/u.exec(url.pathname);
     if (!match) throw failure2(404, "WEB_NOT_FOUND", "route not found");
@@ -13521,14 +13896,14 @@ function parseEventsQuery(query, taskId) {
 import { createHash as createHash11 } from "node:crypto";
 import {
   closeSync as closeSync3,
-  existsSync as existsSync8,
+  existsSync as existsSync9,
   lstatSync as lstatSync3,
   openSync as openSync3,
-  readFileSync as readFileSync6,
-  unlinkSync,
+  readFileSync as readFileSync7,
+  unlinkSync as unlinkSync2,
   writeSync
 } from "node:fs";
-import path20 from "node:path";
+import path22 from "node:path";
 var TASK_CONSOLE_DISCOVERY_FILE = "task-console.json";
 var TASK_CONSOLE_PROTOCOL_VERSION = 1;
 var DISCOVERY_LIMIT_BYTES = 16 * 1024;
@@ -13557,9 +13932,9 @@ function recordDigest(record3) {
 function discoveryRoot(dataRoot) {
   let root;
   try {
-    root = path20.resolve(dataRoot);
-    const stat4 = lstatSync3(root);
-    if (!stat4.isDirectory() || stat4.isSymbolicLink()) throw new Error("not_plain_directory");
+    root = path22.resolve(dataRoot);
+    const stat5 = lstatSync3(root);
+    if (!stat5.isDirectory() || stat5.isSymbolicLink()) throw new Error("not_plain_directory");
   } catch {
     throw new TaskConsoleDiscoveryError("WEB_CONSOLE_ROOT_UNSAFE");
   }
@@ -13579,7 +13954,7 @@ function validatedEndpoint(originValue, urlValue, port) {
   }
 }
 function taskConsoleDiscoveryPath(dataRoot) {
-  return path20.join(discoveryRoot(dataRoot), TASK_CONSOLE_DISCOVERY_FILE);
+  return path22.join(discoveryRoot(dataRoot), TASK_CONSOLE_DISCOVERY_FILE);
 }
 function parseRecord(value) {
   let parsed;
@@ -13614,13 +13989,13 @@ function parseRecord(value) {
 }
 function readTaskConsoleDiscovery(dataRoot) {
   const file = taskConsoleDiscoveryPath(dataRoot);
-  if (!existsSync8(file)) return null;
+  if (!existsSync9(file)) return null;
   try {
-    const stat4 = lstatSync3(file);
-    if (!stat4.isFile() || stat4.isSymbolicLink() || stat4.size > DISCOVERY_LIMIT_BYTES) {
+    const stat5 = lstatSync3(file);
+    if (!stat5.isFile() || stat5.isSymbolicLink() || stat5.size > DISCOVERY_LIMIT_BYTES) {
       throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_INVALID");
     }
-    const record3 = parseRecord(readFileSync6(file, "utf8"));
+    const record3 = parseRecord(readFileSync7(file, "utf8"));
     if (record3.authority_root_digest !== authorityRootDigest(dataRoot)) {
       throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_INVALID");
     }
@@ -13651,7 +14026,7 @@ async function publishTaskConsoleDiscovery(input) {
     started_at: input.startedAt ?? (/* @__PURE__ */ new Date()).toISOString()
   };
   const record3 = { ...body, record_digest: recordDigest(body) };
-  const file = path20.join(root, TASK_CONSOLE_DISCOVERY_FILE);
+  const file = path22.join(root, TASK_CONSOLE_DISCOVERY_FILE);
   let fd;
   let created = false;
   try {
@@ -13676,7 +14051,7 @@ async function publishTaskConsoleDiscovery(input) {
     }
     if (created) {
       try {
-        unlinkSync(file);
+        unlinkSync2(file);
       } catch {
       }
     }
@@ -13727,7 +14102,7 @@ function removeTaskConsoleDiscovery(dataRoot, expected) {
     throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_CHANGED");
   }
   try {
-    unlinkSync(taskConsoleDiscoveryPath(dataRoot));
+    unlinkSync2(taskConsoleDiscoveryPath(dataRoot));
   } catch (error2) {
     if (error2.code !== "ENOENT") throw error2;
   }
@@ -13771,12 +14146,12 @@ function parseArguments(argv, host) {
     const argument = argv[index];
     const value = argv[index + 1];
     if (argument === "--data-root") {
-      if (!value || !path21.isAbsolute(value)) fail("data_root_absolute_required");
-      dataRoot = path21.normalize(value);
+      if (!value || !path23.isAbsolute(value)) fail("data_root_absolute_required");
+      dataRoot = path23.normalize(value);
       index += 1;
     } else if (argument === "--settings-directory") {
-      if (!value || !path21.isAbsolute(value)) fail("settings_directory_absolute_required");
-      settingsDirectory = path21.normalize(value);
+      if (!value || !path23.isAbsolute(value)) fail("settings_directory_absolute_required");
+      settingsDirectory = path23.normalize(value);
       index += 1;
     } else if (argument === "--port") {
       if (!value || !/^\d+$/u.test(value)) fail("port_invalid");
@@ -13811,7 +14186,7 @@ async function runTaskConsoleMain(argv = process2.argv.slice(2)) {
         code: "EXECUTOR_UNAVAILABLE"
       });
     }
-    const consoleId = randomUUID8();
+    const consoleId = randomUUID10();
     const manager = new RemoteTaskManager(client);
     const costLab = createUnifiedCostLabApplication({
       moduleUrl: import.meta.url,
@@ -13820,7 +14195,7 @@ async function runTaskConsoleMain(argv = process2.argv.slice(2)) {
     const projectRoot = resolveConsoleProjectRoot(import.meta.url);
     const runtimeCompatibility = new RuntimeCompatibilityService({
       projectRoot,
-      historyPath: path21.join(
+      historyPath: path23.join(
         options.dataRoot,
         ".run",
         "bridge-console",
@@ -13842,7 +14217,8 @@ async function runTaskConsoleMain(argv = process2.argv.slice(2)) {
       },
       port: options.port,
       consoleId,
-      authorityRootDigest: authorityRootDigest(options.dataRoot)
+      authorityRootDigest: authorityRootDigest(options.dataRoot),
+      settingsDirectory: options.settingsDirectory
     });
     const address = await consoleServer.start();
     const processProbe = createPlatformProbe();
@@ -13923,7 +14299,7 @@ async function runTaskConsoleMain(argv = process2.argv.slice(2)) {
     }
   }
 }
-if (process2.argv[1] && path21.resolve(process2.argv[1]) === path21.resolve(fileURLToPath9(import.meta.url))) {
+if (process2.argv[1] && path23.resolve(process2.argv[1]) === path23.resolve(fileURLToPath9(import.meta.url))) {
   void runTaskConsoleMain().catch((error2) => {
     fail(error2 instanceof Error ? error2.message : String(error2));
   });

@@ -560,6 +560,7 @@ test("Thin MCP disconnect leaves the accepted Task in the Executor and reconnect
     TMP: tempDirectory,
     TMPDIR: tempDirectory,
     ZCODE_BRIDGE_MCP_TRANSPORT: "control",
+    ZCODE_BRIDGE_TASK_CONSOLE: "off",
   };
   delete env.ZCODE_BRIDGE_DATA_DIR;
   delete env.ZCODE_BRIDGE_PLUGIN_MODE;
@@ -805,6 +806,7 @@ test("a shipped MCP Host process exit cannot cancel the original Attempt Result,
     TMP: tempDirectory,
     TMPDIR: tempDirectory,
     ZCODE_BRIDGE_MCP_TRANSPORT: "control",
+    ZCODE_BRIDGE_TASK_CONSOLE: "off",
   };
   delete env.ZCODE_BRIDGE_DATA_DIR;
   delete env.ZCODE_BRIDGE_PLUGIN_MODE;
@@ -896,7 +898,7 @@ test("a shipped MCP Host process exit cannot cancel the original Attempt Result,
     });
     const listedTask = listed.tasks?.find((task) => task.task_id === taskId);
     assert.equal(listedTask?.wake?.state, "web_notify");
-    assert.equal(listedTask?.wake?.reason_code, "policy_missing");
+    assert.equal(listedTask?.wake?.reason_code, "owner_thread_unavailable");
     assert.equal(typeof listedTask?.wake?.at, "string");
 
     const spawns = readFileSync(spawnLog, "utf8").split(/\r?\n/u).filter(Boolean);
@@ -1020,6 +1022,7 @@ test("Thin MCP -> Executor -> Worker -> Official Adapter completes against a con
     TMP: tempDirectory,
     TMPDIR: tempDirectory,
     ZCODE_BRIDGE_MCP_TRANSPORT: "control",
+    ZCODE_BRIDGE_TASK_CONSOLE: "off",
     ZCODE_BRIDGE_ZCODE_CJS: runtime.entrypoint,
     ZCODE_BRIDGE_NODE: process.execPath,
     ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: runtime.builtinConfig,
@@ -1265,7 +1268,7 @@ test("a real Executor commits a synthetic Worker Result, Cleanup, and Release ac
       assert.equal(wakeEvents.length, 1);
       const wake = JSON.parse(wakeEvents[0]!.evidence_json) as Record<string, unknown>;
       assert.equal(wake.state, "web_notify");
-      assert.equal(wake.reason_code, "policy_missing");
+      assert.equal(wake.reason_code, "owner_thread_unavailable");
       assert.equal(wake.thread_id, null);
       assert.equal(operation.phase, "released");
       assert.equal(operation.result_status, "completed");

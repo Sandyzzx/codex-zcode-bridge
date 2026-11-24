@@ -15,6 +15,7 @@ import type {
   ProgressTaskManager,
   TaskManager,
   TaskAttentionSnapshot,
+  TaskAdmission,
   TaskPackage,
   TaskReceipt,
   TaskResult,
@@ -46,7 +47,7 @@ import {
 import type { McpDoctorReport, McpModelSettings } from "./contracts.js";
 
 export const SERVER_NAME = "codex-zcode-bridge";
-export const SERVER_VERSION = "2.0.0-preview.15"; // x-release-please-version
+export const SERVER_VERSION = "2.0.0-preview.16"; // x-release-please-version
 
 export interface BridgeServerOptions {
   taskManager: TaskManager & Partial<Pick<ProgressTaskManager, "getEvents" | "getFeedback" | "getAttention" | "replyToInteraction">>;
@@ -58,6 +59,14 @@ export interface BridgeServerOptions {
 
 const EXECUTION_NOT_VERDICT =
   "Execution only. 'completed' is NOT calling host acceptance. Independently verify the workspace diff and checks.";
+const CODEX_THREAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+const OWNER_IDENTITY_INPUT_KEYS = new Set([
+  "thread_id",
+  "codex_thread_id",
+  "owner_thread_id",
+  "owner_thread",
+  "owner_binding",
+]);
 
 /** P1 §3.4 / ADR-056: large payloads keep the authoritative structuredContent
  * channel but replace the duplicated full JSON text with a bounded reference,
@@ -131,6 +140,30 @@ async function runTool<T>(operation: () => Promise<T>): Promise<CallToolResult> 
       return errorResult(error.code.toUpperCase(), error.message);
     }
     throw error;
+  }
+}
+
+function admissionFromMcpContext(context: unknown): TaskAdmission {
+  const meta = context && typeof context === "object"
+    ? (context as { mcpReq?: { _meta?: Record<string, unknown> } }).mcpReq?._meta
+    : undefined;
+  const raw = meta?.threadId;
+  if (raw === undefined || raw === null) {
+    return { owner_thread_id: null, source: "mcp_meta_missing" };
+  }
+  if (typeof raw !== "string" || raw !== raw.trim() || raw !== raw.normalize("NFC")
+    || !CODEX_THREAD_ID.test(raw)) {
+    return { owner_thread_id: null, source: "mcp_meta_invalid" };
+  }
+  return { owner_thread_id: raw, source: "mcp_meta" };
+}
+
+function assertNoOwnerIdentityInput(args: ZcodeTaskInput): void {
+  if (Object.keys(args as Record<string, unknown>).some((key) => OWNER_IDENTITY_INPUT_KEYS.has(key))) {
+    throw new TaskManagerError(
+      "TASK_INVALID",
+      "Owner Thread identity is supplied only by the trusted Host MCP context and cannot be set in zcode_task input",
+    );
   }
 }
 
@@ -217,7 +250,10 @@ export function createBridgeServer(options: BridgeServerOptions): McpServer {
       inputSchema: zcodeTaskInputSchema,
       outputSchema: taskReceiptSchema,
     },
-    async (args: ZcodeTaskInput) => runTool(() => manager.createTask(args as TaskPackage)),
+    async (args: ZcodeTaskInput, context) => runTool(() => {
+      assertNoOwnerIdentityInput(args);
+      return manager.createTask(args as TaskPackage, admissionFromMcpContext(context));
+    }),
   );
 
   server.registerTool(
