@@ -1,7 +1,7 @@
 # 文档路由 / Documentation
 
 > Status: AUTHORITATIVE（仅指本索引）
-> Last updated: 2026-11-24（Preview.16 candidate；ADR-059 Owner Binding + Auto Wake）
+> Last updated: 2026-11-24（Preview.16 已发布；ADR-059 Owner Binding + Auto Wake）
 > Last verified: 2026-11-24，核对 Preview.15 发布记录、ADR-059 实现与完整回归、隔离 MCP `_meta.threadId` 探针、Preview.15 库副本升级与真实 Host Completion Wake E2E。Owner Binding、A/B/C 并发隔离、无授权文件 Queue、ACK/Turn Started 分离、Late Wake 不改写历史与 v14 无感升级为 `PASS`；正式安装制品 + 真实 Codex Host + 真实 ZCode Runtime 的非空工程 Auto Wake 闭环为 `PASS — REAL`。严格 Wake C/D、Desktop fully exited 与 Official Runtime provenance 仍为 `NOT_RUN`。
 > Verified against: `406c56b848f41823c68a9013f81b645b6b19e0be`（PR #140 合并提交，Preview.16 发布提交）。
 
