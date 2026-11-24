@@ -19,6 +19,16 @@ import { authorityRootDigest } from "../src/executor/lease.js";
 import { createPlatformProbe } from "../src/runtime/process-probe.js";
 import { startExecutorControlServer } from "../src/executor/control-server.js";
 import { executorPipeName } from "../src/executor/pipe.js";
+import { taskConsoleAutostartEnabled } from "../src/web/console-link.js";
+
+test("Task Console autostart honors only explicit opt-out values", () => {
+  assert.equal(taskConsoleAutostartEnabled({}), true);
+  assert.equal(taskConsoleAutostartEnabled({ ZCODE_BRIDGE_TASK_CONSOLE: "auto" }), true);
+  assert.equal(taskConsoleAutostartEnabled({ ZCODE_BRIDGE_TASK_CONSOLE: "ON" }), true);
+  assert.equal(taskConsoleAutostartEnabled({ ZCODE_BRIDGE_TASK_CONSOLE: "off" }), false);
+  assert.equal(taskConsoleAutostartEnabled({ ZCODE_BRIDGE_TASK_CONSOLE: " FALSE " }), false);
+  assert.equal(taskConsoleAutostartEnabled({ ZCODE_BRIDGE_TASK_CONSOLE: "0" }), false);
+});
 
 function manager(): TaskConsoleManager & {
   readonly calls: { cancel: number; reply: number };

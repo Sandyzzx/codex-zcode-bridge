@@ -10,13 +10,13 @@ import { executorPipeName } from "../executor/pipe.js";
 import { createBridgeServer, SERVER_VERSION } from "../mcp/server.js";
 import type { McpDoctorReport } from "../mcp/contracts.js";
 import type { TaskConsoleLink } from "../interfaces.js";
-import { findPackageRoot } from "../runtime/resolver.js";
+import { findPackageRoot, loadPersistedRuntimeEnvironment } from "../runtime/resolver.js";
 import {
   loadInstallAuthoritySelection,
   resolveSqliteStateDirectory,
 } from "../runtime/sqlite-install-config.js";
 import { codexHostProfile, validateHostProfile, type BridgeHostProfile } from "../runtime/host-profile.js";
-import { resolveTaskConsoleLink } from "../web/console-link.js";
+import { resolveTaskConsoleLink, taskConsoleAutostartEnabled } from "../web/console-link.js";
 
 export interface DataRootResolution {
   readonly dataRoot: string;
@@ -137,7 +137,19 @@ async function startThinBridge(host: BridgeHostProfile, version: string): Promis
   const authoritySelection = loadInstallAuthoritySelection(host);
   const resolved = resolveSqliteStateDirectory(authoritySelection, process.env);
   const client = new ExecutorControlClient({ pipeName: executorPipeName(resolved.dataRoot) });
+  const taskConsoleAutostart = taskConsoleAutostartEnabled(
+    loadPersistedRuntimeEnvironment(process.env, undefined, host),
+  );
   const taskConsoleLink = async (taskId: string): Promise<TaskConsoleLink> => {
+    if (!taskConsoleAutostart) {
+      return {
+        available: false,
+        web_url: null,
+        console_id: null,
+        console_reused: null,
+        reason_code: "WEB_CONSOLE_DISABLED",
+      };
+    }
     await client.connect();
     const status = await client.request("executorStatus", {});
     const leaseId = status.ok && typeof status.result?.lease_id === "string"

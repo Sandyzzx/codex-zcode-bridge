@@ -38,6 +38,11 @@ function sleep(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
+export function taskConsoleAutostartEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  const raw = env["ZCODE_BRIDGE_TASK_CONSOLE"]?.trim().toLowerCase();
+  return raw !== "off" && raw !== "0" && raw !== "false";
+}
+
 function resolveTaskConsoleEntry(): string {
   const bundled = fileURLToPath(new URL("./web-console.mjs", import.meta.url));
   return existsSync(bundled) ? bundled : fileURLToPath(new URL("../web/main.js", import.meta.url));
@@ -56,6 +61,7 @@ export function spawnTaskConsole(input: {
     detached: true,
     windowsHide: true,
     stdio: "ignore",
+    cwd: input.dataRoot,
   });
   child.unref();
   return { pid: child.pid };

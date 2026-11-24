@@ -1002,7 +1002,8 @@ var init_resolver = __esm({
       "ZCODE_BRIDGE_TIMEOUT_MS",
       "ZCODE_BRIDGE_BROWSER_USE",
       "ZCODE_BRIDGE_BROWSER_EXECUTABLE",
-      "ZCODE_BRIDGE_AUTO_WAKE"
+      "ZCODE_BRIDGE_AUTO_WAKE",
+      "ZCODE_BRIDGE_TASK_CONSOLE"
     ];
     NodeRuntimeResolver = class {
       #env;

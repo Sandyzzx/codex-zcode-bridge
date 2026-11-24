@@ -22801,8 +22801,21 @@ function createBridgeServer(options) {
 
 // src/runtime/resolver.ts
 import { accessSync, existsSync, readFileSync, statSync } from "node:fs";
+import { homedir as homedir2 } from "node:os";
 import path3 from "node:path";
 import { fileURLToPath } from "node:url";
+
+// src/runtime/errors.ts
+var BridgeError = class extends Error {
+  code;
+  memberPids;
+  constructor(code, message, options) {
+    super(message, options);
+    this.name = "BridgeError";
+    this.code = code;
+    if (options?.memberPids?.length) this.memberPids = [...new Set(options.memberPids.filter((pid) => Number.isSafeInteger(pid) && pid > 0))];
+  }
+};
 
 // src/runtime/host-profile.ts
 import { homedir } from "node:os";
@@ -22833,6 +22846,65 @@ function validateHostProfile(host) {
 }
 
 // src/runtime/resolver.ts
+var PERSISTED_RUNTIME_KEYS = [
+  "ZCODE_BRIDGE_NODE",
+  "ZCODE_BRIDGE_ZCODE_CJS",
+  "ZCODE_BRIDGE_DATA_DIR",
+  "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE",
+  "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE",
+  "ZCODE_HOME",
+  "ZCODE_DATA_BASE_DIR",
+  "ZCODE_WINDOWS_APP_INSTALL_DIR",
+  "ZCODE_BRIDGE_DEFAULT_PROVIDER_ID",
+  "ZCODE_BRIDGE_DEFAULT_MODEL_ID",
+  "ZCODE_BRIDGE_DEFAULT_REASONING_LEVEL",
+  "ZCODE_BRIDGE_PREFER_STARTPLAN",
+  "ZCODE_BRIDGE_MODE",
+  "ZCODE_BRIDGE_MAX_CONCURRENT_WORKERS",
+  "ZCODE_BRIDGE_TIMEOUT_MS",
+  "ZCODE_BRIDGE_BROWSER_USE",
+  "ZCODE_BRIDGE_BROWSER_EXECUTABLE",
+  "ZCODE_BRIDGE_AUTO_WAKE",
+  "ZCODE_BRIDGE_TASK_CONSOLE"
+];
+function loadPersistedRuntimeEnvironment(source, homeDir = homedir2(), host = codexHostProfile(homeDir)) {
+  validateHostProfile(host);
+  const settingsPaths = [host.settingsDirectory, ...host.legacySettingsDirectories ?? []].map((directory) => path3.join(directory, "runtime-config.json"));
+  const legacyDataRoot = source["ZCODE_BRIDGE_DATA_DIR"]?.trim();
+  if (legacyDataRoot && path3.isAbsolute(legacyDataRoot)) {
+    settingsPaths.push(path3.join(legacyDataRoot, "runtime-config.json"));
+  }
+  let parsed = null;
+  const seenPaths = /* @__PURE__ */ new Set();
+  for (const settingsPath of settingsPaths) {
+    const normalized = path3.resolve(settingsPath);
+    const identity = process.platform === "win32" ? normalized.toLocaleLowerCase("en-US") : normalized;
+    if (seenPaths.has(identity)) continue;
+    seenPaths.add(identity);
+    try {
+      if (statSync(normalized).size > 64 * 1024) throw new Error("runtime settings exceed 64 KB");
+      const candidate = JSON.parse(readFileSync(normalized, "utf8"));
+      if (isPlainObject3(candidate)) {
+        parsed = candidate;
+        break;
+      }
+      throw new Error("runtime settings must be an object");
+    } catch (error2) {
+      if (error2.code === "ENOENT") continue;
+      throw new BridgeError("provider_config_invalid", `invalid Bridge runtime settings: ${normalized}`, { cause: error2 });
+    }
+  }
+  if (!parsed) return { ...source };
+  const env = { ...source };
+  for (const key of PERSISTED_RUNTIME_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(parsed, key)) continue;
+    const value = parsed[key];
+    if (typeof value === "string") env[key] = value.trim();
+    else if (value === null) env[key] = "";
+    else throw new BridgeError("provider_config_invalid", `Bridge runtime setting ${key} must be a string or null`);
+  }
+  return env;
+}
 function findPackageRoot(startDir) {
   let current = startDir ?? path3.dirname(fileURLToPath(import.meta.url));
   for (let depth = 0; depth < 10; depth++) {
@@ -22846,6 +22918,9 @@ function findPackageRoot(startDir) {
   throw new Error(
     `Cannot locate the Bridge package root (no package.json or installed plugin markers above ${startDir ?? "module directory"})`
   );
+}
+function isPlainObject3(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 // src/runtime/sqlite-install-config.ts
@@ -23110,6 +23185,10 @@ async function fetchTaskConsoleSession(record2, timeoutMs = 2e3) {
 function sleep2(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
+function taskConsoleAutostartEnabled(env = process.env) {
+  const raw = env["ZCODE_BRIDGE_TASK_CONSOLE"]?.trim().toLowerCase();
+  return raw !== "off" && raw !== "0" && raw !== "false";
+}
 function resolveTaskConsoleEntry() {
   const bundled = fileURLToPath3(new URL("./web-console.mjs", import.meta.url));
   return existsSync4(bundled) ? bundled : fileURLToPath3(new URL("../web/main.js", import.meta.url));
@@ -23126,7 +23205,8 @@ function spawnTaskConsole(input) {
   ], {
     detached: true,
     windowsHide: true,
-    stdio: "ignore"
+    stdio: "ignore",
+    cwd: input.dataRoot
   });
   child.unref();
   return { pid: child.pid };
@@ -23278,7 +23358,19 @@ async function startThinBridge(host, version2) {
   const authoritySelection = loadInstallAuthoritySelection(host);
   const resolved = resolveSqliteStateDirectory(authoritySelection, process.env);
   const client = new ExecutorControlClient({ pipeName: executorPipeName(resolved.dataRoot) });
+  const taskConsoleAutostart = taskConsoleAutostartEnabled(
+    loadPersistedRuntimeEnvironment(process.env, void 0, host)
+  );
   const taskConsoleLink = async (taskId) => {
+    if (!taskConsoleAutostart) {
+      return {
+        available: false,
+        web_url: null,
+        console_id: null,
+        console_reused: null,
+        reason_code: "WEB_CONSOLE_DISABLED"
+      };
+    }
     await client.connect();
     const status = await client.request("executorStatus", {});
     const leaseId = status.ok && typeof status.result?.lease_id === "string" ? status.result.lease_id : null;

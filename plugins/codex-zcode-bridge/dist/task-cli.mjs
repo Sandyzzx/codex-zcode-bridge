@@ -7154,7 +7154,8 @@ function spawnTaskConsole(input) {
   ], {
     detached: true,
     windowsHide: true,
-    stdio: "ignore"
+    stdio: "ignore",
+    cwd: input.dataRoot
   });
   child.unref();
   return { pid: child.pid };
