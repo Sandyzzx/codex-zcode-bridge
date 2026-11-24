@@ -26,8 +26,8 @@
 | 期限 | [027](ADR-027-execution-and-cleanup-deadlines.md) | 执行、交付、清理分工 |
 | Launch | [028](ADR-028-pre-intent-workspace-refusal.md) | Intent 前拒绝与 Intent 后 unknown |
 | 退役/Core | [029](ADR-029-legacy-runtime-retirement.md) | 内部及公共 Core 退役；未来主版本发布 |
-| Start Plan Provider | [030](ADR-030-start-plan-provider-preflight.md) | 每任务一次权威 Billing verdict、Provider 注册门及失败清理边界；正文保持不变 |
-| Model Routing | [031](ADR-031-model-routing-v1.md) | Start Plan 别名、`prefer_startplan` 自动选路与动态凭据发现 |
+| Start Plan Provider | [030](ADR-030-start-plan-provider-preflight.md) | Billing verdict/注册门已按 ADR-058 解除执行阻断，仅作证据与官方认证管线；正文保持不变 |
+| Model Routing | [031](ADR-031-model-routing-v1.md) | Start Plan 别名、`prefer_startplan` 自动选路与动态凭据发现；verdict 仅影响派发前偏好，不阻断执行（ADR-058） |
 | 官方 Host | [032](ADR-032-existing-worker-official-host-integration.md) | Accepted 且已进入 Preview.5；Windows x64 现有 Worker 内装配 Official Host |
 | 账户 Refresh | [033](ADR-033-official-account-refresh-coordination.md) | Accepted；profile-scoped lock、lock-time reread、一次远端 refresh、CAS；无 Broker |
 | 正常 Cleanup | [034](ADR-034-normal-cleanup-worker-tree-proof.md) | Accepted；官方 close 后复用 exact Worker identity、recorded-tree、resource facts、Digest 与 Release CAS |
@@ -38,7 +38,8 @@
 | 官方 Runtime | [040](ADR-040-installed-official-appserver-runtime.md) | 候选集成；安装版官方 AppServer 的统一 Runtime 与精确 Manifest 门禁 |
 | Thin Official Host | [041](ADR-041-thin-official-host-end-state.md) | 统一 Model Catalog/Worker session factory；所有 Provider 走安装版 AppServer；direct stdio 仅测试；三项 patch 暂留 |
 | 未知版本实验授权 | [042](ADR-042-unknown-runtime-experimental-authorization.md) | 安全检查与 Manifest 兼容分离；精确指纹授权历史由 ADR-054 部分替代 |
-| 安全安装版执行 | [054](ADR-054-safe-installed-runtime-without-static-version-gate.md) | 安全安装不因版本、摘要、签名、指纹或实验授权缺失而阻断；静态事实仅作诊断，Provider/Billing 仍独立验证 |
+| 安全安装版执行 | [054](ADR-054-safe-installed-runtime-without-static-version-gate.md) | 安全安装不因版本、摘要、签名、指纹或实验授权缺失而阻断；静态事实仅作诊断 |
+| 套餐解耦 | [058](ADR-058-plan-policy-decoupling.md) | 折扣/权益验证结果不再阻断 Admission/Routing/Selection/Spawn；官方拒绝即真实错误，Cost Lab 倍率仅实测 |
 | Recovery 编号对账 | [044](ADR-044-preview-lifecycle-recovery-reconciliation.md) | Preview 保留 ADR-037 官方认证语义；Stable Host Recovery 在未来对账中使用 ADR-044；不做机械覆盖 |
 | Result 摘要、Event 归属 | [047](ADR-047-compatible-result-summary.md) | 候选 MCP 可选摘要、全量证据读取及 Attempt 核对 |
 | Result 回读合同 | [056](ADR-056-result-readback-contract.md) | Executor 侧摘要投影、MCP 有界文本通道与 `offset_bytes`/`max_bytes` 分页全量读取;默认 full 合同不变 |

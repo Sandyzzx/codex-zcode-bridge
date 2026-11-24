@@ -1213,9 +1213,9 @@ input.on("close", () => process.exit(0));
     });
     const unentitledHandle = await unentitledAdapter.startTask({
       task: {
-        task_id: "start-plan-preflight-rejected",
+        task_id: "start-plan-unentitled-proceeds",
         workspace: "C:\\unused",
-        objective: "A task without verified live entitlement must not reach AppServer",
+        objective: "A task without verified live entitlement proceeds; the official rejection is the real error",
         requirements: [],
         allowed_paths: [],
         forbidden_paths: [],
@@ -1226,10 +1226,29 @@ input.on("close", () => process.exit(0));
       workspace: makeWorkspace(root),
       attempt: 1,
     });
-    const unentitledResult = await unentitledAdapter.getResult(unentitledHandle);
-    assert.equal(unentitledResult.errorCode, "provider_config_invalid");
-    assert.match(unentitledResult.reportError ?? "", /live entitlement was not verified/u);
-    assert.equal(existsSync(requestLog), false, "unentitled Start Plan must not spawn or contact AppServer");
+    // ADR-058: Bridge no longer blocks on live entitlement. The attempt runs,
+    // contacts the AppServer, and the official-side rejection (synthetic
+    // provider_not_configured RPC error) surfaces as the real error through
+    // the normal failure path.
+    const unentitledResult = await unentitledAdapter.getResult(unentitledHandle).then(
+      (value) => value,
+      (error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        return {
+          errorCode: (error as { code?: string }).code ?? "turn_failed",
+          reportError: message,
+          cleanupVerified: false,
+        };
+      },
+    );
+    assert.doesNotMatch(unentitledResult.reportError ?? "", /live entitlement was not verified/u);
+    const unentitledRequests = existsSync(requestLog)
+      ? readFileSync(requestLog, "utf8").trim().split("\n").map((line) => (JSON.parse(line) as { method?: string }).method)
+      : [];
+    assert.equal(unentitledRequests.includes("provider/updateAccountConfig"), true,
+      "the attempt must reach the AppServer instead of a Bridge entitlement preflight");
+    assert.equal(unentitledRequests.includes("session/send"), false,
+      "the official account-sync rejection still stops the turn before send");
     let callbackCalls = 0;
     let facts: FailureFactsV1 | null = null;
     const events: Array<{ type: string; summary: string; details?: Record<string, unknown> }> = [];
@@ -1238,7 +1257,7 @@ input.on("close", () => process.exit(0));
       timeoutMs: 10_000,
       childEnvBase: { PATH: process.env["PATH"] ?? "" },
       homeDir: root,
-      startPlanProviderEntitled: true,
+
       onEvent: (event) => events.push(event),
       onFailureFacts: (value) => { facts = value; },
       resolveStartPlanRuntimeAuth: async () => {

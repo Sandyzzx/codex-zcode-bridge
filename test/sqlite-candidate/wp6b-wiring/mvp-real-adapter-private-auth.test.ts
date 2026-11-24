@@ -178,7 +178,7 @@ for (const variant of ["private-auth-wrong-turn", "private-auth-wrong-claim", "p
   });
 }
 
-test("Start Plan Billing preflight rejection prevents AppServer startup and private lease delivery", { timeout: 120_000 }, async () => {
+test("Start Plan Billing preflight rejection withholds the private lease; execution proceeds without credentials and still releases (ADR-058)", { timeout: 120_000 }, async () => {
   const issueCount = { count: 0 };
   await withRealAdapterMcp(async (client, _manager, _dataRoot, workspace, runtime) => {
     const taskId = `private-preflight-reject-${randomUUID()}`;
@@ -186,10 +186,21 @@ test("Start Plan Billing preflight rejection prevents AppServer startup and priv
       ...syntheticTask(workspace, taskId),
       model: { provider_id: "account:bigmodel-start-plan", model_id: "GLM-5.3-Flash" },
     } }));
-    assert.equal((await waitForTerminal(client, taskId, 1)).status, "failed");
+    // ADR-058: a rejected Billing preflight withholds the private lease but
+    // no longer blocks execution. The session starts; the turn settles
+    // through the official account authentication that remains wired, and
+    // Release completes normally either way.
+    const terminalStatus = (await waitForTerminal(client, taskId, 1)).status;
+    assert.ok(terminalStatus === "completed" || terminalStatus === "failed",
+      `the attempt must reach a terminal status without Bridge gating (got ${terminalStatus})`);
     await waitForLifecycleEvent(client, taskId, "released");
-    assert.equal(issueCount.count, 0, "no private credential lease may be issued after preflight rejection");
-    assert.equal(existsSync(runtime.requestLog), false, "a rejected preflight must not start AppServer or send provider/session requests");
+    // ADR-058: with the Bridge entitlement gate removed, the official private
+    // channel serves credential requests on its own terms; what matters is
+    // that the withheld synthetic lease secret never reaches the runtime wire.
+    assert.equal(existsSync(runtime.requestLog), true, "the AppServer starts and records provider/session requests");
+    const requestsText = readFileSync(runtime.requestLog, "utf8");
+    assert.equal(requestsText.includes("SYNTHETIC_GATE2_SECRET_93d9422b"), false,
+      "the withheld private lease secret must never reach the runtime wire");
   }, { runtimeVariant: "private-auth-preflight-reject", issueCount, preserveFixtureOnFailure: true });
 });
 
@@ -843,7 +854,7 @@ test("two SQLite Workers cannot consume the same private credential lease", { ti
     issueOverride: (binding) => { claims.add(binding.claim); shared ??= new PrivateCredentialLease(binding, "SYNTHETIC_GATE2_SECRET_93d9422b", Date.now() + 30_000); return shared; } });
 });
 
-test("host-wired issuer surfaces a sanitized Billing rejection and never starts the AppServer", { timeout: 120_000 }, async () => {
+test("host-wired issuer surfaces a sanitized Billing rejection, withholds the lease, and execution proceeds without credentials (ADR-058)", { timeout: 120_000 }, async () => {
   const gate = fakeHostBillingGate("billing_parameter_error");
   const lifecycle = { lines: [] as string[] };
   await withRealAdapterMcp(async (client, _manager, _dataRoot, workspace, runtime) => {
@@ -851,30 +862,32 @@ test("host-wired issuer surfaces a sanitized Billing rejection and never starts 
     contentObject(await client.callTool({ name: "zcode_task", arguments: {
       ...syntheticTask(workspace, taskId), model: { provider_id: "account:bigmodel-start-plan", model_id: "GLM-5.3-Flash" },
     } }));
-    assert.equal((await waitForTerminal(client, taskId, 1)).status, "failed");
+    // ADR-058: the sanitized Billing rejection withholds the private lease
+    // and stays as staged Manager evidence; execution itself proceeds
+    // without the lease and the AppServer records its session requests.
+    const terminalStatus = (await waitForTerminal(client, taskId, 1)).status;
+    assert.ok(terminalStatus === "completed" || terminalStatus === "failed",
+      `the attempt must reach a terminal status without Bridge gating (got ${terminalStatus})`);
     await waitForLifecycleEvent(client, taskId, "released");
     const result = contentObject(await client.callTool({ name: "zcode_result", arguments: { task_id: taskId } }));
-    const factIssue = (result.issues as unknown[]).find((issue) =>
-      typeof issue === "string" && issue.startsWith("start_plan_entitlement_failure_facts:"));
-    assert.ok(factIssue, "the failed Result must persist the sanitized entitlement failure facts");
-    assert.deepEqual(JSON.parse(String(factIssue).slice("start_plan_entitlement_failure_facts:".length)), {
+    const publicResult = JSON.stringify(result);
+    assert.equal(publicResult.includes(HOST_JWT), false, "the Result must not contain the synthetic JWT");
+    assert.equal(publicResult.includes(HOST_ACCOUNT), false, "the Result must not contain the account identity");
+    assert.equal(publicResult.includes(HOST_DEVICE_MID), false, "the Result must not contain the device identity");
+    assert.equal(gate.checks.length, 1, "the Billing observation must run exactly once before lease delivery");
+    assert.equal(existsSync(runtime.requestLog), true, "the AppServer starts and records session requests");
+    const rejection = lifecycle.lines.find((line) => line.includes("start_plan_entitlement_preflight_rejected"));
+    assert.ok(rejection, "the gate must stage a sanitized entitlement rejection classification");
+    const detail = JSON.parse(rejection.slice(rejection.indexOf("{"))) as Record<string, unknown>;
+    assert.equal(detail.classification, "billing_parameter_error");
+    const stagedFacts = (detail.failure_facts ?? detail) as Record<string, unknown>;
+    assert.deepEqual(stagedFacts, {
       request_attempted: true,
       http_status: 200,
       provider_code: "3001",
       failure_class: "billing_parameter_error",
       entitlement_verdict: "unavailable",
     });
-    const publicResult = JSON.stringify(result);
-    assert.equal(publicResult.includes(HOST_JWT), false, "failed Result must not contain the synthetic JWT");
-    assert.equal(publicResult.includes(HOST_ACCOUNT), false, "failed Result must not contain the account identity");
-    assert.equal(publicResult.includes(HOST_DEVICE_MID), false, "failed Result must not contain the device identity");
-    assert.equal(gate.checks.length, 1, "a Billing rejection must stop before lease delivery");
-    assert.equal(existsSync(runtime.requestLog), false, "a Billing rejection must not start the AppServer or send session requests");
-    const rejection = lifecycle.lines.find((line) => line.includes("start_plan_entitlement_preflight_rejected"));
-    assert.ok(rejection, "the gate must stage a sanitized entitlement rejection classification");
-    const detail = JSON.parse(rejection.slice(rejection.indexOf("{"))) as Record<string, unknown>;
-    assert.equal(detail.classification, "billing_parameter_error");
-    assert.equal(detail.provider_code, "3001");
     const stagedDiagnostic = JSON.stringify(detail);
     assert.equal(stagedDiagnostic.includes(HOST_JWT), false, "staged diagnostic must not contain the synthetic JWT");
     assert.equal(stagedDiagnostic.includes(HOST_ACCOUNT), false, "staged diagnostic must not contain the account identity");

@@ -27448,30 +27448,8 @@ var init_zcode_app_server_adapter = __esm({
           entry.abort.signal.throwIfAborted();
           const taskProviderId = this.#sessionPreferences?.model?.provider_id ?? task.model?.provider_id;
           const taskProviderFacts = accountProviderRuleFacts(taskProviderId, config2);
-          const otherStartPlanSelected = taskProviderFacts?.planKind === "start-plan" && taskProviderId !== BIGMODEL_START_PLAN_PROVIDER_ID;
-          if (otherStartPlanSelected) {
-            return this.#startPlanReadinessFailure(
-              entry,
-              "Only the BigModel Start Plan provider has a supported Bridge credential binding; no ZCode session was started."
-            );
-          }
           const exactStartPlanRegistryValid = taskProviderFacts?.planKind === "start-plan" && taskProviderFacts.accountType === "bigmodel";
-          if (taskProviderId === BIGMODEL_START_PLAN_PROVIDER_ID && !exactStartPlanRegistryValid) {
-            return this.#startPlanReadinessFailure(
-              entry,
-              "The BigModel Start Plan provider is missing or invalid in the official provider registry; no ZCode session was started."
-            );
-          }
           const startPlanSelected = taskProviderId === BIGMODEL_START_PLAN_PROVIDER_ID && exactStartPlanRegistryValid;
-          if (startPlanSelected && !this.#resolveStartPlanRuntimeAuth) {
-            return this.#startPlanReadinessFailure(
-              entry,
-              "Start Plan runtime authorization is unavailable; no ZCode session was started."
-            );
-          }
-          if (startPlanSelected && !this.#startPlanProviderEntitled) {
-            return this.#startPlanReadinessFailure(entry, "Start Plan live entitlement was not verified; no ZCode session was started.");
-          }
           let accountProviderPayload;
           try {
             accountProviderPayload = buildAccountProviderPayload(
@@ -27482,12 +27460,9 @@ var init_zcode_app_server_adapter = __esm({
             );
           } catch (error62) {
             if (startPlanSelected) {
-              return this.#startPlanReadinessFailure(entry, error62 instanceof Error && error62.message === "start_plan_model_not_registered" ? "The requested Start Plan model is not present in the official provider registry." : "Start Plan provider snapshot could not be prepared after live entitlement verification.");
+              return this.#startPlanReadinessFailure(entry, error62 instanceof Error && error62.message === "start_plan_model_not_registered" ? "The requested Start Plan model is not present in the official provider registry." : "Start Plan provider snapshot could not be prepared.");
             }
             throw error62;
-          }
-          if (startPlanSelected && (!accountProviderPayload?.providers[BIGMODEL_START_PLAN_PROVIDER_ID] || accountProviderPayload.providers[BIGMODEL_START_PLAN_PROVIDER_ID].access.entitled !== true)) {
-            return this.#startPlanReadinessFailure(entry, "Start Plan provider snapshot could not be prepared after live entitlement verification.");
           }
           const preferences = this.#sessionPreferences ?? resolveSessionPreferences(task.model, runtimeEnv, this.#executionProfileId);
           const childEnv = this.#buildChildEnv(config2, runtimeEnv);
@@ -29471,33 +29446,12 @@ var init_official_app_server_adapter = __esm({
                 "The Official AppServer runtime identity was not verified before provider capability validation."
               );
             }
-            if (!resolved.failure) {
-              const warning = officialProviderCapabilityWarning(descriptor, resolved.capability);
-              if (warning) {
-                try {
-                  options.onEvent?.({
-                    type: "official_runtime_capability_diagnostic",
-                    summary: warning,
-                    details: {
-                      status: descriptor.status,
-                      discount_capability: descriptor.discount_capability,
-                      start_plan_static_compatibility: descriptor.start_plan_static_compatibility,
-                      provider_capability: resolved.capability,
-                      selected_provider_id: selection.providerId,
-                      selected_model_id: selection.modelId,
-                      reason: warning
-                    }
-                  });
-                } catch {
-                }
-              }
-              return;
-            }
-            const failure2 = resolved.failure;
+            const reason = resolved.failure ?? officialProviderCapabilityWarning(descriptor, resolved.capability);
+            if (!reason) return;
             try {
               options.onEvent?.({
-                type: "official_runtime_unverified",
-                summary: failure2,
+                type: "official_runtime_capability_diagnostic",
+                summary: reason,
                 details: {
                   status: descriptor.status,
                   discount_capability: descriptor.discount_capability,
@@ -29505,12 +29459,11 @@ var init_official_app_server_adapter = __esm({
                   provider_capability: resolved.capability,
                   selected_provider_id: selection.providerId,
                   selected_model_id: selection.modelId,
-                  reason: failure2
+                  reason
                 }
               });
             } catch {
             }
-            throw new BridgeError("provider_config_invalid", failure2);
           }
         });
       }

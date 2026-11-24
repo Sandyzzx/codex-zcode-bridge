@@ -737,33 +737,15 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       });
       entry.abort.signal.throwIfAborted();
       const taskProviderId = this.#sessionPreferences?.model?.provider_id ?? task.model?.provider_id;
+      // ADR-058: plan entitlement and provider-registry facts no longer gate
+      // execution. The session starts with whatever official authentication is
+      // wired; the official server enforces plan scope, model registration and
+      // entitlement, and its rejection surfaces as the real error with the
+      // normal Cleanup and Release path.
       const taskProviderFacts = accountProviderRuleFacts(taskProviderId, config);
-      const otherStartPlanSelected = taskProviderFacts?.planKind === "start-plan"
-        && taskProviderId !== BIGMODEL_START_PLAN_PROVIDER_ID;
-      if (otherStartPlanSelected) {
-        return this.#startPlanReadinessFailure(
-          entry,
-          "Only the BigModel Start Plan provider has a supported Bridge credential binding; no ZCode session was started.",
-        );
-      }
       const exactStartPlanRegistryValid = taskProviderFacts?.planKind === "start-plan"
         && taskProviderFacts.accountType === "bigmodel";
-      if (taskProviderId === BIGMODEL_START_PLAN_PROVIDER_ID && !exactStartPlanRegistryValid) {
-        return this.#startPlanReadinessFailure(
-          entry,
-          "The BigModel Start Plan provider is missing or invalid in the official provider registry; no ZCode session was started.",
-        );
-      }
       const startPlanSelected = taskProviderId === BIGMODEL_START_PLAN_PROVIDER_ID && exactStartPlanRegistryValid;
-      if (startPlanSelected && !this.#resolveStartPlanRuntimeAuth) {
-        return this.#startPlanReadinessFailure(
-          entry,
-          "Start Plan runtime authorization is unavailable; no ZCode session was started.",
-        );
-      }
-      if (startPlanSelected && !this.#startPlanProviderEntitled) {
-        return this.#startPlanReadinessFailure(entry, "Start Plan live entitlement was not verified; no ZCode session was started.");
-      }
       let accountProviderPayload: ReturnType<typeof buildAccountProviderPayload>;
       try {
         accountProviderPayload = buildAccountProviderPayload(
@@ -778,13 +760,9 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         if (startPlanSelected) {
           return this.#startPlanReadinessFailure(entry, error instanceof Error && error.message === "start_plan_model_not_registered"
             ? "The requested Start Plan model is not present in the official provider registry."
-            : "Start Plan provider snapshot could not be prepared after live entitlement verification.");
+            : "Start Plan provider snapshot could not be prepared.");
         }
         throw error;
-      }
-      if (startPlanSelected && (!accountProviderPayload?.providers[BIGMODEL_START_PLAN_PROVIDER_ID]
-        || accountProviderPayload.providers[BIGMODEL_START_PLAN_PROVIDER_ID].access.entitled !== true)) {
-        return this.#startPlanReadinessFailure(entry, "Start Plan provider snapshot could not be prepared after live entitlement verification.");
       }
       const preferences = this.#sessionPreferences ?? resolveSessionPreferences(task.model, runtimeEnv, this.#executionProfileId);
       const childEnv = this.#buildChildEnv(config, runtimeEnv);

@@ -278,7 +278,6 @@ function makeAdapterFixture(workspace: string): AdapterFixture {
 async function runAdapter(options: {
   fixture: AdapterFixture;
   resolver: import("../src/interfaces.js").RuntimeResolver;
-  startPlanProviderEntitled?: boolean;
   resolveStartPlanRuntimeAuth?: () => Promise<never>;
 }) {
   const fixture=options.fixture;
@@ -289,7 +288,6 @@ async function runAdapter(options: {
     childEnvBase:{PATH:process.env.PATH},homeDir:fixture.task.workspace,
     onEvent:event=>fixture.events.push(event),onFailureFacts:facts=>{fixture.facts=facts;},
     onOutcomeCheckpoint:value=>{outcome=value;},
-    startPlanProviderEntitled:options.startPlanProviderEntitled,
     resolveStartPlanRuntimeAuth:options.resolveStartPlanRuntimeAuth});
   try {
     const handle=await adapter.startTask({task:fixture.task,attempt:fixture.attempt,workspace:{requestedPath:fixture.task.workspace,canonicalPath:fixture.task.workspace,mode:"direct"}});
@@ -431,7 +429,7 @@ test("A1b: Start Plan registration RPC rejection preserves structured private fa
     const run = await runAdapter({
       fixture,
       resolver: { resolve: async () => config },
-      startPlanProviderEntitled: true,
+
       resolveStartPlanRuntimeAuth: async () => { throw new Error("registration failure must precede private auth"); },
     });
     assert.equal(run.result.status, "failed");
@@ -477,7 +475,7 @@ test("A1c: Start Plan registration app-server exit is distinct from an RPC rejec
     const run = await runAdapter({
       fixture,
       resolver: { resolve: async () => config },
-      startPlanProviderEntitled: true,
+
       resolveStartPlanRuntimeAuth: async () => { throw new Error("registration failure must precede private auth"); },
     });
     assert.equal(run.result.status, "failed");
@@ -516,7 +514,7 @@ test("A1d: an unstructured RPC error frame remains a rejection without invented 
     const run = await runAdapter({
       fixture,
       resolver: { resolve: async () => config },
-      startPlanProviderEntitled: true,
+
       resolveStartPlanRuntimeAuth: async () => { throw new Error("registration failure must precede private auth"); },
     });
     assert.equal(run.result.status, "failed");

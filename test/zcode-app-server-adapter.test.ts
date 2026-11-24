@@ -230,7 +230,7 @@ test("runtime auth refuses a lease revoked before its reply is written", async (
     const adapter = new ZCodeAppServerTestAdapter({
       resolver: { resolve: async () => runtimeConfig }, timeoutMs: 10_000,
       childEnvBase: { PATH: process.env.PATH },
-      startPlanProviderEntitled: true,
+
       resolveStartPlanRuntimeAuth: async () => {
         const credential = { apiKey: "synthetic-revoked-marker", expiresAt: Date.now() + 10_000, isValid: () => valid };
         queueMicrotask(() => { valid = false; });
@@ -267,7 +267,7 @@ test("runtime auth dispatcher injects a verified Start Plan lease only into the 
       timeoutMs: 10_000,
       childEnvBase: { PATH: process.env.PATH },
       homeDir: runtime.root,
-      startPlanProviderEntitled: true,
+
       onEvent: (event) => events.push(event),
       resolveStartPlanRuntimeAuth: async (scope) => {
         authCalls += 1;
@@ -597,7 +597,7 @@ test("verified Start Plan receives task-scoped current while Desktop selects Cod
       timeoutMs: 10_000,
       childEnvBase: { PATH: process.env.PATH },
       homeDir: runtime.root,
-      startPlanProviderEntitled: true,
+
       resolveStartPlanRuntimeAuth: async () => ({
         apiKey: "synthetic-start-plan-jwt-marker",
         expiresAt: Date.now() + 10_000,
@@ -689,7 +689,7 @@ test("explicit Coding Plan receives task-scoped current when Desktop selects Sta
   } finally { await rm(runtime.root, { recursive: true, force: true }); }
 });
 
-test("unsupported or malformed Start Plan registry bindings fail before Session creation", async () => {
+test("unsupported or malformed Start Plan registry bindings stay diagnostic and no longer block the session (ADR-058)", async () => {
   for (const scenario of [
     {
       providerId: "account:zai-start-plan",
@@ -728,7 +728,7 @@ test("unsupported or malformed Start Plan registry bindings fail before Session 
         resolver: { resolve: async () => runtime.config },
         timeoutMs: 10_000,
         childEnvBase: { PATH: process.env.PATH },
-        startPlanProviderEntitled: true,
+
         resolveStartPlanRuntimeAuth: async () => ({
           apiKey: "synthetic-start-plan-jwt-marker",
           expiresAt: Date.now() + 10_000,
@@ -741,9 +741,12 @@ test("unsupported or malformed Start Plan registry bindings fail before Session 
         workspace: makeWorkspace(runtime.root),
         attempt: 1,
       });
+      // ADR-058: registry/plan-kind mismatches are no longer a Bridge
+      // execution gate. The session starts; the official server enforces the
+      // real plan scope and its rejection would surface as the turn failure.
       const result = await adapter.getResult(handle);
-      assert.equal(result.exitCode, 1);
-      assert.equal(events.some((event) => event.type === "app_server_started"), false);
+      assert.equal(result.exitCode, 0);
+      assert.equal(events.some((event) => event.type === "app_server_started"), true);
     } finally {
       await rm(runtime.root, { recursive: true, force: true });
     }
