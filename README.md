@@ -14,14 +14,16 @@ Codex ZCode Bridge connects Codex with the official ZCode Agent Runtime on your 
 
 ## Plans in Preview
 
-| Plan | Verification |
+Bridge reuses the locally installed ZCode Runtime; the models actually available, plan allowances, billing multipliers, and usage permissions are decided by ZCode and the respective model provider — not by Bridge.
+
+| Plan | Statement |
 | --- | --- |
-| **Z.ai Coding Plan** | Real Windows end-to-end execution with the installed official AppServer and an official bill confirming the extra `0.67×` multiplier for `GLM-5.3-Flash`. |
-| **Z.ai Start Plan** | Historical real Windows end-to-end evidence. Compatibility with Desktop `3.18.2.10443` AppServer was checked offline. Live E2E on that AppServer remains unverified. |
+| **Z.ai Coding Plan** | Normal authorized model calls are supported. Historical real Windows end-to-end execution exists with the installed official AppServer. Bridge does not guarantee the extra `0.67×` credit multiplier or any other promotional benefit. |
+| **Z.ai Start Plan** | The technical adaptation is retained. Current official policy limits Start Plan to the official ZCode client, so Bridge makes no availability promise and does not bypass official access restrictions. |
 
-Verified ZCode Desktop installs: `3.18.2.10443` (full historical verification), `3.19.0.10774` (protocol smoke + one real Coding Plan execution), and `4.0.0.10870` (protocol smoke + a full real-task E2E through the shipped plugin artifacts on 2026-11-24). Other safe installs run without a version gate; their compatibility stays unverified until listed here.
+Verified ZCode Desktop installs: `3.18.2.10443` (full historical verification), `3.19.0.10774` (protocol smoke + one real Coding Plan execution), and `4.0.0.10870` (protocol smoke + a full real-task E2E through the shipped plugin artifacts on 2026-11-24). Other safe installs run without a version gate; their compatibility stays unverified until listed here. README lists the verified versions, but no static version whitelist or discount-verification result is used as a task-execution gate (ADR-054).
 
-The Coding Plan result applies to the tested account, model, and runtime. The `1.5×` figure describes credit efficiency. Plan allowances are separate, and no discount is claimed for Start Plan.
+Plan policies may change at any time — campaigns, allowances, billing rules, and usage scope follow the latest official policy. Bridge's core goal is reliable async agent dispatch, durable task persistence, lifecycle management, and token-consumption optimization, not obtaining plan discounts.
 
 ## Install
 

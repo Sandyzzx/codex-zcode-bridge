@@ -19,6 +19,10 @@
 - 定向测试：批次 3 共 419+ PASS；两项失败均归因修复后复验（fixture seq 计数器、CLI 摘要桩）。mvp 家族 + CLI 终验 66/66 PASS。完整矩阵由 Release Gate 承担。
 - 未测量/未运行：真实模型 Skill 遵循率、Prompt Cache 收益、付费 A/B；严格 Wake C/D；Desktop fully exited；跨机器复现。
 
+## 套餐权益与版本说明（2026-11-24 用户定稿）
+
+Bridge 复用本机安装的 ZCode Runtime；实际可用模型、套餐额度、计费倍率及使用权限由 ZCode 和相应模型服务商决定。Coding Plan 支持正常授权的模型调用，Bridge 不保证额外 0.67 倍积分抵扣或其他促销权益；Start Plan 保留技术适配但官方政策限定其在官方客户端内使用，Bridge 不承诺可用性、不绕过限制；README 列出已验证版本但不以静态白名单或折扣验证作为执行门槛；套餐政策以官方最新为准。Bridge 的核心目标是可靠的异步派发、任务持久化、生命周期管理与 Token 消耗优化。
+
 ## 已知边界
 
 - `turn_accepted` 仅为内存/诊断事实；`runtime_task_events` 冻结 SQL CHECK 未扩展（诚实边界，不伪造持久化）。
