@@ -121,5 +121,15 @@ Operation 的 delivery 不得用另一个 `delivery_id` 覆盖。
 - 完整 `npm test`：`PASS`（1131 tests / 1129 pass / 2 platform skip /
   0 fail，2026-11-24；含 schema-integrity 并发写锁与真实 Chromium
   Web Console）。
-- 正式安装制品 + 真实 ZCode Desktop Host 的 Completion Wake E2E：
-  `NOT_RUN`（本轮未执行真实 Host 验收，不得宣称完整闭环通过）。
+- Preview.15 库隔离副本无感升级：`PASS`（39 Tasks / 42 Attempts / 482
+  Operation Events / 4341 Runtime Events 保持不变，Binding 回填为
+  `legacy_unavailable`，连续 open 与并发写者下 open 零写入）。
+- 正式安装制品 + 真实 Codex Host + 真实 ZCode Runtime 的非空工程
+  Completion Wake E2E：`PASS — REAL`（Thread
+  `01a20dfc-c2c0-77f0-9b38-5bf4caed941d`；Result/Cleanup/Release 后
+  1 次 Intent、1 次官方 Queue、原 Thread 新 Turn
+  `01a20e01-495a-7d43-98cc-e9febbc75966`；Master 在新 Turn 用原生 MCP
+  回读同一 Attempt 并独立复跑验收命令）。证据见
+  [preview16-real-host-e2e-20261124](../reports/preview16-real-host-e2e-20261124.md)。
+- 未验证：Desktop fully exited、notLoaded、严格 Wake C/D、Official Runtime
+  provenance。

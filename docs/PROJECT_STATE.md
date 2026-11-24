@@ -2,8 +2,8 @@
 
 > Status: AUTHORITATIVE
 > Last updated: 2026-11-24（Preview.16 candidate；ADR-059 Owner Binding、安装即生效 Auto Wake、Late Wake Compensation、Console receipt link）
-> Last verified: 2026-11-24，核对 Preview.15 发布记录、Preview.16 实现与隔离 MCP `_meta.threadId` 探针。Owner Binding 持久化、A/B/C 并发隔离、无 `wake-policy.json` 的 Queue、ACK/Turn Started 分离与 Late Wake 不改写历史为定向 `PASS`；完整 `npm test` 为 `PASS`（1131 tests / 1129 pass / 2 platform skip / 0 fail）。正式安装制品 + 真实 ZCode Desktop Host 的 Completion Wake E2E 为 `NOT_RUN`。严格 C/D、Desktop fully exited、Official Runtime provenance 和非空工程交付验收仍为 `NOT_RUN`。
-> Verified against: `origin/preview@8d58e9e377a0c47d2523cd179e9c814139308e4e`。
+> Last verified: 2026-11-24，核对 Preview.15 发布记录、Preview.16 实现、隔离 MCP `_meta.threadId` 探针与真实 Host Completion Wake E2E。Owner Binding 持久化、A/B/C 并发隔离、无 `wake-policy.json` 的 Queue、ACK/Turn Started 分离、Late Wake 不改写历史与 Preview.15 库无感升级为 `PASS`；完整 `npm test` 为 `PASS`（1131 tests / 1129 pass / 2 platform skip / 0 fail）。真实安装制品 + 真实 Codex Host + 真实 ZCode Runtime 的非空工程 Auto Wake 闭环为 `PASS — REAL`（Thread `01a20dfc-c2c0-77f0-9b38-5bf4caed941d`，Queue 触发新 Turn `01a20e01-495a-7d43-98cc-e9febbc75966`）。严格 C/D、Desktop fully exited 与 Official Runtime provenance 仍为 `NOT_RUN`。
+> Verified against: `codex/preview16-async-handoff-20261124@fc9fb6758`（合并后更新为 Preview 合并提交）。
 
 当前发布状态：
 
@@ -22,8 +22,8 @@
 - ZCode Desktop `3.19.0.10774`：仅通过 ADR-042 的 `OFFICIAL_RUNTIME_EXPERIMENTAL` 精确指纹授权完成兼容性探测；不是 Preview.14 的发布支持版本，Coding Plan 倍率仍 `INCONCLUSIVE`，Start Plan 因无 active plan 为 `BLOCKED`。
 - 已发布 Preview `2.0.0-preview.14`：Tag `codex-zcode-bridge-preview-v2.0.0-preview.14`，Release commit `8d58e9e377a0c47d2523cd179e9c814139308e4e`，GitHub Prerelease `draft=false` / `prerelease=true`，Latest 仍为 Stable `v1.7.2`。PR #131 的代码基线 `c7bfc28b1112dead95ae4179a00962de76051920` 已合入；Release Prep PR #133 合并后 Preview push CI `45130689135` 的 Windows、Ubuntu、SQLite 资源矩阵和 Cost Lab 均通过。该版本包含独立 Executor、Lifetime Lease、Named Pipe IPC、Thin MCP、Task CLI、Operations Console 与 trusted-local Wake。真实 loaded/idle trusted-local 自动 Wake、Native MCP Result readback、Master 生命周期独立验收和 Desktop visible 为 `PASS — REAL`；严格 C/D、Desktop fully exited、Official Runtime provenance 与非空工程交付验收为 `NOT_RUN`。
 - ADR-058（2026-11-24）：套餐折扣/权益验证结果与生产执行资格彻底解耦——Admission/Routing/Selection/Spawn 不再因折扣记录阻断；官方拒绝即真实错误并走正常 Cleanup/Release；Cost Lab 不再默认 0.67 倍率，仅按实测 `effective_extra_ratio` 记录，折扣期望需显式提供。Start Plan/Coding Plan 实现与官方认证全部保留。
-- 已发布 Preview `2.0.0-preview.15`（本候选）：PR #135 的 Whole Task/Staged 派发与 Prompt 合同（ADR-055）、ZCode Desktop 4.0.0 适配与 ADR-054 授权机制退役、P1 可靠性整改（Turn 事实边界、Lease Spawn Fence、Release→Wake 恢复、ADR-056 Result 回读合同）、P2 精简（死代码删除、Status updated_at 修正、Prompt 容量合同、实验 workflow 退役）。
-- Preview.16 candidate（ADR-059）：Owner Thread 只取 `ctx.mcpReq._meta.threadId`，Task/首个 Attempt/Binding 同事务持久化；移除 `wake-policy.json` 与所有 Wake 专用授权门禁；Auto Wake 默认开启并可在 WebUI Settings 关闭；Queue ACK、`turn_started`、`web_notify` 与 Master Accepted 分离；历史未投递 Operation 只能走独立 Late Wake Compensation；MCP receipt 增加验证过的 `console_link`。
+- 已发布 Preview `2.0.0-preview.15`：PR #135 的 Whole Task/Staged 派发与 Prompt 合同（ADR-055）、ZCode Desktop 4.0.0 适配与 ADR-054 授权机制退役、P1 可靠性整改（Turn 事实边界、Lease Spawn Fence、Release→Wake 恢复、ADR-056 Result 回读合同）、P2 精简（死代码删除、Status updated_at 修正、Prompt 容量合同、实验 workflow 退役）。
+- Preview.16 candidate（ADR-059）：Owner Thread 只取 `ctx.mcpReq._meta.threadId`，Task/首个 Attempt/Binding 同事务持久化；移除 `wake-policy.json` 与所有 Wake 专用授权门禁；Auto Wake 默认开启并可在 WebUI Settings 关闭；Queue ACK、`turn_started`、`web_notify` 与 Master Accepted 分离；历史未投递 Operation 只能走独立 Late Wake Compensation；MCP receipt 增加验证过的 `console_link`。真实 Host 非空工程 E2E 已完成一次：released 后 1 次 Intent → 1 次官方 Queue（message `01a20e01-492d-7381-8027-09e5e076922d`）→ 原 Thread 新 Turn，Master 在新 Turn 内用原生 MCP 回读同一 Attempt 并独立验收。
 - ZCode Desktop `4.0.0.10870`（build `3bc8a247`）：`OFFICIAL_INSTALLATION_SAFE`，零模型 Protocol Smoke `PASS`；随包制品真实任务 E2E `PASS — REAL`（真实 Coding Plan/GLM-5.3 回合、Result/Cleanup/Release 闭环、工程产物逐字节核对）。Manifest 诊断位为 UNVERIFIED（ADR-054 下不阻断）。见 [verification](reports/preview15-final-integration-verification-20261124.md)。
 - Operations Console 与 Cost Lab 已随 PR #131 合并到 Preview：Task Web Console 扩展为 Dashboard/Tasks/Cost Lab/Runtime/Settings 的单一 loopback Origin，Cost Lab 仅通过 same-origin API 复用既有服务，Runtime Auto-Learn 按 exact fingerprint 保存兼容性证据。Cost Lab Runner 使用隔离 Authority Root 和独立 Executor 进程；当前通过的是 synthetic Worker/合成账单证据，不能提升为真实 Provider、真实 Desktop 关闭或最终发布结论。
 
@@ -72,6 +72,7 @@ Preview.3 的 Start Plan 历史证据覆盖 Windows、官方 AppServer `0.17.1`�
 | Clean install / supported runtime closure | `PASS — LOCAL_WINDOWS` | 隔离 npm cache 的 clean install 完成 MCP 初始化、13 个工具与 SQLite 启动；BOM 文件与实际包一致；仍不声明跨机器或完整 ZCode 产品资源图 |
 | 真实 Coding Plan + Official Host | `PASS` | 此前 R7 候选完成一次真实 Task：模型、工具、Events、Usage、Result、Cleanup、Release 均通过；不替代 Preview.5 安装后验收 |
 | 真实 Coding Plan + 安装版 AppServer | `PASS — CANDIDATE` | 构建后 MCP/Worker/SQLite 完成一次真实 Task；22,735 Token、官方 1.7666 credits、正常预期 2.636755、有效额外倍率 0.6699901963。官方账单延迟结算后以同小时 fresh snapshot 对账，无第二次模型请求 |
+| Preview.16 真实 Host Auto Wake E2E | `PASS — REAL` | 安装版候选插件 `2.0.0-preview.16` + 真实 Codex Host + 真实 ZCode Runtime，非空交付 `hello.txt`/`verify.mjs`。Owner Binding 为 `bound`/`mcp_meta` 且与 Task/首个 Attempt 同事务；Result→Cleanup→Release 后 1 次 Intent、1 次官方 Queue（message `01a20e01-492d-7381-8027-09e5e076922d`），原 Thread 新 Turn `01a20e01-495a-7d43-98cc-e9febbc75966` 以 Wake 消息起始；Master 在该 Turn 用原生 MCP 回读 digest `9035597…` 并复跑 `node verify.mjs` 退出码 0。Executor 首次启动使用一次 `executor start`（隔离 data_root 的 `state` 子目录未预建），不属于 Wake 或人工 Composer 干预 |
 | 未知官方 3.19.0 安装安全检查与指纹授权 | `PASS — EXPERIMENTAL` | Desktop `3.19.0.10774`、Windows x64、Node 24.16.0；EXE/ASAR/Bundle/builtin/runtime-host 完整指纹，Authenticode 官方主体；无授权时 `OFFICIAL_RUNTIME_UNVERIFIED`，匹配授权后仅 `OFFICIAL_RUNTIME_EXPERIMENTAL` |
 | ZCode 3.19.0 零模型协议 Smoke | `PASS` | 真实安装版 AppServer 启动，`runtime/capabilities` 成功，Session 未创建，模型请求 0，Cleanup PASS |
 | ZCode 3.19.0 Coding Plan 真实执行 | `PASS — EXPERIMENTAL` | 1 次真实 Task completed，18,351 Token；证明该精确安装的模型执行路径可工作，不自动提升发布兼容或折扣 |
@@ -114,7 +115,9 @@ Preview.3 的 Start Plan 历史证据覆盖 Windows、官方 AppServer `0.17.1`�
 
 Preview.7 的本机验证只覆盖 Windows x64、Node `24.16.0`。已安装 Desktop `3.18.2.10443` 的官方签名 helper 与固定 Host 通过进程管理 smoke；Desktop `3.18.0`、`3.18.1` 实机组合未验证，不能标记为不兼容。真实 OAuth refresh 与跨机器制品复现未执行，但属于 Owner 已接受的 Preview 阶段有限风险。PR #96 合并后的 preview push 首次 Windows run 观察到既有 `released` lifecycle observation timeout；Root cause 保持 `UNCONFIRMED`，未修改断言或超时，failed-job rerun 通过。
 
-PR #131 已合入 Preview，合并后 CI `45124466655` 通过。Preview.14 的 trusted-local Wake 已在隔离 Host 中完成一次真实 loaded/idle Queue、Turn、原生 MCP Result readback、Cleanup/Release、Master 生命周期独立验收与 Desktop Visible；这不等同于真实 Codex Desktop fully exited、严格 Wake C/D、Official Runtime provenance 或非空工程交付。Preview.14 发布仍在准备中，尚未创建 Tag 或 GitHub Release。
+PR #131 已合入 Preview，合并后 CI `45124466655` 通过。Preview.14 的 trusted-local Wake 已在隔离 Host 中完成一次真实 loaded/idle Queue、Turn、原生 MCP Result readback、Cleanup/Release、Master 生命周期独立验收与 Desktop Visible；这不等同于真实 Codex Desktop fully exited、严格 Wake C/D 或 Official Runtime provenance。
+
+Preview.16（ADR-059）进一步在真实 Codex Host 完成一次非空工程 Auto Wake E2E：安装版候选插件从 Host 的 `ctx.mcpReq._meta.threadId` 取得原 Thread，SQLite 在受理事务内持久化 Owner Binding；Executor 完成 Result、Cleanup、Release 后只提交一次官方 Codex Queue，原 Thread 随即出现由该消息触发的新 Turn，Master 在新 Turn 内用原生 MCP 回读同一 Attempt 的 Result 并独立复跑验收命令。没有人工 Composer Turn、重复 Worker 或重复 Queue。该证据不覆盖 Desktop fully exited、notLoaded 或严格 Wake C/D。
 
 ## 当前文档入口
 

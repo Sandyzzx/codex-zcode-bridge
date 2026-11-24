@@ -2,7 +2,7 @@
 
 > Status: AUTHORITATIVE
 > Last updated: 2026-11-24（ADR-059 Owner Binding、Auto Wake 与 receipt Console link）
-> Last verified: 2026-11-24，核对 ADR-059 的 `_meta.threadId` 身份来源、Task/Attempt/Binding 同事务、`owner_binding`/`console_link` additive receipt 字段、ADR-056 Result 回读、ADR-039 持久 Spawn 证据与 ADR-048 默认 Event 分页；真实 Host E2E 未运行。
+> Last verified: 2026-11-24，核对 ADR-059 的 `_meta.threadId` 身份来源、Task/Attempt/Binding 同事务、`owner_binding`/`console_link` additive receipt 字段、ADR-056 Result 回读、ADR-039 持久 Spawn 证据与 ADR-048 默认 Event 分页；真实 Codex Host 已观察到 `owner_binding` 与 Queue 触发的原 Thread 新 Turn，`console_link` 在 receipt 中实际返回。
 > Verified against: Preview `3daffe476b12b3eb16cec957d18422c3ff4c775e` + terminal-admin-release candidate
 > ADR-039 Last verified: 2026-11-22，隔离 SQLite/MCP 覆盖 Receipt 保护、live descendant、活动 Worker、终止失败、completed/failed/waiting_for_master/cancelled 终态绑定、并发重复取消与 SQLite 历史校验；生产取消未重试。
 > ADR-047/048: Accepted for Preview；默认 `zcode_result` 保持完整，Summary 仍为显式 opt-in。

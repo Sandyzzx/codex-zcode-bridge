@@ -2,7 +2,7 @@
 
 > Status: AUTHORITATIVE
 > Last updated: 2026-11-24（Auto Wake Settings 与 receipt Console link）
-> Last verified: 2026-11-24，核对 unified Console、Cost Lab same-origin 挂载、i18n/theme、Deep Link、Runtime Auto-Learn、Auto Wake 默认开启/CSRF Settings、`console_link` receipt 与真实 Chromium/synthetic Worker 定向路径；真实 Desktop 全退、真实 Host Completion Wake E2E 与真实 Provider 仍不在已验证范围。
+> Last verified: 2026-11-24，核对 unified Console、Cost Lab same-origin 挂载、i18n/theme、Deep Link、Runtime Auto-Learn、Auto Wake 默认开启/CSRF Settings、`console_link` receipt、真实 Chromium 定向路径与真实 Host Completion Wake E2E（Master 在回复中输出可点击的 Task Deep Link）；真实 Desktop 全退与真实 Provider 不在已验证范围。
 > Verified against: `codex/preview16-async-handoff-20261124`（基于 `origin/preview@fa44b901fe3bb7b403905e7fead791733c69fa60`）
 
 Operations Console 是 Executor Control Pipe 的本地可视化 Adapter。它只使用
