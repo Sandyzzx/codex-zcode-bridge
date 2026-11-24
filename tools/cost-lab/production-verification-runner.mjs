@@ -281,8 +281,7 @@ export function createProductionCodingPlanVerificationRunner(options = {}) {
           effective_reasoning: result.model?.effective_reasoning_level ?? null,
           installation_safety: runtime.installation_safety ?? null,
           installation_fingerprint: runtime.installation_fingerprint ?? null,
-          experimental_authorization_state: runtime.experimental_authorization?.state ?? null,
-          experimental_authorization_scopes: runtime.experimental_authorization?.scopes ?? [],
+          runtime_status: runtime.runtime_status ?? null,
           runtime: {
             status: installedRuntimeObserved ? runtime.runtime_status : "WORKER_RUNTIME_UNOBSERVED",
             version: runtime.manifest?.version ?? runtime.desktop_version ?? null,

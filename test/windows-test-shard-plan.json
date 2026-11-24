@@ -7,7 +7,7 @@
   "shards": [
     {
       "id": 1,
-      "estimated_ms": 782724,
+      "estimated_ms": 788724,
       "tests": [
         {
           "file": "test/agent-report.test.ts",
@@ -36,6 +36,26 @@
         {
           "file": "test/events-summary.test.ts",
           "estimated_ms": 281
+        },
+        {
+          "file": "test/executor-ipc.test.ts",
+          "estimated_ms": 5000
+        },
+        {
+          "file": "test/executor-lease-spawn-fence.test.ts",
+          "estimated_ms": 4000
+        },
+        {
+          "file": "test/executor-lease.test.ts",
+          "estimated_ms": 7000
+        },
+        {
+          "file": "test/executor-process.test.ts",
+          "estimated_ms": 55000
+        },
+        {
+          "file": "test/executor-wake.test.ts",
+          "estimated_ms": 500
         },
         {
           "file": "test/failure-facts-integration.test.ts",
@@ -86,20 +106,8 @@
           "estimated_ms": 8938
         },
         {
-          "file": "test/executor-ipc.test.ts",
-          "estimated_ms": 5000
-        },
-        {
-          "file": "test/executor-lease.test.ts",
-          "estimated_ms": 7000
-        },
-        {
-          "file": "test/executor-process.test.ts",
-          "estimated_ms": 55000
-        },
-        {
-          "file": "test/executor-wake.test.ts",
-          "estimated_ms": 500
+          "file": "test/release-wake-recovery.test.ts",
+          "estimated_ms": 2000
         },
         {
           "file": "test/runtime-preferences.test.ts",
@@ -221,7 +229,7 @@
     },
     {
       "id": 2,
-      "estimated_ms": 767819,
+      "estimated_ms": 831819,
       "tests": [
         {
           "file": "test/account-provider.test.ts",
@@ -230,22 +238,6 @@
         {
           "file": "test/architecture-boundaries.test.ts",
           "estimated_ms": 400
-        },
-        {
-          "file": "test/task-cli.test.ts",
-          "estimated_ms": 4000
-        },
-        {
-          "file": "test/web-console.test.ts",
-          "estimated_ms": 3000
-        },
-        {
-          "file": "test/web-console-browser.test.ts",
-          "estimated_ms": 10000
-        },
-        {
-          "file": "test/runtime-compatibility.test.ts",
-          "estimated_ms": 1000
         },
         {
           "file": "test/attention-wait.test.ts",
@@ -304,8 +296,16 @@
           "estimated_ms": 331
         },
         {
+          "file": "test/result-readback-integrity.test.mjs",
+          "estimated_ms": 12000
+        },
+        {
           "file": "test/run-worker-task.test.ts",
           "estimated_ms": 460
+        },
+        {
+          "file": "test/runtime-compatibility.test.ts",
+          "estimated_ms": 1000
         },
         {
           "file": "test/runtime-resolver.test.ts",
@@ -396,12 +396,32 @@
           "estimated_ms": 7804
         },
         {
+          "file": "test/status-updated-at.test.mjs",
+          "estimated_ms": 6000
+        },
+        {
+          "file": "test/task-cli.test.ts",
+          "estimated_ms": 4000
+        },
+        {
           "file": "test/task-prompt.test.ts",
           "estimated_ms": 333
         },
         {
+          "file": "test/turn-lifecycle-truthfulness.test.ts",
+          "estimated_ms": 46000
+        },
+        {
           "file": "test/validate-plugin-root-pattern.test.ts",
           "estimated_ms": 3839
+        },
+        {
+          "file": "test/web-console-browser.test.ts",
+          "estimated_ms": 10000
+        },
+        {
+          "file": "test/web-console.test.ts",
+          "estimated_ms": 3000
         },
         {
           "file": "test/windows-recorded-tree-native.test.ts",
