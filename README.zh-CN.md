@@ -23,9 +23,9 @@ Coding Plan 的结果适用于已验证的账户、模型和运行时。`1.5` �
 
 ## 安装
 
-预览版环境为 **Windows x64**、**Node.js `24.16.0`** 和已安装的官方 **ZCode Desktop `3.18.2.10443`**。请先登录 ZCode，确认账户可使用目标套餐和模型，并准备 Git 和支持插件的 Codex。Node.js 和 ZCode 需单独安装。
+预览版环境为 **Windows x64** 和 **Node.js `24.16.0`**。任何通过安全检查的官方 ZCode Desktop 安装均可运行（ADR-054）；已完成实际验证的版本如下列出。请先登录 ZCode，确认账户可使用目标套餐和模型，并准备 Git 和支持插件的 Codex。Node.js 和 ZCode 需单独安装。
 
-同一个 Codex 安装中选择一个 Marketplace 渠道即可。安装版 Runtime 集成、Cost Lab、SQLite v14-only 运行时、事件分页、可选结果摘要、独立 Executor 与 Thin MCP、Task CLI/Web Console、loaded/idle trusted-local Queue Wake 和 Async Master Handoff 位于预览版 `2.0.0-preview.14`，稳定版为 `v1.7.2`。
+同一个 Codex 安装中选择一个 Marketplace 渠道即可。安装版 Runtime 集成、Cost Lab、SQLite v14-only 运行时、事件分页、可选结果摘要、独立 Executor 与 Thin MCP、Task CLI/Web Console、loaded/idle trusted-local Queue Wake 和 Async Master Handoff 位于预览版 `2.0.0-preview.15`，稳定版为 `v1.7.2`。
 
 自动 Wake 仅在隔离的 loaded/idle Thread 和显式 trusted-local 授权下完成真实验证。严格 notLoaded Wake、Desktop 完全退出后的恢复、Official Runtime provenance 和非空真实工程交付仍未验证。
 

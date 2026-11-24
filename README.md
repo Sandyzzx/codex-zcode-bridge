@@ -19,11 +19,13 @@ Codex ZCode Bridge connects Codex with the official ZCode Agent Runtime on your 
 | **Z.ai Coding Plan** | Real Windows end-to-end execution with the installed official AppServer and an official bill confirming the extra `0.67×` multiplier for `GLM-5.3-Flash`. |
 | **Z.ai Start Plan** | Historical real Windows end-to-end evidence. Compatibility with Desktop `3.18.2.10443` AppServer was checked offline. Live E2E on that AppServer remains unverified. |
 
+Verified ZCode Desktop installs: `3.18.2.10443` (full historical verification), `3.19.0.10774` (protocol smoke + one real Coding Plan execution), and `4.0.0.10870` (protocol smoke + a full real-task E2E through the shipped plugin artifacts on 2026-11-24). Other safe installs run without a version gate; their compatibility stays unverified until listed here.
+
 The Coding Plan result applies to the tested account, model, and runtime. The `1.5×` figure describes credit efficiency. Plan allowances are separate, and no discount is claimed for Start Plan.
 
 ## Install
 
-For Preview, use **Windows x64**, **Node.js `24.16.0`**, and the installed official **ZCode Desktop `3.18.2.10443`**. Sign in to ZCode with access to your chosen plan and model. You also need Git and Codex with plugin support. Install Node.js and ZCode separately.
+For Preview, use **Windows x64** and **Node.js `24.16.0`**. Any safe official ZCode Desktop installation runs (ADR-054); versions with completed real verification are listed below. Sign in to ZCode with access to your chosen plan and model. You also need Git and Codex with plugin support. Install Node.js and ZCode separately.
 
 Use one marketplace channel per Codex installation. Preview `2.0.0-preview.14` contains the installed Runtime integration, Cost Lab, SQLite v14-only runtime, bounded Event monitoring, opt-in Result summaries, the independent Executor with Thin MCP, Task CLI and Web Console, trusted-local loaded/idle Queue Wake, and Async Master handoff. Stable remains at `v1.7.2`.
 

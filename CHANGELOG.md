@@ -4,6 +4,30 @@
 
 当前版本以 `package.json` 和 Release Please manifest 为准。提交推送到 `master` 后，Release Please 会在有待发布变更时创建发布 PR，并同步更新版本文件与本日志；合并发布 PR 后会生成对应 Git tag 和 GitHub Release。
 
+## [2.0.0-preview.15](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-preview-v2.0.0-preview.14...codex-zcode-bridge-preview-v2.0.0-preview.15) (2026-11-24)
+
+Preview 2.0.0-preview.15（EXPERIMENTAL / PREVIEW ONLY；发布目标为 `preview` 分支）。
+
+### Features
+
+* Whole Task / Staged 派发与 Worker Prompt 合同（ADR-055，PR #135）：删除 Auto 派发，首派与 Continue 共用一份任务合同与 60k 容量界限，Continue 反馈有界投影，Report Repair 独立分流。
+* ZCode Desktop 4.0.0 适配（ADR-054）：安装安全是唯一执行门禁；未验证版本不再阻断调用，Manifest/能力静态事实降为诊断（`officialProviderCapabilityWarning`），实验授权机制与环境变量退役。
+* Turn Lifecycle 事实边界：仅原生 turn.started 建立 Started；ACK 发布 turn_accepted，不再伪造 Started；终态事件不再因等待绑定被丢弃，完成只结算一次。
+* Executor Lease Spawn Fence：Lease 所有权未知时禁止一切新 Worker Spawn（pump/定时器/恢复重派同一围栏），在途 Result 与 Release 通知照常收尾。
+* Release→Wake 恢复：启动 Recovery 为「已 Release 且无任何 Wake 观察」的 Operation 重跑一次通知；已有 Wake 事实的 Operation 保持去重合同。
+* ADR-056 Result 回读合同：`view=summary` 投影下沉 Executor；`zcode_result` 新增 `offset_bytes`/`max_bytes` 分页（码点安全 next_offset，拼接页 SHA-256 等于 result_digest）；MCP 大响应文本通道有界引用。
+* Status `updated_at` 读取最新持久事件（专用单行查询），超过 200 条事件的任务不再显示过期时间。
+
+### Removed
+
+* `LeaseGuardedTaskManager`（生产无调用者）、空 `#acceptRunOutcome`、`authorize-official-runtime` 工具、`ZCODE_BRIDGE_EXPERIMENTAL_RUNTIME_AUTHORIZATION_FILE` 传递、`RUNTIME_PROBE_AUTHORIZATION_REQUIRED` 死错误码、冗余 windows-shard-experiment workflow。
+
+### Validation
+
+* 零模型 Protocol Smoke（安装版 4.0.0.10870 / build 3bc8a247）：PASS。
+* 真实任务 E2E（随包制品、真实 Coding Plan/GLM-5.3 回合）：Result/Cleanup/Release 闭环与工程产物逐字节核对 PASS。
+* 新增故障注入测试：Turn Lifecycle（8）、Lease Fence（4）、Wake Recovery（6）、Result 分页完整性（4）、Status 时间（1）、Prompt 容量与中段错误信号（17）、MCP 分页/有界通道（29）。
+* 完整矩阵（Windows 双分片、Ubuntu、SQLite 资源矩阵、压力）由 Release Gate 承担，见发布记录。
 ## [2.0.0-preview.14](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-preview-v2.0.0-preview.13...codex-zcode-bridge-preview-v2.0.0-preview.14) (2026-11-23)
 
 Preview 2.0.0-preview.14（EXPERIMENTAL / PREVIEW ONLY；发布目标为 `preview` 分支）。
