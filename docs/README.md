@@ -3,7 +3,7 @@
 > Status: AUTHORITATIVE（仅指本索引）
 > Last updated: 2026-11-24（Preview.16 candidate；ADR-059 Owner Binding + Auto Wake）
 > Last verified: 2026-11-24，核对 Preview.15 发布记录、ADR-059 实现与完整回归、隔离 MCP `_meta.threadId` 探针、Preview.15 库副本升级与真实 Host Completion Wake E2E。Owner Binding、A/B/C 并发隔离、无授权文件 Queue、ACK/Turn Started 分离、Late Wake 不改写历史与 v14 无感升级为 `PASS`；正式安装制品 + 真实 Codex Host + 真实 ZCode Runtime 的非空工程 Auto Wake 闭环为 `PASS — REAL`。严格 Wake C/D、Desktop fully exited 与 Official Runtime provenance 仍为 `NOT_RUN`。
-> Verified against: `codex/preview16-async-handoff-20261124`（Preview.16 candidate，基于 `origin/preview@fa44b901`；合并后更新为 Preview 合并提交）。
+> Verified against: `406c56b848f41823c68a9013f81b645b6b19e0be`（PR #140 合并提交，Preview.16 发布提交）。
 
 English users start at [README.md](../README.md). 技术文档为中文。先读当前事实，按问题加载合同；研究或历史材料不作为当前实现或发布证明。
 
@@ -32,6 +32,7 @@ English users start at [README.md](../README.md). 技术文档为中文。先读
 | Preview.12 发布与 Recovery 兼容 | [发布报告](reports/preview12-release-20261122.md) | 无固定观察次数、重复材料事实去重、超过 8 条 Hold 消解、旧 v14 Trigger 兼容与真实 A/B `BLOCKED` |
 | Preview.13 发布与统一取消释放 | [GitHub Release](https://github.com/Sandyzzx/codex-zcode-bridge/releases/tag/codex-zcode-bridge-preview-v2.0.0-preview.13) | 完整捕获响应 AgentReport 解析、四种终态 Result 统一 `zcode_cancel`、安全证明保留与真实 A/B `BLOCKED` |
 | Preview.15 发布 | [GitHub Release](https://github.com/Sandyzzx/codex-zcode-bridge/releases/tag/codex-zcode-bridge-preview-v2.0.0-preview.15)、[发布记录](reports/preview15-publication-20261124.md) | Preview.15 prerelease 已发布：Tag 与 Release commit 一致，ZIP/SHA256 可下载且回验一致，Latest 仍为 Stable |
+| Preview.16 发布 | [GitHub Release](https://github.com/Sandyzzx/codex-zcode-bridge/releases/tag/codex-zcode-bridge-preview-v2.0.0-preview.16)、[发布记录](reports/preview16-publication-20261124.md) | Preview.16 prerelease 已发布：Owner Binding + 安装即生效 Auto Wake；Tag 与 Release commit 一致，ZIP/SHA256 可下载且回验一致，Latest 仍为 Stable |
 | Preview.15 集成与验证 | [验证记录](reports/preview15-final-integration-verification-20261124.md)、[发布准备](reports/preview15-release-20261124.md) | PR #135 + 4.0.0 适配 + ADR-054/055/056 + P1/P2 整改的候选验证：Protocol Smoke 与真实任务 E2E 为 REAL PASS；发布事实以 Release Gate 运行为准 |
 | Preview.16 Owner Binding + Auto Wake | [ADR-059](decisions/ADR-059-owner-binding-and-installed-auto-wake.md)、[架构合同](architecture/BRIDGE_ASYNC_EXECUTION_V1.md)、[真实 Host E2E](reports/preview16-real-host-e2e-20261124.md) | `PASS — REAL`：`_meta.threadId` 唯一身份来源、Task/Attempt/Binding 同事务、并发隔离、无授权文件 Queue、ACK 与 Turn Started 分离、Late Wake 独立补偿、receipt Console link；真实安装制品 + 真实 Codex Host 完成一次非空工程 Auto Wake 闭环 |
 | Preview.14 发布 | [GitHub Release](https://github.com/Sandyzzx/codex-zcode-bridge/releases/tag/codex-zcode-bridge-preview-v2.0.0-preview.14)、[发布报告](reports/preview14-release-20261123.md) | 独立 Executor、Thin MCP、CLI/Web/Wake 已发布为 prerelease；ZIP 与 SHA256 可下载，Latest 仍为 Stable |
