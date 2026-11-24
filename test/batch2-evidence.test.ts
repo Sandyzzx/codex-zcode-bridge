@@ -136,9 +136,14 @@ test("B2-01: normal, completion-before-start, and completion-then-start all sett
       assert.ok(run.outcome!.agentReport, `${scenario}: report parsed`);
       const starts = run.events.filter((event) => event.type === "turn_started").length;
       const completions = run.events.filter((event) => event.type === "turn_completed").length;
+      const accepted = run.events.filter((event) => event.type === "turn_accepted").length;
       assert.equal(starts, expectedStarts[scenario], `${scenario}: exactly the native start events publish`);
-      assert.equal(run.events.filter((event) => event.type === "turn_accepted").length, 1,
-        `${scenario}: the send ACK publishes turn_accepted exactly once`);
+      // The ACK acceptance fact is published once, except when a coalesced
+      // ACK + turn.started chunk settles the native start before the ACK
+      // microtask runs — then the acceptance event is redundant by contract
+      // and stays unemitted (P1 §3.1).
+      assert.ok(accepted <= 1, `${scenario}: the send ACK publishes turn_accepted at most once`);
+      assert.ok(accepted === 1 || starts === 1, `${scenario}: acceptance or the native start must record the send`);
       assert.ok(completions <= 1, `${scenario}: at most one completion event`);
     } finally { run.cleanup(); }
   }
