@@ -560,6 +560,7 @@ test("Thin MCP disconnect leaves the accepted Task in the Executor and reconnect
     TMP: tempDirectory,
     TMPDIR: tempDirectory,
     ZCODE_BRIDGE_MCP_TRANSPORT: "control",
+    ZCODE_BRIDGE_TASK_CONSOLE: "off",
   };
   delete env.ZCODE_BRIDGE_DATA_DIR;
   delete env.ZCODE_BRIDGE_PLUGIN_MODE;
@@ -805,6 +806,7 @@ test("a shipped MCP Host process exit cannot cancel the original Attempt Result,
     TMP: tempDirectory,
     TMPDIR: tempDirectory,
     ZCODE_BRIDGE_MCP_TRANSPORT: "control",
+    ZCODE_BRIDGE_TASK_CONSOLE: "off",
   };
   delete env.ZCODE_BRIDGE_DATA_DIR;
   delete env.ZCODE_BRIDGE_PLUGIN_MODE;
@@ -1020,6 +1022,7 @@ test("Thin MCP -> Executor -> Worker -> Official Adapter completes against a con
     TMP: tempDirectory,
     TMPDIR: tempDirectory,
     ZCODE_BRIDGE_MCP_TRANSPORT: "control",
+    ZCODE_BRIDGE_TASK_CONSOLE: "off",
     ZCODE_BRIDGE_ZCODE_CJS: runtime.entrypoint,
     ZCODE_BRIDGE_NODE: process.execPath,
     ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: runtime.builtinConfig,
