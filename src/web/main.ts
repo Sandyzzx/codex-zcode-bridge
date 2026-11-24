@@ -125,6 +125,7 @@ export async function runTaskConsoleMain(argv: readonly string[] = process.argv.
       port: options.port,
       consoleId,
       authorityRootDigest: authorityRootDigest(options.dataRoot),
+      settingsDirectory: options.settingsDirectory,
     });
     const address = await consoleServer.start();
     const processProbe = createPlatformProbe();

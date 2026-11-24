@@ -23,20 +23,19 @@
 
 1. 当前目标仍受用户明确 Bridge 授权覆盖，写入、审批、取消和外部操作权限没有扩大；
 2. `zcode_task` 返回可归属的受理回执和原 `task_id`，状态不是未知、冲突或失败；
-3. 能核实 Executor Authority；当前 Codex Thread ID 和一次性 Wake 授权可核实，
-   或用户已知道本次只能依赖 Web Notify/下一次 Turn。默认 `strict` 模式还须
-   由 Executor 核实同 Owner 实时 loaded/idle、workspace 与模型配置；显式
-   `trusted-local` Owner 策略允许跳过该私有控制面预检；Adapter 本身不得
-   声称实际模型或 loaded 状态已证明，Turn 启动须由独立观察另行确认；
+3. 能核实 Executor Authority，且 receipt 的 `owner_binding` 为 `bound`；
+   或用户已知道本次只能依赖 Web Notify/下一次 Turn。Auto Wake 由安装并启用
+   插件即生效，默认开启，不需要 `wake-policy.json`、Owner Grant 或逐任务
+   授权；Executor 在 Release 后调用一次官方 Queue。Adapter 不得把 Queue ACK
+   或 `web_notify` 声称成 Turn 已启动，Turn 启动须由独立观察另行确认；
 4. 当前 Attempt 无已知 Pending Interaction、执行启动错误或未决清理事实；
 5. 用户要求的是已授权交付，不把 Async Handoff 变成无人值守审批或无限取消权限。
 
 条件 1 或 5 不成立时停止交接并保持未决；条件 2 或 4 不成立时留在当前 Turn
 核对或报告，Pending 才使用 `foreground`；条件 3 的 Executor Authority 无法核实时
-保持未决。仅 Codex Thread 或一次性 Wake 绑定不可用时，使用 Web Notify 回退并结束
-Turn，同时在报告中说明回退。不要在缺少 Authority、Thread 或预算确认时自行执行
-`codex queue`、附加 `--resume`、修改 Wake 策略或伪造一次性授权。`trusted-local`
-是 Owner 对本地 Thread 当前模型风险的显式接受，不是 Master 可自行选择的绕过模式。
+保持未决。仅 `owner_thread_unavailable` 或 `auto_wake_disabled` 时，使用 Web
+Notify 回退并结束 Turn，同时在报告中说明回退。不要在缺少 Authority 或 Thread
+确认时自行执行 `codex queue`、附加 `--resume`、创建授权文件或伪造 Wake。
 
 ## 受理与交接
 
@@ -45,10 +44,11 @@ Turn，同时在报告中说明回退。不要在缺少 Authority、Thread 或�
    `zcode_events(include_attempt: true, wait_ms: 0)` 做有界受理检查，记录可核实的
    Task、Attempt、Authority Root、Codex Thread、接入方式和当前执行事实。不要等待
    `turn_started`；不得把这一次检查扩展成后续轮询。
-3. 若 Task Console 可用，取得经 `task console-url`/Executor 验证的原
-   `task_id` 当前链接；只报告真实可访问的 `web_url`，不得拼接、猜测或伪造
-   地址。链接只携带 `task_id`，不得包含 CSRF 或凭据；Console 不可用时报告
-   原因和安全的状态查询替代方式。
+3. 优先使用 receipt 的 `console_link.web_url`；只报告真实可访问的 `web_url`。
+   `available=false` 时只报告 `reason_code`，并用 `task status` 作为安全替代。
+   只有 receipt 未提供链接时才使用经 `task console-url`/Executor 验证的原
+   `task_id` 当前链接；不得拼接、猜测或伪造地址。Console 不可用时报告原因和
+   安全的状态查询替代方式。链接只携带 `task_id`，不得包含 CSRF 或凭据。
 4. 向用户简洁报告：目标、Task Scope、Handoff Mechanism、`task_id`、已知
    Attempt/路径、受理状态、Wake delivery mode、可验证的 Task Console 链接，
    以及 Result 将经 Queue 或 Web Notify 返回。`trusted-local` 不得描述成

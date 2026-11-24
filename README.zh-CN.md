@@ -29,9 +29,9 @@ Bridge 复用本机安装的 ZCode Runtime，实际可用模型、套餐额度�
 
 预览版环境为 **Windows x64** 和 **Node.js `24.16.0`**。任何通过安全检查的官方 ZCode Desktop 安装均可运行（ADR-054）；已完成实际验证的版本如下列出。请先登录 ZCode，确认账户可使用目标套餐和模型，并准备 Git 和支持插件的 Codex。Node.js 和 ZCode 需单独安装。
 
-同一个 Codex 安装中选择一个 Marketplace 渠道即可。安装版 Runtime 集成、Cost Lab、SQLite v14-only 运行时、事件分页、可选结果摘要、独立 Executor 与 Thin MCP、Task CLI/Web Console、loaded/idle trusted-local Queue Wake 和 Async Master Handoff 位于预览版 `2.0.0-preview.15`，稳定版为 `v1.7.2`。
+同一个 Codex 安装中选择一个 Marketplace 渠道即可。安装版 Runtime 集成、Cost Lab、SQLite v14-only 运行时、事件分页、可选结果摘要、独立 Executor 与 Thin MCP、Task CLI/Web Console、Async Master Handoff、持久化 Owner Binding 与安装即生效的 Auto Wake 位于预览候选 `2.0.0-preview.16`，稳定版为 `v1.7.2`。
 
-自动 Wake 仅在隔离的 loaded/idle Thread 和显式 trusted-local 授权下完成真实验证。严格 notLoaded Wake、Desktop 完全退出后的恢复、Official Runtime provenance 和非空真实工程交付仍未验证。
+Auto Wake 不再需要逐任务授权文件：可信 Codex Thread ID 来自 MCP Host 请求上下文，在 Worker 启动前持久化，并在 Release 后用于一次官方 Codex Queue 投递。Queue ACK 不代表原 Turn 已启动，`web_notify` 只是 fallback observation。正式 ZCode Desktop Host 的完成 Wake E2E、Desktop 完全退出后的恢复、Official Runtime provenance 和非空真实工程交付仍未验证。
 
 ### 预览版
 

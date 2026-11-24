@@ -954,7 +954,7 @@ function isReadableFile(filePath) {
 function findPackageRoot(startDir) {
   let current = startDir ?? path6.dirname(fileURLToPath(import.meta.url));
   for (let depth = 0; depth < 10; depth++) {
-    if (existsSync3(path6.join(current, "package.json"))) {
+    if (existsSync3(path6.join(current, "package.json")) || existsSync3(path6.join(current, "plugin.json")) && existsSync3(path6.join(current, "dist")) && existsSync3(path6.join(current, "worker"))) {
       return current;
     }
     const parent = path6.dirname(current);
@@ -962,7 +962,7 @@ function findPackageRoot(startDir) {
     current = parent;
   }
   throw new Error(
-    `Cannot locate the Bridge package root (no package.json above ${startDir ?? "module directory"})`
+    `Cannot locate the Bridge package root (no package.json or installed plugin markers above ${startDir ?? "module directory"})`
   );
 }
 function isPlainObject(value) {
@@ -1001,7 +1001,8 @@ var init_resolver = __esm({
       "ZCODE_BRIDGE_MAX_CONCURRENT_WORKERS",
       "ZCODE_BRIDGE_TIMEOUT_MS",
       "ZCODE_BRIDGE_BROWSER_USE",
-      "ZCODE_BRIDGE_BROWSER_EXECUTABLE"
+      "ZCODE_BRIDGE_BROWSER_EXECUTABLE",
+      "ZCODE_BRIDGE_AUTO_WAKE"
     ];
     NodeRuntimeResolver = class {
       #env;

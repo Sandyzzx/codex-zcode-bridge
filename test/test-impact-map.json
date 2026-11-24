@@ -138,6 +138,7 @@
       "paths": [
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
+        "src/runtime/auto-wake-setting.ts",
         "src/runtime/process-probe.ts",
         "src/manager/sqlite-lifecycle-mcp-authority.ts",
         "src/executor/**",
@@ -306,6 +307,15 @@
         "attention-waiting",
         "interface-contract",
         "mcp-host"
+      ]
+    },
+    {
+      "file": "test/auto-wake-setting.test.ts",
+      "type": "Unit",
+      "gate": "T1",
+      "domains": [
+        "manager-lifecycle",
+        "zcode-path-discovery"
       ]
     },
     {

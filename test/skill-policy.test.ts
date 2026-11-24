@@ -94,10 +94,10 @@ test("Async Handoff is default, bounded, and uses Events for lifecycle proof", (
   const dispatch = reference("task-dispatch.md");
   assert.match(handoff, /async_wake.*默认/);
   assert.match(handoff, /不要等待\s*`turn_started`/);
-  assert.match(handoff, /仅 Codex Thread 或一次性 Wake 绑定不可用[\s\S]*Web Notify[\s\S]*结束\s*Turn/);
+  assert.match(handoff, /owner_thread_unavailable[\s\S]*auto_wake_disabled[\s\S]*Web\s*Notify[\s\S]*结束\s*Turn/);
   assert.match(handoff, /Executor Authority 无法核实[\s\S]*保持未决/);
-  assert.match(skill, /仅 Thread\/Wake 绑定不可用[\s\S]*Web Notify[\s\S]*结束 Turn/);
-  assert.match(skill, /回执未知、启动错误、清理未决或 Authority\/授权边界无法确认[\s\S]*保持未决/);
+  assert.match(skill, /owner_thread_unavailable[\s\S]*auto_wake_disabled[\s\S]*Web Notify[\s\S]*结束 Turn/);
+  assert.match(skill, /回执未知、启动错误、清理未决或 Authority 边界无法确认[\s\S]*保持未决/);
   assert.match(handoff, /result_committed[\s\S]*cleanup_verified[\s\S]*released/);
   assert.match(handoff, /Result 摘要只提供 Worker 交付内容，不证明 digest、Cleanup 或\s*Release/);
   assert.match(monitoring, /## Async 受理核对/);
@@ -245,8 +245,9 @@ test("deterministic Async Handoff workflow separates scope, handoff, Wake and ac
     "测试",
     "不是",
     "codex queue",
-    "trusted-local",
-    "trusted_local_turn_start_unverified",
+    "owner_thread_unavailable",
+    "auto_wake_disabled",
+    "console_link",
     "task console-url",
     "web_url",
     "真实可访问",

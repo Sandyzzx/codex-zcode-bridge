@@ -7,8 +7,8 @@ var __export = (target, all) => {
 
 // src/mcp/main.ts
 import { realpathSync as realpathSync2 } from "node:fs";
-import path6 from "node:path";
-import { fileURLToPath as fileURLToPath3 } from "node:url";
+import path7 from "node:path";
+import { fileURLToPath as fileURLToPath4 } from "node:url";
 
 // node_modules/@modelcontextprotocol/server/dist/chunk-Br0eD_fh.mjs
 var __create = Object.create;
@@ -303,10 +303,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path7) {
-  if (!path7)
+function getElementAtPath(obj, path8) {
+  if (!path8)
     return obj;
-  return path7.reduce((acc, key) => acc?.[key], obj);
+  return path8.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -646,11 +646,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path7, issues) {
+function prefixIssues(path8, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path7);
+    iss.path.unshift(path8);
     return iss;
   });
 }
@@ -1099,16 +1099,16 @@ function flattenError(error2, mapper = (issue2) => issue2.message) {
 }
 function formatError(error2, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error3, path7 = []) => {
+  const processError = (error3, path8 = []) => {
     for (const issue2 of error3.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path7, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path8, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path7, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path8, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path7, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path8, ...issue2.path]);
       } else {
-        const fullpath = [...path7, ...issue2.path];
+        const fullpath = [...path8, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -10451,9 +10451,9 @@ var rev2026Codec = {
     });
     const parsed = buildSchemas2026().RequestMetaEnvelopeSchema.safeParse(meta2);
     if (!parsed.success) for (const issue2 of parsed.error.issues) {
-      const path7 = issue2.path.map(String);
-      const key = path7.length > 0 ? path7.join(".") : "_meta";
-      if (path7.length === 1 && issues.some((existing) => existing.key === key && existing.problem === "missing")) continue;
+      const path8 = issue2.path.map(String);
+      const key = path8.length > 0 ? path8.join(".") : "_meta";
+      if (path8.length === 1 && issues.some((existing) => existing.key === key && existing.problem === "missing")) continue;
       issues.push({
         key,
         problem: issue2.message
@@ -10774,29 +10774,29 @@ var PERMITTED_X_MCP_HEADER_TYPES = /* @__PURE__ */ new Set([
 function scanXMcpHeaderDeclarations(inputSchema) {
   const declarations = [];
   const seenLower = /* @__PURE__ */ new Map();
-  const visit = (node2, path7, reachable) => {
+  const visit = (node2, path8, reachable) => {
     if (node2 === null || typeof node2 !== "object") return void 0;
     const schema = node2;
     if (X_MCP_HEADER_KEY in schema) {
-      if (!reachable || path7.length === 0) return `${pathName(path7)}: x-mcp-header is only permitted on properties statically reachable via a chain of 'properties' keys (not under items, additionalProperties, oneOf/anyOf/allOf/not, if/then/else, or $ref)`;
+      if (!reachable || path8.length === 0) return `${pathName(path8)}: x-mcp-header is only permitted on properties statically reachable via a chain of 'properties' keys (not under items, additionalProperties, oneOf/anyOf/allOf/not, if/then/else, or $ref)`;
       const raw = schema[X_MCP_HEADER_KEY];
-      if (typeof raw !== "string" || raw.length === 0) return `${pathName(path7)}: x-mcp-header MUST be a non-empty string`;
-      if (!RFC9110_TOKEN.test(raw)) return `${pathName(path7)}: x-mcp-header '${raw}' is not a valid RFC 9110 token (no spaces, control characters or HTTP delimiters)`;
+      if (typeof raw !== "string" || raw.length === 0) return `${pathName(path8)}: x-mcp-header MUST be a non-empty string`;
+      if (!RFC9110_TOKEN.test(raw)) return `${pathName(path8)}: x-mcp-header '${raw}' is not a valid RFC 9110 token (no spaces, control characters or HTTP delimiters)`;
       const type = typeof schema.type === "string" ? schema.type : void 0;
-      if (type === void 0 || !PERMITTED_X_MCP_HEADER_TYPES.has(type)) return `${pathName(path7)}: x-mcp-header is only permitted on primitive-typed properties (string, integer, boolean); got ${type ?? "<none>"}`;
+      if (type === void 0 || !PERMITTED_X_MCP_HEADER_TYPES.has(type)) return `${pathName(path8)}: x-mcp-header is only permitted on primitive-typed properties (string, integer, boolean); got ${type ?? "<none>"}`;
       const lower = raw.toLowerCase();
       const prior = seenLower.get(lower);
       if (prior !== void 0) return `x-mcp-header '${raw}' is not case-insensitively unique (also declared as '${prior}')`;
       seenLower.set(lower, raw);
       declarations.push({
-        path: path7,
+        path: path8,
         headerName: raw,
         type
       });
     }
     const properties = schema.properties;
     if (properties !== null && typeof properties === "object") for (const [key, child] of Object.entries(properties)) {
-      const fault$1 = visit(child, [...path7, key], reachable);
+      const fault$1 = visit(child, [...path8, key], reachable);
       if (fault$1 !== void 0) return fault$1;
     }
     for (const k of NON_REACHABLE_SUBSCHEMA_KEYWORDS) {
@@ -10804,7 +10804,7 @@ function scanXMcpHeaderDeclarations(inputSchema) {
       if (sub === void 0) continue;
       const branches = Array.isArray(sub) ? sub : sub !== null && typeof sub === "object" && OBJECT_VALUED_SUBSCHEMA_KEYWORDS.has(k) ? Object.values(sub) : [sub];
       for (const branch of branches) {
-        const fault$1 = visit(branch, [...path7, `<${k}>`], false);
+        const fault$1 = visit(branch, [...path8, `<${k}>`], false);
         if (fault$1 !== void 0) return fault$1;
       }
     }
@@ -10844,8 +10844,8 @@ var OBJECT_VALUED_SUBSCHEMA_KEYWORDS = /* @__PURE__ */ new Set([
   "$defs",
   "definitions"
 ]);
-function pathName(path7) {
-  return path7.length === 0 ? "<root>" : path7.join(".");
+function pathName(path8) {
+  return path8.length === 0 ? "<root>" : path8.join(".");
 }
 var HEADER_MISMATCH_ERROR_CODE = -32020;
 var INBOUND_VALIDATION_LADDER = [
@@ -11134,7 +11134,7 @@ var PROPERTY_KEYS_BY_TYPE = {
   array: shapeKeys([UntitledMultiSelectEnumSchemaSchema, TitledMultiSelectEnumSchemaSchema])
 };
 var SUPPORTED_STRING_FORMATS = new Set(StringSchemaSchema.shape.format.unwrap().options);
-function walkProperty(node2, path7, vendor, unsupported) {
+function walkProperty(node2, path8, vendor, unsupported) {
   if (!isJsonObject(node2)) return node2;
   const allowedKeys = typeof node2.type === "string" && Object.hasOwn(PROPERTY_KEYS_BY_TYPE, node2.type) ? PROPERTY_KEYS_BY_TYPE[node2.type] : void 0;
   if (allowedKeys === void 0) return node2;
@@ -11142,8 +11142,8 @@ function walkProperty(node2, path7, vendor, unsupported) {
   for (const [key, value] of Object.entries(node2)) if (allowedKeys.has(key) || isAnnotationOnlyJsonSchemaKeyword(key)) pruned[key] = value;
   else if (key === "pattern" && node2.type === "string" && typeof node2.format === "string") {
     if (!SUPPORTED_STRING_FORMATS.has(node2.format)) pruned[key] = value;
-    else if (typeof value !== "string" || !isLibraryFormatPattern(node2.format, value, vendor)) unsupported.push(`${path7}.${key}`);
-  } else unsupported.push(`${path7}.${key}`);
+    else if (typeof value !== "string" || !isLibraryFormatPattern(node2.format, value, vendor)) unsupported.push(`${path8}.${key}`);
+  } else unsupported.push(`${path8}.${key}`);
   return pruned;
 }
 function walkRequestedSchema(converted, vendor) {
@@ -11160,11 +11160,11 @@ function describeUnsupportedProperties(pruned, fallback) {
   const offenders = Object.entries(pruned.properties).filter(([, node2]) => !parseSchema(PrimitiveSchemaDefinitionSchema, node2).success).map(([name]) => `properties.${name}`);
   return offenders.length > 0 ? offenders.join(", ") : fallback;
 }
-function findDroppedConstraintPaths(original, parsed, path7 = "") {
-  if (Array.isArray(original) && Array.isArray(parsed)) return original.flatMap((item, index) => findDroppedConstraintPaths(item, parsed[index], `${path7}[${index}]`));
+function findDroppedConstraintPaths(original, parsed, path8 = "") {
+  if (Array.isArray(original) && Array.isArray(parsed)) return original.flatMap((item, index) => findDroppedConstraintPaths(item, parsed[index], `${path8}[${index}]`));
   if (!isJsonObject(original) || !isJsonObject(parsed)) return [];
   return Object.entries(original).flatMap(([key, value]) => {
-    const childPath = path7 ? `${path7}.${key}` : key;
+    const childPath = path8 ? `${path8}.${key}` : key;
     if (!Object.prototype.hasOwnProperty.call(parsed, key)) return isAnnotationOnlyJsonSchemaKeyword(key) ? [] : [childPath];
     return findDroppedConstraintPaths(value, parsed[key], childPath);
   });
@@ -15243,8 +15243,8 @@ var require_utils = /* @__PURE__ */ __commonJSMin(((exports, module) => {
     for (let i = 0; i < str.length; i++) if (str[i] === token) ind++;
     return ind;
   }
-  function removeDotSegments(path7) {
-    let input = path7;
+  function removeDotSegments(path8) {
+    let input = path8;
     const output = [];
     let nextSlash = -1;
     let len = 0;
@@ -15397,8 +15397,8 @@ var require_schemes = /* @__PURE__ */ __commonJSMin(((exports, module) => {
       wsComponent.secure = void 0;
     }
     if (wsComponent.resourceName) {
-      const [path7, query] = wsComponent.resourceName.split("?");
-      wsComponent.path = path7 && path7 !== "/" ? path7 : void 0;
+      const [path8, query] = wsComponent.resourceName.split("?");
+      wsComponent.path = path8 && path8 !== "/" ? path8 : void 0;
       wsComponent.query = query;
       wsComponent.resourceName = void 0;
     }
@@ -21537,7 +21537,7 @@ function toError(value) {
 }
 
 // src/host/stdio.ts
-import path5 from "node:path";
+import path6 from "node:path";
 
 // src/executor/control-client.ts
 import net from "node:net";
@@ -21624,8 +21624,15 @@ var EXECUTOR_CONTROL_PROTOCOL_VERSION = 1;
 var EXECUTOR_CONTROL_FRAME_LIMIT_BYTES = 33 * 1024 * 1024;
 var nonEmptyString = string2().min(1);
 var emptyParams = strictObject({});
+var taskAdmissionSchema = strictObject({
+  owner_thread_id: string2().nullable(),
+  source: _enum(["mcp_meta", "mcp_meta_missing", "mcp_meta_invalid", "non_host_admission"])
+}).refine(
+  (value) => value.source === "mcp_meta" === (value.owner_thread_id !== null),
+  { message: "owner_thread_id must be present only for mcp_meta admission" }
+);
 var executorControlParamsSchemas = {
-  createTask: strictObject({ task: zcodeTaskInputSchema }),
+  createTask: strictObject({ task: zcodeTaskInputSchema, admission: taskAdmissionSchema.optional() }),
   listTasks: listTasksInputSchema,
   getStatus: strictObject({ task_id: nonEmptyString }),
   getResult: strictObject({ task_id: nonEmptyString, view: _enum(["summary", "full"]).optional() }),
@@ -21858,8 +21865,10 @@ var TASK_MANAGER_ERROR_CODES = /* @__PURE__ */ new Set([
 ]);
 var RemoteTaskManager = class {
   #client;
-  constructor(client) {
+  #taskConsoleLink;
+  constructor(client, options = {}) {
     this.#client = client;
+    this.#taskConsoleLink = options.taskConsoleLink;
   }
   async #call(method, params, idempotencyKey) {
     await this.#client.connect();
@@ -21883,8 +21892,31 @@ var RemoteTaskManager = class {
     }
     return response.result ?? {};
   }
-  async createTask(task) {
-    return this.#call("createTask", { task }, task.task_id);
+  async #withConsoleLink(receipt) {
+    if (!this.#taskConsoleLink) return receipt;
+    try {
+      return { ...receipt, console_link: await this.#taskConsoleLink(receipt.task_id) };
+    } catch (error2) {
+      const reason = error2 instanceof Error && "code" in error2 && typeof error2.code === "string" ? error2.code : "WEB_CONSOLE_UNAVAILABLE";
+      return {
+        ...receipt,
+        console_link: {
+          available: false,
+          web_url: null,
+          console_id: null,
+          console_reused: null,
+          reason_code: reason
+        }
+      };
+    }
+  }
+  async createTask(task, admission) {
+    const receipt = await this.#call(
+      "createTask",
+      { task, ...admission ? { admission } : {} },
+      task.task_id
+    );
+    return this.#withConsoleLink(receipt);
   }
   async listTasks(input = {}) {
     return this.#call("listTasks", input);
@@ -21899,11 +21931,12 @@ var RemoteTaskManager = class {
     return this.#call("getResultPage", { task_id: taskId, offset_bytes: offsetBytes, max_bytes: maxBytes });
   }
   async continueTask(input) {
-    return this.#call(
+    const receipt = await this.#call(
       "continueTask",
       { input },
       input.operation_id ?? `${input.task_id}:continue`
     );
+    return this.#withConsoleLink(receipt);
   }
   async cancelTask(taskId) {
     return this.#call("cancelTask", { task_id: taskId });
@@ -21925,6 +21958,240 @@ var RemoteTaskManager = class {
 // src/executor/lease.ts
 import path from "node:path";
 import { createHash, randomUUID as randomUUID2 } from "node:crypto";
+
+// src/runtime/process-probe.ts
+import { readFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+var PROCESS_IDENTITY_VERSION = 1;
+var DEFAULT_PROBE_TIMEOUT_MS = 5e3;
+var DEFAULT_MAX_CONCURRENT = 2;
+function identityOfFingerprint(pid, fingerprint, precision, now) {
+  return {
+    pid,
+    fingerprint,
+    fingerprint_precision: precision,
+    identity_version: PROCESS_IDENTITY_VERSION,
+    platform: process.platform,
+    captured_at: new Date(now()).toISOString()
+  };
+}
+function verdict(state, reason, now) {
+  return { state, reason_code: reason, observed_at: new Date(now()).toISOString() };
+}
+function failedQuery(reason) {
+  return { ok: false, reason, fingerprints: /* @__PURE__ */ new Map() };
+}
+function windowsPowerShellExecutable() {
+  const systemRoot = Object.entries(process.env).find(([key]) => key.toLowerCase() === "systemroot")?.[1];
+  return systemRoot ? `${systemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe` : "powershell.exe";
+}
+function windowsBatchQuery(pids, timeoutMs, onFailure) {
+  return new Promise((resolve) => {
+    const script = `$ErrorActionPreference = 'Stop'; foreach ($id in @(${pids.join(",")})) { $target = $null; try { try { $target = [System.Diagnostics.Process]::GetProcessById($id) } catch [System.ArgumentException] { continue }; try { [Console]::Out.WriteLine(("{0}|{1}" -f $id, $target.StartTime.Ticks)) } catch [System.InvalidOperationException] { continue } } finally { if ($null -ne $target) { $target.Dispose() } } }; [Console]::Out.WriteLine('bridge_probe_complete_v1')`;
+    const child = spawn(windowsPowerShellExecutable(), ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script], {
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+      shell: false
+    });
+    let stdout = "";
+    let settled = false;
+    const fail = (reason) => {
+      if (settled) return;
+      try {
+        onFailure?.(reason);
+      } catch {
+      }
+      finish(failedQuery(reason));
+    };
+    const finish = (query) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(query);
+    };
+    const timer = setTimeout(() => {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+      }
+      fail("timeout");
+    }, timeoutMs);
+    timer.unref();
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    let stderrBytes = 0;
+    child.stderr.on("data", (chunk) => {
+      stderrBytes = Math.min(64e3, stderrBytes + chunk.length);
+    });
+    child.stdout.on("data", (chunk) => {
+      if (stdout.length < 1e6) stdout += chunk;
+    });
+    child.on("error", () => fail("spawn_error"));
+    child.on("close", (code) => {
+      const map = /* @__PURE__ */ new Map();
+      const lines = stdout.trim().split(/\r?\n/u);
+      if (code !== 0) {
+        fail("nonzero_exit");
+        return;
+      }
+      if (stderrBytes > 0) {
+        fail("stderr");
+        return;
+      }
+      if (lines.pop() !== "bridge_probe_complete_v1") {
+        fail("missing_completion_marker");
+        return;
+      }
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        const match = /^(\d+)\|(\d+)$/u.exec(line.trim());
+        if (!match || !pids.includes(Number(match[1])) || map.has(Number(match[1]))) {
+          fail("malformed_output");
+          return;
+        }
+        map.set(Number(match[1]), match[2]);
+      }
+      finish({ ok: true, reason: "ok", fingerprints: map });
+    });
+  });
+}
+async function darwinQuery(pids, timeoutMs) {
+  return new Promise((resolve) => {
+    const child = spawn("ps", ["-o", "pid=,lstart=", "-p", pids.join(",")], {
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+      shell: false
+    });
+    let stdout = "";
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      try {
+        child.kill("SIGKILL");
+      } catch {
+      }
+      resolve(failedQuery("timeout"));
+    }, timeoutMs);
+    timer.unref();
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      if (stdout.length < 1e6) stdout += chunk;
+    });
+    child.on("error", () => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        resolve(failedQuery("spawn_error"));
+      }
+    });
+    child.on("close", () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      const map = /* @__PURE__ */ new Map();
+      for (const line of stdout.split(/\r?\n/u)) {
+        const match = /^\s*(\d+)\s+(.+)$/u.exec(line);
+        if (match) map.set(Number(match[1]), match[2].trim());
+      }
+      resolve({ ok: true, reason: "ok", fingerprints: map });
+    });
+  });
+}
+function createPlatformProbe(options = {}) {
+  const timeoutMs = options.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS;
+  const maxConcurrent = options.maxConcurrent ?? DEFAULT_MAX_CONCURRENT;
+  const now = options.now ?? Date.now;
+  let chain = Promise.resolve();
+  let inFlight = 0;
+  let waiters = [];
+  const schedule = async (operation) => {
+    if (inFlight >= maxConcurrent) {
+      await new Promise((resolve) => waiters.push(resolve));
+    }
+    inFlight += 1;
+    try {
+      return await operation();
+    } finally {
+      inFlight -= 1;
+      const next = waiters.shift();
+      if (next) next();
+    }
+  };
+  const probe = async (requests) => {
+    if (requests.length === 0) return [];
+    const distinct = [...new Set(requests.map((request) => request.pid).filter((pid) => Number.isInteger(pid) && pid > 0))];
+    const query = await schedule(async () => {
+      if (process.platform === "win32") return windowsBatchQuery(distinct, timeoutMs, options.onWindowsQueryFailure);
+      if (process.platform === "darwin") return darwinQuery(distinct, timeoutMs);
+      if (process.platform === "linux") {
+        const map = /* @__PURE__ */ new Map();
+        for (const pid of distinct) {
+          try {
+            const stat = await readFile(`/proc/${pid}/stat`, "utf8");
+            const afterComm = stat.slice(stat.lastIndexOf(")") + 2);
+            const fields = afterComm.split(" ");
+            const starttime = fields[19];
+            if (starttime) map.set(pid, starttime.trim());
+          } catch (error2) {
+            if (error2.code === "ENOENT") continue;
+            return failedQuery("proc_read_error");
+          }
+        }
+        return { ok: true, reason: "ok", fingerprints: map };
+      }
+      return failedQuery("unsupported_platform");
+    });
+    return requests.map((request) => {
+      if (!Number.isInteger(request.pid) || request.pid <= 0) return verdict("unknown", "invalid_pid", now);
+      if (!query.ok) return verdict("unknown", `query_${query.reason}`, now);
+      const fingerprint = query.fingerprints.get(request.pid);
+      if (fingerprint === void 0) {
+        return verdict("exited", "pid_absent", now);
+      }
+      if (!request.identity || request.identity.fingerprint === null) {
+        return verdict("unknown", "live_pid_no_fingerprint", now);
+      }
+      if (request.identity.fingerprint_precision === "coarse") {
+        return request.identity.fingerprint === fingerprint ? verdict("unknown", "coarse_fingerprint_match", now) : verdict("exited", "pid_reused_coarse", now);
+      }
+      if (request.identity.fingerprint !== fingerprint) {
+        return verdict("exited", "pid_reused", now);
+      }
+      return verdict("alive", "pid_and_fingerprint_match", now);
+    });
+  };
+  const fingerprintOfPid = async (pid) => {
+    const query = await schedule(async () => {
+      if (process.platform === "win32") return windowsBatchQuery([pid], timeoutMs, options.onWindowsQueryFailure);
+      if (process.platform === "darwin") return darwinQuery([pid], timeoutMs);
+      if (process.platform === "linux") {
+        const map = /* @__PURE__ */ new Map();
+        try {
+          const stat = await readFile(`/proc/${pid}/stat`, "utf8");
+          const afterComm = stat.slice(stat.lastIndexOf(")") + 2);
+          const starttime = afterComm.split(" ")[19];
+          if (starttime) map.set(pid, starttime.trim());
+        } catch {
+        }
+        return { ok: true, reason: "ok", fingerprints: map };
+      }
+      return failedQuery("unsupported_platform");
+    });
+    const fingerprint = query.fingerprints.get(pid);
+    if (!query.ok || !fingerprint) return identityOfFingerprint(pid, null, "unknown", now);
+    const precision = process.platform === "darwin" ? "coarse" : "exact";
+    return identityOfFingerprint(pid, fingerprint, precision, now);
+  };
+  return {
+    platform: process.platform,
+    identityOf: fingerprintOfPid,
+    selfIdentity: () => fingerprintOfPid(process.pid),
+    probe
+  };
+}
+
+// src/executor/lease.ts
 var LEASE_LIMIT_BYTES = 64 * 1024;
 function authorityRootDigest(root) {
   return createHash("sha256").update(path.resolve(root).toLowerCase(), "utf8").digest("hex");
@@ -21959,10 +22226,27 @@ var testReportSchema = object({
   status: _enum(["passed", "failed", "not_run"]),
   details: string2().optional()
 });
+var taskOwnerBindingSchema = object({
+  task_id: string2(),
+  state: _enum(["bound", "unavailable"]),
+  owner_thread_id: string2().nullable(),
+  source: _enum(["mcp_meta", "mcp_meta_missing", "mcp_meta_invalid", "non_host_admission", "legacy_unavailable"]),
+  bound_at: string2().nullable(),
+  reason_code: literal("owner_thread_unavailable").nullable()
+});
+var taskConsoleLinkSchema = object({
+  available: boolean2(),
+  web_url: string2().nullable(),
+  console_id: string2().nullable(),
+  console_reused: boolean2().nullable(),
+  reason_code: string2().nullable()
+});
 var taskReceiptSchema = object({
   task_id: string2(),
   status: _enum(["queued", "running"]),
-  created_at: string2()
+  created_at: string2(),
+  owner_binding: taskOwnerBindingSchema.optional(),
+  console_link: taskConsoleLinkSchema.optional()
 });
 var taskObservationSchema = object({
   schema_version: literal(1),
@@ -22024,7 +22308,8 @@ var taskStatusRecordSchema = object({
   error: string2().optional(),
   observation: taskObservationSchema.optional(),
   execution_observation: executionObservationSchema.optional(),
-  dispatch_blocker: dispatchBlockerSchema.optional()
+  dispatch_blocker: dispatchBlockerSchema.optional(),
+  owner_binding: taskOwnerBindingSchema.optional()
 });
 var taskAttentionSnapshotSchema = strictObject({
   task_id: string2(),
@@ -22237,6 +22522,14 @@ var defaultModelSchema = object({
 var SERVER_NAME = "codex-zcode-bridge";
 var SERVER_VERSION = "2.0.0-preview.15"; // x-release-please-version
 var EXECUTION_NOT_VERDICT = "Execution only. 'completed' is NOT calling host acceptance. Independently verify the workspace diff and checks.";
+var CODEX_THREAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+var OWNER_IDENTITY_INPUT_KEYS = /* @__PURE__ */ new Set([
+  "thread_id",
+  "codex_thread_id",
+  "owner_thread_id",
+  "owner_thread",
+  "owner_binding"
+]);
 var OK_RESULT_TEXT_CHANNEL_LIMIT_BYTES = 1 << 20;
 function okResult(data) {
   const text = JSON.stringify(data, null, 2);
@@ -22300,6 +22593,25 @@ async function runTool(operation) {
       return errorResult(error2.code.toUpperCase(), error2.message);
     }
     throw error2;
+  }
+}
+function admissionFromMcpContext(context) {
+  const meta2 = context && typeof context === "object" ? context.mcpReq?._meta : void 0;
+  const raw = meta2?.threadId;
+  if (raw === void 0 || raw === null) {
+    return { owner_thread_id: null, source: "mcp_meta_missing" };
+  }
+  if (typeof raw !== "string" || raw !== raw.trim() || raw !== raw.normalize("NFC") || !CODEX_THREAD_ID.test(raw)) {
+    return { owner_thread_id: null, source: "mcp_meta_invalid" };
+  }
+  return { owner_thread_id: raw, source: "mcp_meta" };
+}
+function assertNoOwnerIdentityInput(args) {
+  if (Object.keys(args).some((key) => OWNER_IDENTITY_INPUT_KEYS.has(key))) {
+    throw new TaskManagerError(
+      "TASK_INVALID",
+      "Owner Thread identity is supplied only by the trusted Host MCP context and cannot be set in zcode_task input"
+    );
   }
 }
 function createBridgeServer(options) {
@@ -22379,7 +22691,10 @@ function createBridgeServer(options) {
       inputSchema: zcodeTaskInputSchema,
       outputSchema: taskReceiptSchema
     },
-    async (args) => runTool(() => manager.createTask(args))
+    async (args, context) => runTool(() => {
+      assertNoOwnerIdentityInput(args);
+      return manager.createTask(args, admissionFromMcpContext(context));
+    })
   );
   server.registerTool(
     "zcode_status",
@@ -22521,7 +22836,7 @@ function validateHostProfile(host) {
 function findPackageRoot(startDir) {
   let current = startDir ?? path3.dirname(fileURLToPath(import.meta.url));
   for (let depth = 0; depth < 10; depth++) {
-    if (existsSync(path3.join(current, "package.json"))) {
+    if (existsSync(path3.join(current, "package.json")) || existsSync(path3.join(current, "plugin.json")) && existsSync(path3.join(current, "dist")) && existsSync(path3.join(current, "worker"))) {
       return current;
     }
     const parent = path3.dirname(current);
@@ -22529,7 +22844,7 @@ function findPackageRoot(startDir) {
     current = parent;
   }
   throw new Error(
-    `Cannot locate the Bridge package root (no package.json above ${startDir ?? "module directory"})`
+    `Cannot locate the Bridge package root (no package.json or installed plugin markers above ${startDir ?? "module directory"})`
   );
 }
 
@@ -22623,17 +22938,271 @@ function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value) && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
 }
 
+// src/web/console-link.ts
+import { spawn as spawn2 } from "node:child_process";
+import { existsSync as existsSync4 } from "node:fs";
+import { fileURLToPath as fileURLToPath3 } from "node:url";
+
+// src/web/discovery.ts
+import { createHash as createHash3 } from "node:crypto";
+import {
+  closeSync,
+  existsSync as existsSync3,
+  lstatSync as lstatSync2,
+  openSync,
+  readFileSync as readFileSync3,
+  unlinkSync,
+  writeSync
+} from "node:fs";
+import path5 from "node:path";
+var TASK_CONSOLE_DISCOVERY_FILE = "task-console.json";
+var TASK_CONSOLE_PROTOCOL_VERSION = 1;
+var DISCOVERY_LIMIT_BYTES = 16 * 1024;
+var TASK_CONSOLE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u;
+var SHA256 = /^[0-9a-f]{64}$/u;
+var TaskConsoleDiscoveryError = class extends Error {
+  constructor(code, message = code) {
+    super(message);
+    this.code = code;
+    this.name = "TaskConsoleDiscoveryError";
+  }
+  code;
+};
+function canonicalJson(value) {
+  return JSON.stringify(sortObject(value)) ?? "null";
+}
+function sortObject(value) {
+  if (Array.isArray(value)) return value.map(sortObject);
+  if (value === null || typeof value !== "object" || value instanceof Date) return value;
+  if (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) return value;
+  return Object.fromEntries(Object.entries(value).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0).map(([key, item]) => [key, sortObject(item)]));
+}
+function recordDigest(record2) {
+  return createHash3("sha256").update(canonicalJson(record2), "utf8").digest("hex");
+}
+function discoveryRoot(dataRoot) {
+  let root;
+  try {
+    root = path5.resolve(dataRoot);
+    const stat = lstatSync2(root);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("not_plain_directory");
+  } catch {
+    throw new TaskConsoleDiscoveryError("WEB_CONSOLE_ROOT_UNSAFE");
+  }
+  return root;
+}
+function taskConsoleDiscoveryPath(dataRoot) {
+  return path5.join(discoveryRoot(dataRoot), TASK_CONSOLE_DISCOVERY_FILE);
+}
+function parseRecord(value) {
+  let parsed;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_INVALID");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_INVALID");
+  }
+  const record2 = parsed;
+  if (record2.protocol_version !== TASK_CONSOLE_PROTOCOL_VERSION || typeof record2.console_id !== "string" || !TASK_CONSOLE_ID.test(record2.console_id) || typeof record2.authority_root_digest !== "string" || !SHA256.test(record2.authority_root_digest) || !Number.isSafeInteger(record2.pid) || record2.pid < 1 || record2.start_fingerprint !== null && typeof record2.start_fingerprint !== "string" || !["exact", "coarse", "unknown"].includes(record2.fingerprint_precision ?? "") || record2.identity_version !== PROCESS_IDENTITY_VERSION || typeof record2.platform !== "string" || typeof record2.captured_at !== "string" || typeof record2.origin !== "string" || typeof record2.url !== "string" || !Number.isSafeInteger(record2.port) || record2.port < 1 || record2.port > 65535 || typeof record2.started_at !== "string" || typeof record2.record_digest !== "string" || !SHA256.test(record2.record_digest)) {
+    throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_INVALID");
+  }
+  let origin;
+  let url2;
+  try {
+    origin = new URL(record2.origin);
+    url2 = new URL(record2.url);
+  } catch {
+    throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_INVALID");
+  }
+  if (origin.origin !== record2.origin || origin.protocol !== "http:" || origin.hostname !== "127.0.0.1" || origin.port !== String(record2.port) || url2.origin !== record2.origin || url2.pathname !== "/" || url2.search !== "" || url2.hash !== "") {
+    throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_INVALID");
+  }
+  const { record_digest: recordedDigest, ...body } = record2;
+  if (recordDigest(body) !== recordedDigest) {
+    throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_INVALID");
+  }
+  return { ...body, record_digest: recordedDigest };
+}
+function readTaskConsoleDiscovery(dataRoot) {
+  const file = taskConsoleDiscoveryPath(dataRoot);
+  if (!existsSync3(file)) return null;
+  try {
+    const stat = lstatSync2(file);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > DISCOVERY_LIMIT_BYTES) {
+      throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_INVALID");
+    }
+    const record2 = parseRecord(readFileSync3(file, "utf8"));
+    if (record2.authority_root_digest !== authorityRootDigest(dataRoot)) {
+      throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_INVALID");
+    }
+    return record2;
+  } catch (error2) {
+    if (error2 instanceof TaskConsoleDiscoveryError) throw error2;
+    throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_INVALID");
+  }
+}
+function identityFromRecord(record2) {
+  return {
+    pid: record2.pid,
+    fingerprint: record2.start_fingerprint,
+    fingerprint_precision: record2.fingerprint_precision,
+    identity_version: PROCESS_IDENTITY_VERSION,
+    platform: record2.platform,
+    captured_at: record2.captured_at
+  };
+}
+async function inspectTaskConsoleDiscovery(dataRoot, processProbe = createPlatformProbe()) {
+  let record2;
+  try {
+    record2 = readTaskConsoleDiscovery(dataRoot);
+  } catch (error2) {
+    if (error2 instanceof TaskConsoleDiscoveryError && error2.code === "WEB_CONSOLE_DISCOVERY_INVALID") {
+      throw error2;
+    }
+    throw error2;
+  }
+  if (record2 === null) return { state: "absent" };
+  const [verdict2] = await processProbe.probe([{
+    pid: record2.pid,
+    identity: identityFromRecord(record2)
+  }]);
+  if (!verdict2 || verdict2.state === "unknown") return { state: "owner_unknown", record: record2 };
+  if (verdict2.state === "exited") return { state: "stale_owner", record: record2 };
+  return { state: "active_owner", record: record2 };
+}
+function removeTaskConsoleDiscovery(dataRoot, expected) {
+  const current = readTaskConsoleDiscovery(dataRoot);
+  if (current === null) return;
+  if (current.console_id !== expected.console_id || current.record_digest !== expected.record_digest) {
+    throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_CHANGED");
+  }
+  try {
+    unlinkSync(taskConsoleDiscoveryPath(dataRoot));
+  } catch (error2) {
+    if (error2.code !== "ENOENT") throw error2;
+  }
+}
+async function fetchTaskConsoleSession(record2, timeoutMs = 2e3) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(new URL("/api/session", record2.url), {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      signal: controller.signal
+    });
+    const body = await response.json().catch(() => null);
+    if (!response.ok || body?.ok !== true || !body.result || body.result.console?.console_id !== record2.console_id || body.result.console?.authority_root_digest !== record2.authority_root_digest || body.result.console?.url !== record2.url) {
+      throw new TaskConsoleDiscoveryError("WEB_CONSOLE_SESSION_INVALID");
+    }
+    return body.result;
+  } catch (error2) {
+    if (error2 instanceof TaskConsoleDiscoveryError) throw error2;
+    throw new TaskConsoleDiscoveryError("WEB_CONSOLE_OWNER_UNRESPONSIVE");
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// src/web/console-link.ts
+function sleep2(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+function resolveTaskConsoleEntry() {
+  const bundled = fileURLToPath3(new URL("./web-console.mjs", import.meta.url));
+  return existsSync4(bundled) ? bundled : fileURLToPath3(new URL("../web/main.js", import.meta.url));
+}
+function spawnTaskConsole(input) {
+  const child = spawn2(process.execPath, [
+    resolveTaskConsoleEntry(),
+    "--data-root",
+    input.dataRoot,
+    "--settings-directory",
+    input.settingsDirectory,
+    "--port",
+    "0"
+  ], {
+    detached: true,
+    windowsHide: true,
+    stdio: "ignore"
+  });
+  child.unref();
+  return { pid: child.pid };
+}
+async function waitForTaskConsole(dataRoot, leaseId, timeoutMs, processProbe, wait) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError;
+  while (Date.now() <= deadline) {
+    const inspection = await inspectTaskConsoleDiscovery(dataRoot, processProbe);
+    if (inspection.state === "active_owner" && inspection.record) {
+      try {
+        const session = await fetchTaskConsoleSession(inspection.record);
+        if (session.executor.lease_id === leaseId) return { record: inspection.record };
+        lastError = Object.assign(new Error("Task Console is bound to a different Executor lease"), {
+          code: "WEB_CONSOLE_LEASE_MISMATCH"
+        });
+      } catch (error2) {
+        lastError = error2;
+      }
+    } else if (inspection.state === "stale_owner" && inspection.record) {
+      removeTaskConsoleDiscovery(dataRoot, inspection.record);
+    } else if (inspection.state === "owner_unknown") {
+      throw Object.assign(new Error("Task Console owner state is unknown"), {
+        code: "WEB_CONSOLE_OWNER_UNKNOWN"
+      });
+    }
+    await wait(250);
+  }
+  throw lastError instanceof Error ? lastError : Object.assign(new Error("Task Console did not become ready"), { code: "WEB_CONSOLE_UNAVAILABLE" });
+}
+async function resolveTaskConsoleLink(options) {
+  const timeoutMs = options.timeoutMs ?? 5e3;
+  const processProbe = options.processProbe ?? createPlatformProbe();
+  const wait = options.sleep ?? sleep2;
+  let discovery = await inspectTaskConsoleDiscovery(options.dataRoot, processProbe);
+  if (discovery.state === "stale_owner" && discovery.record) {
+    removeTaskConsoleDiscovery(options.dataRoot, discovery.record);
+    discovery = await inspectTaskConsoleDiscovery(options.dataRoot, processProbe);
+  }
+  const reused = discovery.state === "active_owner";
+  if (!reused) {
+    if (options.noStart) {
+      throw Object.assign(new Error("Task Console is not available and --no-start was requested"), {
+        code: "WEB_CONSOLE_UNAVAILABLE"
+      });
+    }
+    const spawned = (options.spawnConsole ?? spawnTaskConsole)({
+      dataRoot: options.dataRoot,
+      settingsDirectory: options.settingsDirectory
+    });
+    if (!spawned.pid) {
+      console.error("zcode-bridge: Task Console process has no PID; discovery verification will still run\n");
+    }
+  }
+  const found = await waitForTaskConsole(options.dataRoot, options.leaseId, timeoutMs, processProbe, wait);
+  return {
+    web_url: `${found.record.url}?task_id=${encodeURIComponent(options.taskId)}`,
+    console_id: found.record.console_id,
+    console_pid: found.record.pid,
+    console_reused: reused,
+    executor_lease_id: options.leaseId,
+    authority_root_digest: authorityRootDigest(options.dataRoot)
+  };
+}
+
 // src/host/stdio.ts
 function resolveDataRoot(env) {
   const override = env["ZCODE_BRIDGE_DATA_DIR"]?.trim();
   if (override) {
-    if (!path5.isAbsolute(override)) {
+    if (!path6.isAbsolute(override)) {
       return {
         dataRoot: findPackageRoot(),
         warning: `ZCODE_BRIDGE_DATA_DIR must be an absolute path; ignoring ${override} and using the Bridge installation directory`
       };
     }
-    return { dataRoot: path5.normalize(override) };
+    return { dataRoot: path6.normalize(override) };
   }
   return { dataRoot: findPackageRoot() };
 }
@@ -22709,8 +23278,31 @@ async function startThinBridge(host, version2) {
   const authoritySelection = loadInstallAuthoritySelection(host);
   const resolved = resolveSqliteStateDirectory(authoritySelection, process.env);
   const client = new ExecutorControlClient({ pipeName: executorPipeName(resolved.dataRoot) });
+  const taskConsoleLink = async (taskId) => {
+    await client.connect();
+    const status = await client.request("executorStatus", {});
+    const leaseId = status.ok && typeof status.result?.lease_id === "string" ? status.result.lease_id : null;
+    if (!leaseId) {
+      throw Object.assign(new Error("Executor lease identity is unavailable"), {
+        code: "EXECUTOR_LEASE_UNKNOWN"
+      });
+    }
+    const link = await resolveTaskConsoleLink({
+      dataRoot: resolved.dataRoot,
+      settingsDirectory: host.settingsDirectory,
+      taskId,
+      leaseId
+    });
+    return {
+      available: true,
+      web_url: link.web_url,
+      console_id: link.console_id,
+      console_reused: link.console_reused,
+      reason_code: null
+    };
+  };
   const server = createBridgeServer({
-    taskManager: new RemoteTaskManager(client),
+    taskManager: new RemoteTaskManager(client, { taskConsoleLink }),
     doctor: () => readExecutorDoctor(client),
     modelSettings: new RemoteModelSettings(client),
     serverInfo: { name: host.name, version: version2 },
@@ -22744,8 +23336,8 @@ async function startBridge(host = codexHostProfile(), version2 = SERVER_VERSION,
 var isEntry = process.argv[1] !== void 0 && sameRealPath(import.meta.url, process.argv[1]);
 function sameRealPath(moduleUrl, argvPath) {
   try {
-    const modulePath = realpathSync2(fileURLToPath3(moduleUrl));
-    const entryPath = realpathSync2(path6.resolve(argvPath));
+    const modulePath = realpathSync2(fileURLToPath4(moduleUrl));
+    const entryPath = realpathSync2(path7.resolve(argvPath));
     return process.platform === "win32" ? modulePath.toLocaleLowerCase("en-US") === entryPath.toLocaleLowerCase("en-US") : modulePath === entryPath;
   } catch {
     return false;

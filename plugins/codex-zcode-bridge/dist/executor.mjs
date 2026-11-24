@@ -316,7 +316,7 @@ function isReadableFile(filePath) {
 function findPackageRoot(startDir) {
   let current = startDir ?? path5.dirname(fileURLToPath2(import.meta.url));
   for (let depth = 0; depth < 10; depth++) {
-    if (existsSync3(path5.join(current, "package.json"))) {
+    if (existsSync3(path5.join(current, "package.json")) || existsSync3(path5.join(current, "plugin.json")) && existsSync3(path5.join(current, "dist")) && existsSync3(path5.join(current, "worker"))) {
       return current;
     }
     const parent = path5.dirname(current);
@@ -324,7 +324,7 @@ function findPackageRoot(startDir) {
     current = parent;
   }
   throw new Error(
-    `Cannot locate the Bridge package root (no package.json above ${startDir ?? "module directory"})`
+    `Cannot locate the Bridge package root (no package.json or installed plugin markers above ${startDir ?? "module directory"})`
   );
 }
 function isPlainObject(value) {
@@ -363,7 +363,8 @@ var init_resolver = __esm({
       "ZCODE_BRIDGE_MAX_CONCURRENT_WORKERS",
       "ZCODE_BRIDGE_TIMEOUT_MS",
       "ZCODE_BRIDGE_BROWSER_USE",
-      "ZCODE_BRIDGE_BROWSER_EXECUTABLE"
+      "ZCODE_BRIDGE_BROWSER_EXECUTABLE",
+      "ZCODE_BRIDGE_AUTO_WAKE"
     ];
     NodeRuntimeResolver = class {
       #env;
@@ -3261,7 +3262,14 @@ function normalizeAdminAbandonmentTableSql(sql) {
 function adminAbandonmentRowsDigest(rows) {
   return createHash15("sha256").update(rows.map(upgradeRowJson).join("\n")).digest("hex");
 }
-function assertCandidateSchema(db, { allowRuntimeEventExtensionAbsent = false, allowLegacyRecoveryBindingTrigger = false } = {}) {
+function withoutSchemaObjects(objects, names) {
+  return objects.filter((row) => !names.has(row[1]));
+}
+function assertCandidateSchema(db, {
+  allowRuntimeEventExtensionAbsent = false,
+  allowOwnerBindingExtensionAbsent = false,
+  allowLegacyRecoveryBindingTrigger = false
+} = {}) {
   const key = allowRuntimeEventExtensionAbsent ? "recovery" : "strict";
   if (!expectedSchemas.has(key)) {
     const base = new DatabaseSync(":memory:"), admin = new DatabaseSync(":memory:"), legacyAdmin = new DatabaseSync(":memory:");
@@ -3273,10 +3281,20 @@ function assertCandidateSchema(db, { allowRuntimeEventExtensionAbsent = false, a
       const adminObjects = schemaObjects(admin);
       const legacyAdminObjects = schemaObjects(legacyAdmin);
       const variants = [JSON.stringify(baseObjects), JSON.stringify(adminObjects), JSON.stringify(legacyAdminObjects)];
-      if (allowRuntimeEventExtensionAbsent) {
-        variants.push(JSON.stringify(baseObjects.filter((row) => !RUNTIME_EVENT_SCHEMA_OBJECTS.has(row[1]))));
-        variants.push(JSON.stringify(adminObjects.filter((row) => !RUNTIME_EVENT_SCHEMA_OBJECTS.has(row[1]))));
-        variants.push(JSON.stringify(legacyAdminObjects.filter((row) => !RUNTIME_EVENT_SCHEMA_OBJECTS.has(row[1]))));
+      for (const [objects2] of [[baseObjects], [adminObjects], [legacyAdminObjects]]) {
+        if (allowRuntimeEventExtensionAbsent) {
+          variants.push(JSON.stringify(withoutSchemaObjects(objects2, RUNTIME_EVENT_SCHEMA_OBJECTS)));
+        }
+        if (allowOwnerBindingExtensionAbsent) {
+          variants.push(JSON.stringify(withoutSchemaObjects(objects2, OWNER_BINDING_SCHEMA_OBJECTS)));
+        }
+        if (allowRuntimeEventExtensionAbsent && allowOwnerBindingExtensionAbsent) {
+          const withoutBoth = withoutSchemaObjects(
+            withoutSchemaObjects(objects2, RUNTIME_EVENT_SCHEMA_OBJECTS),
+            OWNER_BINDING_SCHEMA_OBJECTS
+          );
+          variants.push(JSON.stringify(withoutBoth));
+        }
       }
       expectedSchemas.set(key, variants);
     } finally {
@@ -3413,6 +3431,36 @@ function ensureRuntimeEventsSchema(db) {
     throw error2;
   }
 }
+function ownerBindingsSchema() {
+  const start = SCHEMA.indexOf("CREATE TABLE task_owner_bindings");
+  const end = SCHEMA.indexOf("CREATE TABLE attempts", start);
+  if (start < 0 || end < 0) throw new Error("owner binding schema is missing");
+  return SCHEMA.slice(start, end).trim();
+}
+function ensureOwnerBindingsSchema(db) {
+  if (db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='task_owner_bindings'").get() && !db.prepare(`SELECT 1 FROM tasks
+      WHERE task_id NOT IN (SELECT task_id FROM task_owner_bindings) LIMIT 1`).get()) return;
+  let began = false;
+  try {
+    db.exec("BEGIN IMMEDIATE");
+    began = true;
+    if (!db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='task_owner_bindings'").get()) {
+      db.exec(ownerBindingsSchema());
+    }
+    db.prepare(`INSERT INTO task_owner_bindings(task_id,binding_state,owner_thread_id,binding_source,bound_at)
+      SELECT task_id,'unavailable',NULL,'legacy_unavailable',?
+      FROM tasks
+      WHERE task_id NOT IN (SELECT task_id FROM task_owner_bindings)`).run((/* @__PURE__ */ new Date()).toISOString());
+    db.exec("COMMIT");
+    began = false;
+  } catch (error2) {
+    if (began) try {
+      db.exec("ROLLBACK");
+    } catch {
+    }
+    throw error2;
+  }
+}
 function resolvedRecoveryCommitment(digests) {
   const ordered = sortedDigests(digests);
   return {
@@ -3525,7 +3573,9 @@ function validateObservationEventEvidence(value) {
   const own2 = Object.keys(value).sort().join("|");
   if (own2 === EXECUTOR_WAKE_BASE_EVIDENCE_KEYS.join("|") || own2 === EXECUTOR_WAKE_EVIDENCE_KEYS.join("|")) {
     const { evidence_digest, ...unsigned } = value;
-    if (value.reason !== "executor_wake" || !EXECUTOR_WAKE_STATES.has(value.state) || !validId3(value.task_id) || !validId3(value.operation_id) || !Number.isSafeInteger(value.attempt) || value.attempt < 1 || !Number.isSafeInteger(value.generation) || value.generation < 1 || ![value.result_digest, value.policy_digest, value.authorization_digest, value.delivery_id].every((item) => typeof item === "string" && /^[0-9a-f]{64}$/u.test(item)) || !validId3(value.result_commit_ref) || !validText3(value.reason_code, 128) || value.thread_id !== null && !validId3(value.thread_id) || value.state !== "web_notify" && value.thread_id === null || "queue_message_id" in value && (!validId3(value.queue_message_id) || value.state !== "queued") || evidence_digest !== digest2(unsigned) || [value.task_id, value.operation_id, value.result_commit_ref].some((item) => item !== item.normalize("NFC"))) fail2("invalid_executor_wake_evidence");
+    const executorWake = value.reason === "executor_wake";
+    const lateWake = value.reason === LATE_WAKE_REASON;
+    if (!executorWake && !lateWake || !(executorWake ? EXECUTOR_WAKE_STATES : LATE_WAKE_STATES).has(value.state) || !validId3(value.task_id) || !validId3(value.operation_id) || !Number.isSafeInteger(value.attempt) || value.attempt < 1 || !Number.isSafeInteger(value.generation) || value.generation < 1 || ![value.result_digest, value.policy_digest, value.authorization_digest, value.delivery_id].every((item) => typeof item === "string" && /^[0-9a-f]{64}$/u.test(item)) || !validId3(value.result_commit_ref) || !validText3(value.reason_code, 128) || value.thread_id !== null && !validId3(value.thread_id) || executorWake && value.state !== "web_notify" && value.thread_id === null || lateWake && value.thread_id === null || "queue_message_id" in value && (!validId3(value.queue_message_id) || value.state !== "queued") || evidence_digest !== digest2(unsigned) || [value.task_id, value.operation_id, value.result_commit_ref].some((item) => item !== item.normalize("NFC"))) fail2("invalid_executor_wake_evidence");
     return;
   }
   if (own2 === "cancel_id|evidence_digest|launch_id|reason|request_digest|token_digest") {
@@ -3809,6 +3859,12 @@ function validateExecutorWakeInput(input) {
   const inputKeys = input && Object.getPrototypeOf(input) === Object.prototype ? Object.keys(input).sort().join("|") : "";
   if (!input || inputKeys !== EXECUTOR_WAKE_BASE_INPUT_KEYS && inputKeys !== EXECUTOR_WAKE_INPUT_KEYS || !validId3(input.operation_id) || !validId3(input.task_id) || !Number.isSafeInteger(input.attempt) || input.attempt < 1 || !Number.isSafeInteger(input.generation) || input.generation < 1 || !EXECUTOR_WAKE_STATES.has(input.state) || !validText3(input.reason_code, 128) || ![input.policy_digest, input.authorization_digest, input.delivery_id].every((item) => typeof item === "string" && /^[0-9a-f]{64}$/u.test(item)) || input.thread_id !== null && !validId3(input.thread_id) || input.state !== "web_notify" && input.thread_id === null || "queue_message_id" in input && (!validId3(input.queue_message_id) || input.state !== "queued") || [input.operation_id, input.task_id, input.reason_code].some((item) => item !== item.normalize("NFC")))
     fail2("invalid_executor_wake_request");
+  return input;
+}
+function validateLateWakeInput(input) {
+  const inputKeys = input && Object.getPrototypeOf(input) === Object.prototype ? Object.keys(input).sort().join("|") : "";
+  if (!input || inputKeys !== EXECUTOR_WAKE_BASE_INPUT_KEYS && inputKeys !== EXECUTOR_WAKE_INPUT_KEYS || !validId3(input.operation_id) || !validId3(input.task_id) || !Number.isSafeInteger(input.attempt) || input.attempt < 1 || !Number.isSafeInteger(input.generation) || input.generation < 1 || !LATE_WAKE_STATES.has(input.state) || !validText3(input.reason_code, 128) || ![input.policy_digest, input.authorization_digest, input.delivery_id].every((item) => typeof item === "string" && /^[0-9a-f]{64}$/u.test(item)) || !validId3(input.thread_id) || "queue_message_id" in input && (!validId3(input.queue_message_id) || input.state !== "queued") || [input.operation_id, input.task_id, input.reason_code].some((item) => item !== item.normalize("NFC")))
+    fail2("invalid_late_wake_request");
   return input;
 }
 function validateAdminAbandonmentInput(input) {
@@ -4198,6 +4254,30 @@ function validInteractionPreparedAcknowledgement(value) {
 function validId3(v) {
   return typeof v === "string" && v.length > 0 && v.length <= 128 && !/[\x00-\x1f]/u.test(v);
 }
+function normalizeTaskAdmission(value) {
+  if (value === void 0 || value === null) {
+    return { owner_thread_id: null, binding_source: "non_host_admission" };
+  }
+  if (!value || Object.getPrototypeOf(value) !== Object.prototype) return { owner_thread_id: null, binding_source: "mcp_meta_invalid" };
+  const ownerThreadId = value.owner_thread_id ?? null;
+  if (ownerThreadId === null) {
+    const source = value.source === "mcp_meta_missing" || value.source === "mcp_meta_invalid" ? value.source : "non_host_admission";
+    return { owner_thread_id: null, binding_source: source };
+  }
+  if (!validId3(ownerThreadId) || ownerThreadId !== ownerThreadId.trim() || ownerThreadId !== ownerThreadId.normalize("NFC")) return { owner_thread_id: null, binding_source: "mcp_meta_invalid" };
+  if (value.source !== "mcp_meta") return { owner_thread_id: null, binding_source: "mcp_meta_invalid" };
+  return { owner_thread_id: ownerThreadId, binding_source: "mcp_meta" };
+}
+function ownerBindingProjection(taskId, admission, boundAt) {
+  return {
+    task_id: taskId,
+    state: admission.owner_thread_id === null ? "unavailable" : "bound",
+    owner_thread_id: admission.owner_thread_id,
+    source: admission.binding_source,
+    bound_at: boundAt,
+    reason_code: admission.owner_thread_id === null ? "owner_thread_unavailable" : null
+  };
+}
 function validateTaskPackage(task) {
   if (!task || Object.getPrototypeOf(task) !== Object.prototype || !validId3(task.task_id) || typeof task.workspace !== "string" || !task.workspace || typeof task.objective !== "string" || !["requirements", "allowed_paths", "forbidden_paths", "acceptance_criteria", "test_commands"].every((k) => Array.isArray(task[k]) && task[k].every((v) => typeof v === "string")) || task.worktree_path !== void 0 && typeof task.worktree_path !== "string" || task.context !== void 0 && typeof task.context !== "string" || task.timeout_ms !== void 0 && (!Number.isSafeInteger(task.timeout_ms) || task.timeout_ms < 6e4 || task.timeout_ms > 144e5) || task.model !== void 0 && (!task.model || Object.getPrototypeOf(task.model) !== Object.prototype || typeof task.model.provider_id !== "string" || !task.model.provider_id || typeof task.model.model_id !== "string" || !task.model.model_id))
     fail2("invalid_task_package");
@@ -4240,7 +4320,7 @@ function callDecision(fn, workspace, input) {
     return { state: "unknown" };
   }
 }
-var HERE, SCHEMA, RUNTIME_EVENTS_SCHEMA, ADMIN_ABANDONMENT_SCHEMA, NORMALIZED_ADMIN_ABANDONMENT_SCHEMA, LEGACY_ADMIN_ABANDONMENT_SCHEMA, CONSTRUCT, SCHEMA_VERSION, SCHEMA_OBJECT_QUERY, RUNTIME_EVENT_SCHEMA_OBJECTS, expectedSchemas, expectedRecoveryBindingTriggerSql, ADMIN_ABANDONMENT_TABLE_SQL, LEGACY_ADMIN_ABANDONMENT_TABLE_SQL, NORMALIZED_ADMIN_ABANDONMENT_TABLE_SQL, NORMALIZED_LEGACY_ADMIN_ABANDONMENT_TABLE_SQL, SQLITE_V14_ONLY_MESSAGE, V13_UPGRADE_MARKER_MESSAGE, v13UpgradeMarker, RESULT_CONTRACT_VERSION, RESULT_STATUSES2, RECOVERY_PHASES, RECOVERY_SOURCES, RECOVERY_REASON_CODES, RECOVERY_QUARANTINE_CODES, RECOVERY_EVIDENCE_KEYS, RECOVERY_RELEASE_EVIDENCE_KEYS, EXECUTOR_WAKE_BASE_EVIDENCE_KEYS, EXECUTOR_WAKE_EVIDENCE_KEYS, EXECUTOR_WAKE_STATES, EXECUTOR_WAKE_LIMIT, RECOVERY_MATERIAL_BINDING_KEYS, RECOVERY_MATERIAL_DETAIL_KEYS, RESOLVED_RECOVERY_SET_CONTRACT, RECOVERY_MATERIAL_CONTRACT, digest2, rawDigest, sortedDigests, upgradeRowJson, EVIDENCE_KEYS, FUTURE_EVENT_TYPES, FUTURE_EVIDENCE_KEYS, EVENT_PHASE, RECOVERY_INPUT_KEYS, RECOVERY_RELEASE_INPUT_KEYS, ADMIN_ABANDONMENT_INPUT_KEYS, ADMIN_ABANDONMENT_EVIDENCE_KEYS, USER_AUTHORIZED_RELEASE_INPUT_KEYS, USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS, EXECUTOR_WAKE_BASE_INPUT_KEYS, EXECUTOR_WAKE_INPUT_KEYS, USER_AUTHORIZED_TERMINAL_RELEASE_INPUT_KEYS, AdmissionError, fail2, IsolatedAdmissionStore;
+var HERE, SCHEMA, RUNTIME_EVENTS_SCHEMA, ADMIN_ABANDONMENT_SCHEMA, NORMALIZED_ADMIN_ABANDONMENT_SCHEMA, LEGACY_ADMIN_ABANDONMENT_SCHEMA, CONSTRUCT, SCHEMA_VERSION, SCHEMA_OBJECT_QUERY, RUNTIME_EVENT_SCHEMA_OBJECTS, OWNER_BINDING_SCHEMA_OBJECTS, expectedSchemas, expectedRecoveryBindingTriggerSql, ADMIN_ABANDONMENT_TABLE_SQL, LEGACY_ADMIN_ABANDONMENT_TABLE_SQL, NORMALIZED_ADMIN_ABANDONMENT_TABLE_SQL, NORMALIZED_LEGACY_ADMIN_ABANDONMENT_TABLE_SQL, SQLITE_V14_ONLY_MESSAGE, V13_UPGRADE_MARKER_MESSAGE, v13UpgradeMarker, RESULT_CONTRACT_VERSION, RESULT_STATUSES2, RECOVERY_PHASES, RECOVERY_SOURCES, RECOVERY_REASON_CODES, RECOVERY_QUARANTINE_CODES, RECOVERY_EVIDENCE_KEYS, RECOVERY_RELEASE_EVIDENCE_KEYS, EXECUTOR_WAKE_BASE_EVIDENCE_KEYS, EXECUTOR_WAKE_EVIDENCE_KEYS, EXECUTOR_WAKE_STATES, EXECUTOR_WAKE_LIMIT, LATE_WAKE_REASON, LATE_WAKE_STATES, LATE_WAKE_LIMIT, RECOVERY_MATERIAL_BINDING_KEYS, RECOVERY_MATERIAL_DETAIL_KEYS, RESOLVED_RECOVERY_SET_CONTRACT, RECOVERY_MATERIAL_CONTRACT, digest2, rawDigest, sortedDigests, upgradeRowJson, EVIDENCE_KEYS, FUTURE_EVENT_TYPES, FUTURE_EVIDENCE_KEYS, EVENT_PHASE, RECOVERY_INPUT_KEYS, RECOVERY_RELEASE_INPUT_KEYS, ADMIN_ABANDONMENT_INPUT_KEYS, ADMIN_ABANDONMENT_EVIDENCE_KEYS, USER_AUTHORIZED_RELEASE_INPUT_KEYS, USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS, EXECUTOR_WAKE_BASE_INPUT_KEYS, EXECUTOR_WAKE_INPUT_KEYS, USER_AUTHORIZED_TERMINAL_RELEASE_INPUT_KEYS, AdmissionError, fail2, IsolatedAdmissionStore;
 var init_store = __esm({
   "src/sqlite-candidate/wp6b2b1/store.mjs"() {
     "use strict";
@@ -4269,6 +4349,12 @@ var init_store = __esm({
       "runtime_task_events_no_update",
       "runtime_task_events_no_delete",
       "runtime_task_events_identity_guard"
+    ]);
+    OWNER_BINDING_SCHEMA_OBJECTS = /* @__PURE__ */ new Set([
+      "task_owner_bindings",
+      "task_owner_bindings_thread",
+      "task_owner_bindings_no_update",
+      "task_owner_bindings_no_delete"
     ]);
     expectedSchemas = /* @__PURE__ */ new Map();
     ADMIN_ABANDONMENT_TABLE_SQL = adminAbandonmentTableStatement(ADMIN_ABANDONMENT_SCHEMA);
@@ -4305,6 +4391,9 @@ var init_store = __esm({
     EXECUTOR_WAKE_EVIDENCE_KEYS = Object.freeze([...EXECUTOR_WAKE_BASE_EVIDENCE_KEYS, "queue_message_id"].sort());
     EXECUTOR_WAKE_STATES = /* @__PURE__ */ new Set(["intent", "queued", "submission_unknown", "turn_started", "web_notify"]);
     EXECUTOR_WAKE_LIMIT = 5;
+    LATE_WAKE_REASON = "executor_late_wake_compensation";
+    LATE_WAKE_STATES = /* @__PURE__ */ new Set(["intent", "queued", "submission_unknown", "turn_started", "web_notify"]);
+    LATE_WAKE_LIMIT = 5;
     RECOVERY_MATERIAL_BINDING_KEYS = Object.freeze(["attempt", "claim_id", "classification", "evidence_source", "reason_code", "task_id", "worker_identity_digest"]);
     RECOVERY_MATERIAL_DETAIL_KEYS = Object.freeze([
       "complete_cleanup_closure",
@@ -4452,8 +4541,12 @@ var init_store = __esm({
         try {
           assertSchemaVersion(db);
           upgradeRecoveryBindingTrigger(db);
-          assertCandidateSchema(db, { allowRuntimeEventExtensionAbsent: true });
+          assertCandidateSchema(db, {
+            allowRuntimeEventExtensionAbsent: true,
+            allowOwnerBindingExtensionAbsent: true
+          });
           ensureRuntimeEventsSchema(db);
+          ensureOwnerBindingsSchema(db);
           assertCandidateSchema(db);
           const columns = new Set(db.prepare("PRAGMA table_info(manager_operations)").all().map((x) => x.name));
           if (!["result_status", "result_generation", "result_digest", "result_json", "result_commit_ref"].every((x) => columns.has(x))) fail2("candidate_schema_mismatch");
@@ -4558,19 +4651,69 @@ var init_store = __esm({
         };
       }
       /**
-      /** Persist a TaskPackage and its initial queued Attempt in this candidate authority. */
-      createTask(task, createdAt = (/* @__PURE__ */ new Date()).toISOString()) {
+      /** Persist a TaskPackage, its initial queued Attempt, and its trusted Owner
+       * Binding in one transaction. The binding is never read from task_json. */
+      createTask(task, admissionOrCreatedAt = {}, legacyCreatedAt) {
         this.#assertWritable();
         validateTaskPackage(task);
+        const createdAt = typeof admissionOrCreatedAt === "string" ? admissionOrCreatedAt : legacyCreatedAt ?? (/* @__PURE__ */ new Date()).toISOString();
+        const admission = normalizeTaskAdmission(
+          typeof admissionOrCreatedAt === "string" ? void 0 : admissionOrCreatedAt
+        );
         if (!validText3(createdAt, 64) || Number.isNaN(Date.parse(createdAt))) fail2("invalid_task_created_at");
         const taskJson = canonical4(task);
         return this.#transaction(() => {
           if (this.#db.prepare("SELECT task_id FROM tasks WHERE task_id=?").get(task.task_id)) fail2("task_already_exists");
           this.#db.prepare("INSERT INTO tasks(task_id,task_json,status,current_attempt,created_at) VALUES(?,?,'queued',1,?)").run(task.task_id, taskJson, createdAt);
           this.#db.prepare("INSERT INTO attempts(task_id,attempt,generation,status,created_at) VALUES(?,1,NULL,'queued',?)").run(task.task_id, createdAt);
+          this.#db.prepare(`INSERT INTO task_owner_bindings(
+        task_id,binding_state,owner_thread_id,binding_source,bound_at
+      ) VALUES(?,?,?,?,?)`).run(
+            task.task_id,
+            admission.owner_thread_id === null ? "unavailable" : "bound",
+            admission.owner_thread_id,
+            admission.binding_source,
+            createdAt
+          );
           this.#faultPoint("after_projection");
-          return { task_id: task.task_id, current_attempt: 1, status: "queued", created_at: createdAt };
+          return {
+            task_id: task.task_id,
+            current_attempt: 1,
+            status: "queued",
+            created_at: createdAt,
+            owner_binding: ownerBindingProjection(task.task_id, admission, createdAt)
+          };
         });
+      }
+      #ownerBinding(taskId) {
+        if (!this.#db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='task_owner_bindings'").get()) {
+          return {
+            task_id: taskId,
+            state: "unavailable",
+            owner_thread_id: null,
+            source: "legacy_unavailable",
+            bound_at: null,
+            reason_code: "owner_thread_unavailable"
+          };
+        }
+        const row = this.#db.prepare(`SELECT task_id,binding_state,owner_thread_id,binding_source,bound_at
+      FROM task_owner_bindings WHERE task_id=?`).get(taskId);
+        if (!row) return {
+          task_id: taskId,
+          state: "unavailable",
+          owner_thread_id: null,
+          source: "legacy_unavailable",
+          bound_at: null,
+          reason_code: "owner_thread_unavailable"
+        };
+        return {
+          task_id: row.task_id,
+          state: row.binding_state,
+          owner_thread_id: row.owner_thread_id,
+          source: row.binding_source,
+          bound_at: row.bound_at,
+          reason_code: row.binding_state === "unavailable" ? "owner_thread_unavailable" : null
+        };
       }
       readTask(taskId) {
         return this.#readConsistent(() => {
@@ -4634,6 +4777,7 @@ var init_store = __esm({
               created_at: row.created_at,
               workspace: task.workspace,
               objective: task.objective,
+              owner_binding: this.#ownerBinding(row.task_id),
               wake_evidence_json: row.wake_evidence_json,
               wake_at: row.wake_at
             };
@@ -4748,7 +4892,16 @@ var init_store = __esm({
           const continuation = attemptRow.continuation_json === null ? null : JSON.parse(attemptRow.continuation_json);
           const rejected = operationRow ? this.#db.prepare("SELECT evidence_json FROM manager_operation_events WHERE operation_id=? AND event_type='observation_recorded' AND json_extract(evidence_json,'$.reason') LIKE 'result_submission_failed:%' ORDER BY sequence DESC LIMIT 1").get(operationRow.operation_id) : null;
           const result_submission_error = rejected ? JSON.parse(rejected.evidence_json).reason.slice("result_submission_failed:".length) : null;
-          return { task, projection: { task_id: taskRow.task_id, status: taskRow.status, current_attempt: taskRow.current_attempt, created_at: taskRow.created_at }, attempt, operation, result, continuation, ...result_submission_error ? { result_submission_error } : {} };
+          return {
+            task,
+            projection: { task_id: taskRow.task_id, status: taskRow.status, current_attempt: taskRow.current_attempt, created_at: taskRow.created_at },
+            owner_binding: this.#ownerBinding(taskId),
+            attempt,
+            operation,
+            result,
+            continuation,
+            ...result_submission_error ? { result_submission_error } : {}
+          };
         });
       }
       /** P1 §3.4: read one bounded page of the exact stored canonical Result
@@ -5259,7 +5412,15 @@ var init_store = __esm({
           if (!stored || Object.getPrototypeOf(stored) !== Object.prototype || priorAttempt.continuation_operation_id !== operationId || priorAttempt.continuation_digest !== digest2(priorAttempt.continuation_json) || stored.contract !== "wp6b2b-continue-v1" || stored.operation_id !== operationId || stored.task_id !== priorAttempt.task_id) fail2("continue_history_mismatch");
           if (canonical4({ task_id: stored.task_id, feedback: stored.feedback, additional_requirements: stored.additional_requirements }) !== publicRequestJson)
             fail2("continue_operation_conflict");
-          return { duplicate: true, operation_id: operationId, task_id: input.task_id, attempt: priorAttempt.attempt, status: "queued", created_at: priorAttempt.created_at };
+          return {
+            duplicate: true,
+            operation_id: operationId,
+            task_id: input.task_id,
+            attempt: priorAttempt.attempt,
+            status: "queued",
+            created_at: priorAttempt.created_at,
+            owner_binding: this.#ownerBinding(input.task_id)
+          };
         };
         const existing = this.#readConsistent(() => {
           const priorAttempt = this.#db.prepare("SELECT task_id,attempt,continuation_operation_id,continuation_json,continuation_digest,created_at FROM attempts WHERE continuation_operation_id=?").get(operationId);
@@ -5313,7 +5474,15 @@ var init_store = __esm({
           const insertedAttempt = this.#db.prepare("INSERT INTO attempts(task_id,attempt,generation,status,created_at,continuation_operation_id,continuation_json,continuation_digest) VALUES(?,?,NULL,'queued',?,?,?,?)").run(input.task_id, nextAttempt, createdAt, operationId, continuationJson, continuationDigest);
           if (insertedAttempt.changes !== 1) fail2("continue_attempt_conflict");
           this.#faultPoint("after_projection");
-          return { duplicate: false, operation_id: operationId, task_id: input.task_id, attempt: nextAttempt, status: "queued", created_at: createdAt };
+          return {
+            duplicate: false,
+            operation_id: operationId,
+            task_id: input.task_id,
+            attempt: nextAttempt,
+            status: "queued",
+            created_at: createdAt,
+            owner_binding: this.#ownerBinding(input.task_id)
+          };
         });
       }
       /**
@@ -6524,7 +6693,7 @@ var init_store = __esm({
           const taskProjections = this.#db.prepare(`SELECT task_id,current_attempt,status,created_at,
           json_extract(task_json,'$.workspace') AS workspace,
           COALESCE(json_extract(task_json,'$.worktree_path'),json_extract(task_json,'$.workspace')) AS execution_workspace
-        FROM tasks ORDER BY task_id`).all();
+        FROM tasks ORDER BY task_id`).all().map((row) => ({ ...row, owner_binding: this.#ownerBinding(row.task_id) }));
           const adminAbandonments = this.#adminAbandonments();
           let integrityError = null;
           try {
@@ -6708,6 +6877,114 @@ var init_store = __esm({
           }
           const changed = this.#db.prepare("UPDATE manager_operations SET revision=revision+1 WHERE operation_id=? AND task_id=? AND attempt=? AND generation=? AND phase='released' AND revision=? AND result_digest=? AND result_commit_ref=?").run(o.operation_id, o.task_id, o.attempt, o.generation, o.revision, o.result_digest, o.result_commit_ref);
           if (changed.changes !== 1) fail2("stale_executor_wake_cas");
+          this.#faultPoint("after_projection");
+          this.#event(o.operation_id, o.revision + 1, "observation_recorded", "released", "released", o.generation, evidence, (/* @__PURE__ */ new Date()).toISOString());
+          return {
+            duplicate: false,
+            operation_id: o.operation_id,
+            task_id: o.task_id,
+            attempt: o.attempt,
+            generation: o.generation,
+            revision: o.revision + 1,
+            event_sequence: o.revision + 1,
+            state: input.state,
+            delivery_id: input.delivery_id,
+            desktop_visible: "UNKNOWN"
+          };
+        });
+      }
+      /**
+       * Append an explicit, per-Operation Late Wake Compensation fact. This is
+       * deliberately separate from executor_wake: it is eligible only after a
+       * terminal web_notify and never for a Queue submission whose outcome is
+       * queued, unknown, or already observed as started. It never changes Task,
+       * Result, Cleanup, Release, capacity, or Worker execution.
+       */
+      recordLateWakeCompensation(input) {
+        validateLateWakeInput(input);
+        this.#assertWritable();
+        return this.#transaction(() => {
+          const o = this.#attemptOperation(input);
+          if (o.phase !== "released" || o.result_digest === null || o.result_commit_ref === null)
+            fail2("executor_wake_operation_not_released");
+          const binding = this.#ownerBinding(input.task_id);
+          if (binding.state !== "bound" || binding.owner_thread_id !== input.thread_id)
+            fail2("late_wake_owner_binding_required");
+          const wake = [];
+          const compensation = [];
+          for (const row of this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? AND event_type='observation_recorded' ORDER BY sequence").all(input.operation_id)) {
+            let evidence2;
+            try {
+              evidence2 = JSON.parse(row.evidence_json);
+            } catch {
+              fail2("invalid_executor_wake_evidence");
+            }
+            if (evidence2.reason === "executor_wake") {
+              validateObservationEventEvidence(evidence2);
+              wake.push({ row, evidence: evidence2 });
+            } else if (evidence2.reason === LATE_WAKE_REASON) {
+              validateObservationEventEvidence(evidence2);
+              compensation.push({ row, evidence: evidence2 });
+            }
+          }
+          if (!wake.some((item) => item.evidence.state === "web_notify") || wake.some((item) => ["queued", "submission_unknown", "turn_started"].includes(item.evidence.state)))
+            fail2("late_wake_not_eligible");
+          if (input.state === "intent" && compensation.length !== 0) fail2("late_wake_intent_not_first");
+          if (wake.some((item) => item.evidence.delivery_id === input.delivery_id))
+            fail2("late_wake_delivery_conflict");
+          if (compensation.length >= LATE_WAKE_LIMIT) fail2("late_wake_observation_limit");
+          if (compensation.some((item) => item.evidence.delivery_id !== input.delivery_id))
+            fail2("late_wake_delivery_conflict");
+          if (compensation.some((item) => item.evidence.result_digest !== o.result_digest || item.evidence.result_commit_ref !== o.result_commit_ref || item.evidence.task_id !== o.task_id || item.evidence.attempt !== o.attempt || item.evidence.generation !== o.generation))
+            fail2("late_wake_operation_binding_conflict");
+          const unsigned = {
+            reason: LATE_WAKE_REASON,
+            state: input.state,
+            task_id: input.task_id,
+            attempt: input.attempt,
+            operation_id: input.operation_id,
+            generation: input.generation,
+            result_digest: o.result_digest,
+            result_commit_ref: o.result_commit_ref,
+            thread_id: input.thread_id,
+            delivery_id: input.delivery_id,
+            policy_digest: input.policy_digest,
+            authorization_digest: input.authorization_digest,
+            reason_code: input.reason_code,
+            ..."queue_message_id" in input ? { queue_message_id: input.queue_message_id } : {}
+          };
+          const evidence = { ...unsigned, evidence_digest: digest2(unsigned) };
+          validateObservationEventEvidence(evidence);
+          const same = compensation.find((item) => item.evidence.delivery_id === input.delivery_id && item.evidence.state === input.state);
+          if (same) {
+            if (same.evidence.evidence_digest === evidence.evidence_digest && canonical4(same.evidence) === canonical4(evidence))
+              return {
+                duplicate: true,
+                operation_id: o.operation_id,
+                task_id: o.task_id,
+                attempt: o.attempt,
+                generation: o.generation,
+                revision: o.revision,
+                event_sequence: same.row.sequence,
+                state: input.state,
+                delivery_id: input.delivery_id,
+                desktop_visible: "UNKNOWN"
+              };
+            fail2("late_wake_observation_conflict");
+          }
+          const states = new Set(compensation.map((item) => item.evidence.state));
+          if (["queued", "submission_unknown"].includes(input.state) && (!states.has("intent") || states.has("queued") || states.has("submission_unknown") || states.has("web_notify")))
+            fail2("late_wake_ack_transition_invalid");
+          if (input.state === "turn_started" && (!states.has("intent") || !states.has("queued") && !states.has("submission_unknown") || states.has("turn_started") || states.has("web_notify")))
+            fail2("late_wake_turn_transition_invalid");
+          if (input.state === "web_notify" && states.has("turn_started")) fail2("late_wake_turn_transition_invalid");
+          if (compensation.length) {
+            const prior = compensation[0].evidence;
+            if (prior.thread_id !== input.thread_id || prior.policy_digest !== input.policy_digest || prior.authorization_digest !== input.authorization_digest)
+              fail2("late_wake_binding_conflict");
+          }
+          const changed = this.#db.prepare("UPDATE manager_operations SET revision=revision+1 WHERE operation_id=? AND task_id=? AND attempt=? AND generation=? AND phase='released' AND revision=? AND result_digest=? AND result_commit_ref=?").run(o.operation_id, o.task_id, o.attempt, o.generation, o.revision, o.result_digest, o.result_commit_ref);
+          if (changed.changes !== 1) fail2("stale_late_wake_cas");
           this.#faultPoint("after_projection");
           this.#event(o.operation_id, o.revision + 1, "observation_recorded", "released", "released", o.generation, evidence, (/* @__PURE__ */ new Date()).toISOString());
           return {
@@ -7628,12 +7905,31 @@ var init_store = __esm({
           if (this.#db.prepare("PRAGMA user_version").get().user_version !== SCHEMA_VERSION) fail2("schema_version_unknown");
           assertCandidateSchema(this.#db, {
             allowRuntimeEventExtensionAbsent: this.#recoveryOnly,
+            allowOwnerBindingExtensionAbsent: this.#recoveryOnly,
             allowLegacyRecoveryBindingTrigger: this.#recoveryOnly
           });
           if (this.#db.prepare("PRAGMA quick_check").get().quick_check !== "ok") fail2("database_corrupt");
           if (this.#db.prepare("PRAGMA foreign_key_check").all().length) fail2("database_inconsistent");
           const m = this.#db.prepare("SELECT * FROM authority_metadata").all();
           if (m.length !== 1 || m[0].schema_version !== SCHEMA_VERSION) fail2("policy_or_schema_mismatch");
+          const hasOwnerBindings = Boolean(this.#db.prepare(
+            "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='task_owner_bindings'"
+          ).get());
+          if (hasOwnerBindings) {
+            const bindings = this.#db.prepare("SELECT * FROM task_owner_bindings ORDER BY task_id").all();
+            const taskCount = this.#db.prepare("SELECT COUNT(*) AS n FROM tasks").get().n;
+            if (bindings.length !== taskCount) fail2("task_owner_binding_missing");
+            const validSources = /* @__PURE__ */ new Set(["mcp_meta", "mcp_meta_missing", "mcp_meta_invalid", "non_host_admission", "legacy_unavailable"]);
+            for (const binding of bindings) {
+              if (!this.#db.prepare("SELECT 1 FROM tasks WHERE task_id=?").get(binding.task_id) || !validText3(binding.bound_at, 64) || Number.isNaN(Date.parse(binding.bound_at)) || !validSources.has(binding.binding_source)) fail2("task_owner_binding_invalid");
+              if (binding.binding_state === "bound") {
+                if (binding.owner_thread_id === null || !validId3(binding.owner_thread_id) || binding.binding_source !== "mcp_meta") fail2("task_owner_binding_invalid");
+              } else if (binding.binding_state === "unavailable") {
+                if (binding.owner_thread_id !== null || binding.binding_source === "mcp_meta")
+                  fail2("task_owner_binding_invalid");
+              } else fail2("task_owner_binding_invalid");
+            }
+          }
           const freshReceipts = this.#db.prepare("SELECT * FROM fresh_install_receipt").all();
           const authoritySwitches = this.#db.prepare("SELECT * FROM authority_switch").all();
           const migrationRuns = this.#db.prepare("SELECT * FROM migration_runs").all();
@@ -7848,7 +8144,7 @@ var init_store = __esm({
             const launchEvents = { launch_intent: [], launch_receipt: [], claim_committed: [] };
             const cleanupEvents = { cleanup_pending: [], cleanup_verified: [], cleanup_unverified: [], cleanup_reverified: [], released: [] };
             const resultEvents = [];
-            const recoveryEvents = [], cancellationIntents = [], cancellationVerifications = [], executorWakeEvents = [];
+            const recoveryEvents = [], cancellationIntents = [], cancellationVerifications = [], executorWakeEvents = [], lateWakeEvents = [];
             for (let i = 0; i < es.length; i++) {
               const e = es[i];
               if (e.sequence !== i + 1 || e.evidence_digest !== digest2(e.evidence_json) || (i === 0 ? e.from_phase !== null : e.from_phase !== es[i - 1].to_phase)) fail2("projection_event_mismatch");
@@ -7866,6 +8162,7 @@ var init_store = __esm({
               if (e.event_type === "observation_recorded" && parsed.reason === "cancel_requested") cancellationIntents.push({ event: e, evidence: parsed });
               if (e.event_type === "observation_recorded" && parsed.reason === "cancel_tree_verified") cancellationVerifications.push({ event: e, evidence: parsed });
               if (e.event_type === "observation_recorded" && parsed.reason === "executor_wake") executorWakeEvents.push({ event: e, evidence: parsed });
+              if (e.event_type === "observation_recorded" && parsed.reason === LATE_WAKE_REASON) lateWakeEvents.push({ event: e, evidence: parsed });
               if (i > 0 && e.from_phase !== es[i - 1].to_phase) fail2("projection_event_mismatch");
               if (e.event_type === "launch_receipt" && (e.from_phase !== "launch_intent" || e.to_phase !== "launch_intent")) fail2("invalid_event_phase");
               if (e.event_type === "claim_committed" && (e.from_phase !== "launch_intent" || e.to_phase !== "running")) fail2("invalid_event_phase");
@@ -7891,7 +8188,7 @@ var init_store = __esm({
               if (!releaseEvent || executorWakeEvents[0].event.sequence <= releaseEvent.sequence || executorWakeEvents.length > EXECUTOR_WAKE_LIMIT)
                 fail2("executor_wake_history_invalid");
               const releaseSequence = releaseEvent.sequence;
-              if (es.some((event) => event.sequence > releaseSequence && (event.event_type !== "observation_recorded" || JSON.parse(event.evidence_json).reason !== "executor_wake")))
+              if (es.some((event) => event.sequence > releaseSequence && (event.event_type !== "observation_recorded" || !["executor_wake", LATE_WAKE_REASON].includes(JSON.parse(event.evidence_json).reason))))
                 fail2("executor_wake_terminal_history_invalid");
               const deliveryId = executorWakeEvents[0].evidence.delivery_id;
               const binding = executorWakeEvents[0].evidence;
@@ -7912,6 +8209,41 @@ var init_store = __esm({
                   else if (evidence.state === "web_notify") stage = "web_notify";
                   else fail2("executor_wake_history_transition_invalid");
                 } else fail2("executor_wake_history_transition_invalid");
+              }
+            }
+            if (lateWakeEvents.length) {
+              if (o.phase !== "released" || o.result_digest === null || o.result_commit_ref === null)
+                fail2("late_wake_operation_not_released");
+              const releaseEvent = es.find((event) => event.event_type === "released");
+              if (!releaseEvent || lateWakeEvents[0].event.sequence <= releaseEvent.sequence || lateWakeEvents.length > LATE_WAKE_LIMIT)
+                fail2("late_wake_history_invalid");
+              if (!executorWakeEvents.length || !executorWakeEvents.some((item) => item.evidence.state === "web_notify") || executorWakeEvents.some((item) => ["queued", "submission_unknown", "turn_started"].includes(item.evidence.state)))
+                fail2("late_wake_not_eligible");
+              if (lateWakeEvents[0].event.sequence <= executorWakeEvents[executorWakeEvents.length - 1].event.sequence)
+                fail2("late_wake_history_invalid");
+              if (es.some((event) => event.sequence > lateWakeEvents[0].event.sequence && event.event_type === "observation_recorded" && JSON.parse(event.evidence_json).reason === "executor_wake"))
+                fail2("late_wake_history_invalid");
+              const owner = this.#db.prepare("SELECT binding_state,owner_thread_id FROM task_owner_bindings WHERE task_id=?").get(o.task_id);
+              if (!owner || owner.binding_state !== "bound" || owner.owner_thread_id !== lateWakeEvents[0].evidence.thread_id)
+                fail2("late_wake_owner_binding_required");
+              const deliveryId = lateWakeEvents[0].evidence.delivery_id;
+              const binding = lateWakeEvents[0].evidence;
+              let stage = "start";
+              for (const { event, evidence } of lateWakeEvents) {
+                if (evidence.delivery_id !== deliveryId || evidence.operation_id !== o.operation_id || evidence.task_id !== o.task_id || evidence.attempt !== o.attempt || evidence.generation !== o.generation || evidence.result_digest !== o.result_digest || evidence.result_commit_ref !== o.result_commit_ref || evidence.thread_id !== binding.thread_id || evidence.policy_digest !== binding.policy_digest || evidence.authorization_digest !== binding.authorization_digest || event.generation !== o.generation || event.sequence <= releaseEvent.sequence)
+                  fail2("late_wake_history_binding_mismatch");
+                if (stage === "start") {
+                  if (evidence.state === "intent") stage = "intent";
+                  else fail2("late_wake_history_transition_invalid");
+                } else if (stage === "intent") {
+                  if (evidence.state === "queued" || evidence.state === "submission_unknown") stage = "ack";
+                  else if (evidence.state === "web_notify") stage = "web_notify";
+                  else fail2("late_wake_history_transition_invalid");
+                } else if (stage === "ack") {
+                  if (evidence.state === "turn_started") stage = "turn_started";
+                  else if (evidence.state === "web_notify") stage = "web_notify";
+                  else fail2("late_wake_history_transition_invalid");
+                } else fail2("late_wake_history_transition_invalid");
               }
             }
             if (o.operation_kind === "attempt_lifecycle") {
@@ -11603,6 +11935,15 @@ async function writeModelCatalogCache(cachePath, cache) {
 // src/executor/production-composition.ts
 init_resolver();
 
+// src/runtime/auto-wake-setting.ts
+init_errors();
+var AUTO_WAKE_RUNTIME_KEY = "ZCODE_BRIDGE_AUTO_WAKE";
+var SETTINGS_LIMIT_BYTES = 64 * 1024;
+function autoWakeEnabledFromEnvironment(env) {
+  const raw = env[AUTO_WAKE_RUNTIME_KEY]?.trim().toLowerCase();
+  return raw !== "false" && raw !== "0" && raw !== "off" && raw !== "no";
+}
+
 // src/runtime/trusted-local-policy-config.ts
 init_host_profile();
 
@@ -14516,7 +14857,7 @@ async function openClaimOnlyDriver(options) {
         throw error2;
       }
     },
-    createTask: (task) => port.createTask(task),
+    createTask: (task, admission) => port.createTask(task, admission),
     readTaskLifecycle: (taskId) => port.readTaskLifecycle(taskId),
     readTaskProjections: (options2) => port.readTaskProjections(options2),
     readTaskAttention: (taskId) => port.readTaskAttention(taskId),
@@ -22644,7 +22985,7 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
   #spawnFenceReason() {
     return this.#dispatchFence?.() ?? null;
   }
-  async createTask(task) {
+  async createTask(task, admission = { owner_thread_id: null, source: "non_host_admission" }) {
     this.#assertOpen();
     this.#assertAccepting();
     this.#assertRecoveryReady();
@@ -22675,9 +23016,16 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
       if (canonicalJson4(existing.task) !== canonicalJson4(normalizedTask)) {
         throw new TaskManagerError("TASK_ID_CONFLICT", `task_id already belongs to a different SQLite request: ${task.task_id}`);
       }
+      const existingBinding = taskOwnerBinding(existing.owner_binding);
+      if (existingBinding.state === "bound" && admission.owner_thread_id !== null && existingBinding.owner_thread_id !== admission.owner_thread_id) {
+        throw new TaskManagerError(
+          "TASK_ID_CONFLICT",
+          `task_id is already bound to a different Codex Thread: ${task.task_id}`
+        );
+      }
       const projection2 = asRecord6(existing.projection);
       this.#routeTaskModel?.confirmRouting(task);
-      return receipt(task.task_id, projection2.status, projection2.created_at);
+      return receipt(task.task_id, projection2.status, projection2.created_at, existingBinding);
     }
     if (task.model?.provider_id === "account:bigmodel-start-plan" && !this.#testOnlyFakeAdapter) {
       if (!this.#startPlanAuthAvailable) throw new TaskManagerError("TASK_INVALID", "official Start Plan credentials are unavailable");
@@ -22687,7 +23035,7 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
       }
     }
     try {
-      this.#driver.createTask(normalizedTask);
+      this.#driver.createTask(normalizedTask, admission);
     } catch (error2) {
       const raced = asRecord6(this.#driver.readTaskLifecycle(task.task_id));
       if (!raced || canonicalJson4(raced.task) !== canonicalJson4(normalizedTask)) {
@@ -22698,8 +23046,14 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
     this.#routeTaskModel?.confirmRouting(task);
     const snapshot = asRecord6(this.#driver.readTaskLifecycle(task.task_id));
     const projection = asRecord6(snapshot.projection);
+    const ownerBinding = taskOwnerBinding(snapshot.owner_binding);
     this.#enqueue(task.task_id, Number(projection.current_attempt));
-    return { task_id: task.task_id, status: "queued", created_at: string3(projection.created_at, "task_created_at_missing") };
+    return {
+      task_id: task.task_id,
+      status: "queued",
+      created_at: string3(projection.created_at, "task_created_at_missing"),
+      owner_binding: ownerBinding
+    };
   }
   async getStatus(taskId) {
     const snapshot = this.#readSnapshot(taskId);
@@ -22744,6 +23098,7 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
       } : {},
       ...executionObservation ? { execution_observation: executionObservation } : {},
       ...dispatchBlocker ? { dispatch_blocker: dispatchBlocker } : {},
+      owner_binding: taskOwnerBinding(snapshot.owner_binding),
       ...Number(attempt.attempt) > 0 ? {} : {}
     };
   }
@@ -22766,6 +23121,7 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
         created_at: string3(item.created_at, "task_list_created_at_missing"),
         workspace: string3(item.workspace, "task_list_workspace_missing"),
         objective: string3(item.objective, "task_list_objective_missing"),
+        owner_binding: taskOwnerBinding(item.owner_binding),
         ...taskListWakeSummary(item.wake_evidence_json, item.wake_at) ?? {}
       };
     });
@@ -22928,7 +23284,12 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
       try {
         const replay = asRecord6(this.#driver.createNextAttempt(common));
         this.#enqueue(input.task_id, Number(replay.attempt));
-        return { task_id: input.task_id, status: "queued", created_at: string3(replay.created_at, "continue_created_at_missing") };
+        return {
+          task_id: input.task_id,
+          status: "queued",
+          created_at: string3(replay.created_at, "continue_created_at_missing"),
+          owner_binding: taskOwnerBinding(replay.owner_binding)
+        };
       } catch (error2) {
         if (errorCode2(error2) !== "continue_cas_required") throw error2;
       }
@@ -22948,7 +23309,12 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
       previous_result: result
     }));
     this.#enqueue(input.task_id, Number(outcome.attempt));
-    return { task_id: input.task_id, status: "queued", created_at: string3(outcome.created_at, "continue_created_at_missing") };
+    return {
+      task_id: input.task_id,
+      status: "queued",
+      created_at: string3(outcome.created_at, "continue_created_at_missing"),
+      owner_binding: taskOwnerBinding(outcome.owner_binding)
+    };
   }
   async cancelTask(taskId) {
     const existing = this.#recoveryRuns.get(taskId);
@@ -23502,6 +23868,7 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
     return {
       task: snapshot.task,
       projection: asRecord6(snapshot.projection),
+      ...snapshot.owner_binding === void 0 ? {} : { owner_binding: snapshot.owner_binding },
       attempt: asRecord6(snapshot.attempt),
       operation: snapshot.operation ? asRecord6(snapshot.operation) : null,
       result: snapshot.result,
@@ -23795,6 +24162,7 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
     const attempt = Number(snapshot.attempt.attempt);
     const generation = Number(operation.generation);
     if (!Number.isSafeInteger(attempt) || attempt < 1 || !Number.isSafeInteger(generation) || generation < 1) return;
+    const ownerBinding = taskOwnerBinding(snapshot.owner_binding);
     const fact = {
       task_id: String(operation.task_id),
       attempt,
@@ -23804,7 +24172,9 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
       result_status: result.status,
       result_digest: operation.result_digest,
       result_commit_ref: operation.result_commit_ref,
-      workspace: snapshot.task.workspace
+      workspace: snapshot.task.workspace,
+      owner_thread_id: ownerBinding.owner_thread_id,
+      owner_binding_state: ownerBinding.state
     };
     try {
       await this.#onOperationReleased(fact, (input) => this.recordExecutorWakeObservation(input));
@@ -23853,6 +24223,7 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
       const projection = typeof taskId === "string" ? taskProjectionByTaskId.get(taskId) : void 0;
       const workspace = typeof projection?.workspace === "string" ? projection.workspace : null;
       if (typeof taskId !== "string" || !Number.isSafeInteger(attempt) || attempt < 1 || !Number.isSafeInteger(generation) || generation < 1 || !workspace) continue;
+      const ownerBinding = taskOwnerBinding(projection?.owner_binding);
       const fact = {
         task_id: taskId,
         attempt,
@@ -23862,7 +24233,9 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
         result_status: String(operation.result_status),
         result_digest: operation.result_digest,
         result_commit_ref: operation.result_commit_ref,
-        workspace
+        workspace,
+        owner_thread_id: ownerBinding.owner_thread_id,
+        owner_binding_state: ownerBinding.state
       };
       this.#schedulerStage("release_wake_recovery_selected", {
         task_id: taskId,
@@ -23925,8 +24298,26 @@ function taskListWakeSummary(evidenceJson, at) {
     return null;
   }
 }
-function receipt(taskId, status, createdAt) {
-  return { task_id: taskId, status: status === "running" ? "running" : "queued", created_at: string3(createdAt, "task_created_at_missing") };
+function receipt(taskId, status, createdAt, ownerBinding) {
+  return {
+    task_id: taskId,
+    status: status === "running" ? "running" : "queued",
+    created_at: string3(createdAt, "task_created_at_missing"),
+    ...ownerBinding ? { owner_binding: ownerBinding } : {}
+  };
+}
+function taskOwnerBinding(value) {
+  const binding = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const state = binding.state === "bound" ? "bound" : "unavailable";
+  const source = ["mcp_meta", "mcp_meta_missing", "mcp_meta_invalid", "non_host_admission", "legacy_unavailable"].includes(String(binding.source)) ? String(binding.source) : "legacy_unavailable";
+  return {
+    task_id: String(binding.task_id ?? ""),
+    state,
+    owner_thread_id: state === "bound" && typeof binding.owner_thread_id === "string" ? binding.owner_thread_id : null,
+    source,
+    bound_at: typeof binding.bound_at === "string" ? binding.bound_at : null,
+    reason_code: state === "unavailable" ? "owner_thread_unavailable" : null
+  };
 }
 function toProgressEvent(value, includeAttempt) {
   let details;
@@ -24138,19 +24529,9 @@ import { createHash as createHash19 } from "node:crypto";
 import {
   spawn as spawn6
 } from "node:child_process";
-import {
-  existsSync as existsSync11,
-  lstatSync as lstatSync4,
-  readFileSync as readFileSync11,
-  realpathSync as realpathSync5,
-  writeFileSync as writeFileSync4
-} from "node:fs";
+import { existsSync as existsSync11 } from "node:fs";
 import { homedir as homedir6 } from "node:os";
 import path19 from "node:path";
-var WAKE_POLICY_FILE = "wake-policy.json";
-var WAKE_POLICY_MAX_BYTES = 16 * 1024;
-var WAKE_AUTHORIZATION_MAX_MS = 24 * 60 * 60 * 1e3;
-var WAKE_AUTHORIZATION_MIN_MS = 60 * 1e3;
 var WAKE_CONTROL_FRAME_MAX_BYTES = 1024 * 1024;
 var WAKE_CONTROL_STDERR_MAX_BYTES = 8 * 1024;
 var WAKE_QUEUE_TIMEOUT_MS = 1e4;
@@ -24159,22 +24540,6 @@ var WAKE_TURN_OBSERVATION_MS = 2e3;
 var WAKE_TURN_POLL_MS = 200;
 var WAKE_LOADED_PAGE_LIMIT = 200;
 var WAKE_LOADED_MAX_PAGES = 50;
-var SAFE_REASONING_EFFORTS = /* @__PURE__ */ new Set(["minimal", "low", "medium"]);
-var WAKE_POLICY_BASE_KEYS = [
-  "attempt",
-  "authorization",
-  "enabled",
-  "fallback",
-  "model",
-  "model_provider",
-  "reasoning_effort",
-  "schema_version",
-  "task_id",
-  "thread_id",
-  "workspace"
-];
-var WAKE_POLICY_KEYS_V2 = ["delivery_mode", ...WAKE_POLICY_BASE_KEYS];
-var WAKE_AUTHORIZATION_KEYS = ["expires_at", "granted_at", "granted_by", "scope"];
 function defaultAppServerControlSocket(env = process.env, homeDir = homedir6()) {
   const override = env.ZCODE_BRIDGE_APP_SERVER_CONTROL_SOCKET?.trim();
   if (override) return path19.resolve(override);
@@ -24185,8 +24550,6 @@ function defaultCodexExecutable(env = process.env) {
   return env.ZCODE_BRIDGE_CODEX_EXECUTABLE?.trim() || (process.platform === "win32" ? "codex.exe" : "codex");
 }
 function createExecutorWakeCoordinator(options) {
-  const authorityRoot = path19.resolve(options.authorityRoot);
-  const now = options.now ?? Date.now;
   const appServer = options.appServer ?? new AppServerProxyConnector();
   const queue = options.queue ?? new QueueCommandRunner();
   const codexExecutable = options.codexExecutable ?? defaultCodexExecutable();
@@ -24202,53 +24565,47 @@ function createExecutorWakeCoordinator(options) {
     async handle(release, recorderOverride) {
       const recorder = recorderOverride ?? options.recorder;
       if (!recorder) throw new Error("EXECUTOR_WAKE_RECORDER_UNAVAILABLE");
-      const policyRead = readWakePolicy(authorityRoot, now());
-      if (!policyRead.ok) {
-        return recordWebFallback(
+      const threadId = release.owner_binding_state === "bound" ? release.owner_thread_id : null;
+      const policyDigest = wakeDigest({
+        contract: "auto-wake-release-v2",
+        task_id: release.task_id,
+        attempt: release.attempt,
+        operation_id: release.operation_id,
+        generation: release.generation,
+        result_digest: release.result_digest,
+        result_commit_ref: release.result_commit_ref,
+        owner_thread_id: threadId
+      });
+      const authorizationDigest = wakeDigest({
+        contract: "plugin-installed-auto-wake-v1",
+        schema_version: 2,
+        state: "accepted"
+      });
+      const deliveryId = wakeDeliveryId(release, policyDigest);
+      if (threadId === null) {
+        return recordObservation(
           recorder,
           notifyWeb,
           release,
-          policyRead.thread_id,
-          policyRead.policy_digest,
-          policyRead.authorization_digest,
-          policyRead.reason_code
+          { policy_digest: policyDigest, authorization_digest: authorizationDigest },
+          deliveryId,
+          "web_notify",
+          "owner_thread_unavailable",
+          null
         );
       }
-      const bindingFailure = validatePolicyBinding(policyRead.policy, release);
-      if (bindingFailure) {
-        return recordWebFallback(
+      if (options.autoWakeEnabled?.() === false) {
+        return recordObservation(
           recorder,
           notifyWeb,
           release,
-          policyRead.policy.thread_id,
-          policyRead.policy_digest,
-          policyRead.authorization_digest,
-          bindingFailure
+          { policy_digest: policyDigest, authorization_digest: authorizationDigest },
+          deliveryId,
+          "web_notify",
+          "auto_wake_disabled",
+          threadId
         );
       }
-      if (!policyRead.policy.enabled) {
-        return recordWebFallback(
-          recorder,
-          notifyWeb,
-          release,
-          policyRead.policy.thread_id,
-          policyRead.policy_digest,
-          policyRead.authorization_digest,
-          "policy_disabled"
-        );
-      }
-      if (!SAFE_REASONING_EFFORTS.has(policyRead.policy.reasoning_effort)) {
-        return recordWebFallback(
-          recorder,
-          notifyWeb,
-          release,
-          policyRead.policy.thread_id,
-          policyRead.policy_digest,
-          policyRead.authorization_digest,
-          "unsafe_reasoning_effort"
-        );
-      }
-      const deliveryId = wakeDeliveryId(release, policyRead.policy_digest);
       const recordIntent = (reasonCode) => {
         const intent = {
           operation_id: release.operation_id,
@@ -24256,10 +24613,10 @@ function createExecutorWakeCoordinator(options) {
           attempt: release.attempt,
           generation: release.generation,
           state: "intent",
-          thread_id: policyRead.policy.thread_id,
+          thread_id: threadId,
           delivery_id: deliveryId,
-          policy_digest: policyRead.policy_digest,
-          authorization_digest: policyRead.authorization_digest,
+          policy_digest: policyDigest,
+          authorization_digest: authorizationDigest,
           reason_code: reasonCode
         };
         try {
@@ -24275,128 +24632,103 @@ function createExecutorWakeCoordinator(options) {
           throw error2;
         }
       };
-      if (policyRead.policy.delivery_mode === "trusted_local") {
-        const alreadyHandled = recordIntent("owner_authorized_trusted_local");
-        if (alreadyHandled) return alreadyHandled;
-        const queued = await submitWakeQueue(
+      const alreadyHandled = recordIntent("plugin_installed_auto_wake");
+      if (alreadyHandled) return alreadyHandled;
+      const queued = await submitWakeQueue(
+        recorder,
+        notifyWeb,
+        release,
+        { policy_digest: policyDigest, authorization_digest: authorizationDigest },
+        deliveryId,
+        threadId,
+        queue,
+        codexExecutable,
+        queueTimeoutMs
+      );
+      if (queued.state !== "queued") return queued;
+      const turnStarted = await observeTurnStart({
+        appServer,
+        socketPath,
+        codexExecutable,
+        threadId,
+        controlTimeoutMs,
+        turnObservationMs,
+        turnPollMs
+      });
+      if (turnStarted) {
+        return recordObservation(
           recorder,
           notifyWeb,
           release,
-          policyRead,
+          { policy_digest: policyDigest, authorization_digest: authorizationDigest },
           deliveryId,
-          queue,
-          codexExecutable,
-          queueTimeoutMs
-        );
-        if (queued.state !== "queued") return queued;
-        const fallback = await recordObservation(
-          recorder,
-          notifyWeb,
-          release,
-          policyRead,
-          deliveryId,
-          "web_notify",
-          "trusted_local_turn_start_unverified",
-          policyRead.policy.thread_id
-        );
-        return {
-          ...fallback,
-          ...queued.queue_message_id ? { queue_message_id: queued.queue_message_id } : {}
-        };
-      }
-      let session;
-      try {
-        session = await appServer.connect({ socketPath, executable: codexExecutable, timeoutMs: controlTimeoutMs });
-      } catch {
-        return recordWebFallback(
-          recorder,
-          notifyWeb,
-          release,
-          policyRead.policy.thread_id,
-          policyRead.policy_digest,
-          policyRead.authorization_digest,
-          "app_server_unavailable"
+          "turn_started",
+          "turn_in_progress_observed",
+          threadId
         );
       }
-      try {
-        let preflight;
-        try {
-          preflight = await session.preflight(policyRead.policy.thread_id, controlTimeoutMs);
-        } catch {
-          return await recordWebFallback(
-            recorder,
-            notifyWeb,
-            release,
-            policyRead.policy.thread_id,
-            policyRead.policy_digest,
-            policyRead.authorization_digest,
-            "app_server_preflight_failed"
-          );
-        }
-        const preflightFailure = validatePreflight(policyRead.policy, preflight);
-        if (preflightFailure) {
-          return await recordWebFallback(
-            recorder,
-            notifyWeb,
-            release,
-            policyRead.policy.thread_id,
-            policyRead.policy_digest,
-            policyRead.authorization_digest,
-            preflightFailure
-          );
-        }
-        const baselineTurnIds = preflight.recent_turns.map((turn) => turn.id);
-        const alreadyHandled = recordIntent("queue_preflight_passed");
-        if (alreadyHandled) return alreadyHandled;
-        const queued = await submitWakeQueue(
-          recorder,
-          notifyWeb,
-          release,
-          policyRead,
-          deliveryId,
-          queue,
-          codexExecutable,
-          queueTimeoutMs
-        );
-        if (queued.state !== "queued" || turnObservationMs === 0) return queued;
-        const deadline = Date.now() + turnObservationMs;
-        do {
-          try {
-            if (await session.observeNewInProgressTurn(
-              policyRead.policy.thread_id,
-              baselineTurnIds,
-              Math.max(1, Math.min(controlTimeoutMs, deadline - Date.now()))
-            )) {
-              return await recordObservation(
-                recorder,
-                notifyWeb,
-                release,
-                policyRead,
-                deliveryId,
-                "turn_started",
-                "turn_in_progress_observed",
-                policyRead.policy.thread_id
-              );
-            }
-          } catch {
-            break;
-          }
-          if (Date.now() >= deadline) break;
-          await delay3(Math.min(turnPollMs, Math.max(1, deadline - Date.now())));
-        } while (Date.now() < deadline);
-        return queued;
-      } finally {
-        await session.close().catch(() => void 0);
-      }
+      const fallback = await recordObservation(
+        recorder,
+        notifyWeb,
+        release,
+        { policy_digest: policyDigest, authorization_digest: authorizationDigest },
+        deliveryId,
+        "web_notify",
+        "turn_start_unverified",
+        threadId
+      );
+      return {
+        ...fallback,
+        ...queued.queue_message_id ? { queue_message_id: queued.queue_message_id } : {}
+      };
     }
   };
 }
-async function submitWakeQueue(recorder, notifyWeb, release, policy, deliveryId, queue, codexExecutable, queueTimeoutMs) {
+async function observeTurnStart(input) {
+  if (input.turnObservationMs === 0) return false;
+  let session;
+  try {
+    session = await input.appServer.connect({
+      socketPath: input.socketPath,
+      executable: input.codexExecutable,
+      timeoutMs: input.controlTimeoutMs
+    });
+  } catch {
+    return false;
+  }
+  try {
+    let preflight;
+    try {
+      preflight = await session.preflight(input.threadId, input.controlTimeoutMs);
+    } catch {
+      return false;
+    }
+    const baselineTurnIds = preflight.recent_turns.map((turn) => turn.id);
+    const deadline = Date.now() + input.turnObservationMs;
+    do {
+      try {
+        if (await session.observeNewInProgressTurn(
+          input.threadId,
+          baselineTurnIds,
+          Math.max(1, Math.min(input.controlTimeoutMs, deadline - Date.now()))
+        )) return true;
+      } catch {
+        return false;
+      }
+      if (Date.now() >= deadline) return false;
+      await delay3(Math.min(input.turnPollMs, Math.max(1, deadline - Date.now())));
+    } while (Date.now() < deadline);
+    return false;
+  } finally {
+    await session.close().catch(() => void 0);
+  }
+}
+async function submitWakeQueue(recorder, notifyWeb, release, binding, deliveryId, threadId, queue, codexExecutable, queueTimeoutMs) {
   let submission;
   try {
     submission = await queue.submit({
       executable: codexExecutable,
-      threadId: policy.policy.thread_id,
+      threadId,
       message: wakeMessage(release),
       timeoutMs: queueTimeoutMs
     });
@@ -24405,11 +24737,11 @@ async function submitWakeQueue(recorder, notifyWeb, release, policy, deliveryId,
       recorder,
       notifyWeb,
       release,
-      policy,
+      binding,
       deliveryId,
       "submission_unknown",
       "queue_submission_outcome_unknown",
-      policy.policy.thread_id
+      threadId
     );
   }
   if (!submission.started) {
@@ -24417,11 +24749,11 @@ async function submitWakeQueue(recorder, notifyWeb, release, policy, deliveryId,
       recorder,
       notifyWeb,
       release,
-      policy,
+      binding,
       deliveryId,
       "web_notify",
       "queue_command_unavailable",
-      policy.policy.thread_id
+      threadId
     );
   }
   if (submission.timed_out || submission.signal !== null || submission.exit_code !== 0) {
@@ -24429,56 +24761,23 @@ async function submitWakeQueue(recorder, notifyWeb, release, policy, deliveryId,
       recorder,
       notifyWeb,
       release,
-      policy,
+      binding,
       deliveryId,
       "submission_unknown",
       submission.timed_out ? "queue_submission_timeout" : "queue_submission_outcome_unknown",
-      policy.policy.thread_id
+      threadId
     );
   }
   return recordObservation(
     recorder,
     notifyWeb,
     release,
-    policy,
+    binding,
     deliveryId,
     "queued",
     "queue_command_accepted",
-    policy.policy.thread_id,
+    threadId,
     submission.queue_message_id
-  );
-}
-function validatePolicyBinding(policy, release) {
-  if (policy.task_id !== release.task_id) return "policy_task_mismatch";
-  if (policy.attempt !== release.attempt) return "policy_attempt_mismatch";
-  if (normalizeWorkspace(policy.workspace) !== normalizeWorkspace(release.workspace)) return "policy_workspace_mismatch";
-  return null;
-}
-function validatePreflight(policy, preflight) {
-  if (!preflight.loaded) return "thread_not_loaded";
-  if (preflight.status !== "idle") return `thread_status_${preflight.status}`;
-  if (preflight.can_accept_direct_input !== true) return "thread_direct_input_unavailable";
-  if (preflight.cwd === null || normalizeWorkspace(preflight.cwd) !== normalizeWorkspace(policy.workspace)) {
-    return "thread_workspace_mismatch";
-  }
-  if (preflight.model !== policy.model) return "thread_model_mismatch";
-  if (preflight.model_provider !== policy.model_provider) return "thread_provider_mismatch";
-  if (preflight.reasoning_effort !== policy.reasoning_effort) return "thread_reasoning_mismatch";
-  if (preflight.reasoning_effort !== null && !SAFE_REASONING_EFFORTS.has(preflight.reasoning_effort)) {
-    return "unsafe_reasoning_effort";
-  }
-  return null;
-}
-async function recordWebFallback(recorder, notifyWeb, release, threadId, policyDigest, authorizationDigest, reasonCode) {
-  return recordObservation(
-    recorder,
-    notifyWeb,
-    release,
-    { policy_digest: policyDigest, authorization_digest: authorizationDigest },
-    wakeDeliveryId(release, policyDigest),
-    "web_notify",
-    reasonCode,
-    threadId
   );
 }
 async function recordObservation(recorder, notifyWeb, release, binding, deliveryId, state, reasonCode, threadId, queueMessageId) {
@@ -24522,99 +24821,6 @@ function wakeResult(state, reasonCode, duplicate = false, queueMessageId = void 
     ...queueMessageId ? { queue_message_id: queueMessageId } : {}
   };
 }
-function readWakePolicy(authorityRoot, nowMs) {
-  const policyPath = path19.join(authorityRoot, WAKE_POLICY_FILE);
-  if (!existsSync11(policyPath)) {
-    return {
-      ok: false,
-      reason_code: "policy_missing",
-      policy_digest: wakeDigest({ state: "missing", schema_version: 1 }),
-      authorization_digest: wakeDigest({ state: "not_granted", schema_version: 1 }),
-      thread_id: null
-    };
-  }
-  let raw = "";
-  try {
-    const stat2 = lstatSync4(policyPath);
-    if (!stat2.isFile() || stat2.isSymbolicLink() || stat2.size < 2 || stat2.size > WAKE_POLICY_MAX_BYTES) {
-      throw new Error("wake_policy_file_invalid");
-    }
-    raw = readFileSync11(policyPath, "utf8");
-    const value = JSON.parse(raw);
-    const policy = parseWakePolicy(value, nowMs);
-    return {
-      ok: true,
-      policy,
-      policy_digest: wakeDigest(policy),
-      authorization_digest: wakeDigest(policy.authorization)
-    };
-  } catch {
-    return {
-      ok: false,
-      reason_code: "policy_invalid",
-      policy_digest: createHash19("sha256").update(raw || "wake-policy:invalid", "utf8").digest("hex"),
-      authorization_digest: wakeDigest({ state: "invalid", schema_version: 1 }),
-      thread_id: safeThreadHint(raw)
-    };
-  }
-}
-function parseWakePolicy(value, nowMs) {
-  if (!isRecord7(value) || !hasExactKeys(value, WAKE_POLICY_BASE_KEYS) && !hasExactKeys(value, WAKE_POLICY_KEYS_V2)) {
-    throw new Error("wake_policy_shape_invalid");
-  }
-  if (value.schema_version !== 1 || typeof value.enabled !== "boolean" || value.fallback !== "web_notify") {
-    throw new Error("wake_policy_version_invalid");
-  }
-  const deliveryMode = value.delivery_mode === void 0 ? "strict" : value.delivery_mode === "strict" || value.delivery_mode === "trusted_local" ? value.delivery_mode : null;
-  if (deliveryMode === null) throw new Error("wake_policy_delivery_mode_invalid");
-  const taskId = boundedIdentifier(value.task_id);
-  const threadId = boundedIdentifier(value.thread_id);
-  const model = boundedText(value.model, 256);
-  const provider = boundedText(value.model_provider, 256);
-  if (!Number.isSafeInteger(value.attempt) || Number(value.attempt) < 1) throw new Error("wake_policy_attempt_invalid");
-  if (typeof value.workspace !== "string" || !path19.isAbsolute(value.workspace)) throw new Error("wake_policy_workspace_invalid");
-  if (value.reasoning_effort !== "minimal" && value.reasoning_effort !== "low" && value.reasoning_effort !== "medium") {
-    throw new Error("wake_policy_reasoning_invalid");
-  }
-  if (!isRecord7(value.authorization) || !hasExactKeys(value.authorization, WAKE_AUTHORIZATION_KEYS)) {
-    throw new Error("wake_authorization_shape_invalid");
-  }
-  if (value.authorization.scope !== "one_turn" || value.authorization.granted_by !== "owner") {
-    throw new Error("wake_authorization_scope_invalid");
-  }
-  const grantedAt = Date.parse(String(value.authorization.granted_at));
-  const expiresAt = Date.parse(String(value.authorization.expires_at));
-  if (!Number.isFinite(grantedAt) || !Number.isFinite(expiresAt) || grantedAt > nowMs || expiresAt <= nowMs || expiresAt <= grantedAt || expiresAt - grantedAt > WAKE_AUTHORIZATION_MAX_MS) {
-    throw new Error("wake_authorization_time_invalid");
-  }
-  return {
-    schema_version: 1,
-    enabled: value.enabled,
-    task_id: taskId,
-    attempt: Number(value.attempt),
-    thread_id: threadId,
-    workspace: normalizeWorkspace(value.workspace),
-    model,
-    model_provider: provider,
-    reasoning_effort: value.reasoning_effort,
-    fallback: "web_notify",
-    delivery_mode: deliveryMode,
-    authorization: {
-      scope: "one_turn",
-      granted_by: "owner",
-      granted_at: String(value.authorization.granted_at),
-      expires_at: String(value.authorization.expires_at)
-    }
-  };
-}
-function safeThreadHint(raw) {
-  try {
-    const value = JSON.parse(raw);
-    return isRecord7(value) && typeof value.thread_id === "string" && isIdentifier(value.thread_id) ? value.thread_id : null;
-  } catch {
-    return null;
-  }
-}
 function wakeMessage(release) {
   return [
     "[CODEX-ZCODE BRIDGE WAKE - VERIFIED RELEASE FACTS]",
@@ -24642,35 +24848,13 @@ function wakeDeliveryId(release, policyDigest) {
     policy_digest: policyDigest
   });
 }
-function normalizeWorkspace(value) {
-  const resolved = path19.resolve(value);
-  try {
-    const canonical5 = realpathSync5.native(resolved);
-    return process.platform === "win32" ? canonical5.toLowerCase() : canonical5;
-  } catch {
-    return process.platform === "win32" ? resolved.toLowerCase() : resolved;
-  }
-}
 function boundedDuration(value, fallback, min, max) {
   if (value === void 0) return fallback;
   if (!Number.isSafeInteger(value) || value < min || value > max) throw new Error("EXECUTOR_WAKE_DURATION_INVALID");
   return value;
 }
-function boundedIdentifier(value) {
-  if (!isIdentifier(value)) throw new Error("wake_identifier_invalid");
-  return value;
-}
 function isIdentifier(value) {
   return typeof value === "string" && value.length > 0 && value.length <= 128 && /^[A-Za-z0-9._:-]+$/u.test(value) && value === value.normalize("NFC");
-}
-function boundedText(value, maxBytes) {
-  if (typeof value !== "string" || !value.trim() || Buffer.byteLength(value, "utf8") > maxBytes || value !== value.normalize("NFC")) {
-    throw new Error("wake_text_invalid");
-  }
-  return value;
-}
-function hasExactKeys(value, expected) {
-  return Object.keys(value).sort().join("|") === [...expected].sort().join("|");
 }
 function isRecord7(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -25072,7 +25256,10 @@ async function createProductionAuthorityComposition(options) {
   const wakeCoordinator = createExecutorWakeCoordinator({
     authorityRoot: options.authorityRoot,
     codexExecutable: defaultCodexExecutable(env),
-    socketPath: defaultAppServerControlSocket(env, homeDir)
+    socketPath: defaultAppServerControlSocket(env, homeDir),
+    autoWakeEnabled: () => autoWakeEnabledFromEnvironment(
+      loadPersistedRuntimeEnvironment(env, homeDir, options.host)
+    )
   });
   await initializeFreshInstallSqliteRoot(
     options.authorityRoot,
@@ -25139,8 +25326,15 @@ var EXECUTOR_CONTROL_PROTOCOL_VERSION = 1;
 var EXECUTOR_CONTROL_FRAME_LIMIT_BYTES = 33 * 1024 * 1024;
 var nonEmptyString = string2().min(1);
 var emptyParams = strictObject({});
+var taskAdmissionSchema = strictObject({
+  owner_thread_id: string2().nullable(),
+  source: _enum(["mcp_meta", "mcp_meta_missing", "mcp_meta_invalid", "non_host_admission"])
+}).refine(
+  (value) => value.source === "mcp_meta" === (value.owner_thread_id !== null),
+  { message: "owner_thread_id must be present only for mcp_meta admission" }
+);
 var executorControlParamsSchemas = {
-  createTask: strictObject({ task: zcodeTaskInputSchema }),
+  createTask: strictObject({ task: zcodeTaskInputSchema, admission: taskAdmissionSchema.optional() }),
   listTasks: listTasksInputSchema,
   getStatus: strictObject({ task_id: nonEmptyString }),
   getResult: strictObject({ task_id: nonEmptyString, view: _enum(["summary", "full"]).optional() }),
@@ -25230,7 +25424,10 @@ async function dispatch(options, request, currentState) {
     // The shared TaskPackage schema allows a routable model without provider_id;
     // Manager routing resolves that public input before persistence.
     case "createTask":
-      return await manager.createTask(request.params.task);
+      return await manager.createTask(
+        request.params.task,
+        request.params.admission
+      );
     case "listTasks":
       if (!manager.listTasks) throw Object.assign(new Error("TASK_LIST_UNAVAILABLE"), { code: "TASK_LIST_UNAVAILABLE" });
       return await manager.listTasks(request.params);

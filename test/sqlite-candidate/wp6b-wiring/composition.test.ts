@@ -5268,3 +5268,56 @@ test("SQLite Manager preserves attention waiting and rejects invalid cursors bef
     }finally{store.close();}
   }});
 });
+
+test("MCP admission persists the trusted Thread binding before Worker dispatch", { timeout: 30_000 }, async () => {
+  const taskId = `owner-binding-${randomUUID()}`;
+  const threadId = "019c0000-0000-7000-8000-0000000000aa";
+  let managerRef: SqliteLifecycleMcpAuthority | undefined;
+  let bindingAtDispatch: unknown;
+  await withSqliteMcp(async (client, manager, _dataRoot, workspace) => {
+    managerRef = manager;
+    const created = contentObject(await client.callTool({
+      name: "zcode_task",
+      arguments: syntheticTask(workspace, taskId),
+      _meta: { threadId },
+    }));
+    assert.equal(created.status, "queued");
+    const binding = created.owner_binding as Record<string, unknown>;
+    assert.equal(binding.state, "bound");
+    assert.equal(binding.owner_thread_id, threadId);
+    assert.equal(binding.source, "mcp_meta");
+    const terminal = await waitForTerminal(client, taskId, 1);
+    assert.equal(terminal.status, "completed");
+    const after = await manager.getStatus(taskId);
+    assert.equal(after.owner_binding?.owner_thread_id, threadId);
+  }, {
+    testBeforeDispatch: async () => {
+      assert.ok(managerRef, "manager must exist before dispatch");
+      const status = await managerRef.getStatus(taskId);
+      bindingAtDispatch = status.owner_binding;
+      assert.equal((bindingAtDispatch as Record<string, unknown>).state, "bound");
+      assert.equal((bindingAtDispatch as Record<string, unknown>).owner_thread_id, threadId);
+    },
+  });
+  assert.equal((bindingAtDispatch as Record<string, unknown>).owner_thread_id, threadId);
+});
+
+test("concurrent MCP admissions keep same-Thread and different-Thread bindings isolated", { timeout: 30_000 }, async () => {
+  const threadA = "019c0000-0000-7000-8000-0000000000ab";
+  const threadB = "019c0000-0000-7000-8000-0000000000ac";
+  await withSqliteMcp(async (client, _manager, _dataRoot, workspace) => {
+    const ids = [`owner-a1-${randomUUID()}`, `owner-a2-${randomUUID()}`, `owner-b1-${randomUUID()}`];
+    const receipts = await Promise.all(ids.map((taskId, index) => client.callTool({
+      name: "zcode_task",
+      arguments: syntheticTask(workspace, taskId),
+      _meta: { threadId: index < 2 ? threadA : threadB },
+    })));
+    const created = receipts.map((result) => contentObject(result));
+    const bindings = created.map((receipt) => receipt.owner_binding as Record<string, unknown>);
+    assert.deepEqual(bindings.map((binding) => binding.owner_thread_id), [threadA, threadA, threadB]);
+    for (const binding of bindings) {
+      assert.equal(binding.state, "bound");
+      assert.equal(binding.source, "mcp_meta");
+    }
+  });
+});

@@ -69,7 +69,10 @@ async function dispatch(
   switch (request.method) {
     // The shared TaskPackage schema allows a routable model without provider_id;
     // Manager routing resolves that public input before persistence.
-    case "createTask": return await manager.createTask(request.params.task as Parameters<ProgressTaskManager["createTask"]>[0]) as unknown as Record<string, unknown>;
+    case "createTask": return await manager.createTask(
+      request.params.task as Parameters<ProgressTaskManager["createTask"]>[0],
+      request.params.admission,
+    ) as unknown as Record<string, unknown>;
     case "listTasks":
       if (!manager.listTasks) throw Object.assign(new Error("TASK_LIST_UNAVAILABLE"), { code: "TASK_LIST_UNAVAILABLE" });
       return await manager.listTasks(request.params) as unknown as Record<string, unknown>;

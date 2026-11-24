@@ -4,22 +4,12 @@ import {
   type ChildProcessByStdio,
   type ChildProcessWithoutNullStreams,
 } from "node:child_process";
-import {
-  existsSync,
-  lstatSync,
-  readFileSync,
-  realpathSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import type { Readable } from "node:stream";
 import type { ExecutorWakeReleaseFact } from "../manager/sqlite-lifecycle-mcp-authority.js";
 
-const WAKE_POLICY_FILE = "wake-policy.json";
-const WAKE_POLICY_MAX_BYTES = 16 * 1024;
-const WAKE_AUTHORIZATION_MAX_MS = 24 * 60 * 60 * 1000;
-const WAKE_AUTHORIZATION_MIN_MS = 60 * 1000;
 const WAKE_CONTROL_FRAME_MAX_BYTES = 1024 * 1024;
 const WAKE_CONTROL_STDERR_MAX_BYTES = 8 * 1024;
 const WAKE_QUEUE_TIMEOUT_MS = 10_000;
@@ -28,25 +18,8 @@ const WAKE_TURN_OBSERVATION_MS = 2_000;
 const WAKE_TURN_POLL_MS = 200;
 const WAKE_LOADED_PAGE_LIMIT = 200;
 const WAKE_LOADED_MAX_PAGES = 50;
-const SAFE_REASONING_EFFORTS = new Set(["minimal", "low", "medium"]);
-const WAKE_POLICY_BASE_KEYS = [
-  "attempt",
-  "authorization",
-  "enabled",
-  "fallback",
-  "model",
-  "model_provider",
-  "reasoning_effort",
-  "schema_version",
-  "task_id",
-  "thread_id",
-  "workspace",
-] as const;
-const WAKE_POLICY_KEYS_V2 = ["delivery_mode", ...WAKE_POLICY_BASE_KEYS] as const;
-const WAKE_AUTHORIZATION_KEYS = ["expires_at", "granted_at", "granted_by", "scope"] as const;
 
 export type ExecutorWakeState = "intent" | "queued" | "submission_unknown" | "turn_started" | "web_notify";
-export type ExecutorWakeDeliveryMode = "strict" | "trusted_local";
 
 export interface ExecutorWakeObservationInput {
   readonly operation_id: string;
@@ -68,53 +41,6 @@ export interface ExecutorWakeRecorder {
     readonly state: ExecutorWakeState;
   };
 }
-
-export interface ExecutorWakePolicy {
-  readonly schema_version: 1;
-  readonly enabled: boolean;
-  readonly task_id: string;
-  readonly attempt: number;
-  readonly thread_id: string;
-  readonly workspace: string;
-  readonly model: string;
-  readonly model_provider: string;
-  readonly reasoning_effort: "minimal" | "low" | "medium";
-  readonly fallback: "web_notify";
-  readonly delivery_mode: ExecutorWakeDeliveryMode;
-  readonly authorization: {
-    readonly scope: "one_turn";
-    readonly granted_by: "owner";
-    readonly granted_at: string;
-    readonly expires_at: string;
-  };
-}
-
-export interface ExecutorWakePolicyGrant {
-  readonly task_id: string;
-  readonly attempt: number;
-  readonly thread_id: string;
-  readonly workspace: string;
-  readonly model: string;
-  readonly model_provider: string;
-  readonly reasoning_effort: "minimal" | "low" | "medium";
-  readonly expires_in_ms: number;
-  readonly delivery_mode?: ExecutorWakeDeliveryMode;
-}
-
-type WakePolicyRead =
-  | {
-    readonly ok: true;
-    readonly policy: ExecutorWakePolicy;
-    readonly policy_digest: string;
-    readonly authorization_digest: string;
-  }
-  | {
-    readonly ok: false;
-    readonly reason_code: string;
-    readonly policy_digest: string;
-    readonly authorization_digest: string;
-    readonly thread_id: string | null;
-  };
 
 export interface WakeThreadTurn {
   readonly id: string;
@@ -188,6 +114,8 @@ export interface ExecutorWakeCoordinatorOptions {
   readonly controlTimeoutMs?: number;
   readonly turnObservationMs?: number;
   readonly turnPollMs?: number;
+  /** Read at delivery time so a settings change applies to later Wake attempts. */
+  readonly autoWakeEnabled?: () => boolean;
 }
 
 export interface ExecutorWakeCoordinator {
@@ -222,74 +150,9 @@ export function defaultCodexExecutable(env: NodeJS.ProcessEnv = process.env): st
   return env.ZCODE_BRIDGE_CODEX_EXECUTABLE?.trim() || (process.platform === "win32" ? "codex.exe" : "codex");
 }
 
-/** Create the single Owner-authorized Wake policy. Existing policies are never overwritten. */
-export function writeExecutorWakePolicy(
-  authorityRoot: string,
-  grant: ExecutorWakePolicyGrant,
-  nowMs = Date.now(),
-): {
-  readonly path: string;
-  readonly policy: ExecutorWakePolicy;
-  readonly policy_digest: string;
-  readonly authorization_digest: string;
-} {
-  if (!Number.isSafeInteger(nowMs) || nowMs < 0) throw new Error("EXECUTOR_WAKE_NOW_INVALID");
-  if (!Number.isSafeInteger(grant.expires_in_ms)
-    || grant.expires_in_ms < WAKE_AUTHORIZATION_MIN_MS
-    || grant.expires_in_ms > WAKE_AUTHORIZATION_MAX_MS) {
-    throw new Error("EXECUTOR_WAKE_AUTHORIZATION_DURATION_INVALID");
-  }
-  const root = path.resolve(authorityRoot);
-  if (!lstatSync(root).isDirectory()) throw new Error("EXECUTOR_WAKE_AUTHORITY_ROOT_INVALID");
-  const policyPath = path.join(root, WAKE_POLICY_FILE);
-  const value = {
-    schema_version: 1,
-    enabled: true,
-    task_id: grant.task_id,
-    attempt: grant.attempt,
-    thread_id: grant.thread_id,
-    workspace: grant.workspace,
-    model: grant.model,
-    model_provider: grant.model_provider,
-    reasoning_effort: grant.reasoning_effort,
-    fallback: "web_notify",
-    delivery_mode: grant.delivery_mode ?? "strict",
-    authorization: {
-      scope: "one_turn",
-      granted_by: "owner",
-      granted_at: new Date(nowMs).toISOString(),
-      expires_at: new Date(nowMs + grant.expires_in_ms).toISOString(),
-    },
-  } as const;
-  const policy = parseWakePolicy(value, nowMs);
-  try {
-    writeFileSync(policyPath, `${JSON.stringify(policy, null, 2)}\n`, {
-      encoding: "utf8",
-      flag: "wx",
-      mode: 0o600,
-    });
-  } catch (error) {
-    if (errorCode(error) === "EEXIST") {
-      throw Object.assign(
-        new Error("A Wake policy already exists; refusing to overwrite Owner authorization"),
-        { code: "WAKE_POLICY_EXISTS" },
-      );
-    }
-    throw error;
-  }
-  return {
-    path: policyPath,
-    policy,
-    policy_digest: wakeDigest(policy),
-    authorization_digest: wakeDigest(policy.authorization),
-  };
-}
-
 export function createExecutorWakeCoordinator(
   options: ExecutorWakeCoordinatorOptions,
 ): ExecutorWakeCoordinator {
-  const authorityRoot = path.resolve(options.authorityRoot);
-  const now = options.now ?? Date.now;
   const appServer = options.appServer ?? new AppServerProxyConnector();
   const queue = options.queue ?? new QueueCommandRunner();
   const codexExecutable = options.codexExecutable ?? defaultCodexExecutable();
@@ -306,26 +169,48 @@ export function createExecutorWakeCoordinator(
     async handle(release, recorderOverride) {
       const recorder = recorderOverride ?? options.recorder;
       if (!recorder) throw new Error("EXECUTOR_WAKE_RECORDER_UNAVAILABLE");
-      const policyRead = readWakePolicy(authorityRoot, now());
-      if (!policyRead.ok) {
-        return recordWebFallback(recorder, notifyWeb, release, policyRead.thread_id,
-          policyRead.policy_digest, policyRead.authorization_digest, policyRead.reason_code);
+      const threadId = release.owner_binding_state === "bound" ? release.owner_thread_id : null;
+      const policyDigest = wakeDigest({
+        contract: "auto-wake-release-v2",
+        task_id: release.task_id,
+        attempt: release.attempt,
+        operation_id: release.operation_id,
+        generation: release.generation,
+        result_digest: release.result_digest,
+        result_commit_ref: release.result_commit_ref,
+        owner_thread_id: threadId,
+      });
+      const authorizationDigest = wakeDigest({
+        contract: "plugin-installed-auto-wake-v1",
+        schema_version: 2,
+        state: "accepted",
+      });
+      const deliveryId = wakeDeliveryId(release, policyDigest);
+      if (threadId === null) {
+        return recordObservation(
+          recorder,
+          notifyWeb,
+          release,
+          { policy_digest: policyDigest, authorization_digest: authorizationDigest },
+          deliveryId,
+          "web_notify",
+          "owner_thread_unavailable",
+          null,
+        );
       }
-      const bindingFailure = validatePolicyBinding(policyRead.policy, release);
-      if (bindingFailure) {
-        return recordWebFallback(recorder, notifyWeb, release, policyRead.policy.thread_id,
-          policyRead.policy_digest, policyRead.authorization_digest, bindingFailure);
-      }
-      if (!policyRead.policy.enabled) {
-        return recordWebFallback(recorder, notifyWeb, release, policyRead.policy.thread_id,
-          policyRead.policy_digest, policyRead.authorization_digest, "policy_disabled");
-      }
-      if (!SAFE_REASONING_EFFORTS.has(policyRead.policy.reasoning_effort)) {
-        return recordWebFallback(recorder, notifyWeb, release, policyRead.policy.thread_id,
-          policyRead.policy_digest, policyRead.authorization_digest, "unsafe_reasoning_effort");
+      if (options.autoWakeEnabled?.() === false) {
+        return recordObservation(
+          recorder,
+          notifyWeb,
+          release,
+          { policy_digest: policyDigest, authorization_digest: authorizationDigest },
+          deliveryId,
+          "web_notify",
+          "auto_wake_disabled",
+          threadId,
+        );
       }
 
-      const deliveryId = wakeDeliveryId(release, policyRead.policy_digest);
       const recordIntent = (reasonCode: string): ReturnType<typeof wakeResult> | null => {
         const intent: ExecutorWakeObservationInput = {
           operation_id: release.operation_id,
@@ -333,10 +218,10 @@ export function createExecutorWakeCoordinator(
           attempt: release.attempt,
           generation: release.generation,
           state: "intent",
-          thread_id: policyRead.policy.thread_id,
+          thread_id: threadId,
           delivery_id: deliveryId,
-          policy_digest: policyRead.policy_digest,
-          authorization_digest: policyRead.authorization_digest,
+          policy_digest: policyDigest,
+          authorization_digest: authorizationDigest,
           reason_code: reasonCode,
         };
         try {
@@ -353,109 +238,121 @@ export function createExecutorWakeCoordinator(
         }
       };
 
-      if (policyRead.policy.delivery_mode === "trusted_local") {
-        const alreadyHandled = recordIntent("owner_authorized_trusted_local");
-        if (alreadyHandled) return alreadyHandled;
-        const queued = await submitWakeQueue(
+      const alreadyHandled = recordIntent("plugin_installed_auto_wake");
+      if (alreadyHandled) return alreadyHandled;
+      const queued = await submitWakeQueue(
+        recorder,
+        notifyWeb,
+        release,
+        { policy_digest: policyDigest, authorization_digest: authorizationDigest },
+        deliveryId,
+        threadId,
+        queue,
+        codexExecutable,
+        queueTimeoutMs,
+      );
+      if (queued.state !== "queued") return queued;
+
+      // Queue acknowledgement is not Turn-start evidence. Observe the real
+      // Thread when the local control channel is available; otherwise retain
+      // the durable Queue fact and record an explicit fallback observation.
+      const turnStarted = await observeTurnStart({
+        appServer,
+        socketPath,
+        codexExecutable,
+        threadId,
+        controlTimeoutMs,
+        turnObservationMs,
+        turnPollMs,
+      });
+      if (turnStarted) {
+        return recordObservation(
           recorder,
           notifyWeb,
           release,
-          policyRead,
+          { policy_digest: policyDigest, authorization_digest: authorizationDigest },
           deliveryId,
-          queue,
-          codexExecutable,
-          queueTimeoutMs,
+          "turn_started",
+          "turn_in_progress_observed",
+          threadId,
         );
-        if (queued.state !== "queued") return queued;
-
-        // Without a same-owner control socket, Queue acceptance cannot prove
-        // that a loaded/idle consumer started a Turn. Publish the durable Queue
-        // fact first, then make the safe Web fallback discoverable without
-        // resubmitting.
-        const fallback = await recordObservation(
-          recorder,
-          notifyWeb,
-          release,
-          policyRead,
-          deliveryId,
-          "web_notify",
-          "trusted_local_turn_start_unverified",
-          policyRead.policy.thread_id,
-        );
-        return {
-          ...fallback,
-          ...(queued.queue_message_id ? { queue_message_id: queued.queue_message_id } : {}),
-        };
       }
-
-      let session: WakeAppServerSession;
-      try {
-        session = await appServer.connect({ socketPath, executable: codexExecutable, timeoutMs: controlTimeoutMs });
-      } catch {
-        return recordWebFallback(recorder, notifyWeb, release, policyRead.policy.thread_id,
-          policyRead.policy_digest, policyRead.authorization_digest, "app_server_unavailable");
-      }
-
-      try {
-        let preflight: WakeThreadPreflight;
-        try {
-          preflight = await session.preflight(policyRead.policy.thread_id, controlTimeoutMs);
-        } catch {
-          return await recordWebFallback(recorder, notifyWeb, release, policyRead.policy.thread_id,
-            policyRead.policy_digest, policyRead.authorization_digest, "app_server_preflight_failed");
-        }
-        const preflightFailure = validatePreflight(policyRead.policy, preflight);
-        if (preflightFailure) {
-          return await recordWebFallback(recorder, notifyWeb, release, policyRead.policy.thread_id,
-            policyRead.policy_digest, policyRead.authorization_digest, preflightFailure);
-        }
-
-        const baselineTurnIds = preflight.recent_turns.map((turn) => turn.id);
-        const alreadyHandled = recordIntent("queue_preflight_passed");
-        if (alreadyHandled) return alreadyHandled;
-        const queued = await submitWakeQueue(
-          recorder,
-          notifyWeb,
-          release,
-          policyRead,
-          deliveryId,
-          queue,
-          codexExecutable,
-          queueTimeoutMs,
-        );
-        if (queued.state !== "queued" || turnObservationMs === 0) return queued;
-
-        const deadline = Date.now() + turnObservationMs;
-        do {
-          try {
-            if (await session.observeNewInProgressTurn(
-              policyRead.policy.thread_id,
-              baselineTurnIds,
-              Math.max(1, Math.min(controlTimeoutMs, deadline - Date.now())),
-            )) {
-              return await recordObservation(recorder, notifyWeb, release, policyRead,
-                deliveryId, "turn_started", "turn_in_progress_observed", policyRead.policy.thread_id);
-            }
-          } catch {
-            break;
-          }
-          if (Date.now() >= deadline) break;
-          await delay(Math.min(turnPollMs, Math.max(1, deadline - Date.now())));
-        } while (Date.now() < deadline);
-        return queued;
-      } finally {
-        await session.close().catch(() => undefined);
-      }
+      const fallback = await recordObservation(
+        recorder,
+        notifyWeb,
+        release,
+        { policy_digest: policyDigest, authorization_digest: authorizationDigest },
+        deliveryId,
+        "web_notify",
+        "turn_start_unverified",
+        threadId,
+      );
+      return {
+        ...fallback,
+        ...(queued.queue_message_id ? { queue_message_id: queued.queue_message_id } : {}),
+      };
     },
   };
+}
+
+async function observeTurnStart(input: {
+  readonly appServer: WakeAppServerConnector;
+  readonly socketPath: string;
+  readonly codexExecutable: string;
+  readonly threadId: string;
+  readonly controlTimeoutMs: number;
+  readonly turnObservationMs: number;
+  readonly turnPollMs: number;
+}): Promise<boolean> {
+  if (input.turnObservationMs === 0) return false;
+  let session: WakeAppServerSession;
+  try {
+    session = await input.appServer.connect({
+      socketPath: input.socketPath,
+      executable: input.codexExecutable,
+      timeoutMs: input.controlTimeoutMs,
+    });
+  } catch {
+    return false;
+  }
+  try {
+    let preflight: WakeThreadPreflight;
+    try {
+      preflight = await session.preflight(input.threadId, input.controlTimeoutMs);
+    } catch {
+      return false;
+    }
+    const baselineTurnIds = preflight.recent_turns.map((turn) => turn.id);
+    const deadline = Date.now() + input.turnObservationMs;
+    do {
+      try {
+        if (await session.observeNewInProgressTurn(
+          input.threadId,
+          baselineTurnIds,
+          Math.max(1, Math.min(input.controlTimeoutMs, deadline - Date.now())),
+        )) return true;
+      } catch {
+        return false;
+      }
+      if (Date.now() >= deadline) return false;
+      await delay(Math.min(input.turnPollMs, Math.max(1, deadline - Date.now())));
+    } while (Date.now() < deadline);
+    return false;
+  } finally {
+    await session.close().catch(() => undefined);
+  }
 }
 
 async function submitWakeQueue(
   recorder: ExecutorWakeRecorder,
   notifyWeb: NonNullable<ExecutorWakeCoordinatorOptions["notifyWeb"]>,
   release: ExecutorWakeReleaseFact,
-  policy: Extract<WakePolicyRead, { readonly ok: true }>,
+  binding: {
+    readonly policy_digest: string;
+    readonly authorization_digest: string;
+  },
   deliveryId: string,
+  threadId: string,
   queue: WakeQueueRunner,
   codexExecutable: string,
   queueTimeoutMs: number,
@@ -464,72 +361,28 @@ async function submitWakeQueue(
   try {
     submission = await queue.submit({
       executable: codexExecutable,
-      threadId: policy.policy.thread_id,
+      threadId,
       message: wakeMessage(release),
       timeoutMs: queueTimeoutMs,
     });
   } catch {
-    return recordObservation(recorder, notifyWeb, release, policy,
-      deliveryId, "submission_unknown", "queue_submission_outcome_unknown", policy.policy.thread_id);
+    return recordObservation(recorder, notifyWeb, release, binding,
+      deliveryId, "submission_unknown", "queue_submission_outcome_unknown", threadId);
   }
 
   if (!submission.started) {
-    return recordObservation(recorder, notifyWeb, release, policy,
-      deliveryId, "web_notify", "queue_command_unavailable", policy.policy.thread_id);
+    return recordObservation(recorder, notifyWeb, release, binding,
+      deliveryId, "web_notify", "queue_command_unavailable", threadId);
   }
   if (submission.timed_out || submission.signal !== null || submission.exit_code !== 0) {
-    return recordObservation(recorder, notifyWeb, release, policy,
+    return recordObservation(recorder, notifyWeb, release, binding,
       deliveryId, "submission_unknown",
       submission.timed_out ? "queue_submission_timeout" : "queue_submission_outcome_unknown",
-      policy.policy.thread_id);
+      threadId);
   }
-  return recordObservation(recorder, notifyWeb, release, policy,
-    deliveryId, "queued", "queue_command_accepted", policy.policy.thread_id,
+  return recordObservation(recorder, notifyWeb, release, binding,
+    deliveryId, "queued", "queue_command_accepted", threadId,
     submission.queue_message_id);
-}
-
-function validatePolicyBinding(policy: ExecutorWakePolicy, release: ExecutorWakeReleaseFact): string | null {
-  if (policy.task_id !== release.task_id) return "policy_task_mismatch";
-  if (policy.attempt !== release.attempt) return "policy_attempt_mismatch";
-  if (normalizeWorkspace(policy.workspace) !== normalizeWorkspace(release.workspace)) return "policy_workspace_mismatch";
-  return null;
-}
-
-function validatePreflight(policy: ExecutorWakePolicy, preflight: WakeThreadPreflight): string | null {
-  if (!preflight.loaded) return "thread_not_loaded";
-  if (preflight.status !== "idle") return `thread_status_${preflight.status}`;
-  if (preflight.can_accept_direct_input !== true) return "thread_direct_input_unavailable";
-  if (preflight.cwd === null || normalizeWorkspace(preflight.cwd) !== normalizeWorkspace(policy.workspace)) {
-    return "thread_workspace_mismatch";
-  }
-  if (preflight.model !== policy.model) return "thread_model_mismatch";
-  if (preflight.model_provider !== policy.model_provider) return "thread_provider_mismatch";
-  if (preflight.reasoning_effort !== policy.reasoning_effort) return "thread_reasoning_mismatch";
-  if (preflight.reasoning_effort !== null && !SAFE_REASONING_EFFORTS.has(preflight.reasoning_effort)) {
-    return "unsafe_reasoning_effort";
-  }
-  return null;
-}
-
-async function recordWebFallback(
-  recorder: ExecutorWakeRecorder,
-  notifyWeb: NonNullable<ExecutorWakeCoordinatorOptions["notifyWeb"]>,
-  release: ExecutorWakeReleaseFact,
-  threadId: string | null,
-  policyDigest: string,
-  authorizationDigest: string,
-  reasonCode: string,
-) {
-  return recordObservation(
-    recorder,
-    notifyWeb,
-    release,
-    { policy_digest: policyDigest, authorization_digest: authorizationDigest },
-    wakeDeliveryId(release, policyDigest),
-    "web_notify",
-    reasonCode,
-    threadId,
-  );
 }
 
 async function recordObservation(
@@ -596,111 +449,6 @@ function wakeResult(
   };
 }
 
-function readWakePolicy(authorityRoot: string, nowMs: number): WakePolicyRead {
-  const policyPath = path.join(authorityRoot, WAKE_POLICY_FILE);
-  if (!existsSync(policyPath)) {
-    return {
-      ok: false,
-      reason_code: "policy_missing",
-      policy_digest: wakeDigest({ state: "missing", schema_version: 1 }),
-      authorization_digest: wakeDigest({ state: "not_granted", schema_version: 1 }),
-      thread_id: null,
-    };
-  }
-  let raw = "";
-  try {
-    const stat = lstatSync(policyPath);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.size < 2 || stat.size > WAKE_POLICY_MAX_BYTES) {
-      throw new Error("wake_policy_file_invalid");
-    }
-    raw = readFileSync(policyPath, "utf8");
-    const value: unknown = JSON.parse(raw);
-    const policy = parseWakePolicy(value, nowMs);
-    return {
-      ok: true,
-      policy,
-      policy_digest: wakeDigest(policy),
-      authorization_digest: wakeDigest(policy.authorization),
-    };
-  } catch {
-    return {
-      ok: false,
-      reason_code: "policy_invalid",
-      policy_digest: createHash("sha256").update(raw || "wake-policy:invalid", "utf8").digest("hex"),
-      authorization_digest: wakeDigest({ state: "invalid", schema_version: 1 }),
-      thread_id: safeThreadHint(raw),
-    };
-  }
-}
-
-function parseWakePolicy(value: unknown, nowMs: number): ExecutorWakePolicy {
-  if (!isRecord(value)
-    || (!hasExactKeys(value, WAKE_POLICY_BASE_KEYS) && !hasExactKeys(value, WAKE_POLICY_KEYS_V2))) {
-    throw new Error("wake_policy_shape_invalid");
-  }
-  if (value.schema_version !== 1 || typeof value.enabled !== "boolean" || value.fallback !== "web_notify") {
-    throw new Error("wake_policy_version_invalid");
-  }
-  const deliveryMode = value.delivery_mode === undefined
-    ? "strict"
-    : value.delivery_mode === "strict" || value.delivery_mode === "trusted_local"
-      ? value.delivery_mode
-      : null;
-  if (deliveryMode === null) throw new Error("wake_policy_delivery_mode_invalid");
-  const taskId = boundedIdentifier(value.task_id);
-  const threadId = boundedIdentifier(value.thread_id);
-  const model = boundedText(value.model, 256);
-  const provider = boundedText(value.model_provider, 256);
-  if (!Number.isSafeInteger(value.attempt) || Number(value.attempt) < 1) throw new Error("wake_policy_attempt_invalid");
-  if (typeof value.workspace !== "string" || !path.isAbsolute(value.workspace)) throw new Error("wake_policy_workspace_invalid");
-  if (value.reasoning_effort !== "minimal" && value.reasoning_effort !== "low" && value.reasoning_effort !== "medium") {
-    throw new Error("wake_policy_reasoning_invalid");
-  }
-  if (!isRecord(value.authorization) || !hasExactKeys(value.authorization, WAKE_AUTHORIZATION_KEYS)) {
-    throw new Error("wake_authorization_shape_invalid");
-  }
-  if (value.authorization.scope !== "one_turn" || value.authorization.granted_by !== "owner") {
-    throw new Error("wake_authorization_scope_invalid");
-  }
-  const grantedAt = Date.parse(String(value.authorization.granted_at));
-  const expiresAt = Date.parse(String(value.authorization.expires_at));
-  if (!Number.isFinite(grantedAt) || !Number.isFinite(expiresAt)
-    || grantedAt > nowMs || expiresAt <= nowMs || expiresAt <= grantedAt
-    || expiresAt - grantedAt > WAKE_AUTHORIZATION_MAX_MS) {
-    throw new Error("wake_authorization_time_invalid");
-  }
-  return {
-    schema_version: 1,
-    enabled: value.enabled,
-    task_id: taskId,
-    attempt: Number(value.attempt),
-    thread_id: threadId,
-    workspace: normalizeWorkspace(value.workspace),
-    model,
-    model_provider: provider,
-    reasoning_effort: value.reasoning_effort,
-    fallback: "web_notify",
-    delivery_mode: deliveryMode,
-    authorization: {
-      scope: "one_turn",
-      granted_by: "owner",
-      granted_at: String(value.authorization.granted_at),
-      expires_at: String(value.authorization.expires_at),
-    },
-  };
-}
-
-function safeThreadHint(raw: string): string | null {
-  try {
-    const value: unknown = JSON.parse(raw);
-    return isRecord(value) && typeof value.thread_id === "string" && isIdentifier(value.thread_id)
-      ? value.thread_id
-      : null;
-  } catch {
-    return null;
-  }
-}
-
 function wakeMessage(release: ExecutorWakeReleaseFact): string {
   return [
     "[CODEX-ZCODE BRIDGE WAKE - VERIFIED RELEASE FACTS]",
@@ -731,42 +479,15 @@ function wakeDeliveryId(release: ExecutorWakeReleaseFact, policyDigest: string):
   });
 }
 
-function normalizeWorkspace(value: string): string {
-  const resolved = path.resolve(value);
-  try {
-    const canonical = realpathSync.native(resolved);
-    return process.platform === "win32" ? canonical.toLowerCase() : canonical;
-  } catch {
-    return process.platform === "win32" ? resolved.toLowerCase() : resolved;
-  }
-}
-
 function boundedDuration(value: number | undefined, fallback: number, min: number, max: number): number {
   if (value === undefined) return fallback;
   if (!Number.isSafeInteger(value) || value < min || value > max) throw new Error("EXECUTOR_WAKE_DURATION_INVALID");
   return value;
 }
 
-function boundedIdentifier(value: unknown): string {
-  if (!isIdentifier(value)) throw new Error("wake_identifier_invalid");
-  return value;
-}
-
 function isIdentifier(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 128
     && /^[A-Za-z0-9._:-]+$/u.test(value) && value === value.normalize("NFC");
-}
-
-function boundedText(value: unknown, maxBytes: number): string {
-  if (typeof value !== "string" || !value.trim() || Buffer.byteLength(value, "utf8") > maxBytes
-    || value !== value.normalize("NFC")) {
-    throw new Error("wake_text_invalid");
-  }
-  return value;
-}
-
-function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
-  return Object.keys(value).sort().join("|") === [...expected].sort().join("|");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

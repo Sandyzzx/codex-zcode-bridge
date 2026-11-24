@@ -7,11 +7,15 @@
   "shards": [
     {
       "id": 1,
-      "estimated_ms": 788724,
+      "estimated_ms": 788774,
       "tests": [
         {
           "file": "test/agent-report.test.ts",
           "estimated_ms": 273
+        },
+        {
+          "file": "test/auto-wake-setting.test.ts",
+          "estimated_ms": 50
         },
         {
           "file": "test/batch2-evidence.test.ts",

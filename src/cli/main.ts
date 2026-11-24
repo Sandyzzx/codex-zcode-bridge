@@ -19,24 +19,16 @@ import type {
 } from "../executor/protocol.js";
 import { executorPipeName } from "../executor/pipe.js";
 import {
-  authorityRootDigest,
   clearExecutorLease,
   EXECUTOR_UNLEASED_TRANSITION_ENV,
   inspectExecutorLease,
   type ExecutorLeaseInspection,
   type ExecutorLeaseRecord,
 } from "../executor/lease.js";
-import { writeExecutorWakePolicy, type ExecutorWakePolicyGrant } from "../executor/wake.js";
-import {
-  fetchTaskConsoleSession,
-  inspectTaskConsoleDiscovery,
-  removeTaskConsoleDiscovery,
-  type TaskConsoleDiscoveryRecord,
-} from "../web/discovery.js";
+import { resolveTaskConsoleLink } from "../web/console-link.js";
 import {
   listTasksInputSchema,
   type ListTasksInput,
-  type TaskListPage,
 } from "../task-list.js";
 import type { GetEventsInput, TaskResult, ZCodeInteractionReplyInput } from "../interfaces.js";
 
@@ -57,9 +49,6 @@ export const TASK_CLI_USAGE = [
   "  task cancel <task_id>",
   "  task reply <task_id> --request-id ID --decision allow|deny|accept|decline [--reason TEXT] [--answer KEY=VALUE]",
   "  task console-url <task_id> [--no-start] [--timeout-ms 500..60000]",
-  "  task wake-authorize <task_id> --attempt N --thread ID --model MODEL --model-provider PROVIDER",
-  "      --reasoning-effort minimal|low|medium --expires-in-minutes 1..1440 --confirm-owner",
-  "      [--delivery-mode strict|trusted-local]",
 ].join("\n");
 
 export class CliUsageError extends Error {}
@@ -89,8 +78,6 @@ export interface TaskCliDependencies {
   }) => { readonly pid: number | undefined };
   readonly inspectLease?: (dataRoot: string) => Promise<ExecutorLeaseInspection>;
   readonly clearLease?: (dataRoot: string) => Promise<ExecutorLeaseRecord>;
-  readonly writeWakePolicy?: typeof writeExecutorWakePolicy;
-  readonly now?: () => number;
   readonly sleep?: (milliseconds: number) => Promise<void>;
   readonly spawnTaskConsole?: (input: {
     readonly dataRoot: string;
@@ -213,9 +200,6 @@ async function runTaskCommand(
       return 0;
     });
   }
-  if (subcommand === "wake-authorize") {
-    return runWakeAuthorize(args.slice(1), dataRoot, pipeName, io, dependencies);
-  }
   if (subcommand === "console-url") {
     return runTaskConsoleUrl(args.slice(1), dataRoot, pipeName, settingsDirectory, io, dependencies);
   }
@@ -329,89 +313,6 @@ async function runTaskCommand(
   throw new CliUsageError("unknown or invalid task command");
 }
 
-async function runWakeAuthorize(
-  args: readonly string[],
-  dataRoot: string,
-  pipeName: string,
-  io: TaskCliIo,
-  dependencies: TaskCliDependencies,
-): Promise<number> {
-  const taskId = args[0];
-  if (!TASK_ID.test(taskId ?? "")) throw new CliUsageError("wake-authorize requires a valid task_id");
-  const options = parseFlags(
-    args.slice(1),
-    new Set([
-      "--attempt", "--thread", "--model", "--model-provider",
-      "--reasoning-effort", "--expires-in-minutes", "--confirm-owner", "--delivery-mode",
-    ]),
-    new Set(["--confirm-owner"]),
-  );
-  if (!options.boolean.has("--confirm-owner")) {
-    throw new CliUsageError("wake-authorize requires --confirm-owner");
-  }
-  const attempt = integer("--attempt", required(options.single, "--attempt"), 1, Number.MAX_SAFE_INTEGER);
-  const threadId = required(options.single, "--thread").trim();
-  const model = required(options.single, "--model").trim();
-  const provider = required(options.single, "--model-provider").trim();
-  const reasoningEffort = enumValue(
-    "--reasoning-effort",
-    required(options.single, "--reasoning-effort"),
-    ["minimal", "low", "medium"] as const,
-  );
-  const expiresInMinutes = integer(
-    "--expires-in-minutes",
-    required(options.single, "--expires-in-minutes"),
-    1,
-    1440,
-  );
-  const deliveryMode = options.single.has("--delivery-mode")
-    ? enumValue("--delivery-mode", options.single.get("--delivery-mode")!, ["strict", "trusted-local"] as const)
-      === "trusted-local" ? "trusted_local" as const : "strict" as const
-    : "strict" as const;
-
-  return withClient(dependencies, pipeName, async (client) => {
-    const task = await findTask(client, taskId!);
-    if (task.attempt !== attempt) {
-      throw Object.assign(
-        new Error(`Task ${taskId} is at Attempt ${task.attempt}, not ${attempt}`),
-        { code: "WAKE_ATTEMPT_MISMATCH" },
-      );
-    }
-    const grant: ExecutorWakePolicyGrant = {
-      task_id: taskId!,
-      attempt,
-      thread_id: threadId,
-      workspace: task.workspace,
-      model,
-      model_provider: provider,
-      reasoning_effort: reasoningEffort,
-      expires_in_ms: expiresInMinutes * 60_000,
-      delivery_mode: deliveryMode,
-    };
-    const written = (dependencies.writeWakePolicy ?? writeExecutorWakePolicy)(
-      dataRoot,
-      grant,
-      dependencies.now?.() ?? Date.now(),
-    );
-    writeJson(io, {
-      task_id: taskId,
-      attempt,
-      thread_id: threadId,
-      workspace: written.policy.workspace,
-      model,
-      model_provider: provider,
-      reasoning_effort: reasoningEffort,
-      delivery_mode: written.policy.delivery_mode,
-      authorization_scope: written.policy.authorization.scope,
-      authorization_expires_at: written.policy.authorization.expires_at,
-      policy_path: written.path,
-      policy_digest: written.policy_digest,
-      authorization_digest: written.authorization_digest,
-    });
-    return 0;
-  });
-}
-
 async function runTaskConsoleUrl(
   args: readonly string[],
   dataRoot: string,
@@ -443,101 +344,24 @@ async function runTaskConsoleUrl(
         code: "EXECUTOR_LEASE_UNKNOWN",
       });
     }
-    const probe = createPlatformProbe();
-    let discovery = await inspectTaskConsoleDiscovery(dataRoot, probe);
-    if (discovery.state === "stale_owner" && discovery.record) {
-      removeTaskConsoleDiscovery(dataRoot, discovery.record);
-      discovery = await inspectTaskConsoleDiscovery(dataRoot, probe);
-    }
-    const reused = discovery.state === "active_owner";
-    if (!reused) {
-      if (noStart) {
-        throw Object.assign(new Error("Task Console is not available and --no-start was requested"), {
-          code: "WEB_CONSOLE_UNAVAILABLE",
-        });
-      }
-      const spawned = (dependencies.spawnTaskConsole ?? spawnTaskConsole)({
-        dataRoot,
-        settingsDirectory,
-      });
-      if (!spawned.pid) console.error("zcode-bridge: Task Console process has no PID; discovery verification will still run\n");
-    }
-    const found = await waitForTaskConsole(
+    const link = await resolveTaskConsoleLink({
       dataRoot,
+      settingsDirectory,
+      taskId: taskId!,
       leaseId,
       timeoutMs,
-      probe,
-      dependencies.sleep ?? sleep,
-    );
-    const url = `${found.record.url}?task_id=${encodeURIComponent(taskId!)}`;
+      noStart,
+      ...(dependencies.spawnTaskConsole ? { spawnConsole: dependencies.spawnTaskConsole } : {}),
+      ...(dependencies.sleep ? { sleep: dependencies.sleep } : {}),
+    });
     writeJson(io, {
       task_id: taskId,
       status: taskStatus.status ?? "unknown",
       attempt: taskStatus.attempt ?? null,
-      web_url: url,
-      console_id: found.record.console_id,
-      console_pid: found.record.pid,
-      console_reused: reused,
-      executor_lease_id: leaseId,
-      authority_root_digest: authorityRootDigest(dataRoot),
+      ...link,
     });
     return 0;
   });
-}
-
-async function waitForTaskConsole(
-  dataRoot: string,
-  leaseId: string,
-  timeoutMs: number,
-  processProbe: ReturnType<typeof createPlatformProbe>,
-  sleep: (milliseconds: number) => Promise<void>,
-): Promise<{ readonly record: TaskConsoleDiscoveryRecord; readonly session: Awaited<ReturnType<typeof fetchTaskConsoleSession>> }> {
-  const deadline = Date.now() + timeoutMs;
-  let lastError: unknown;
-  while (Date.now() <= deadline) {
-    try {
-      const inspection = await inspectTaskConsoleDiscovery(dataRoot, processProbe);
-      if (inspection.state === "active_owner" && inspection.record) {
-        const session = await fetchTaskConsoleSession(inspection.record);
-        if (session.executor.lease_id === leaseId) {
-          return { record: inspection.record, session };
-        }
-        lastError = Object.assign(new Error("Task Console is bound to a different Executor lease"), {
-          code: "WEB_CONSOLE_LEASE_MISMATCH",
-        });
-      } else if (inspection.state === "stale_owner" && inspection.record) {
-        removeTaskConsoleDiscovery(dataRoot, inspection.record);
-      } else if (inspection.state === "owner_unknown") {
-        throw Object.assign(new Error("Task Console owner state is unknown"), {
-          code: "WEB_CONSOLE_OWNER_UNKNOWN",
-        });
-      }
-    } catch (error) {
-      lastError = error;
-    }
-    if (Date.now() + 100 > deadline) break;
-    await sleep(100);
-  }
-  const error = Object.assign(
-    new Error(lastError instanceof Error ? lastError.message : "Task Console did not become discoverable"),
-    { code: "WEB_CONSOLE_UNAVAILABLE", cause: lastError },
-  );
-  throw error;
-}
-
-async function findTask(client: CliControlClient, taskId: string): Promise<TaskListPage["tasks"][number]> {
-  let after: string | null = null;
-  for (let pageNumber = 0; pageNumber < 100; pageNumber += 1) {
-    const page = (await requestOk(client, "listTasks", {
-      limit: 100,
-      ...(after === null ? {} : { after_task_id: after }),
-    })).result as unknown as TaskListPage;
-    const found = page.tasks.find((task) => task.task_id === taskId);
-    if (found) return found;
-    if (!page.has_more || page.next_task_id === null) break;
-    after = page.next_task_id;
-  }
-  throw Object.assign(new Error(`unknown SQLite task: ${taskId}`), { code: "TASK_NOT_FOUND" });
 }
 
 async function runExecutorCommand(
@@ -692,32 +516,9 @@ function spawnExecutor(input: {
   return { pid: child.pid };
 }
 
-function spawnTaskConsole(input: {
-  readonly dataRoot: string;
-  readonly settingsDirectory: string;
-}): { readonly pid: number | undefined } {
-  const child = spawn(process.execPath, [
-    resolveTaskConsoleEntry(),
-    "--data-root", input.dataRoot,
-    "--settings-directory", input.settingsDirectory,
-    "--port", "0",
-  ], {
-    detached: true,
-    windowsHide: true,
-    stdio: "ignore",
-  });
-  child.unref();
-  return { pid: child.pid };
-}
-
 function resolveExecutorEntry(): string {
   const bundled = fileURLToPath(new URL("./executor.mjs", import.meta.url));
   return existsSync(bundled) ? bundled : fileURLToPath(new URL("../executor/main.js", import.meta.url));
-}
-
-function resolveTaskConsoleEntry(): string {
-  const bundled = fileURLToPath(new URL("./web-console.mjs", import.meta.url));
-  return existsSync(bundled) ? bundled : fileURLToPath(new URL("../web/main.js", import.meta.url));
 }
 
 function resolveBridgeEntry(): string {

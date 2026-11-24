@@ -29,9 +29,9 @@ Plan policies may change at any time — campaigns, allowances, billing rules, a
 
 For Preview, use **Windows x64** and **Node.js `24.16.0`**. Any safe official ZCode Desktop installation runs (ADR-054); versions with completed real verification are listed below. Sign in to ZCode with access to your chosen plan and model. You also need Git and Codex with plugin support. Install Node.js and ZCode separately.
 
-Use one marketplace channel per Codex installation. Preview `2.0.0-preview.14` contains the installed Runtime integration, Cost Lab, SQLite v14-only runtime, bounded Event monitoring, opt-in Result summaries, the independent Executor with Thin MCP, Task CLI and Web Console, trusted-local loaded/idle Queue Wake, and Async Master handoff. Stable remains at `v1.7.2`.
+Use one marketplace channel per Codex installation. Preview `2.0.0-preview.16` (candidate) contains the installed Runtime integration, Cost Lab, SQLite v14-only runtime, bounded Event monitoring, opt-in Result summaries, the independent Executor with Thin MCP, Task CLI and Web Console, Async Master handoff, persisted Owner Binding, and Auto Wake that is enabled by installing the plugin. Stable remains at `v1.7.2`.
 
-Automatic Wake is verified only for an isolated loaded/idle Thread using explicit trusted-local authorization. Strict not-loaded Wake, Desktop fully exited recovery, Official Runtime provenance and a non-empty real engineering delivery remain unverified.
+Auto Wake needs no per-task authorization file: the trusted Codex Thread ID comes from the MCP Host request context, is persisted before the Worker starts, and is used for one official Codex Queue delivery after Release. Queue acknowledgement is not proof that the original Turn started, and `web_notify` is only a fallback observation. Real ZCode Desktop Host completion-wake E2E, Desktop fully exited recovery, Official Runtime provenance and a non-empty real engineering delivery remain unverified.
 
 ### Preview
 

@@ -1,6 +1,6 @@
 import * as z from "zod/v4";
 import { taskIdSchema } from "./api-schemas.js";
-import type { TaskStatus } from "./interfaces.js";
+import type { TaskOwnerBinding, TaskStatus } from "./interfaces.js";
 
 export const DEFAULT_TASK_LIST_LIMIT = 50;
 export const MAX_TASK_LIST_LIMIT = 100;
@@ -33,6 +33,7 @@ export interface TaskListItem {
   readonly created_at: string;
   readonly workspace: string;
   readonly objective: string;
+  readonly owner_binding?: TaskOwnerBinding;
   readonly wake?: TaskListWakeSummary;
 }
 

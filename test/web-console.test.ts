@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -49,7 +49,7 @@ function manager(): TaskConsoleManager & {
           objective: "Inspect the durable result",
           wake: {
             state: "web_notify",
-            reason_code: "policy_missing",
+            reason_code: "owner_thread_unavailable",
             at: "2026-01-01T00:02:30Z",
           },
         }],
@@ -209,7 +209,7 @@ test("Web Console serves a loopback task inspection surface without mutations", 
     assert.equal(listed.tasks.length, 1);
     assert.deepEqual(listed.tasks[0]?.wake, {
       state: "web_notify",
-      reason_code: "policy_missing",
+      reason_code: "owner_thread_unavailable",
       at: "2026-01-01T00:02:30Z",
     });
 
@@ -221,6 +221,41 @@ test("Web Console serves a loopback task inspection surface without mutations", 
     assert.equal(fixture.calls.cancel, 0);
   } finally {
     await server.close();
+  }
+});
+
+test("Web Console Auto Wake setting defaults ON and persists a CSRF-protected toggle", async () => {
+  const fixture = manager();
+  const settingsDirectory = mkdtempSync(path.join(tmpdir(), "web-auto-wake-"));
+  const server = createTaskConsoleServer({ manager: fixture, settingsDirectory });
+  try {
+    const address = await server.start();
+    const session = await request(address, "/api/session");
+    const token = (session.json as { result: { csrf_token: string } }).result.csrf_token;
+    const initial = await request(address, "/api/settings");
+    assert.equal(initial.status, 200);
+    assert.equal((initial.json as { result: { auto_wake: { enabled: boolean } } }).result.auto_wake.enabled, true);
+
+    const rejected = await request(address, "/api/settings/auto-wake", {
+      method: "POST",
+      body: { enabled: false },
+      headers: { Origin: address.origin },
+    });
+    assert.equal(rejected.status, 403);
+    const updated = await request(address, "/api/settings/auto-wake", {
+      method: "POST",
+      body: { enabled: false },
+      headers: { Origin: address.origin, "X-ZCode-Bridge-CSRF": token },
+    });
+    assert.equal(updated.status, 200);
+    assert.equal((updated.json as { result: { auto_wake: { enabled: boolean } } }).result.auto_wake.enabled, false);
+    const saved = JSON.parse(readFileSync(path.join(settingsDirectory, "runtime-config.json"), "utf8")) as Record<string, unknown>;
+    assert.equal(saved.ZCODE_BRIDGE_AUTO_WAKE, "false");
+    const after = await request(address, "/api/settings");
+    assert.equal((after.json as { result: { auto_wake: { enabled: boolean } } }).result.auto_wake.enabled, false);
+  } finally {
+    await server.close();
+    rmSync(settingsDirectory, { recursive: true, force: true });
   }
 });
 

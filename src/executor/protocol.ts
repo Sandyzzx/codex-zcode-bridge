@@ -1,6 +1,7 @@
 import type {
   ContinueTaskInput,
   GetEventsInput,
+  TaskAdmission,
   ZCodeInteractionReplyInput,
 } from "../interfaces.js";
 import {
@@ -74,7 +75,7 @@ export interface ExecutorControlResponse {
 }
 
 export interface ExecutorControlParamsByMethod {
-  createTask: { readonly task: ZcodeTaskInput };
+  createTask: { readonly task: ZcodeTaskInput; readonly admission?: TaskAdmission };
   listTasks: ListTasksInput;
   getStatus: { readonly task_id: string };
   getResult: { readonly task_id: string; readonly view?: "summary" | "full" };
@@ -103,11 +104,18 @@ export type ExecutorControlResultByMethod = Record<string, unknown>;
 
 const nonEmptyString = z.string().min(1);
 const emptyParams = z.strictObject({});
+const taskAdmissionSchema = z.strictObject({
+  owner_thread_id: z.string().nullable(),
+  source: z.enum(["mcp_meta", "mcp_meta_missing", "mcp_meta_invalid", "non_host_admission"]),
+}).refine(
+  (value) => (value.source === "mcp_meta") === (value.owner_thread_id !== null),
+  { message: "owner_thread_id must be present only for mcp_meta admission" },
+);
 
 export const executorControlParamsSchemas: {
   readonly [M in ExecutorControlMethod]: z.ZodType<ExecutorControlParamsByMethod[M]>;
 } = {
-  createTask: z.strictObject({ task: zcodeTaskInputSchema }),
+  createTask: z.strictObject({ task: zcodeTaskInputSchema, admission: taskAdmissionSchema.optional() }),
   listTasks: listTasksInputSchema,
   getStatus: z.strictObject({ task_id: nonEmptyString }),
   getResult: z.strictObject({ task_id: nonEmptyString, view: z.enum(["summary", "full"]).optional() }),

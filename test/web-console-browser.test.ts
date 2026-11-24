@@ -63,7 +63,7 @@ function browserFixture(): BrowserFixture {
             objective: "Deep-linked task",
             wake: {
               state: "web_notify",
-              reason_code: "policy_missing",
+              reason_code: "owner_thread_unavailable",
               at: "2026-01-01T00:02:30Z",
             },
           }],
@@ -291,6 +291,9 @@ test("real Chromium preserves Task deep links, UI preferences, and zero-cost con
 
     await page.locator(".task-row").filter({ hasText: "task-a" }).click();
     await page.waitForFunction(() => new URL(location.href).searchParams.get("task_id") === "task-a");
+    await page.waitForFunction(
+      () => document.querySelector("#task-detail h3")?.textContent === "task-a",
+    );
     assert.equal(
       await page.locator("#task-detail h3").textContent(),
       "task-a",

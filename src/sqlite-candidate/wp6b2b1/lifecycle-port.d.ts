@@ -13,6 +13,20 @@ export interface CandidateTaskPackage {
   readonly context?: string;
 }
 
+export interface CandidateTaskAdmission {
+  readonly owner_thread_id: string | null;
+  readonly source: 'mcp_meta' | 'mcp_meta_missing' | 'mcp_meta_invalid' | 'non_host_admission';
+}
+
+export interface CandidateTaskOwnerBinding {
+  readonly task_id: string;
+  readonly state: 'bound' | 'unavailable';
+  readonly owner_thread_id: string | null;
+  readonly source: 'mcp_meta' | 'mcp_meta_missing' | 'mcp_meta_invalid' | 'non_host_admission' | 'legacy_unavailable';
+  readonly bound_at: string | null;
+  readonly reason_code: 'owner_thread_unavailable' | null;
+}
+
 export interface CandidateOperationIdentity {
   readonly operation_id: string;
   readonly task_id: string;
@@ -131,6 +145,7 @@ export interface CandidateRuntimeEventChannel {
 export interface CandidateTaskLifecycleSnapshot {
   readonly task: CandidateTaskPackage;
   readonly projection: Readonly<{ task_id: string; status: string; current_attempt: number; created_at: string }>;
+  readonly owner_binding: CandidateTaskOwnerBinding;
   readonly attempt: Readonly<{ task_id: string; attempt: number; generation: number | null; status: string; created_at: string }>;
   readonly operation: Readonly<Record<string, unknown>> | null;
   readonly result: CandidateTaskResult | null;
@@ -199,6 +214,7 @@ export interface CandidateContinueAttemptOutcome {
   readonly attempt: number;
   readonly status: 'queued';
   readonly created_at: string;
+  readonly owner_binding: CandidateTaskOwnerBinding;
 }
 
 export interface CandidateInteractionRequestInput {
@@ -452,7 +468,9 @@ export interface CandidateExecutorWakeObservationOutcome {
 }
 
 export interface SqliteLifecyclePort {
-  createTask(task: CandidateTaskPackage, createdAt?: string): { task_id: string; current_attempt: 1; status: 'queued'; created_at: string };
+  createTask(task: CandidateTaskPackage, admission?: CandidateTaskAdmission): {
+    task_id: string; current_attempt: 1; status: 'queued'; created_at: string; owner_binding: CandidateTaskOwnerBinding;
+  };
   readTask(taskId: string): CandidateTaskPackage | null;
   readTaskProjection(taskId: string): { task_id: string; status: string; current_attempt: number; created_at: string } | null;
   readAttempt(taskId: string, attempt: number): { task_id: string; attempt: number; generation: number | null; status: string; created_at: string } | null;

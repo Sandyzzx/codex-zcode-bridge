@@ -456,7 +456,14 @@ function normalizeAdminAbandonmentTableSql(sql) {
 function adminAbandonmentRowsDigest(rows) {
   return createHash2("sha256").update(rows.map(upgradeRowJson).join("\n")).digest("hex");
 }
-function assertCandidateSchema(db, { allowRuntimeEventExtensionAbsent = false, allowLegacyRecoveryBindingTrigger = false } = {}) {
+function withoutSchemaObjects(objects, names) {
+  return objects.filter((row) => !names.has(row[1]));
+}
+function assertCandidateSchema(db, {
+  allowRuntimeEventExtensionAbsent = false,
+  allowOwnerBindingExtensionAbsent = false,
+  allowLegacyRecoveryBindingTrigger = false
+} = {}) {
   const key = allowRuntimeEventExtensionAbsent ? "recovery" : "strict";
   if (!expectedSchemas.has(key)) {
     const base = new DatabaseSync(":memory:"), admin = new DatabaseSync(":memory:"), legacyAdmin = new DatabaseSync(":memory:");
@@ -468,10 +475,20 @@ function assertCandidateSchema(db, { allowRuntimeEventExtensionAbsent = false, a
       const adminObjects = schemaObjects(admin);
       const legacyAdminObjects = schemaObjects(legacyAdmin);
       const variants = [JSON.stringify(baseObjects), JSON.stringify(adminObjects), JSON.stringify(legacyAdminObjects)];
-      if (allowRuntimeEventExtensionAbsent) {
-        variants.push(JSON.stringify(baseObjects.filter((row) => !RUNTIME_EVENT_SCHEMA_OBJECTS.has(row[1]))));
-        variants.push(JSON.stringify(adminObjects.filter((row) => !RUNTIME_EVENT_SCHEMA_OBJECTS.has(row[1]))));
-        variants.push(JSON.stringify(legacyAdminObjects.filter((row) => !RUNTIME_EVENT_SCHEMA_OBJECTS.has(row[1]))));
+      for (const [objects2] of [[baseObjects], [adminObjects], [legacyAdminObjects]]) {
+        if (allowRuntimeEventExtensionAbsent) {
+          variants.push(JSON.stringify(withoutSchemaObjects(objects2, RUNTIME_EVENT_SCHEMA_OBJECTS)));
+        }
+        if (allowOwnerBindingExtensionAbsent) {
+          variants.push(JSON.stringify(withoutSchemaObjects(objects2, OWNER_BINDING_SCHEMA_OBJECTS)));
+        }
+        if (allowRuntimeEventExtensionAbsent && allowOwnerBindingExtensionAbsent) {
+          const withoutBoth = withoutSchemaObjects(
+            withoutSchemaObjects(objects2, RUNTIME_EVENT_SCHEMA_OBJECTS),
+            OWNER_BINDING_SCHEMA_OBJECTS
+          );
+          variants.push(JSON.stringify(withoutBoth));
+        }
       }
       expectedSchemas.set(key, variants);
     } finally {
@@ -608,6 +625,36 @@ function ensureRuntimeEventsSchema(db) {
     throw error;
   }
 }
+function ownerBindingsSchema() {
+  const start = SCHEMA.indexOf("CREATE TABLE task_owner_bindings");
+  const end = SCHEMA.indexOf("CREATE TABLE attempts", start);
+  if (start < 0 || end < 0) throw new Error("owner binding schema is missing");
+  return SCHEMA.slice(start, end).trim();
+}
+function ensureOwnerBindingsSchema(db) {
+  if (db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='task_owner_bindings'").get() && !db.prepare(`SELECT 1 FROM tasks
+      WHERE task_id NOT IN (SELECT task_id FROM task_owner_bindings) LIMIT 1`).get()) return;
+  let began = false;
+  try {
+    db.exec("BEGIN IMMEDIATE");
+    began = true;
+    if (!db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='task_owner_bindings'").get()) {
+      db.exec(ownerBindingsSchema());
+    }
+    db.prepare(`INSERT INTO task_owner_bindings(task_id,binding_state,owner_thread_id,binding_source,bound_at)
+      SELECT task_id,'unavailable',NULL,'legacy_unavailable',?
+      FROM tasks
+      WHERE task_id NOT IN (SELECT task_id FROM task_owner_bindings)`).run((/* @__PURE__ */ new Date()).toISOString());
+    db.exec("COMMIT");
+    began = false;
+  } catch (error) {
+    if (began) try {
+      db.exec("ROLLBACK");
+    } catch {
+    }
+    throw error;
+  }
+}
 function resolvedRecoveryCommitment(digests) {
   const ordered = sortedDigests(digests);
   return {
@@ -720,7 +767,9 @@ function validateObservationEventEvidence(value) {
   const own = Object.keys(value).sort().join("|");
   if (own === EXECUTOR_WAKE_BASE_EVIDENCE_KEYS.join("|") || own === EXECUTOR_WAKE_EVIDENCE_KEYS.join("|")) {
     const { evidence_digest, ...unsigned } = value;
-    if (value.reason !== "executor_wake" || !EXECUTOR_WAKE_STATES.has(value.state) || !validId(value.task_id) || !validId(value.operation_id) || !Number.isSafeInteger(value.attempt) || value.attempt < 1 || !Number.isSafeInteger(value.generation) || value.generation < 1 || ![value.result_digest, value.policy_digest, value.authorization_digest, value.delivery_id].every((item) => typeof item === "string" && /^[0-9a-f]{64}$/u.test(item)) || !validId(value.result_commit_ref) || !validText2(value.reason_code, 128) || value.thread_id !== null && !validId(value.thread_id) || value.state !== "web_notify" && value.thread_id === null || "queue_message_id" in value && (!validId(value.queue_message_id) || value.state !== "queued") || evidence_digest !== digest(unsigned) || [value.task_id, value.operation_id, value.result_commit_ref].some((item) => item !== item.normalize("NFC"))) fail2("invalid_executor_wake_evidence");
+    const executorWake = value.reason === "executor_wake";
+    const lateWake = value.reason === LATE_WAKE_REASON;
+    if (!executorWake && !lateWake || !(executorWake ? EXECUTOR_WAKE_STATES : LATE_WAKE_STATES).has(value.state) || !validId(value.task_id) || !validId(value.operation_id) || !Number.isSafeInteger(value.attempt) || value.attempt < 1 || !Number.isSafeInteger(value.generation) || value.generation < 1 || ![value.result_digest, value.policy_digest, value.authorization_digest, value.delivery_id].every((item) => typeof item === "string" && /^[0-9a-f]{64}$/u.test(item)) || !validId(value.result_commit_ref) || !validText2(value.reason_code, 128) || value.thread_id !== null && !validId(value.thread_id) || executorWake && value.state !== "web_notify" && value.thread_id === null || lateWake && value.thread_id === null || "queue_message_id" in value && (!validId(value.queue_message_id) || value.state !== "queued") || evidence_digest !== digest(unsigned) || [value.task_id, value.operation_id, value.result_commit_ref].some((item) => item !== item.normalize("NFC"))) fail2("invalid_executor_wake_evidence");
     return;
   }
   if (own === "cancel_id|evidence_digest|launch_id|reason|request_digest|token_digest") {
@@ -1004,6 +1053,12 @@ function validateExecutorWakeInput(input) {
   const inputKeys = input && Object.getPrototypeOf(input) === Object.prototype ? Object.keys(input).sort().join("|") : "";
   if (!input || inputKeys !== EXECUTOR_WAKE_BASE_INPUT_KEYS && inputKeys !== EXECUTOR_WAKE_INPUT_KEYS || !validId(input.operation_id) || !validId(input.task_id) || !Number.isSafeInteger(input.attempt) || input.attempt < 1 || !Number.isSafeInteger(input.generation) || input.generation < 1 || !EXECUTOR_WAKE_STATES.has(input.state) || !validText2(input.reason_code, 128) || ![input.policy_digest, input.authorization_digest, input.delivery_id].every((item) => typeof item === "string" && /^[0-9a-f]{64}$/u.test(item)) || input.thread_id !== null && !validId(input.thread_id) || input.state !== "web_notify" && input.thread_id === null || "queue_message_id" in input && (!validId(input.queue_message_id) || input.state !== "queued") || [input.operation_id, input.task_id, input.reason_code].some((item) => item !== item.normalize("NFC")))
     fail2("invalid_executor_wake_request");
+  return input;
+}
+function validateLateWakeInput(input) {
+  const inputKeys = input && Object.getPrototypeOf(input) === Object.prototype ? Object.keys(input).sort().join("|") : "";
+  if (!input || inputKeys !== EXECUTOR_WAKE_BASE_INPUT_KEYS && inputKeys !== EXECUTOR_WAKE_INPUT_KEYS || !validId(input.operation_id) || !validId(input.task_id) || !Number.isSafeInteger(input.attempt) || input.attempt < 1 || !Number.isSafeInteger(input.generation) || input.generation < 1 || !LATE_WAKE_STATES.has(input.state) || !validText2(input.reason_code, 128) || ![input.policy_digest, input.authorization_digest, input.delivery_id].every((item) => typeof item === "string" && /^[0-9a-f]{64}$/u.test(item)) || !validId(input.thread_id) || "queue_message_id" in input && (!validId(input.queue_message_id) || input.state !== "queued") || [input.operation_id, input.task_id, input.reason_code].some((item) => item !== item.normalize("NFC")))
+    fail2("invalid_late_wake_request");
   return input;
 }
 function validateAdminAbandonmentInput(input) {
@@ -1393,6 +1448,30 @@ function validInteractionPreparedAcknowledgement(value) {
 function validId(v) {
   return typeof v === "string" && v.length > 0 && v.length <= 128 && !/[\x00-\x1f]/u.test(v);
 }
+function normalizeTaskAdmission(value) {
+  if (value === void 0 || value === null) {
+    return { owner_thread_id: null, binding_source: "non_host_admission" };
+  }
+  if (!value || Object.getPrototypeOf(value) !== Object.prototype) return { owner_thread_id: null, binding_source: "mcp_meta_invalid" };
+  const ownerThreadId = value.owner_thread_id ?? null;
+  if (ownerThreadId === null) {
+    const source = value.source === "mcp_meta_missing" || value.source === "mcp_meta_invalid" ? value.source : "non_host_admission";
+    return { owner_thread_id: null, binding_source: source };
+  }
+  if (!validId(ownerThreadId) || ownerThreadId !== ownerThreadId.trim() || ownerThreadId !== ownerThreadId.normalize("NFC")) return { owner_thread_id: null, binding_source: "mcp_meta_invalid" };
+  if (value.source !== "mcp_meta") return { owner_thread_id: null, binding_source: "mcp_meta_invalid" };
+  return { owner_thread_id: ownerThreadId, binding_source: "mcp_meta" };
+}
+function ownerBindingProjection(taskId, admission, boundAt) {
+  return {
+    task_id: taskId,
+    state: admission.owner_thread_id === null ? "unavailable" : "bound",
+    owner_thread_id: admission.owner_thread_id,
+    source: admission.binding_source,
+    bound_at: boundAt,
+    reason_code: admission.owner_thread_id === null ? "owner_thread_unavailable" : null
+  };
+}
 function validateTaskPackage(task) {
   if (!task || Object.getPrototypeOf(task) !== Object.prototype || !validId(task.task_id) || typeof task.workspace !== "string" || !task.workspace || typeof task.objective !== "string" || !["requirements", "allowed_paths", "forbidden_paths", "acceptance_criteria", "test_commands"].every((k) => Array.isArray(task[k]) && task[k].every((v) => typeof v === "string")) || task.worktree_path !== void 0 && typeof task.worktree_path !== "string" || task.context !== void 0 && typeof task.context !== "string" || task.timeout_ms !== void 0 && (!Number.isSafeInteger(task.timeout_ms) || task.timeout_ms < 6e4 || task.timeout_ms > 144e5) || task.model !== void 0 && (!task.model || Object.getPrototypeOf(task.model) !== Object.prototype || typeof task.model.provider_id !== "string" || !task.model.provider_id || typeof task.model.model_id !== "string" || !task.model.model_id))
     fail2("invalid_task_package");
@@ -1435,7 +1514,7 @@ function callDecision(fn, workspace, input) {
     return { state: "unknown" };
   }
 }
-var HERE, SCHEMA, RUNTIME_EVENTS_SCHEMA, ADMIN_ABANDONMENT_SCHEMA, NORMALIZED_ADMIN_ABANDONMENT_SCHEMA, LEGACY_ADMIN_ABANDONMENT_SCHEMA, CONSTRUCT, SCHEMA_VERSION, SCHEMA_OBJECT_QUERY, RUNTIME_EVENT_SCHEMA_OBJECTS, expectedSchemas, expectedRecoveryBindingTriggerSql, ADMIN_ABANDONMENT_TABLE_SQL, LEGACY_ADMIN_ABANDONMENT_TABLE_SQL, NORMALIZED_ADMIN_ABANDONMENT_TABLE_SQL, NORMALIZED_LEGACY_ADMIN_ABANDONMENT_TABLE_SQL, SQLITE_V14_ONLY_MESSAGE, V13_UPGRADE_MARKER_MESSAGE, v13UpgradeMarker, RESULT_CONTRACT_VERSION, RESULT_STATUSES2, RECOVERY_PHASES, RECOVERY_SOURCES, RECOVERY_REASON_CODES, RECOVERY_QUARANTINE_CODES, RECOVERY_EVIDENCE_KEYS, RECOVERY_RELEASE_EVIDENCE_KEYS, EXECUTOR_WAKE_BASE_EVIDENCE_KEYS, EXECUTOR_WAKE_EVIDENCE_KEYS, EXECUTOR_WAKE_STATES, EXECUTOR_WAKE_LIMIT, RECOVERY_MATERIAL_BINDING_KEYS, RECOVERY_MATERIAL_DETAIL_KEYS, RESOLVED_RECOVERY_SET_CONTRACT, RECOVERY_MATERIAL_CONTRACT, digest, rawDigest, sortedDigests, upgradeRowJson, EVIDENCE_KEYS, FUTURE_EVENT_TYPES, FUTURE_EVIDENCE_KEYS, EVENT_PHASE, RECOVERY_INPUT_KEYS, RECOVERY_RELEASE_INPUT_KEYS, ADMIN_ABANDONMENT_INPUT_KEYS, ADMIN_ABANDONMENT_EVIDENCE_KEYS, USER_AUTHORIZED_RELEASE_INPUT_KEYS, USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS, EXECUTOR_WAKE_BASE_INPUT_KEYS, EXECUTOR_WAKE_INPUT_KEYS, USER_AUTHORIZED_TERMINAL_RELEASE_INPUT_KEYS, AdmissionError, fail2, IsolatedAdmissionStore;
+var HERE, SCHEMA, RUNTIME_EVENTS_SCHEMA, ADMIN_ABANDONMENT_SCHEMA, NORMALIZED_ADMIN_ABANDONMENT_SCHEMA, LEGACY_ADMIN_ABANDONMENT_SCHEMA, CONSTRUCT, SCHEMA_VERSION, SCHEMA_OBJECT_QUERY, RUNTIME_EVENT_SCHEMA_OBJECTS, OWNER_BINDING_SCHEMA_OBJECTS, expectedSchemas, expectedRecoveryBindingTriggerSql, ADMIN_ABANDONMENT_TABLE_SQL, LEGACY_ADMIN_ABANDONMENT_TABLE_SQL, NORMALIZED_ADMIN_ABANDONMENT_TABLE_SQL, NORMALIZED_LEGACY_ADMIN_ABANDONMENT_TABLE_SQL, SQLITE_V14_ONLY_MESSAGE, V13_UPGRADE_MARKER_MESSAGE, v13UpgradeMarker, RESULT_CONTRACT_VERSION, RESULT_STATUSES2, RECOVERY_PHASES, RECOVERY_SOURCES, RECOVERY_REASON_CODES, RECOVERY_QUARANTINE_CODES, RECOVERY_EVIDENCE_KEYS, RECOVERY_RELEASE_EVIDENCE_KEYS, EXECUTOR_WAKE_BASE_EVIDENCE_KEYS, EXECUTOR_WAKE_EVIDENCE_KEYS, EXECUTOR_WAKE_STATES, EXECUTOR_WAKE_LIMIT, LATE_WAKE_REASON, LATE_WAKE_STATES, LATE_WAKE_LIMIT, RECOVERY_MATERIAL_BINDING_KEYS, RECOVERY_MATERIAL_DETAIL_KEYS, RESOLVED_RECOVERY_SET_CONTRACT, RECOVERY_MATERIAL_CONTRACT, digest, rawDigest, sortedDigests, upgradeRowJson, EVIDENCE_KEYS, FUTURE_EVENT_TYPES, FUTURE_EVIDENCE_KEYS, EVENT_PHASE, RECOVERY_INPUT_KEYS, RECOVERY_RELEASE_INPUT_KEYS, ADMIN_ABANDONMENT_INPUT_KEYS, ADMIN_ABANDONMENT_EVIDENCE_KEYS, USER_AUTHORIZED_RELEASE_INPUT_KEYS, USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS, EXECUTOR_WAKE_BASE_INPUT_KEYS, EXECUTOR_WAKE_INPUT_KEYS, USER_AUTHORIZED_TERMINAL_RELEASE_INPUT_KEYS, AdmissionError, fail2, IsolatedAdmissionStore;
 var init_store = __esm({
   "src/sqlite-candidate/wp6b2b1/store.mjs"() {
     "use strict";
@@ -1464,6 +1543,12 @@ var init_store = __esm({
       "runtime_task_events_no_update",
       "runtime_task_events_no_delete",
       "runtime_task_events_identity_guard"
+    ]);
+    OWNER_BINDING_SCHEMA_OBJECTS = /* @__PURE__ */ new Set([
+      "task_owner_bindings",
+      "task_owner_bindings_thread",
+      "task_owner_bindings_no_update",
+      "task_owner_bindings_no_delete"
     ]);
     expectedSchemas = /* @__PURE__ */ new Map();
     ADMIN_ABANDONMENT_TABLE_SQL = adminAbandonmentTableStatement(ADMIN_ABANDONMENT_SCHEMA);
@@ -1500,6 +1585,9 @@ var init_store = __esm({
     EXECUTOR_WAKE_EVIDENCE_KEYS = Object.freeze([...EXECUTOR_WAKE_BASE_EVIDENCE_KEYS, "queue_message_id"].sort());
     EXECUTOR_WAKE_STATES = /* @__PURE__ */ new Set(["intent", "queued", "submission_unknown", "turn_started", "web_notify"]);
     EXECUTOR_WAKE_LIMIT = 5;
+    LATE_WAKE_REASON = "executor_late_wake_compensation";
+    LATE_WAKE_STATES = /* @__PURE__ */ new Set(["intent", "queued", "submission_unknown", "turn_started", "web_notify"]);
+    LATE_WAKE_LIMIT = 5;
     RECOVERY_MATERIAL_BINDING_KEYS = Object.freeze(["attempt", "claim_id", "classification", "evidence_source", "reason_code", "task_id", "worker_identity_digest"]);
     RECOVERY_MATERIAL_DETAIL_KEYS = Object.freeze([
       "complete_cleanup_closure",
@@ -1647,8 +1735,12 @@ var init_store = __esm({
         try {
           assertSchemaVersion(db);
           upgradeRecoveryBindingTrigger(db);
-          assertCandidateSchema(db, { allowRuntimeEventExtensionAbsent: true });
+          assertCandidateSchema(db, {
+            allowRuntimeEventExtensionAbsent: true,
+            allowOwnerBindingExtensionAbsent: true
+          });
           ensureRuntimeEventsSchema(db);
+          ensureOwnerBindingsSchema(db);
           assertCandidateSchema(db);
           const columns = new Set(db.prepare("PRAGMA table_info(manager_operations)").all().map((x) => x.name));
           if (!["result_status", "result_generation", "result_digest", "result_json", "result_commit_ref"].every((x) => columns.has(x))) fail2("candidate_schema_mismatch");
@@ -1753,19 +1845,69 @@ var init_store = __esm({
         };
       }
       /**
-      /** Persist a TaskPackage and its initial queued Attempt in this candidate authority. */
-      createTask(task, createdAt = (/* @__PURE__ */ new Date()).toISOString()) {
+      /** Persist a TaskPackage, its initial queued Attempt, and its trusted Owner
+       * Binding in one transaction. The binding is never read from task_json. */
+      createTask(task, admissionOrCreatedAt = {}, legacyCreatedAt) {
         this.#assertWritable();
         validateTaskPackage(task);
+        const createdAt = typeof admissionOrCreatedAt === "string" ? admissionOrCreatedAt : legacyCreatedAt ?? (/* @__PURE__ */ new Date()).toISOString();
+        const admission = normalizeTaskAdmission(
+          typeof admissionOrCreatedAt === "string" ? void 0 : admissionOrCreatedAt
+        );
         if (!validText2(createdAt, 64) || Number.isNaN(Date.parse(createdAt))) fail2("invalid_task_created_at");
         const taskJson = canonical3(task);
         return this.#transaction(() => {
           if (this.#db.prepare("SELECT task_id FROM tasks WHERE task_id=?").get(task.task_id)) fail2("task_already_exists");
           this.#db.prepare("INSERT INTO tasks(task_id,task_json,status,current_attempt,created_at) VALUES(?,?,'queued',1,?)").run(task.task_id, taskJson, createdAt);
           this.#db.prepare("INSERT INTO attempts(task_id,attempt,generation,status,created_at) VALUES(?,1,NULL,'queued',?)").run(task.task_id, createdAt);
+          this.#db.prepare(`INSERT INTO task_owner_bindings(
+        task_id,binding_state,owner_thread_id,binding_source,bound_at
+      ) VALUES(?,?,?,?,?)`).run(
+            task.task_id,
+            admission.owner_thread_id === null ? "unavailable" : "bound",
+            admission.owner_thread_id,
+            admission.binding_source,
+            createdAt
+          );
           this.#faultPoint("after_projection");
-          return { task_id: task.task_id, current_attempt: 1, status: "queued", created_at: createdAt };
+          return {
+            task_id: task.task_id,
+            current_attempt: 1,
+            status: "queued",
+            created_at: createdAt,
+            owner_binding: ownerBindingProjection(task.task_id, admission, createdAt)
+          };
         });
+      }
+      #ownerBinding(taskId) {
+        if (!this.#db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='task_owner_bindings'").get()) {
+          return {
+            task_id: taskId,
+            state: "unavailable",
+            owner_thread_id: null,
+            source: "legacy_unavailable",
+            bound_at: null,
+            reason_code: "owner_thread_unavailable"
+          };
+        }
+        const row = this.#db.prepare(`SELECT task_id,binding_state,owner_thread_id,binding_source,bound_at
+      FROM task_owner_bindings WHERE task_id=?`).get(taskId);
+        if (!row) return {
+          task_id: taskId,
+          state: "unavailable",
+          owner_thread_id: null,
+          source: "legacy_unavailable",
+          bound_at: null,
+          reason_code: "owner_thread_unavailable"
+        };
+        return {
+          task_id: row.task_id,
+          state: row.binding_state,
+          owner_thread_id: row.owner_thread_id,
+          source: row.binding_source,
+          bound_at: row.bound_at,
+          reason_code: row.binding_state === "unavailable" ? "owner_thread_unavailable" : null
+        };
       }
       readTask(taskId) {
         return this.#readConsistent(() => {
@@ -1829,6 +1971,7 @@ var init_store = __esm({
               created_at: row.created_at,
               workspace: task.workspace,
               objective: task.objective,
+              owner_binding: this.#ownerBinding(row.task_id),
               wake_evidence_json: row.wake_evidence_json,
               wake_at: row.wake_at
             };
@@ -1943,7 +2086,16 @@ var init_store = __esm({
           const continuation = attemptRow.continuation_json === null ? null : JSON.parse(attemptRow.continuation_json);
           const rejected = operationRow ? this.#db.prepare("SELECT evidence_json FROM manager_operation_events WHERE operation_id=? AND event_type='observation_recorded' AND json_extract(evidence_json,'$.reason') LIKE 'result_submission_failed:%' ORDER BY sequence DESC LIMIT 1").get(operationRow.operation_id) : null;
           const result_submission_error = rejected ? JSON.parse(rejected.evidence_json).reason.slice("result_submission_failed:".length) : null;
-          return { task, projection: { task_id: taskRow.task_id, status: taskRow.status, current_attempt: taskRow.current_attempt, created_at: taskRow.created_at }, attempt, operation, result, continuation, ...result_submission_error ? { result_submission_error } : {} };
+          return {
+            task,
+            projection: { task_id: taskRow.task_id, status: taskRow.status, current_attempt: taskRow.current_attempt, created_at: taskRow.created_at },
+            owner_binding: this.#ownerBinding(taskId),
+            attempt,
+            operation,
+            result,
+            continuation,
+            ...result_submission_error ? { result_submission_error } : {}
+          };
         });
       }
       /** P1 §3.4: read one bounded page of the exact stored canonical Result
@@ -2454,7 +2606,15 @@ var init_store = __esm({
           if (!stored || Object.getPrototypeOf(stored) !== Object.prototype || priorAttempt.continuation_operation_id !== operationId || priorAttempt.continuation_digest !== digest(priorAttempt.continuation_json) || stored.contract !== "wp6b2b-continue-v1" || stored.operation_id !== operationId || stored.task_id !== priorAttempt.task_id) fail2("continue_history_mismatch");
           if (canonical3({ task_id: stored.task_id, feedback: stored.feedback, additional_requirements: stored.additional_requirements }) !== publicRequestJson)
             fail2("continue_operation_conflict");
-          return { duplicate: true, operation_id: operationId, task_id: input.task_id, attempt: priorAttempt.attempt, status: "queued", created_at: priorAttempt.created_at };
+          return {
+            duplicate: true,
+            operation_id: operationId,
+            task_id: input.task_id,
+            attempt: priorAttempt.attempt,
+            status: "queued",
+            created_at: priorAttempt.created_at,
+            owner_binding: this.#ownerBinding(input.task_id)
+          };
         };
         const existing = this.#readConsistent(() => {
           const priorAttempt = this.#db.prepare("SELECT task_id,attempt,continuation_operation_id,continuation_json,continuation_digest,created_at FROM attempts WHERE continuation_operation_id=?").get(operationId);
@@ -2508,7 +2668,15 @@ var init_store = __esm({
           const insertedAttempt = this.#db.prepare("INSERT INTO attempts(task_id,attempt,generation,status,created_at,continuation_operation_id,continuation_json,continuation_digest) VALUES(?,?,NULL,'queued',?,?,?,?)").run(input.task_id, nextAttempt, createdAt, operationId, continuationJson, continuationDigest);
           if (insertedAttempt.changes !== 1) fail2("continue_attempt_conflict");
           this.#faultPoint("after_projection");
-          return { duplicate: false, operation_id: operationId, task_id: input.task_id, attempt: nextAttempt, status: "queued", created_at: createdAt };
+          return {
+            duplicate: false,
+            operation_id: operationId,
+            task_id: input.task_id,
+            attempt: nextAttempt,
+            status: "queued",
+            created_at: createdAt,
+            owner_binding: this.#ownerBinding(input.task_id)
+          };
         });
       }
       /**
@@ -3719,7 +3887,7 @@ var init_store = __esm({
           const taskProjections = this.#db.prepare(`SELECT task_id,current_attempt,status,created_at,
           json_extract(task_json,'$.workspace') AS workspace,
           COALESCE(json_extract(task_json,'$.worktree_path'),json_extract(task_json,'$.workspace')) AS execution_workspace
-        FROM tasks ORDER BY task_id`).all();
+        FROM tasks ORDER BY task_id`).all().map((row) => ({ ...row, owner_binding: this.#ownerBinding(row.task_id) }));
           const adminAbandonments = this.#adminAbandonments();
           let integrityError = null;
           try {
@@ -3903,6 +4071,114 @@ var init_store = __esm({
           }
           const changed = this.#db.prepare("UPDATE manager_operations SET revision=revision+1 WHERE operation_id=? AND task_id=? AND attempt=? AND generation=? AND phase='released' AND revision=? AND result_digest=? AND result_commit_ref=?").run(o.operation_id, o.task_id, o.attempt, o.generation, o.revision, o.result_digest, o.result_commit_ref);
           if (changed.changes !== 1) fail2("stale_executor_wake_cas");
+          this.#faultPoint("after_projection");
+          this.#event(o.operation_id, o.revision + 1, "observation_recorded", "released", "released", o.generation, evidence, (/* @__PURE__ */ new Date()).toISOString());
+          return {
+            duplicate: false,
+            operation_id: o.operation_id,
+            task_id: o.task_id,
+            attempt: o.attempt,
+            generation: o.generation,
+            revision: o.revision + 1,
+            event_sequence: o.revision + 1,
+            state: input.state,
+            delivery_id: input.delivery_id,
+            desktop_visible: "UNKNOWN"
+          };
+        });
+      }
+      /**
+       * Append an explicit, per-Operation Late Wake Compensation fact. This is
+       * deliberately separate from executor_wake: it is eligible only after a
+       * terminal web_notify and never for a Queue submission whose outcome is
+       * queued, unknown, or already observed as started. It never changes Task,
+       * Result, Cleanup, Release, capacity, or Worker execution.
+       */
+      recordLateWakeCompensation(input) {
+        validateLateWakeInput(input);
+        this.#assertWritable();
+        return this.#transaction(() => {
+          const o = this.#attemptOperation(input);
+          if (o.phase !== "released" || o.result_digest === null || o.result_commit_ref === null)
+            fail2("executor_wake_operation_not_released");
+          const binding = this.#ownerBinding(input.task_id);
+          if (binding.state !== "bound" || binding.owner_thread_id !== input.thread_id)
+            fail2("late_wake_owner_binding_required");
+          const wake = [];
+          const compensation = [];
+          for (const row of this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? AND event_type='observation_recorded' ORDER BY sequence").all(input.operation_id)) {
+            let evidence2;
+            try {
+              evidence2 = JSON.parse(row.evidence_json);
+            } catch {
+              fail2("invalid_executor_wake_evidence");
+            }
+            if (evidence2.reason === "executor_wake") {
+              validateObservationEventEvidence(evidence2);
+              wake.push({ row, evidence: evidence2 });
+            } else if (evidence2.reason === LATE_WAKE_REASON) {
+              validateObservationEventEvidence(evidence2);
+              compensation.push({ row, evidence: evidence2 });
+            }
+          }
+          if (!wake.some((item) => item.evidence.state === "web_notify") || wake.some((item) => ["queued", "submission_unknown", "turn_started"].includes(item.evidence.state)))
+            fail2("late_wake_not_eligible");
+          if (input.state === "intent" && compensation.length !== 0) fail2("late_wake_intent_not_first");
+          if (wake.some((item) => item.evidence.delivery_id === input.delivery_id))
+            fail2("late_wake_delivery_conflict");
+          if (compensation.length >= LATE_WAKE_LIMIT) fail2("late_wake_observation_limit");
+          if (compensation.some((item) => item.evidence.delivery_id !== input.delivery_id))
+            fail2("late_wake_delivery_conflict");
+          if (compensation.some((item) => item.evidence.result_digest !== o.result_digest || item.evidence.result_commit_ref !== o.result_commit_ref || item.evidence.task_id !== o.task_id || item.evidence.attempt !== o.attempt || item.evidence.generation !== o.generation))
+            fail2("late_wake_operation_binding_conflict");
+          const unsigned = {
+            reason: LATE_WAKE_REASON,
+            state: input.state,
+            task_id: input.task_id,
+            attempt: input.attempt,
+            operation_id: input.operation_id,
+            generation: input.generation,
+            result_digest: o.result_digest,
+            result_commit_ref: o.result_commit_ref,
+            thread_id: input.thread_id,
+            delivery_id: input.delivery_id,
+            policy_digest: input.policy_digest,
+            authorization_digest: input.authorization_digest,
+            reason_code: input.reason_code,
+            ..."queue_message_id" in input ? { queue_message_id: input.queue_message_id } : {}
+          };
+          const evidence = { ...unsigned, evidence_digest: digest(unsigned) };
+          validateObservationEventEvidence(evidence);
+          const same = compensation.find((item) => item.evidence.delivery_id === input.delivery_id && item.evidence.state === input.state);
+          if (same) {
+            if (same.evidence.evidence_digest === evidence.evidence_digest && canonical3(same.evidence) === canonical3(evidence))
+              return {
+                duplicate: true,
+                operation_id: o.operation_id,
+                task_id: o.task_id,
+                attempt: o.attempt,
+                generation: o.generation,
+                revision: o.revision,
+                event_sequence: same.row.sequence,
+                state: input.state,
+                delivery_id: input.delivery_id,
+                desktop_visible: "UNKNOWN"
+              };
+            fail2("late_wake_observation_conflict");
+          }
+          const states = new Set(compensation.map((item) => item.evidence.state));
+          if (["queued", "submission_unknown"].includes(input.state) && (!states.has("intent") || states.has("queued") || states.has("submission_unknown") || states.has("web_notify")))
+            fail2("late_wake_ack_transition_invalid");
+          if (input.state === "turn_started" && (!states.has("intent") || !states.has("queued") && !states.has("submission_unknown") || states.has("turn_started") || states.has("web_notify")))
+            fail2("late_wake_turn_transition_invalid");
+          if (input.state === "web_notify" && states.has("turn_started")) fail2("late_wake_turn_transition_invalid");
+          if (compensation.length) {
+            const prior = compensation[0].evidence;
+            if (prior.thread_id !== input.thread_id || prior.policy_digest !== input.policy_digest || prior.authorization_digest !== input.authorization_digest)
+              fail2("late_wake_binding_conflict");
+          }
+          const changed = this.#db.prepare("UPDATE manager_operations SET revision=revision+1 WHERE operation_id=? AND task_id=? AND attempt=? AND generation=? AND phase='released' AND revision=? AND result_digest=? AND result_commit_ref=?").run(o.operation_id, o.task_id, o.attempt, o.generation, o.revision, o.result_digest, o.result_commit_ref);
+          if (changed.changes !== 1) fail2("stale_late_wake_cas");
           this.#faultPoint("after_projection");
           this.#event(o.operation_id, o.revision + 1, "observation_recorded", "released", "released", o.generation, evidence, (/* @__PURE__ */ new Date()).toISOString());
           return {
@@ -4823,12 +5099,31 @@ var init_store = __esm({
           if (this.#db.prepare("PRAGMA user_version").get().user_version !== SCHEMA_VERSION) fail2("schema_version_unknown");
           assertCandidateSchema(this.#db, {
             allowRuntimeEventExtensionAbsent: this.#recoveryOnly,
+            allowOwnerBindingExtensionAbsent: this.#recoveryOnly,
             allowLegacyRecoveryBindingTrigger: this.#recoveryOnly
           });
           if (this.#db.prepare("PRAGMA quick_check").get().quick_check !== "ok") fail2("database_corrupt");
           if (this.#db.prepare("PRAGMA foreign_key_check").all().length) fail2("database_inconsistent");
           const m = this.#db.prepare("SELECT * FROM authority_metadata").all();
           if (m.length !== 1 || m[0].schema_version !== SCHEMA_VERSION) fail2("policy_or_schema_mismatch");
+          const hasOwnerBindings = Boolean(this.#db.prepare(
+            "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='task_owner_bindings'"
+          ).get());
+          if (hasOwnerBindings) {
+            const bindings = this.#db.prepare("SELECT * FROM task_owner_bindings ORDER BY task_id").all();
+            const taskCount = this.#db.prepare("SELECT COUNT(*) AS n FROM tasks").get().n;
+            if (bindings.length !== taskCount) fail2("task_owner_binding_missing");
+            const validSources = /* @__PURE__ */ new Set(["mcp_meta", "mcp_meta_missing", "mcp_meta_invalid", "non_host_admission", "legacy_unavailable"]);
+            for (const binding of bindings) {
+              if (!this.#db.prepare("SELECT 1 FROM tasks WHERE task_id=?").get(binding.task_id) || !validText2(binding.bound_at, 64) || Number.isNaN(Date.parse(binding.bound_at)) || !validSources.has(binding.binding_source)) fail2("task_owner_binding_invalid");
+              if (binding.binding_state === "bound") {
+                if (binding.owner_thread_id === null || !validId(binding.owner_thread_id) || binding.binding_source !== "mcp_meta") fail2("task_owner_binding_invalid");
+              } else if (binding.binding_state === "unavailable") {
+                if (binding.owner_thread_id !== null || binding.binding_source === "mcp_meta")
+                  fail2("task_owner_binding_invalid");
+              } else fail2("task_owner_binding_invalid");
+            }
+          }
           const freshReceipts = this.#db.prepare("SELECT * FROM fresh_install_receipt").all();
           const authoritySwitches = this.#db.prepare("SELECT * FROM authority_switch").all();
           const migrationRuns = this.#db.prepare("SELECT * FROM migration_runs").all();
@@ -5043,7 +5338,7 @@ var init_store = __esm({
             const launchEvents = { launch_intent: [], launch_receipt: [], claim_committed: [] };
             const cleanupEvents = { cleanup_pending: [], cleanup_verified: [], cleanup_unverified: [], cleanup_reverified: [], released: [] };
             const resultEvents = [];
-            const recoveryEvents = [], cancellationIntents = [], cancellationVerifications = [], executorWakeEvents = [];
+            const recoveryEvents = [], cancellationIntents = [], cancellationVerifications = [], executorWakeEvents = [], lateWakeEvents = [];
             for (let i = 0; i < es.length; i++) {
               const e = es[i];
               if (e.sequence !== i + 1 || e.evidence_digest !== digest(e.evidence_json) || (i === 0 ? e.from_phase !== null : e.from_phase !== es[i - 1].to_phase)) fail2("projection_event_mismatch");
@@ -5061,6 +5356,7 @@ var init_store = __esm({
               if (e.event_type === "observation_recorded" && parsed.reason === "cancel_requested") cancellationIntents.push({ event: e, evidence: parsed });
               if (e.event_type === "observation_recorded" && parsed.reason === "cancel_tree_verified") cancellationVerifications.push({ event: e, evidence: parsed });
               if (e.event_type === "observation_recorded" && parsed.reason === "executor_wake") executorWakeEvents.push({ event: e, evidence: parsed });
+              if (e.event_type === "observation_recorded" && parsed.reason === LATE_WAKE_REASON) lateWakeEvents.push({ event: e, evidence: parsed });
               if (i > 0 && e.from_phase !== es[i - 1].to_phase) fail2("projection_event_mismatch");
               if (e.event_type === "launch_receipt" && (e.from_phase !== "launch_intent" || e.to_phase !== "launch_intent")) fail2("invalid_event_phase");
               if (e.event_type === "claim_committed" && (e.from_phase !== "launch_intent" || e.to_phase !== "running")) fail2("invalid_event_phase");
@@ -5086,7 +5382,7 @@ var init_store = __esm({
               if (!releaseEvent || executorWakeEvents[0].event.sequence <= releaseEvent.sequence || executorWakeEvents.length > EXECUTOR_WAKE_LIMIT)
                 fail2("executor_wake_history_invalid");
               const releaseSequence = releaseEvent.sequence;
-              if (es.some((event) => event.sequence > releaseSequence && (event.event_type !== "observation_recorded" || JSON.parse(event.evidence_json).reason !== "executor_wake")))
+              if (es.some((event) => event.sequence > releaseSequence && (event.event_type !== "observation_recorded" || !["executor_wake", LATE_WAKE_REASON].includes(JSON.parse(event.evidence_json).reason))))
                 fail2("executor_wake_terminal_history_invalid");
               const deliveryId = executorWakeEvents[0].evidence.delivery_id;
               const binding = executorWakeEvents[0].evidence;
@@ -5107,6 +5403,41 @@ var init_store = __esm({
                   else if (evidence.state === "web_notify") stage = "web_notify";
                   else fail2("executor_wake_history_transition_invalid");
                 } else fail2("executor_wake_history_transition_invalid");
+              }
+            }
+            if (lateWakeEvents.length) {
+              if (o.phase !== "released" || o.result_digest === null || o.result_commit_ref === null)
+                fail2("late_wake_operation_not_released");
+              const releaseEvent = es.find((event) => event.event_type === "released");
+              if (!releaseEvent || lateWakeEvents[0].event.sequence <= releaseEvent.sequence || lateWakeEvents.length > LATE_WAKE_LIMIT)
+                fail2("late_wake_history_invalid");
+              if (!executorWakeEvents.length || !executorWakeEvents.some((item) => item.evidence.state === "web_notify") || executorWakeEvents.some((item) => ["queued", "submission_unknown", "turn_started"].includes(item.evidence.state)))
+                fail2("late_wake_not_eligible");
+              if (lateWakeEvents[0].event.sequence <= executorWakeEvents[executorWakeEvents.length - 1].event.sequence)
+                fail2("late_wake_history_invalid");
+              if (es.some((event) => event.sequence > lateWakeEvents[0].event.sequence && event.event_type === "observation_recorded" && JSON.parse(event.evidence_json).reason === "executor_wake"))
+                fail2("late_wake_history_invalid");
+              const owner = this.#db.prepare("SELECT binding_state,owner_thread_id FROM task_owner_bindings WHERE task_id=?").get(o.task_id);
+              if (!owner || owner.binding_state !== "bound" || owner.owner_thread_id !== lateWakeEvents[0].evidence.thread_id)
+                fail2("late_wake_owner_binding_required");
+              const deliveryId = lateWakeEvents[0].evidence.delivery_id;
+              const binding = lateWakeEvents[0].evidence;
+              let stage = "start";
+              for (const { event, evidence } of lateWakeEvents) {
+                if (evidence.delivery_id !== deliveryId || evidence.operation_id !== o.operation_id || evidence.task_id !== o.task_id || evidence.attempt !== o.attempt || evidence.generation !== o.generation || evidence.result_digest !== o.result_digest || evidence.result_commit_ref !== o.result_commit_ref || evidence.thread_id !== binding.thread_id || evidence.policy_digest !== binding.policy_digest || evidence.authorization_digest !== binding.authorization_digest || event.generation !== o.generation || event.sequence <= releaseEvent.sequence)
+                  fail2("late_wake_history_binding_mismatch");
+                if (stage === "start") {
+                  if (evidence.state === "intent") stage = "intent";
+                  else fail2("late_wake_history_transition_invalid");
+                } else if (stage === "intent") {
+                  if (evidence.state === "queued" || evidence.state === "submission_unknown") stage = "ack";
+                  else if (evidence.state === "web_notify") stage = "web_notify";
+                  else fail2("late_wake_history_transition_invalid");
+                } else if (stage === "ack") {
+                  if (evidence.state === "turn_started") stage = "turn_started";
+                  else if (evidence.state === "web_notify") stage = "web_notify";
+                  else fail2("late_wake_history_transition_invalid");
+                } else fail2("late_wake_history_transition_invalid");
               }
             }
             if (o.operation_kind === "attempt_lifecycle") {
@@ -5565,7 +5896,7 @@ import { fileURLToPath as fileURLToPath2 } from "node:url";
 function findPackageRoot(startDir) {
   let current = startDir ?? path4.dirname(fileURLToPath2(import.meta.url));
   for (let depth = 0; depth < 10; depth++) {
-    if (existsSync2(path4.join(current, "package.json"))) {
+    if (existsSync2(path4.join(current, "package.json")) || existsSync2(path4.join(current, "plugin.json")) && existsSync2(path4.join(current, "dist")) && existsSync2(path4.join(current, "worker"))) {
       return current;
     }
     const parent = path4.dirname(current);
@@ -5573,7 +5904,7 @@ function findPackageRoot(startDir) {
     current = parent;
   }
   throw new Error(
-    `Cannot locate the Bridge package root (no package.json above ${startDir ?? "module directory"})`
+    `Cannot locate the Bridge package root (no package.json or installed plugin markers above ${startDir ?? "module directory"})`
   );
 }
 

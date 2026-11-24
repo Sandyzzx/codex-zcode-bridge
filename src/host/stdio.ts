@@ -9,12 +9,14 @@ import { RemoteTaskManager } from "../executor/remote-task-manager.js";
 import { executorPipeName } from "../executor/pipe.js";
 import { createBridgeServer, SERVER_VERSION } from "../mcp/server.js";
 import type { McpDoctorReport } from "../mcp/contracts.js";
+import type { TaskConsoleLink } from "../interfaces.js";
 import { findPackageRoot } from "../runtime/resolver.js";
 import {
   loadInstallAuthoritySelection,
   resolveSqliteStateDirectory,
 } from "../runtime/sqlite-install-config.js";
 import { codexHostProfile, validateHostProfile, type BridgeHostProfile } from "../runtime/host-profile.js";
+import { resolveTaskConsoleLink } from "../web/console-link.js";
 
 export interface DataRootResolution {
   readonly dataRoot: string;
@@ -135,8 +137,33 @@ async function startThinBridge(host: BridgeHostProfile, version: string): Promis
   const authoritySelection = loadInstallAuthoritySelection(host);
   const resolved = resolveSqliteStateDirectory(authoritySelection, process.env);
   const client = new ExecutorControlClient({ pipeName: executorPipeName(resolved.dataRoot) });
+  const taskConsoleLink = async (taskId: string): Promise<TaskConsoleLink> => {
+    await client.connect();
+    const status = await client.request("executorStatus", {});
+    const leaseId = status.ok && typeof status.result?.lease_id === "string"
+      ? status.result.lease_id
+      : null;
+    if (!leaseId) {
+      throw Object.assign(new Error("Executor lease identity is unavailable"), {
+        code: "EXECUTOR_LEASE_UNKNOWN",
+      });
+    }
+    const link = await resolveTaskConsoleLink({
+      dataRoot: resolved.dataRoot,
+      settingsDirectory: host.settingsDirectory,
+      taskId,
+      leaseId,
+    });
+    return {
+      available: true,
+      web_url: link.web_url,
+      console_id: link.console_id,
+      console_reused: link.console_reused,
+      reason_code: null,
+    };
+  };
   const server = createBridgeServer({
-    taskManager: new RemoteTaskManager(client),
+    taskManager: new RemoteTaskManager(client, { taskConsoleLink }),
     doctor: () => readExecutorDoctor(client),
     modelSettings: new RemoteModelSettings(client),
     serverInfo: { name: host.name, version },

@@ -6,6 +6,7 @@ import type {
   ProgressTaskManager,
   TaskAttentionSnapshot,
   TaskFeedbackSnapshotV01,
+  TaskAdmission,
   TaskPackage,
   TaskProgressEvent,
   TaskProgressPage,
@@ -13,6 +14,7 @@ import type {
   TaskResult,
   TaskStatus,
   TaskStatusRecord,
+  TaskOwnerBinding,
   DispatchBlocker,
   ExecutionObservation,
   ZCodeInteractionReplyInput,
@@ -53,6 +55,8 @@ export interface ExecutorWakeReleaseFact {
   readonly result_digest: string;
   readonly result_commit_ref: string;
   readonly workspace: string;
+  readonly owner_thread_id: string | null;
+  readonly owner_binding_state: "bound" | "unavailable";
 }
 
 export interface AuthorityExecutorWakeObservationInput {
@@ -165,7 +169,10 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     return this.#dispatchFence?.() ?? null;
   }
 
-  async createTask(task: TaskPackage): Promise<TaskReceipt> {
+  async createTask(
+    task: TaskPackage,
+    admission: TaskAdmission = { owner_thread_id: null, source: "non_host_admission" },
+  ): Promise<TaskReceipt> {
     this.#assertOpen();
     this.#assertAccepting();
     this.#assertRecoveryReady();
@@ -200,11 +207,19 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       if (canonicalJson(existing.task) !== canonicalJson(normalizedTask)) {
         throw new TaskManagerError("TASK_ID_CONFLICT", `task_id already belongs to a different SQLite request: ${task.task_id}`);
       }
+      const existingBinding = taskOwnerBinding(existing.owner_binding);
+      if (existingBinding.state === "bound" && admission.owner_thread_id !== null
+        && existingBinding.owner_thread_id !== admission.owner_thread_id) {
+        throw new TaskManagerError(
+          "TASK_ID_CONFLICT",
+          `task_id is already bound to a different Codex Thread: ${task.task_id}`,
+        );
+      }
       const projection = asRecord(existing.projection);
       // The persisted TaskPackage equals this routing; accept it so an
       // identical re-submission replays from the routing cache as well.
       this.#routeTaskModel?.confirmRouting(task);
-      return receipt(task.task_id, projection.status, projection.created_at);
+      return receipt(task.task_id, projection.status, projection.created_at, existingBinding);
     }
 
     // ADR-031: Start Plan credential discovery is on-demand for genuinely new
@@ -221,7 +236,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     }
 
     try {
-      this.#driver.createTask(normalizedTask as CandidateTaskPackage);
+      this.#driver.createTask(normalizedTask as CandidateTaskPackage, admission);
     } catch (error) {
       const raced = asRecord(this.#driver.readTaskLifecycle(task.task_id));
       if (!raced || canonicalJson(raced.task) !== canonicalJson(normalizedTask)) {
@@ -234,8 +249,14 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     this.#routeTaskModel?.confirmRouting(task);
     const snapshot = asRecord(this.#driver.readTaskLifecycle(task.task_id));
     const projection = asRecord(snapshot.projection);
+    const ownerBinding = taskOwnerBinding(snapshot.owner_binding);
     this.#enqueue(task.task_id, Number(projection.current_attempt));
-    return { task_id: task.task_id, status: "queued", created_at: string(projection.created_at, "task_created_at_missing") };
+    return {
+      task_id: task.task_id,
+      status: "queued",
+      created_at: string(projection.created_at, "task_created_at_missing"),
+      owner_binding: ownerBinding,
+    };
   }
 
   async getStatus(taskId: string): Promise<TaskStatusRecord> {
@@ -288,6 +309,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       } : {}),
       ...(executionObservation ? { execution_observation: executionObservation } : {}),
       ...(dispatchBlocker ? { dispatch_blocker: dispatchBlocker } : {}),
+      owner_binding: taskOwnerBinding(snapshot.owner_binding),
       ...(Number(attempt.attempt) > 0 ? {} : {}),
     };
   }
@@ -313,6 +335,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
         created_at: string(item.created_at, "task_list_created_at_missing"),
         workspace: string(item.workspace, "task_list_workspace_missing"),
         objective: string(item.objective, "task_list_objective_missing"),
+        owner_binding: taskOwnerBinding(item.owner_binding),
         ...(taskListWakeSummary(item.wake_evidence_json, item.wake_at) ?? {}),
       };
     });
@@ -503,7 +526,12 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       try {
         const replay = asRecord(this.#driver.createNextAttempt(common));
         this.#enqueue(input.task_id, Number(replay.attempt));
-        return { task_id: input.task_id, status: "queued", created_at: string(replay.created_at, "continue_created_at_missing") };
+        return {
+          task_id: input.task_id,
+          status: "queued",
+          created_at: string(replay.created_at, "continue_created_at_missing"),
+          owner_binding: taskOwnerBinding(replay.owner_binding),
+        };
       } catch (error) {
         if (errorCode(error) !== "continue_cas_required") throw error;
       }
@@ -523,7 +551,12 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       previous_result: result,
     }));
     this.#enqueue(input.task_id, Number(outcome.attempt));
-    return { task_id: input.task_id, status: "queued", created_at: string(outcome.created_at, "continue_created_at_missing") };
+    return {
+      task_id: input.task_id,
+      status: "queued",
+      created_at: string(outcome.created_at, "continue_created_at_missing"),
+      owner_binding: taskOwnerBinding(outcome.owner_binding),
+    };
   }
 
   async cancelTask(taskId: string): Promise<TaskStatusRecord> {
@@ -1127,7 +1160,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     }
   }
 
-  #readSnapshot(taskId: string): { task: TaskPackage; projection: Record<string, unknown>; attempt: Record<string, unknown>; operation: Record<string, unknown> | null; result: TaskResult | null; continuation: Record<string, unknown> | null; result_submission_error: string | null } {
+  #readSnapshot(taskId: string): { task: TaskPackage; projection: Record<string, unknown>; owner_binding?: unknown; attempt: Record<string, unknown>; operation: Record<string, unknown> | null; result: TaskResult | null; continuation: Record<string, unknown> | null; result_submission_error: string | null } {
     this.#assertOpen();
     const value = this.#driver.readTaskLifecycle(taskId);
     if (!value) throw new TaskManagerError("TASK_NOT_FOUND", `unknown SQLite task: ${taskId}`);
@@ -1135,6 +1168,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     return {
       task: snapshot.task as TaskPackage,
       projection: asRecord(snapshot.projection),
+      ...(snapshot.owner_binding === undefined ? {} : { owner_binding: snapshot.owner_binding }),
       attempt: asRecord(snapshot.attempt),
       operation: snapshot.operation ? asRecord(snapshot.operation) : null,
       result: snapshot.result as TaskResult | null,
@@ -1440,6 +1474,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     const attempt = Number(snapshot.attempt.attempt);
     const generation = Number(operation.generation);
     if (!Number.isSafeInteger(attempt) || attempt < 1 || !Number.isSafeInteger(generation) || generation < 1) return;
+    const ownerBinding = taskOwnerBinding(snapshot.owner_binding);
     const fact: ExecutorWakeReleaseFact = {
       task_id: String(operation.task_id),
       attempt,
@@ -1450,6 +1485,8 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       result_digest: operation.result_digest,
       result_commit_ref: operation.result_commit_ref,
       workspace: snapshot.task.workspace,
+      owner_thread_id: ownerBinding.owner_thread_id,
+      owner_binding_state: ownerBinding.state,
     };
     try {
       await this.#onOperationReleased(fact, (input) => this.recordExecutorWakeObservation(input));
@@ -1507,6 +1544,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       const workspace = typeof projection?.workspace === "string" ? projection.workspace : null;
       if (typeof taskId !== "string" || !Number.isSafeInteger(attempt) || attempt < 1
         || !Number.isSafeInteger(generation) || generation < 1 || !workspace) continue;
+      const ownerBinding = taskOwnerBinding(projection?.owner_binding);
       const fact: ExecutorWakeReleaseFact = {
         task_id: taskId,
         attempt,
@@ -1517,6 +1555,8 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
         result_digest: operation.result_digest,
         result_commit_ref: operation.result_commit_ref,
         workspace,
+        owner_thread_id: ownerBinding.owner_thread_id,
+        owner_binding_state: ownerBinding.state,
       };
       this.#schedulerStage("release_wake_recovery_selected", {
         task_id: taskId, attempt, operation_id: operationId,
@@ -1552,6 +1592,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
 interface TaskSnapshot {
   readonly task: TaskPackage;
   readonly projection: Record<string, unknown>;
+  readonly owner_binding?: unknown;
   readonly attempt: Record<string, unknown>;
   readonly operation: Record<string, unknown> | null;
   readonly result: TaskResult | null;
@@ -1608,8 +1649,32 @@ function taskListWakeSummary(
   }
 }
 
-function receipt(taskId: string, status: unknown, createdAt: unknown): TaskReceipt {
-  return { task_id: taskId, status: status === "running" ? "running" : "queued", created_at: string(createdAt, "task_created_at_missing") };
+function receipt(taskId: string, status: unknown, createdAt: unknown, ownerBinding?: TaskOwnerBinding): TaskReceipt {
+  return {
+    task_id: taskId,
+    status: status === "running" ? "running" : "queued",
+    created_at: string(createdAt, "task_created_at_missing"),
+    ...(ownerBinding ? { owner_binding: ownerBinding } : {}),
+  };
+}
+
+function taskOwnerBinding(value: unknown): TaskOwnerBinding {
+  const binding = value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+  const state = binding.state === "bound" ? "bound" : "unavailable";
+  const source = ["mcp_meta", "mcp_meta_missing", "mcp_meta_invalid", "non_host_admission", "legacy_unavailable"].includes(String(binding.source))
+    ? String(binding.source) as TaskOwnerBinding["source"]
+    : "legacy_unavailable";
+  return {
+    task_id: String(binding.task_id ?? ""),
+    state,
+    owner_thread_id: state === "bound" && typeof binding.owner_thread_id === "string"
+      ? binding.owner_thread_id : null,
+    source,
+    bound_at: typeof binding.bound_at === "string" ? binding.bound_at : null,
+    reason_code: state === "unavailable" ? "owner_thread_unavailable" : null,
+  };
 }
 
 function toProgressEvent(value: Record<string, unknown>, includeAttempt: boolean): TaskProgressEvent {

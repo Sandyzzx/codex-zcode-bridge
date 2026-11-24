@@ -111,9 +111,9 @@ function recordStoreInteraction(store, operationId, taskId, requestId) {
   });
 }
 
-function makePriorAttempt(store, taskId, workspace, resultStatus = 'completed', finishCleanup = true, pendingRequestIds = []) {
+function makePriorAttempt(store, taskId, workspace, resultStatus = 'completed', finishCleanup = true, pendingRequestIds = [], admission) {
   const operationId = `prior-${taskId}`;
-  store.createTask(task(taskId, workspace), '2026-10-25T00:00:00.000Z');
+  store.createTask(task(taskId, workspace), admission ?? '2026-10-25T00:00:00.000Z');
   const admitted = store.admitOperation({ operation_id: operationId, task_id: taskId, attempt: 1, workspace_ref: workspace }, gates);
   const launch = { operation_id: operationId, task_id: taskId, attempt: 1, generation: admitted.generation,
     revision: admitted.revision, launch_id: `launch-${taskId}`, launch_epoch: 1, launch_token: `token-${taskId}-0123456789abcdef` };
@@ -313,7 +313,9 @@ test('runtime Schema is self-contained and persists a Task with its initial Atte
   const store = IsolatedAdmissionStore.initialize(r);
   try {
     const created = store.createTask(task('task-projection', workspace), '2026-10-23T00:00:00.000Z');
-    assert.deepEqual(created, { task_id: 'task-projection', current_attempt: 1, status: 'queued', created_at: '2026-10-23T00:00:00.000Z' });
+    assert.deepEqual(created, { task_id: 'task-projection', current_attempt: 1, status: 'queued', created_at: '2026-10-23T00:00:00.000Z',
+      owner_binding: { task_id: 'task-projection', state: 'unavailable', owner_thread_id: null,
+        source: 'non_host_admission', bound_at: '2026-10-23T00:00:00.000Z', reason_code: 'owner_thread_unavailable' } });
     assert.deepEqual(store.readTask('task-projection'), task('task-projection', workspace));
     assert.deepEqual({ ...store.readTaskProjection('task-projection') }, {
       task_id: 'task-projection', status: 'queued', current_attempt: 1, created_at: '2026-10-23T00:00:00.000Z',
@@ -324,6 +326,8 @@ test('runtime Schema is self-contained and persists a Task with its initial Atte
     assert.deepEqual(store.readTaskLifecycle('task-projection'), {
       task: task('task-projection', workspace),
       projection: { task_id: 'task-projection', status: 'queued', current_attempt: 1, created_at: '2026-10-23T00:00:00.000Z' },
+      owner_binding: { task_id: 'task-projection', state: 'unavailable', owner_thread_id: null,
+        source: 'non_host_admission', bound_at: '2026-10-23T00:00:00.000Z', reason_code: 'owner_thread_unavailable' },
       attempt: { task_id: 'task-projection', attempt: 1, generation: null, status: 'queued', created_at: '2026-10-23T00:00:00.000Z' },
       operation: null,
       result: null,
@@ -336,7 +340,8 @@ test('runtime Schema is self-contained and persists a Task with its initial Atte
       assert.deepEqual(db.prepare("SELECT name FROM sqlite_schema WHERE type='table' ORDER BY name").all().map(row => row.name), [
         'attempts', 'authority_metadata', 'authority_switch', 'fresh_install_receipt', 'json_artifacts',
         'manager_interaction_payloads', 'manager_operation_events', 'manager_operations', 'migrated_task_events',
-        'migrated_task_results', 'migration_runs', 'runtime_task_events', 'sqlite_sequence', 'tasks',
+        'migrated_task_results', 'migration_runs', 'runtime_task_events', 'sqlite_sequence',
+        'task_owner_bindings', 'tasks',
       ]);
     } finally { db.close(); }
     assert.throws(() => store.createTask(task('task-projection', workspace)), error => error.code === 'task_already_exists');
@@ -369,6 +374,47 @@ test('bounded Task enumeration is stable, cursor-based, and read-only', () => {
     );
   } finally {
     fixture.store.close();
+  }
+});
+
+test('Owner Binding is durable at admission, independent per Task, and preserved through fast completion and Continue', () => {
+  const fixture = makeCandidateStore('owner-binding', 4);
+  const threadA = '019c0000-0000-7000-8000-00000000000a';
+  const threadB = '019c0000-0000-7000-8000-00000000000b';
+  try {
+    const first = fixture.port.createTask(task('owner-task-a', fixture.workspace), {
+      owner_thread_id: threadA, source: 'mcp_meta',
+    });
+    const second = fixture.port.createTask(task('owner-task-b', fixture.workspace), {
+      owner_thread_id: threadA, source: 'mcp_meta',
+    });
+    const third = fixture.port.createTask(task('owner-task-c', fixture.workspace), {
+      owner_thread_id: threadB, source: 'mcp_meta',
+    });
+    assert.equal(first.owner_binding.owner_thread_id, threadA);
+    assert.equal(second.owner_binding.owner_thread_id, threadA);
+    assert.equal(third.owner_binding.owner_thread_id, threadB);
+    assert.equal(fixture.port.readTaskLifecycle('owner-task-a').owner_binding.owner_thread_id, threadA);
+    assert.equal(fixture.port.readTaskLifecycle('owner-task-c').owner_binding.owner_thread_id, threadB);
+
+    const prior = makePriorAttempt(fixture.store, 'owner-task-fast', fixture.workspace, 'completed', true, [], {
+      owner_thread_id: threadA, source: 'mcp_meta',
+    });
+    const continued = fixture.port.createNextAttempt(continueInput(prior, 'owner-continue'), gates);
+    assert.equal(continued.owner_binding.owner_thread_id, threadA);
+    assert.equal(fixture.port.readTaskLifecycle('owner-task-fast').owner_binding.owner_thread_id, threadA);
+
+    fixture.store.close();
+    const reopened = IsolatedAdmissionStore.open(fixture.r);
+    try {
+      assert.equal(reopened.readTaskLifecycle('owner-task-fast').owner_binding.owner_thread_id, threadA);
+      assert.equal(reopened.readTaskLifecycle('owner-task-b').owner_binding.owner_thread_id, threadA);
+      assert.equal(reopened.readTaskLifecycle('owner-task-c').owner_binding.owner_thread_id, threadB);
+    } finally {
+      reopened.close();
+    }
+  } finally {
+    try { fixture.store.close(); } catch {}
   }
 });
 

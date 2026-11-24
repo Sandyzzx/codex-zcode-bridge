@@ -34,6 +34,7 @@ const PERSISTED_RUNTIME_KEYS = [
   "ZCODE_BRIDGE_TIMEOUT_MS",
   "ZCODE_BRIDGE_BROWSER_USE",
   "ZCODE_BRIDGE_BROWSER_EXECUTABLE",
+  "ZCODE_BRIDGE_AUTO_WAKE",
 ] as const;
 
 /**
@@ -389,11 +390,18 @@ function isReadableFile(filePath: string): boolean {
   }
 }
 
-/** Walks up from the module location to the directory containing package.json. */
+/**
+ * Walks up from the module location to a Bridge package root. The source
+ * checkout has package.json; the installed plugin is a self-contained root
+ * identified by plugin.json plus its dist/ and worker/ payloads.
+ */
 export function findPackageRoot(startDir?: string): string {
   let current = startDir ?? path.dirname(fileURLToPath(import.meta.url));
   for (let depth = 0; depth < 10; depth++) {
-    if (existsSync(path.join(current, "package.json"))) {
+    if (existsSync(path.join(current, "package.json"))
+      || (existsSync(path.join(current, "plugin.json"))
+        && existsSync(path.join(current, "dist"))
+        && existsSync(path.join(current, "worker")))) {
       return current;
     }
     const parent = path.dirname(current);
@@ -401,7 +409,7 @@ export function findPackageRoot(startDir?: string): string {
     current = parent;
   }
   throw new Error(
-    `Cannot locate the Bridge package root (no package.json above ${startDir ?? "module directory"})`,
+    `Cannot locate the Bridge package root (no package.json or installed plugin markers above ${startDir ?? "module directory"})`,
   );
 }
 

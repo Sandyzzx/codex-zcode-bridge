@@ -1,8 +1,8 @@
 # 决策路由 / Decisions
 
 > Status: AUTHORITATIVE（仅指本索引）
-> Last updated: 2026-11-24（Preview 最终集成：ADR-054 + ADR-055 同树）
-> Last verified: 2026-11-24，核对 ADR-045/051/052 的合并状态、ADR-055 的 whole_task/staged 合同（PR #135，Release Gate 45200314368），以及 ADR-054 安装安全门禁与静态 Manifest 诊断分离的实现差异（本候选树）。严格 C/D、Desktop fully exited、真实 Provider/Billing、非空工程交付和真实模型 Skill 遵循率仍为 `NOT_RUN`。
+> Last updated: 2026-11-24（Preview.16：ADR-059 Owner Binding + Auto Wake）
+> Last verified: 2026-11-24，核对 ADR-045/051/052 的合并状态、ADR-055 的 whole_task/staged 合同（PR #135，Release Gate 45200314368）、ADR-054 安装安全门禁与静态 Manifest 诊断分离，以及 ADR-059 对 ADR-051 授权门禁的退役范围（本候选树）。真实 ZCode Desktop Host Completion Wake E2E、严格 C/D、Desktop fully exited、真实 Provider/Billing、非空工程交付和真实模型 Skill 遵循率仍为 `NOT_RUN`。
 > Verified against: `codex/final-integration-20261124`（基于 PR #135 merge `7d0e6f35f` 与 ADR-054 适配 `15e75001` 的合并候选）。
 
 先读当前 [架构](../ARCHITECTURE.md)/[接口](../INTERFACES.md)，只在需要解释取舍时加载对应决策。文件保持原路径和历史正文；Partially superseded 的标注优先于历史段落。
@@ -47,7 +47,8 @@
 | Async Executor | [045](ADR-045-async-executor-ownership.md) | Accepted / Implemented；PR #131 已合并到 Preview `c7bfc28b`；独立 Executor、Thin MCP、CLI/Web、loaded/idle trusted-local Wake 与 Native MCP Result readback 已进入 Preview.14；严格 C/D、Desktop fully exited、Official Runtime provenance 和非空工程交付仍 `NOT_RUN` |
 | Task CLI | [049](ADR-049-task-cli-control-surface.md) | CLI 只经 Executor Control 管理同一 Authority；不打开 SQLite、不实现调度或恢复；已有 Executor 不重复 Spawn，过渡和 Shutdown unknown 均有显式边界 |
 | Task Web Console | [050](ADR-050-local-task-web-console.md) | 仅 loopback；Root 级动态发现/CAS 复用、Deep Link 与跨页 summary；经同一 Executor Control 读取 Task/Event/Result/Attention 并显式转发 Cancel/Reply；不创建 Task、不打开 SQLite、不拥有 Executor 生命周期 |
-| Executor Wake | [051](ADR-051-executor-wake-delivery.md) | post-Release 一次性 Wake；strict 默认要求同 Owner loaded/idle exact-config；显式 trusted-local 已完成真实 loaded/idle Queue、新 Turn、Native MCP Result readback、Cleanup/Release 与 Desktop Visible；严格 C/D 仍 `NOT_RUN`，SQLite v14 observation 不重试 |
+| Executor Wake | [051](ADR-051-executor-wake-delivery.md) | post-Release 一次性 Wake；投递顺序、Observation 不可改写与未知提交保护继续有效。授权文件与 loaded/idle 前置门禁由 [059](ADR-059-owner-binding-and-installed-auto-wake.md) 退役 |
+| Owner Binding / Auto Wake | [059](ADR-059-owner-binding-and-installed-auto-wake.md) | `_meta.threadId` 唯一身份来源；Binding 在受理/Attempt/Spawn 前持久化到同一 SQLite；安装即生效的 Auto Wake 默认开启；`web_notify`、Queue ACK、Turn Started、Master Accepted 分离；Late Wake 为独立补偿事实；receipt 携带验证过的 Console 链接。真实 Host Completion Wake E2E 仍 `NOT_RUN` |
 | Async Handoff | [052](ADR-052-async-master-handoff.md) | Task Scope 与 Handoff 分离；可靠受理后结束 Turn/停止轮询，断连不取消；loaded/idle Wake 后 Master 生命周期独立验收为 `PASS — REAL`；真实模型 Skill 遵循率与 Pending Interaction 原审批边界仍按未验证处理 |
 | Runtime Auto-Learn | [053](ADR-053-runtime-auto-learn-compatibility.md) | exact fingerprint 证据库、静态检查、安全安装上的显式零模型探针、Provider/Billing 分离矩阵和待审查 Candidate Report；不修改 Manifest、不发起付费请求 |
 

@@ -14,6 +14,7 @@ import {
 import { ZCodeModelSettings } from "../runtime/model-settings.js";
 import { createPlatformProbe, type ProcessProbe } from "../runtime/process-probe.js";
 import { loadPersistedRuntimeEnvironment, NodeRuntimeResolver } from "../runtime/resolver.js";
+import { autoWakeEnabledFromEnvironment } from "../runtime/auto-wake-setting.js";
 import {
   type OfficialStartPlanAuthenticationResolver,
   type ProductionAuthIssuer,
@@ -199,6 +200,9 @@ export async function createProductionAuthorityComposition(
     authorityRoot: options.authorityRoot,
     codexExecutable: defaultCodexExecutable(env),
     socketPath: defaultAppServerControlSocket(env, homeDir),
+    autoWakeEnabled: () => autoWakeEnabledFromEnvironment(
+      loadPersistedRuntimeEnvironment(env, homeDir, options.host),
+    ),
   });
 
   await initializeFreshInstallSqliteRoot(

@@ -17,8 +17,9 @@ Bridge 面向机器 Host。默认 MCP 工具面、Task/Result 字段和 SQLite �
 Host 向用户说明结果时，可直接根据这些机器事实组织当前对话所需的文字，但不得把 Bridge 状态、Worker 自报、独立验收、Cleanup 和 Release 混成一个 PASS。
 
 Async Handoff 的受理报告至少分别写出 `task_id`、Attempt（已知时）、Task Scope、
-Handoff Mechanism、Authority/Thread 绑定是否已核实、可验证的 Console `web_url`
-（不可用时说明安全查询替代方式），以及与结果有关的已知状态。
+Handoff Mechanism、`owner_binding` 是否为 `bound`、receipt 的
+`console_link.web_url`（`available=false` 时写 `reason_code` 并用 `task status`
+作为安全替代），以及与结果有关的已知状态。
 不要报告未观察到的 Queue/Turn/Desktop 状态。Wake 后先报告持久事实，再报告独立
 验收；`QUEUED`、`TURN_STARTED`、`TURN_COMPLETED`、`DESKTOP_VISIBLE` 和
 `Master accepted` 都是不同字段，其中 Desktop 可见性通常为 `UNKNOWN`。
