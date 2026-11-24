@@ -9,7 +9,6 @@ Codex ZCode Bridge 将 Codex 与本机官方 ZCode Agent Runtime 连接起来。
 - **持久化 Agent 任务委派。** 把目标、范围和验收条件一起交给 ZCode。Bridge 保存任务状态和结果，Codex 可以跟进或恢复中断的任务。
 - **复用官方 ZCode Runtime。** ZCode 使用自己的 AppServer 执行模型和工具，Codex 负责任务定义与结果审查。
 - **同时支持 Coding Plan 和 Start Plan。** 可使用 Z.ai Coding Plan 账户，也可选择 Start Plan。Start Plan 走独立官方认证路径，检查所选模型的权益，并按任务管理凭据。
-- **已验证的 Coding Plan 积分优惠。** 在已测试配置下，同样模型用量约消耗正常计价的 `0.67` 倍积分，每积分可获得约 `1.5` 倍的模型用量。
 - **Cost Lab 本地积分验证。** 在本地网页检查官方运行时，查看 Token 用量，并与官方积分账单对账。
 
 ## 预览版套餐支持
@@ -18,7 +17,7 @@ Bridge 复用本机安装的 ZCode Runtime，实际可用模型、套餐额度�
 
 | 套餐 | 说明 |
 | --- | --- |
-| **Z.ai Coding Plan** | 支持正常授权的模型调用；已有安装版官方 AppServer 的 Windows 真实端到端执行历史。Bridge 不保证额外的 `0.67` 倍积分抵扣或其他促销权益。 |
+| **Z.ai Coding Plan** | 支持正常授权的模型调用；已有安装版官方 AppServer 的 Windows 真实端到端执行历史。Bridge 不承诺积分倍率或其他促销权益，实际计费以 Z.ai 官方当前政策为准。 |
 | **Z.ai Start Plan** | 保留技术适配实现。当前官方政策限定其在官方 ZCode 客户端内使用，因此 Bridge 不承诺其可用性，也不绕过官方访问限制。 |
 
 已验证的 ZCode Desktop 安装：`3.18.2.10443`（完整历史验证）、`3.19.0.10774`（协议 Smoke + 一次真实 Coding Plan 执行）、`4.0.0.10870`（协议 Smoke + 2026-11-24 随包制品真实任务 E2E）。其他安全安装直接运行、无版本门禁；其兼容性在列入此处前保持未验证。README 列出已经验证的 ZCode 版本，但不以静态版本白名单或折扣验证结果作为任务执行门槛（ADR-054）。
@@ -31,7 +30,7 @@ Bridge 复用本机安装的 ZCode Runtime，实际可用模型、套餐额度�
 
 同一个 Codex 安装中选择一个 Marketplace 渠道即可。安装版 Runtime 集成、Cost Lab、SQLite v14-only 运行时、事件分页、可选结果摘要、独立 Executor 与 Thin MCP、Task CLI/Web Console、Async Master Handoff、持久化 Owner Binding 与安装即生效的 Auto Wake 位于预览候选 `2.0.0-preview.16`，稳定版为 `v1.7.2`。
 
-Auto Wake 不再需要逐任务授权文件：可信 Codex Thread ID 来自 MCP Host 请求上下文，在 Worker 启动前持久化，并在 Release 后用于一次官方 Codex Queue 投递。Queue ACK 不代表原 Turn 已启动，`web_notify` 只是 fallback observation。正式 ZCode Desktop Host 的完成 Wake E2E、Desktop 完全退出后的恢复、Official Runtime provenance 和非空真实工程交付仍未验证。
+Auto Wake 不再需要逐任务授权文件：安装并启用插件即接受本机可信 Auto Wake 合同。可信 Codex Thread ID 来自 MCP Host 请求上下文，在 Worker 启动前持久化，并在 Release 后用于一次官方 Codex Queue 投递；该投递会以原会话当前模型恢复 Codex，因此可能产生额外 Codex 用量。可在 WebUI Settings 关闭 Auto Wake，此时只保留 Web Console 观察、不提交 Queue。Queue ACK 不代表原 Turn 已启动，`web_notify` 只是 fallback observation。正式 ZCode Desktop Host 的完成 Wake E2E、Desktop 完全退出后的恢复、Official Runtime provenance 和非空真实工程交付仍未验证。
 
 ### 预览版
 
@@ -81,7 +80,7 @@ npm run cost-lab:web
 ## 文档
 
 - [架构](docs/ARCHITECTURE.md)
-- [Coding Plan 官方积分证据](docs/evidence/coding-plan-official-discount-verification-20261118.md)
+- [Coding Plan 历史积分实测（不构成承诺）](docs/evidence/coding-plan-official-discount-verification-20261118.md)
 - [Start Plan 兼容性](docs/research/start-plan-official-appserver-compatibility-20261118.md)
 - [排障、运行环境与升级](docs/ZCODE_RUNTIME.md)
 - [插件安全说明](plugins/codex-zcode-bridge/SECURITY.md)

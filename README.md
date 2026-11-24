@@ -9,7 +9,6 @@ Codex ZCode Bridge connects Codex with the official ZCode Agent Runtime on your 
 - **Persistent task delegation.** Send a whole task with its scope and acceptance checks. Bridge saves progress and results so Codex can follow up or recover interrupted work.
 - **Official ZCode Runtime.** ZCode uses its own AppServer to run the model and tools. Codex defines the task and reviews the result.
 - **Coding Plan and Start Plan.** Use your Z.ai Coding Plan account or select Start Plan, which uses its own official authentication, model entitlement checks, and task-scoped credentials.
-- **Verified Coding Plan credit advantage.** The tested setup consumed about `0.67×` the normal credits for the same model usage, giving roughly `1.5×` the usage per credit.
 - **Cost Lab billing verification.** Check your installed runtime and reconcile model usage against the official credit ledger from a local web page.
 
 ## Plans in Preview
@@ -18,7 +17,7 @@ Bridge reuses the locally installed ZCode Runtime; the models actually available
 
 | Plan | Statement |
 | --- | --- |
-| **Z.ai Coding Plan** | Normal authorized model calls are supported. Historical real Windows end-to-end execution exists with the installed official AppServer. Bridge does not guarantee the extra `0.67×` credit multiplier or any other promotional benefit. |
+| **Z.ai Coding Plan** | Normal authorized model calls are supported. Historical real Windows end-to-end execution exists with the installed official AppServer. Bridge makes no promise about credit multipliers or other promotional benefits; current plan policy is whatever Z.ai reports. |
 | **Z.ai Start Plan** | The technical adaptation is retained. Current official policy limits Start Plan to the official ZCode client, so Bridge makes no availability promise and does not bypass official access restrictions. |
 
 Verified ZCode Desktop installs: `3.18.2.10443` (full historical verification), `3.19.0.10774` (protocol smoke + one real Coding Plan execution), and `4.0.0.10870` (protocol smoke + a full real-task E2E through the shipped plugin artifacts on 2026-11-24). Other safe installs run without a version gate; their compatibility stays unverified until listed here. README lists the verified versions, but no static version whitelist or discount-verification result is used as a task-execution gate (ADR-054).
@@ -31,7 +30,7 @@ For Preview, use **Windows x64** and **Node.js `24.16.0`**. Any safe official ZC
 
 Use one marketplace channel per Codex installation. Preview `2.0.0-preview.16` (candidate) contains the installed Runtime integration, Cost Lab, SQLite v14-only runtime, bounded Event monitoring, opt-in Result summaries, the independent Executor with Thin MCP, Task CLI and Web Console, Async Master handoff, persisted Owner Binding, and Auto Wake that is enabled by installing the plugin. Stable remains at `v1.7.2`.
 
-Auto Wake needs no per-task authorization file: the trusted Codex Thread ID comes from the MCP Host request context, is persisted before the Worker starts, and is used for one official Codex Queue delivery after Release. Queue acknowledgement is not proof that the original Turn started, and `web_notify` is only a fallback observation. Real ZCode Desktop Host completion-wake E2E, Desktop fully exited recovery, Official Runtime provenance and a non-empty real engineering delivery remain unverified.
+Auto Wake needs no per-task authorization file: installing and enabling the plugin is the local trusted Auto Wake contract. The trusted Codex Thread ID comes from the MCP Host request context, is persisted before the Worker starts, and is used for one official Codex Queue delivery after Release. That delivery resumes the original Codex session with its current model, so it can consume additional Codex usage. You can turn Auto Wake off in WebUI Settings; Bridge then keeps the Web Console observation only and submits no Queue message. Queue acknowledgement is not proof that the original Turn started, and `web_notify` is only a fallback observation. Real ZCode Desktop Host completion-wake E2E, Desktop fully exited recovery, Official Runtime provenance and a non-empty real engineering delivery remain unverified.
 
 ### Preview
 
@@ -81,7 +80,7 @@ Open the local address printed by the command. The page shows runtime checks, mo
 ## Documentation
 
 - [Architecture](docs/ARCHITECTURE.md)
-- [Official Coding Plan billing evidence](docs/evidence/coding-plan-official-discount-verification-20261118.md)
+- [Historical Coding Plan credit measurement (not a guarantee)](docs/evidence/coding-plan-official-discount-verification-20261118.md)
 - [Start Plan compatibility](docs/research/start-plan-official-appserver-compatibility-20261118.md)
 - [Troubleshooting, runtime, and upgrades](docs/ZCODE_RUNTIME.md)
 - [Plugin safety](plugins/codex-zcode-bridge/SECURITY.md)
