@@ -57,7 +57,7 @@ test("marketplace launcher preserves the Node 22.18+ product gate before loading
   }
 });
 
-test("Marketplace launcher keeps Thin MCP initialize free of a local SQLite bootstrap", { timeout: 75_000, skip: process.platform !== "win32" }, async () => {
+test("Marketplace launcher keeps explicitly disabled Thin MCP recovery free of a local SQLite bootstrap", { timeout: 75_000, skip: process.platform !== "win32" }, async () => {
   assert.equal(process.versions.node, "24.16.0", "this R1 launcher acceptance run uses the pinned Node runtime");
   const pluginRoot = path.resolve("plugins/codex-zcode-bridge");
   const launcherPath = realpathSync(path.join(pluginRoot, "launch-node24.mjs"));
@@ -87,6 +87,7 @@ test("Marketplace launcher keeps Thin MCP initialize free of a local SQLite boot
     APPDATA: path.join(isolatedHome, "AppData", "Roaming"),
     LOCALAPPDATA: localAppData,
     ZCODE_BRIDGE_PLUGIN_MODE: "1",
+    ZCODE_BRIDGE_EXECUTOR_AUTO_RECOVER: "0",
   };
   const stdout: string[] = [];
   const stderr: string[] = [];
@@ -261,6 +262,7 @@ test("Marketplace launcher keeps Thin MCP initialize free of a local SQLite boot
     });
     assert.deepEqual(close, { code: 0, signal: null }, `Bridge exit must be clean; stderr: ${stderr.join("")}`);
     assert.ok(stderr.join("").includes(`data root: ${dataRoot}`), "Bridge must use the isolated synthetic data root");
+    assert.match(stderr.join(""), /Executor automatic recovery disabled/u, "the diagnostic fixture must disable automatic recovery explicitly");
     assert.doesNotMatch(stderr.join(""), /fatal:|Unsupported Node/u);
     assert.ok(!stdout.join("").includes("[bridge]"), "stdout must remain JSON-RPC only");
     assert.equal(
