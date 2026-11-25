@@ -31,11 +31,29 @@ import type { DoctorCheck } from "../runtime/doctor.js";
 import type { TaskModelRouter } from "../runtime/model-routing.js";
 import {
   DEFAULT_TASK_LIST_LIMIT,
+  type ConsoleTaskAttemptProjection,
+  type ConsoleTaskBucket,
+  type ConsoleTaskCleanupProjection,
+  type ConsoleTaskDetail,
+  type ConsoleTaskDiscountProjection,
+  type ConsoleTaskHoldProjection,
+  type ConsoleTaskListItem,
+  type ConsoleTaskListInput,
+  type ConsoleTaskListPage,
+  type ConsoleTaskModelProjection,
+  type ConsoleTaskPlanProjection,
+  type ConsoleTaskReleaseProjection,
+  type ConsoleTaskResultProjection,
+  type ConsoleTaskUsageProjection,
+  type ConsoleTaskWakeProjection,
   type ListTasksInput,
   type TaskListItem,
   type TaskListPage,
   type TaskListWakeSummary,
+  resolveConsoleActionCapabilities,
 } from "../task-list.js";
+import { BIGMODEL_START_PLAN_PROVIDER_ID } from "../runtime/account-provider.js";
+import { isOfficialCodingPlanProvider } from "../runtime/official-app-server-runtime.js";
 
 const EXECUTION_OBSERVATION_PROBE_BUDGET_MS = 5_000;
 const DEFAULT_HOST_SHUTDOWN_WAIT_MS = 60_000;
@@ -346,6 +364,69 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     };
   }
 
+  async listConsoleTasks(input: ConsoleTaskListInput = {}): Promise<ConsoleTaskListPage> {
+    this.#assertOpen();
+    const limit = input.limit ?? DEFAULT_TASK_LIST_LIMIT;
+    const bucket = input.bucket;
+    if (bucket === undefined) {
+      const page = asRecord(this.#driver.readTaskProjections({
+        afterTaskId: input.after_task_id ?? null,
+        limit,
+        status: null,
+      }));
+      const tasks = (Array.isArray(page.tasks) ? page.tasks : []).map((value) => {
+        const taskId = string(asRecord(value).task_id, "task_list_id_missing");
+        const raw = this.#driver.readTaskConsoleProjection(taskId, { includeAttempts: false });
+        if (!raw) throw new TaskManagerError("TASK_NOT_FOUND", `Task disappeared during projection: ${taskId}`);
+        return consoleTaskListItem(raw);
+      });
+      return {
+        tasks,
+        next_task_id: typeof page.next_task_id === "string" ? page.next_task_id : null,
+        has_more: page.has_more === true,
+      };
+    }
+    // Bucket filtering happens after the durable projection is derived, so a
+    // page may scan several source pages before it can fill its result page.
+    const tasks: ConsoleTaskListItem[] = [];
+    let cursor = input.after_task_id ?? null;
+    let lastScanned: string | null = null;
+    let sourceHasMore = false;
+    for (let scannedPages = 0; scannedPages < 100; scannedPages += 1) {
+      const page = asRecord(this.#driver.readTaskProjections({ afterTaskId: cursor, limit: 100, status: null }));
+      const rows = Array.isArray(page.tasks) ? page.tasks : [];
+      for (const value of rows) {
+        const taskId = string(asRecord(value).task_id, "task_list_id_missing");
+        lastScanned = taskId;
+        const raw = this.#driver.readTaskConsoleProjection(taskId, { includeAttempts: false });
+        if (!raw) continue;
+        const item = consoleTaskListItem(raw);
+        if (consoleTaskBucket(item) === bucket) tasks.push(item);
+        if (tasks.length > limit) break;
+      }
+      if (tasks.length > limit) {
+        sourceHasMore = true;
+        break;
+      }
+      if (page.has_more !== true || typeof page.next_task_id !== "string") break;
+      sourceHasMore = true;
+      cursor = page.next_task_id;
+    }
+    const visible = tasks.slice(0, limit);
+    return {
+      tasks: visible,
+      next_task_id: visible.at(-1)?.task_id ?? lastScanned,
+      has_more: sourceHasMore,
+    };
+  }
+
+  async getConsoleTaskDetail(taskId: string): Promise<ConsoleTaskDetail> {
+    this.#assertOpen();
+    const raw = this.#driver.readTaskConsoleProjection(taskId, { includeAttempts: true });
+    if (!raw) throw new TaskManagerError("TASK_NOT_FOUND", `unknown SQLite task: ${taskId}`);
+    return consoleTaskDetail(raw);
+  }
+
   async getAttention(taskId: string): Promise<TaskAttentionSnapshot> {
     this.#assertOpen();
     let value: unknown;
@@ -540,12 +621,22 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     if (!snapshot.operation) throw new TaskManagerError("TASK_STATE", "the prior SQLite Attempt has no released Operation");
     const operation = asRecord(snapshot.operation);
     const result = snapshot.result as Record<string, unknown> | null;
+    const releaseEvent = this.#driver.readAllLifecycleEvents(
+      string(operation.operation_id, "continue_operation_missing"),
+    ).map(asRecord).reverse().find((event) => event.event_type === "released");
+    const releaseRevision = Number(releaseEvent?.sequence);
+    if (!Number.isSafeInteger(releaseRevision) || releaseRevision < 1) {
+      throw new TaskManagerError("TASK_STATE", "the prior SQLite Attempt has no durable Release fact");
+    }
     const outcome = asRecord(this.#driver.createNextAttempt({
       ...common,
       previous_attempt: Number(asRecord(snapshot.attempt).attempt),
       previous_operation_id: string(operation.operation_id, "continue_operation_missing"),
       expected_generation: Number(operation.generation),
-      expected_revision: Number(operation.revision),
+      // Wake observations append Operation revisions after Release. The
+      // continuation CAS must bind the durable Release event, not the later
+      // read-only Wake revision.
+      expected_revision: releaseRevision,
       claim_id: string(operation.claim_id, "continue_claim_missing"),
       claim_worker_identity_digest: string(operation.claim_worker_identity_digest, "continue_worker_identity_missing"),
       previous_result: result,
@@ -655,7 +746,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
             && canUserAuthorizeUnverifiedRelease(outcome)) {
             return await this.#userAuthorizedRelease(taskId, this.#readSnapshot(taskId), outcome);
           }
-          throw new TaskManagerError("CANCEL_FAILED", `SQLite cleanup remains occupied for this workspace: ${reason}`);
+          throw new TaskManagerError("CANCEL_FAILED", `Cleanup remains unverified for this workspace: ${reason}`);
         }
         this.#schedulePump();
         return this.getStatus(taskId);
@@ -1587,6 +1678,379 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
   #schedulerStage(stage: string, detail: Readonly<Record<string, unknown>>): void {
     this.#testOnScheduler?.(stage, detail);
   }
+}
+
+function consoleTaskListItem(value: unknown): ConsoleTaskListItem {
+  const raw = asRecord(value);
+  const task = asRecord(raw.task) as unknown as TaskPackage;
+  const projection = asRecord(raw.projection);
+  const currentAttemptNumber = Number(projection.current_attempt);
+  const current = consoleAttemptProjection(raw.current, task, currentAttemptNumber);
+  const attentionReasons = consoleAttentionReasons(taskStatus(projection.status), current);
+  return {
+    task_id: string(projection.task_id, "console_task_id_missing"),
+    name: clipText(task.objective, 160),
+    status: taskStatus(projection.status),
+    attempt: currentAttemptNumber,
+    created_at: string(projection.created_at, "console_task_created_at_missing"),
+    updated_at: consoleIsoTime(raw.updated_at, string(projection.created_at, "console_task_created_at_missing")),
+    workspace: task.workspace,
+    objective: task.objective,
+    owner_binding: taskOwnerBinding(raw.owner_binding),
+    ...(current.wake ? {
+      wake: current.wake,
+    } : {}),
+    model: current.model,
+    plan: current.plan,
+    usage: current.usage,
+    discount: current.discount,
+    cleanup: current.cleanup,
+    release: current.release,
+    needs_attention: attentionReasons.length > 0,
+    attention_reasons: attentionReasons,
+    action_capabilities: resolveConsoleActionCapabilities(current),
+  };
+}
+
+function consoleTaskDetail(value: unknown): ConsoleTaskDetail {
+  const raw = asRecord(value);
+  const item = consoleTaskListItem(raw);
+  const task = asRecord(raw.task) as unknown as TaskPackage;
+  const attempts = Array.isArray(raw.attempts) ? raw.attempts : [];
+  const currentAttempt = attempts
+    .map((attempt) => consoleAttemptProjection(attempt, task, item.attempt))
+    .find((attempt) => attempt.current);
+  return {
+    ...item,
+    task,
+    attempts: attempts.map((attempt) => consoleAttemptProjection(attempt, task, item.attempt)),
+    master_usage: {
+      state: "not_observed",
+      reason_code: "bridge_authority_does_not_record_master_usage",
+    },
+    result_submission_error: currentAttempt
+      ? resultSubmissionErrorFromRaw(raw.current)
+      : null,
+  };
+}
+
+function consoleAttemptProjection(
+  value: unknown,
+  task: TaskPackage,
+  currentAttempt: number,
+): ConsoleTaskAttemptProjection {
+  const raw = asRecord(value);
+  const attempt = Number(raw.attempt);
+  const status = taskStatus(raw.status);
+  const operation = raw.operation ? asRecord(raw.operation) : null;
+  const operationPhase = operation && typeof operation.phase === "string" ? operation.phase : null;
+  const result = raw.result && typeof raw.result === "object" && !Array.isArray(raw.result)
+    ? asRecord(raw.result)
+    : null;
+  const model = consoleModelProjection(task, result);
+  const plan = consolePlanProjection(model);
+  const pendingRequests = stringArray(raw.pending_requests, 128);
+  const replyOutcomeUnknownRequests = stringArray(raw.reply_outcome_unknown_requests, 128);
+  return {
+    attempt,
+    status,
+    created_at: string(raw.created_at, "console_attempt_created_at_missing"),
+    updated_at: consoleIsoTime(raw.updated_at, string(raw.created_at, "console_attempt_created_at_missing")),
+    current: attempt === currentAttempt,
+    operation_phase: operationPhase,
+    model,
+    plan,
+    usage: consoleUsageProjection(result),
+    discount: consoleDiscountProjection(plan),
+    result: consoleResultProjection(result),
+    wake: consoleWakeProjection(raw.wake),
+    cleanup: consoleCleanupProjection(operation),
+    release: consoleReleaseProjection(operation),
+    hold: consoleHoldProjection(raw.hold, operation),
+    pending_requests: pendingRequests,
+    reply_outcome_unknown_requests: replyOutcomeUnknownRequests,
+  };
+}
+
+function consoleModelProjection(
+  task: TaskPackage,
+  result: Record<string, unknown> | null,
+): ConsoleTaskModelProjection {
+  const runtimeModel = result?.model && typeof result.model === "object" && !Array.isArray(result.model)
+    ? asRecord(result.model)
+    : null;
+  if (runtimeModel && typeof runtimeModel.provider_id === "string" && runtimeModel.provider_id
+    && typeof runtimeModel.model_id === "string" && runtimeModel.model_id) {
+    return {
+      state: "observed",
+      provider_id: runtimeModel.provider_id,
+      model_id: runtimeModel.model_id,
+      source: "runtime",
+    };
+  }
+  const requested = task.model;
+  if (requested?.provider_id && requested.model_id) {
+    return {
+      state: "requested",
+      provider_id: requested.provider_id,
+      model_id: requested.model_id,
+      source: "task_request",
+    };
+  }
+  if (runtimeModel && typeof runtimeModel.requested_model === "string" && runtimeModel.requested_model) {
+    return {
+      state: "requested",
+      provider_id: null,
+      model_id: runtimeModel.requested_model,
+      source: "runtime",
+    };
+  }
+  return { state: "not_observed", provider_id: null, model_id: null, source: "none" };
+}
+
+function consolePlanProjection(model: ConsoleTaskModelProjection): ConsoleTaskPlanProjection {
+  const providerId = model.provider_id;
+  const source = model.state === "observed"
+    ? "runtime"
+    : model.state === "requested"
+      ? model.source === "runtime" ? "runtime" : "task_request"
+      : "none";
+  if (providerId === BIGMODEL_START_PLAN_PROVIDER_ID) {
+    return { kind: "start_plan", provider_id: providerId, source };
+  }
+  if (isOfficialCodingPlanProvider(providerId ?? undefined)) {
+    return { kind: "coding_plan", provider_id: providerId, source };
+  }
+  if (providerId) return { kind: "other", provider_id: providerId, source };
+  return { kind: "not_observed", provider_id: null, source: "none" };
+}
+
+function consoleUsageProjection(result: Record<string, unknown> | null): ConsoleTaskUsageProjection {
+  const usage = result?.usage && typeof result.usage === "object" && !Array.isArray(result.usage)
+    ? asRecord(result.usage)
+    : null;
+  if (!usage) {
+    return {
+      state: "not_observed",
+      source: null,
+      scope: null,
+      observed_at: null,
+      finality: null,
+      input_tokens: null,
+      cached_input_tokens: null,
+      cached_write_input_tokens: null,
+      output_tokens: null,
+      reasoning_tokens: null,
+      total_tokens: null,
+      conflicts: [],
+      provider_cost: consoleProviderCostProjection(),
+    };
+  }
+  const finality = usage.finality === "reported" || usage.finality === "derived" || usage.finality === "partial"
+    ? usage.finality
+    : null;
+  return {
+    state: "observed",
+    source: nullableString(usage.source),
+    scope: nullableString(usage.scope),
+    observed_at: nullableString(usage.observed_at),
+    finality,
+    input_tokens: nullableNonNegativeInteger(usage.input_tokens),
+    cached_input_tokens: nullableNonNegativeInteger(usage.cached_input_tokens),
+    cached_write_input_tokens: nullableNonNegativeInteger(usage.cached_write_input_tokens),
+    output_tokens: nullableNonNegativeInteger(usage.output_tokens),
+    reasoning_tokens: nullableNonNegativeInteger(usage.reasoning_tokens),
+    total_tokens: nullableNonNegativeInteger(usage.total_tokens),
+    conflicts: stringArray(usage.conflicts, 64),
+    provider_cost: consoleProviderCostProjection(),
+  };
+}
+
+function consoleProviderCostProjection() {
+  return {
+    state: "not_observed" as const,
+    scope: "per_attempt" as const,
+    amount: null,
+    currency: null,
+    reason_code: "bridge_authority_has_no_provider_settlement" as const,
+  };
+}
+
+function consoleDiscountProjection(plan: ConsoleTaskPlanProjection): ConsoleTaskDiscountProjection {
+  if (plan.kind === "start_plan") {
+    return {
+      state: "not_applicable",
+      source: "provider_kind",
+      reason_code: "start_plan_coding_discount_not_applicable",
+    };
+  }
+  if (plan.kind === "coding_plan") {
+    return {
+      state: "not_observed",
+      source: "per_attempt_settlement",
+      reason_code: "no_per_attempt_settlement_evidence",
+    };
+  }
+  return {
+    state: "not_observed",
+    source: "none",
+    reason_code: "provider_settlement_not_observed",
+  };
+}
+
+function consoleResultProjection(result: Record<string, unknown> | null): ConsoleTaskResultProjection | null {
+  if (!result) return null;
+  const status = result.status;
+  if (status !== "completed" && status !== "failed" && status !== "cancelled" && status !== "waiting_for_master") {
+    throw new TaskManagerError("TASK_STATE", "SQLite Result has an unknown status");
+  }
+  const tests = Array.isArray(result.tests)
+    ? result.tests.slice(0, 50).map((value): ConsoleTaskResultProjection["tests"][number] => {
+      const test = asRecord(value);
+      const testStatus = test.status === "passed" || test.status === "failed" || test.status === "not_run"
+        ? test.status
+        : "not_run";
+      return {
+        command: clipText(typeof test.command === "string" ? test.command : "", 1000),
+        status: testStatus,
+        details: typeof test.details === "string" ? clipText(test.details, 2000) : null,
+      };
+    })
+    : [];
+  return {
+    status,
+    summary: clipText(typeof result.summary === "string" ? result.summary : "", 4000),
+    error_code: typeof result.error_code === "string" ? result.error_code : null,
+    issues: stringArray(result.issues, 50).map((issue) => clipText(issue, 2000)),
+    files_changed: stringArray(result.files_changed, 100).map((file) => clipText(file, 1000)),
+    tests,
+    needs_master_decision: result.needs_master_decision === true,
+    started_at: nullableString(result.started_at),
+    finished_at: nullableString(result.finished_at),
+  };
+}
+
+function consoleWakeProjection(value: unknown): ConsoleTaskWakeProjection | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const wake = asRecord(value);
+  if (typeof wake.state !== "string"
+    || !["intent", "queued", "submission_unknown", "turn_started", "web_notify"].includes(wake.state)
+    || typeof wake.reason_code !== "string" || typeof wake.at !== "string") return null;
+  return {
+    state: wake.state as ConsoleTaskWakeProjection["state"],
+    reason_code: clipText(wake.reason_code, 256),
+    at: wake.at,
+  };
+}
+
+function consoleCleanupProjection(operation: Record<string, unknown> | null): ConsoleTaskCleanupProjection {
+  const phase = operation && typeof operation.phase === "string" ? operation.phase : null;
+  if (phase === "cancelled_before_launch") return { state: "not_required", reason_code: phase };
+  if (phase === "cleanup_pending") return { state: "pending", reason_code: phase };
+  if (phase === "cleanup_verified" || phase === "cleanup_reverified") return { state: "verified", reason_code: phase };
+  if (phase === "cleanup_unverified" || phase === "quarantined" || phase === "admin_abandoned") {
+    return { state: "unverified", reason_code: phase };
+  }
+  if (phase === "released") {
+    if (operation?.cleanup_verified === true) return { state: "verified", reason_code: phase };
+    if (operation?.administrative_release === true) return { state: "unverified", reason_code: "administrative_release" };
+    return { state: "unknown", reason_code: phase };
+  }
+  if (phase === null) return { state: "not_started", reason_code: null };
+  return { state: "not_started", reason_code: phase };
+}
+
+function consoleReleaseProjection(operation: Record<string, unknown> | null): ConsoleTaskReleaseProjection {
+  const phase = operation && typeof operation.phase === "string" ? operation.phase : null;
+  if (phase === "released") {
+    const verified = operation?.cleanup_verified === true
+      ? true
+      : operation?.administrative_release === true ? false : null;
+    return {
+      state: "released",
+      cleanup_verified: verified,
+      reason_code: verified === false ? "administrative_release_unverified" : "released",
+    };
+  }
+  if (phase && ["result_committed", "cleanup_pending", "cleanup_unverified", "cleanup_verified", "cleanup_reverified", "quarantined"].includes(phase)) {
+    return { state: "held", cleanup_verified: null, reason_code: phase };
+  }
+  return { state: "not_released", cleanup_verified: null, reason_code: phase };
+}
+
+function consoleHoldProjection(
+  value: unknown,
+  operation: Record<string, unknown> | null,
+): ConsoleTaskHoldProjection {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const hold = asRecord(value);
+    if (typeof hold.reason_code === "string") {
+      return {
+        active: true,
+        reason_code: hold.reason_code,
+        at: nullableString(hold.at),
+      };
+    }
+  }
+  const phase = operation && typeof operation.phase === "string" ? operation.phase : null;
+  if (phase === "cleanup_unverified") {
+    return { active: true, reason_code: "cleanup_unverified", at: null };
+  }
+  if (phase === "quarantined") {
+    return { active: true, reason_code: "recovery_quarantine", at: null };
+  }
+  if (phase === "admin_abandoned") {
+    return { active: true, reason_code: "administrative_release_unverified", at: null };
+  }
+  return { active: false, reason_code: null, at: null };
+}
+
+function consoleAttentionReasons(status: TaskStatus, current: ConsoleTaskAttemptProjection): string[] {
+  const reasons = new Set<string>();
+  if (current.pending_requests.length > 0) reasons.add("pending_interaction");
+  if (current.reply_outcome_unknown_requests.length > 0) reasons.add("interaction_reply_outcome_unknown");
+  if (current.cleanup.state === "pending") reasons.add("cleanup_pending");
+  if (current.cleanup.state === "unverified") reasons.add("cleanup_unverified");
+  if (current.hold.active && current.hold.reason_code) reasons.add(`hold:${current.hold.reason_code}`);
+  if (status === "waiting_for_master") reasons.add("waiting_for_master");
+  if (current.result?.needs_master_decision) reasons.add("needs_master_decision");
+  if (status === "failed") reasons.add("task_failed");
+  if (current.wake?.state === "submission_unknown") reasons.add("wake_submission_unknown");
+  if (current.wake?.state === "web_notify") reasons.add("wake_web_notify");
+  return [...reasons];
+}
+
+function consoleTaskBucket(task: ConsoleTaskListItem): ConsoleTaskBucket {
+  if (task.needs_attention) return "attention";
+  if (task.status === "queued" || task.status === "running") return "running";
+  return "completed";
+}
+
+function resultSubmissionErrorFromRaw(value: unknown): string | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const raw = asRecord(value);
+  return typeof raw.result_submission_error === "string" ? raw.result_submission_error : null;
+}
+
+function consoleIsoTime(value: unknown, fallback: string): string {
+  return typeof value === "string" && Number.isFinite(Date.parse(value)) ? value : fallback;
+}
+
+function nullableString(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+function nullableNonNegativeInteger(value: unknown): number | null {
+  return Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : null;
+}
+
+function stringArray(value: unknown, limit: number): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry): entry is string => typeof entry === "string").slice(0, limit);
+}
+
+function clipText(value: string, limit: number): string {
+  return value.length <= limit ? value : `${value.slice(0, Math.max(0, limit - 1))}…`;
 }
 
 interface TaskSnapshot {

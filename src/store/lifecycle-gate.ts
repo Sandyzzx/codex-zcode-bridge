@@ -174,6 +174,10 @@ interface ClaimOnlyPort {
   reverifyCleanup(input: CandidateCleanupFence & { readonly cleanup_evidence: Readonly<Record<string, unknown>> }): Readonly<Record<string, unknown>>;
   releaseCapacity(input: CandidateCleanupFence & { readonly cleanup_digest: string }): Readonly<Record<string, unknown>>;
   readTaskLifecycle(taskId: string): unknown;
+  readTaskConsoleProjection(
+    taskId: string,
+    options?: { readonly includeAttempts?: boolean },
+  ): unknown;
   readTaskAttention(taskId: string): Readonly<Record<string, unknown>> | null;
   readRecoverableQueuedAttempts(): readonly Readonly<Record<string, unknown>>[];
   readTaskEvents(taskId: string, options?: { readonly afterCursor?: number; readonly limit?: number }): LifecycleEventsPage;
@@ -1419,6 +1423,10 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
   provisionCapacity(input: unknown): unknown;
   createTask(task: CandidateTaskPackage, admission?: CandidateTaskAdmission): unknown;
   readTaskLifecycle(taskId: string): unknown;
+  readTaskConsoleProjection(
+    taskId: string,
+    options?: { readonly includeAttempts?: boolean },
+  ): unknown;
   readTaskProjections(options?: {
     readonly afterTaskId?: string | null;
     readonly limit?: number;
@@ -1426,6 +1434,7 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
   }): unknown;
   readTaskAttention(taskId: string): unknown;
   readTaskEvents(taskId: string, options?: { readonly afterCursor?: number; readonly limit?: number }): LifecycleEventsPage;
+  readAllLifecycleEvents(operationId: string): readonly Readonly<Record<string, unknown>>[];
   readTaskResultPage(taskId: string, offsetBytes: number, maxBytes: number): unknown;
   readTaskLatestEventAt(taskId: string): unknown;
   readCommittedResult(operationId: string): CandidateCommittedResult | null;
@@ -2289,9 +2298,11 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
     },
     createTask: (task, admission) => port.createTask(task, admission),
     readTaskLifecycle: (taskId) => port.readTaskLifecycle(taskId),
+    readTaskConsoleProjection: (taskId, options) => port.readTaskConsoleProjection(taskId, options),
     readTaskProjections: (options) => port.readTaskProjections(options),
     readTaskAttention: (taskId) => port.readTaskAttention(taskId),
     readTaskEvents: (taskId, options) => port.readTaskEvents(taskId, options),
+    readAllLifecycleEvents: (operationId) => readAllLifecycleEventsForRecovery(port, operationId),
     readTaskResultPage: (taskId, offsetBytes, maxBytes) => port.readTaskResultPage(taskId, offsetBytes, maxBytes),
     readTaskLatestEventAt: (taskId) => port.readTaskLatestEventAt(taskId),
     readCommittedResult: (operationId) => port.readCommittedResult(operationId),

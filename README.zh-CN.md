@@ -9,7 +9,7 @@ Codex ZCode Bridge 将 Codex 与本机官方 ZCode Agent Runtime 连接起来。
 - **持久化 Agent 任务委派。** 把目标、范围和验收条件一起交给 ZCode。Bridge 保存任务状态和结果，Codex 可以跟进或恢复中断的任务。
 - **复用官方 ZCode Runtime。** ZCode 使用自己的 AppServer 执行模型和工具，Codex 负责任务定义与结果审查。
 - **同时支持 Coding Plan 和 Start Plan。** 可使用 Z.ai Coding Plan 账户，也可选择 Start Plan。Start Plan 走独立官方认证路径，检查所选模型的权益，并按任务管理凭据。
-- **Cost Lab 本地积分验证。** 在本地网页检查官方运行时，查看 Token 用量，并与官方积分账单对账。
+- **单页 Task Console 与显式诊断。** 在一个本地页面查看 Task、Attempt、Result、Cleanup、Release 与 Token 用量。Bridge 没有 Provider 结算证据时，Provider 实际成本会明确显示为未观测。Runtime 与 Cost Lab 检查位于 Diagnostics。
 
 ## 预览版套餐支持
 
@@ -30,7 +30,7 @@ Bridge 复用本机安装的 ZCode Runtime，实际可用模型、套餐额度�
 
 同一个 Codex 安装中选择一个 Marketplace 渠道即可。安装版 Runtime 集成、Cost Lab、SQLite v14-only 运行时、事件分页、可选结果摘要、独立 Executor 与 Thin MCP、Task CLI/Web Console、Async Master Handoff、持久化 Owner Binding 与安装即生效的 Auto Wake 位于预览版 `2.0.0-preview.16`，稳定版为 `v1.7.2`。
 
-Auto Wake 不再需要逐任务授权文件：安装并启用插件即接受本机可信 Auto Wake 合同。可信 Codex Thread ID 来自 MCP Host 请求上下文，在 Worker 启动前持久化，并在 Release 后用于一次官方 Codex Queue 投递；该投递会以原会话当前模型恢复 Codex，因此可能产生额外 Codex 用量。可在 WebUI Settings 关闭 Auto Wake，此时只保留 Web Console 观察、不提交 Queue。Queue ACK 不代表原 Turn 已启动，`web_notify` 只是 fallback observation。真实 Codex Host 的完成 Wake E2E（含非空工程交付）已于 2026-11-24 通过；Desktop 完全退出后的恢复、notLoaded 场景与 Official Runtime provenance 仍未验证。
+Auto Wake 不再需要逐任务授权文件：安装并启用插件即接受本机可信 Auto Wake 合同。可信 Codex Thread ID 来自 MCP Host 请求上下文，在 Worker 启动前持久化，并在 Release 后用于一次官方 Codex Queue 投递；该投递会以原会话当前模型恢复 Codex，因此可能产生额外 Codex 用量。可在 Task Console 的 Diagnostics 中关闭 Auto Wake，此时只保留 Web Console 观察、不提交 Queue。Queue ACK 不代表原 Turn 已启动，`web_notify` 只是 fallback observation。真实 Codex Host 的完成 Wake E2E（含非空工程交付）已于 2026-11-24 通过；Desktop 完全退出后的恢复、notLoaded 场景与 Official Runtime provenance 仍未验证。
 
 ### 预览版
 
@@ -65,17 +65,20 @@ codex plugin add codex-zcode-bridge@codex-zcode-bridge
 
 请在可信的单用户环境运行 Bridge。Git Worktree 可用于分开管理修改，文件权限仍由当前系统账户决定。
 
-## 用 Cost Lab 核对积分
+## 查看任务与诊断
 
-配置与使用见 [Cost Lab — 本地积分验证工具](tools/cost-lab/README.md)。在预览版源码目录执行：
+任务回执会链接到本地 Task Console。在预览版源码目录执行：
 
 ```powershell
 npm ci
 npm run build
-npm run cost-lab:web
+npm run bridge:cli -- executor start
+npm run bridge:cli -- task console-url <task_id>
 ```
 
-打开命令打印的本机地址，查看运行时检查、模型 Token、官方积分和验证历史。加载网页不消耗模型额度，真实 Coding Plan 验证需要主动确认。Cost Lab 对 Start Plan 提供离线检查。
+Task 列表显示 Workspace、状态、Attempt、模型、套餐、消耗、更新时间和 Attention；任务详情显示完整 Workspace，以及逐 Attempt 的 Usage、折扣状态和 Provider 实际成本。没有 Provider 结算证据时，Provider 实际成本明确为 `not_observed`，原因码为 `bridge_authority_has_no_provider_settlement`，不会推定为 0 或估算值。
+
+原独立的 Runtime 与 Cost Lab 主导航页面已退役。Runtime 静态检查、授权的零模型协议探针、Candidate Report 导出，以及 Cost Lab 的环境、历史与验证入口仍在 **Diagnostics** 中提供。打开 Task Console 或 Diagnostics 不会发出模型、Runtime 探针或 Billing 请求；每项外部读取或检查都必须显式点击。真实 Coding Plan 验证仍需既有显式确认流程。
 
 ## 文档
 

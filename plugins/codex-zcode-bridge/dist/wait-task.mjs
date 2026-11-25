@@ -2098,6 +2098,140 @@ var init_store = __esm({
           };
         });
       }
+      /** Read-only Console projection. All relational facts and Result summaries
+       * come from one SQLite snapshot; callers must not infer Plan, Usage or
+       * Release from Workspace, Task name, or model naming conventions. */
+      readTaskConsoleProjection(taskId, { includeAttempts = false } = {}) {
+        if (!validId(taskId) || typeof includeAttempts !== "boolean") fail2("invalid_console_projection_query");
+        return this.#readConsistent(() => {
+          const taskRow = this.#db.prepare("SELECT task_id,status,current_attempt,created_at,task_json FROM tasks WHERE task_id=?").get(taskId);
+          if (!taskRow || this.#isRetiredHistoricalTask(taskId)) return null;
+          let task;
+          try {
+            task = JSON.parse(taskRow.task_json);
+          } catch {
+            fail2("task_projection_invalid");
+          }
+          validateTaskPackage(task);
+          if (task.task_id !== taskId) fail2("task_projection_identity_mismatch");
+          const attemptRows = this.#db.prepare(`SELECT task_id,attempt,generation,status,created_at,
+          queued_cancel_id,queued_cancel_event_cursor,queued_cancelled_at,queued_cancel_operation_id,queued_cancel_result_json
+        FROM attempts WHERE task_id=? ORDER BY attempt`).all(taskId);
+          if (!attemptRows.length || !attemptRows.some((row) => row.attempt === taskRow.current_attempt)) fail2("task_attempt_projection_mismatch");
+          const operationRows = this.#db.prepare(`SELECT * FROM manager_operations
+        WHERE operation_kind='attempt_lifecycle' AND task_id=? ORDER BY attempt`).all(taskId);
+          const operations = new Map(operationRows.map((row) => [row.attempt, row]));
+          const runtimeEvents = this.#db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='runtime_task_events'").get();
+          const attempts = attemptRows.map((attemptRow) => {
+            const operationRow = operations.get(attemptRow.attempt) ?? null;
+            const adminAbandonment = operationRow ? this.#adminAbandonments().get(operationRow.operation_id) : void 0;
+            const operation = operationRow ? presentOperation(operationRow, adminAbandonment) : null;
+            let result = null;
+            if (operationRow?.result_json !== null && operationRow?.result_json !== void 0) {
+              try {
+                result = JSON.parse(operationRow.result_json);
+              } catch {
+                fail2("result_projection_invalid");
+              }
+            } else if (attemptRow.queued_cancel_result_json !== null) {
+              try {
+                result = JSON.parse(attemptRow.queued_cancel_result_json);
+              } catch {
+                fail2("result_projection_invalid");
+              }
+            }
+            const events = operationRow ? this.#db.prepare(`SELECT *
+          FROM manager_operation_events WHERE operation_id=? ORDER BY sequence`).all(operationRow.operation_id) : [];
+            let wake = null, hold = null, resultSubmissionError = null, administrativeRelease = false, cleanupVerified = false;
+            for (const event of events) {
+              let evidence;
+              try {
+                evidence = JSON.parse(event.evidence_json);
+              } catch {
+                fail2("operation_event_evidence_invalid");
+              }
+              if (event.event_type === "cleanup_verified" || event.event_type === "cleanup_reverified") cleanupVerified = true;
+              if (event.event_type === "observation_recorded" && evidence.reason === "executor_wake" && typeof evidence.state === "string" && typeof evidence.reason_code === "string") {
+                wake = { state: evidence.state, reason_code: evidence.reason_code, at: event.at };
+              }
+              if (event.event_type === "observation_recorded" && evidence.reason === "user_authorized_release_unverified") {
+                administrativeRelease = true;
+              }
+              if (event.event_type === "observation_recorded" && typeof evidence.reason === "string" && evidence.reason.startsWith("result_submission_failed:")) {
+                resultSubmissionError = evidence.reason.slice("result_submission_failed:".length);
+              }
+            }
+            if (operationRow && foldedRecoveryClassification(operationRow, events) !== "normal") {
+              const active = recoveryEventsFor(events, operationRow).filter((event) => event.active).at(-1);
+              hold = {
+                reason_code: typeof active?.evidence.reason_code === "string" ? active.evidence.reason_code : operationRow.phase === "quarantined" ? "recovery_quarantine" : "recovery_hold",
+                at: active?.event.at ?? null
+              };
+            }
+            const pendingRequests = [];
+            const replyOutcomeUnknownRequests = [];
+            if (operationRow) {
+              const payloads = this.#db.prepare(`SELECT p.request_id,
+              EXISTS(SELECT 1 FROM manager_operation_events e WHERE e.operation_id=p.operation_id
+                AND json_extract(e.evidence_json,'$.request_id')=p.request_id
+                AND e.event_type='interaction_reply_accepted') AS answered,
+              EXISTS(SELECT 1 FROM manager_operation_events e WHERE e.operation_id=p.operation_id
+                AND json_extract(e.evidence_json,'$.request_id')=p.request_id
+                AND e.event_type='interaction_reply_intent') AS reply_intent
+            FROM manager_interaction_payloads p WHERE p.operation_id=? ORDER BY p.rowid`).all(operationRow.operation_id);
+              for (const payload of payloads) {
+                if (payload.answered) continue;
+                if (payload.reply_intent) replyOutcomeUnknownRequests.push(payload.request_id);
+                else pendingRequests.push(payload.request_id);
+              }
+            }
+            const latestOperationAt = events.at(-1)?.at ?? null;
+            const latestRuntimeAt = runtimeEvents ? this.#db.prepare(`SELECT MAX(at) AS at FROM runtime_task_events
+          WHERE task_id=? AND attempt=?`).get(taskId, attemptRow.attempt).at : null;
+            const cancelledAt = attemptRow.queued_cancelled_at ?? null;
+            const attemptUpdatedAt = [latestOperationAt, latestRuntimeAt, cancelledAt, attemptRow.created_at].filter((value) => typeof value === "string" && Number.isFinite(Date.parse(value))).sort().at(-1) ?? attemptRow.created_at;
+            return {
+              attempt: attemptRow.attempt,
+              generation: attemptRow.generation,
+              status: attemptRow.status,
+              created_at: attemptRow.created_at,
+              updated_at: attemptUpdatedAt,
+              current: attemptRow.attempt === taskRow.current_attempt,
+              operation: operation ? {
+                operation_id: operation.operation_id,
+                phase: operation.phase,
+                revision: operation.revision,
+                result_status: operation.result_status,
+                result_digest: operation.result_digest,
+                cleanup_verified: cleanupVerified,
+                administrative_release: administrativeRelease
+              } : null,
+              result,
+              wake,
+              hold,
+              pending_requests: pendingRequests,
+              reply_outcome_unknown_requests: replyOutcomeUnknownRequests,
+              ...resultSubmissionError ? { result_submission_error: resultSubmissionError } : {}
+            };
+          });
+          const current = attempts.find((attempt) => attempt.current);
+          if (!current) fail2("task_attempt_projection_mismatch");
+          const updatedAt = [current.updated_at, taskRow.created_at].filter((value) => typeof value === "string" && Number.isFinite(Date.parse(value))).sort().at(-1) ?? taskRow.created_at;
+          return {
+            task,
+            projection: {
+              task_id: taskRow.task_id,
+              status: taskRow.status,
+              current_attempt: taskRow.current_attempt,
+              created_at: taskRow.created_at
+            },
+            owner_binding: this.#ownerBinding(taskId),
+            updated_at: updatedAt,
+            current,
+            ...includeAttempts ? { attempts } : {}
+          };
+        });
+      }
       /** P1 §3.4: read one bounded page of the exact stored canonical Result
        * JSON. Byte offsets always land on UTF-8 codepoint boundaries via the
        * returned next_offset; callers must page with it instead of computing
