@@ -34,6 +34,24 @@
 - 真实 Executor 正常退出：重新启动并复用 Authority。
 - 真实 Executor `SIGKILL`：归档旧 Lease、启动新 Executor、同一 Thin MCP
   会话后续读取成功。
+- Windows 真实 production Worker：使用真实 SQLite v14、真实 Executor
+  Lease/Control 进程和 production `worker-main.js` 完成 provenance、
+  bootstrap、launch receipt、permanent claim 与 identity handshake，随后在
+  私有 interaction bind 处保持存活；此时 `SIGKILL` Executor，由真实 Thin
+  MCP 的 `zcode_status` 触发自动恢复。恢复以
+  `EXECUTOR_RECOVERY_WORKER_ACTIVE` 拒绝，blocker 为
+  `worker_still_alive:task-production-worker/1`。
+- 上述真实 Worker 场景同时核对：Worker PID 仍存活；Lease 字节未变；没有
+  新的 Executor control endpoint；没有 `EXECUTOR_START_RECOVERED`；恢复锁
+  不存在；Spawn 日志仍只有一个 Worker PID；SQLite Operation/Event 未变。
+  Worker 退出后 Worker Safety 才转为 safe。
+- 该场景中的 Worker 是 claim-only，并在私有 interaction bind 处等待，尚未
+  进入模型或 Adapter 执行；因此它证明的是“真实 Worker 存活时不得双
+  Spawn/覆盖 Lease”，不是生产模型执行 E2E。
+
+最终测试修正只增加真实进程证据与测试域映射，没有保留或新增供 fixture
+绕过的 production 兼容分支。未发现根恢复顺序存在双 Spawn 缺陷；此前缺口
+是证据层级不足，而不是已确认的功能缺陷。
 
 ## P0-B Continue Release 事实
 
@@ -57,14 +75,21 @@
 
 | 检查 | 结果 |
 |---|---|
-| `npm run typecheck` | PASS（A 线代码） |
-| `npm run build:test` | PASS |
-| `test/executor-recovery.test.ts` | PASS（12/12） |
-| `sqlite-candidate/wp6c/executor-wake.test.mjs` | PASS（7/7） |
+| `npm run typecheck` | PASS（最终工作树） |
+| `npm run build` / `npm run build:test` / `npm run check:generated` | PASS（生成物 14 项最新） |
+| `test/executor-recovery.test.ts` | PASS（13/13，含 Windows 真实 production Worker） |
+| Lease/IPC/Spawn Fence | PASS（30/30） |
 | `test/mcp-stdio-entry.test.ts` | PASS（6/6） |
-| A 线定向集合（Recovery/Wake/Lease/IPC/Thin MCP/Executor 进程） | PASS（60/60） |
-| 真实进程恢复定向用例 | PASS |
-| Preview.17 完整回归 / Windows / Ubuntu CI | NOT_RUN（集成阶段） |
+| `sqlite-candidate/wp6c/executor-wake.test.mjs` | PASS（7/7） |
+| `test/executor-process.test.ts` | PASS（12/12） |
+| A 线定向集合（Recovery/Wake/Lease/IPC/Thin MCP/Executor 进程） | PASS（68/68） |
+| `npm run test:affected -- --development` | PASS（214 项：213 pass、1 Node-version skip、0 fail；`FULL_SUITE_DEFERRED_TO_RELEASE_GATE`） |
+| 受影响门禁选择原因 | `FULL_SUITE`：`test/test-impact-map.json` 与 3 个测试 fixture 属于未登记测试基础设施 |
+| 生产模型/Adapter 执行 | NOT_RUN（真实 Worker 在 bind 前被阻断） |
+| Ubuntu production claim-only handshake | NOT_RUN |
+| Preview.17 完整 Release Gate / GitHub Windows / Ubuntu CI | NOT_RUN（集成阶段） |
 | Windows 重启 / Desktop fully exited / notLoaded / 严格 Wake C/D | NOT_RUN |
 
 本报告不把定向测试或合成 Executor 结果提升为 Preview.17 最终验收。
+`npm run test:affected` 是开发期受影响/延期门禁，其上述结果不是完整 CI
+PASS；完整 Windows/Ubuntu 矩阵仍需在集成或发布候选阶段执行。
