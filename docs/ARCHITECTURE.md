@@ -3,9 +3,9 @@
 > Status: AUTHORITATIVE
 
 > 2026-11-16 本地候选修订：[ADR-039](decisions/ADR-039-host-authorized-cancellation.md) 将取消授权与清理事实分离。queued + Launch Intent 无 Claim 时允许原子持久化取消并禁止迟到 Claim，未证明的进程/资源占用保留；Running 的 cleanup-only Hold 可经新鲜取消树证明追加消解记录，再继续原 CAS。此修复不增加 MCP 工具、Schema、重派或第二套恢复引擎。
-> Last updated: 2026-11-24（Preview.16 已发布：ADR-059 Owner Binding 与安装即生效 Auto Wake）
-> Last verified: 2026-11-24，核对 ADR-059 实现、完整 `npm test`（1132 tests / 1130 pass / 2 skip / 0 fail）、Preview.15 库副本无感升级、真实安装制品 + 真实 Codex Host 的非空工程 Auto Wake 闭环（原 Thread 出现 Queue 触发的新 Turn、原生 MCP Result 回读与独立验收）。严格 C/D、Desktop fully exited 与 Official Runtime provenance 仍为 `NOT_RUN`。
-> Verified against: `406c56b848f41823c68a9013f81b645b6b19e0be`（PR #140 合并提交，Preview.16 发布提交）。
+> Last updated: 2026-11-25（Preview.17 候选：ADR-060 Executor 崩溃恢复与 Continue Release 事实）
+> Last verified: 2026-11-25，核对 ADR-060 的真实 Executor 正常/`SIGKILL` 退出、同一 Thin MCP 会话自动恢复、真实 Store Wake 后 Continue、并发恢复/Worker 存活/Owner unknown/归档未知故障注入。Preview.17 完整回归、Windows/Ubuntu CI 与真实 Host E2E 在集成阶段记录；严格 C/D、Desktop fully exited 与重启矩阵仍为 `NOT_RUN`。
+> Verified against: A-line candidate based on `6af69b55d7ecb660c2ad2c923888cf7f1e8886c8`（合并时由集成候选更新）。
 
 本文件描述当前 Preview.16 发布候选的生产架构。Windows x64 已默认切换到官方 Host 路径，R7 Runtime Events/Usage 复用同一 SQLite Authority；候选保留 ZCode 3.18.2 Host 模块、官方 Start Plan 认证投影与官方签名 runtime host，并完成 ADR-041 的 Thin Official Host 收敛。PR #116 已在 `450c18af` 合入 opt-in Result 摘要/默认完整 Result 与 Event Attempt 归属；PR #121 已在 `f51e965e` 合入无固定次数的 Recovery 观察去重与历史 v14 Hold 兼容；PR #129 已合入完整已捕获响应的 AgentReport 扫描；PR #130 已合入四种终态 Result 的统一 `zcode_cancel` 行政释放；PR #131 已合入独立 Executor、Thin MCP、Task CLI/Web 与 Async Master Handoff；ADR-059 已用持久 Owner Binding 与安装即生效 Auto Wake 取代专用 Wake 授权。公开合同继续以 [INTERFACES.md](INTERFACES.md) 为准，宿主和运行配置分别见 [SHARED_CORE.md](SHARED_CORE.md) 与 [ZCODE_RUNTIME.md](ZCODE_RUNTIME.md)。
 
@@ -53,6 +53,16 @@ MCP tools                                      │ queue / cancel / read-only re
 
 当前 Preview 中 `SqliteLifecycleMcpAuthority` 仍由 MCP Host 进程持有。PR 2.5 candidate 不改变这个历史事实，但把候选分支的 shipped MCP 入口收窄为 Thin MCP：`ExecutorControlClient` 连接独立 Executor，生产 `SqliteLifecycleMcpAuthority`、SQLite writer、Worker IPC、Official Runtime 和 Recovery 均迁入 Executor；测试专用 legacy Host harness 不进入生产包。`lifecycle-gate.ts` 负责 Bootstrap、进程身份、私有 Claim/Result/Interaction 管道、Schema 校验和清理证明；SQLite Store 负责事务、Task/Attempt/Operation、Result digest、Capacity 和不可覆盖事件。
 
+[ADR-060](decisions/ADR-060-executor-crash-recovery-and-release-fact-continue.md) 在 Thin MCP 首次收到控制通道
+`EXECUTOR_UNAVAILABLE` 时触发一次性恢复，不增加常驻 Supervisor 或后台轮询。
+恢复协调器复用 Lifetime Lease、精确进程身份和现有跨进程锁：锁位于 Host
+设置目录，不污染 Authority 根；Owner 已退出时先只读检查同一 SQLite
+Authority 的活动 Launch/Claim Worker，只有 Worker 已证明退出或从未启动才
+归档旧 Lease 并 Spawn。Owner 存活、Worker 存活、身份未知或
+`launch_intent` 缺 Receipt 均 Fail Closed。恢复成功后重新连接同一控制
+通道；并发请求只收敛到一次 Spawn，历史 Task/Attempt/Operation/Result/
+Event 不重建。
+
 R7 在同一 Authority 内增加 additive `runtime_task_events`，不新增 Event Broker、第二状态机或 Companion IPC。Worker 通过一次性 fd14 发送规范化 Runtime observation；Manager 只从持久 Task/Attempt/Generation/Claim 派生身份绑定，Worker 不能自报权威身份。Store 以 Worker sequence 幂等、拒绝 stale Attempt，并把 Runtime row 映射到既有单调 public cursor。`zcode_events`、`zcode_feedback` 和 `buildTaskResult()` 从同一持久事实读取 Usage、Model Profile、Timing、Tool Activity 与 Feedback；Lifecycle Event 与 Runtime Event 仍分属不同表。ADR-048 只把省略 `max_bytes` 的读取限制为默认 32 KiB 页，持久 Event 不裁剪，调用方按 `has_more`/`scan_incomplete` 与 cursor 读至结束。
 
 生产 Worker 的 `zcode_app_server` 模式按 [ADR-035](decisions/ADR-035-worker-platform-adapter-selection.md) 选择 Adapter。只有 `win32/x64` 实例化 `OfficialAppServerWorkerAdapter`；Linux、macOS、Windows 非 x64 与其他组合都在构造 Adapter 前以 `unsupported_worker_platform` fail closed。direct stdio 实现已收敛为显式 `ZCodeAppServerTestAdapter` 与 `testOnlyLegacyDirectAdapter`，只服务协议、帧、期限和 Cleanup 合成回归，不是生产备用路径。选择只读取 platform/arch，环境变量、TaskPackage、MCP 参数、持久配置和测试参数都不能改变正式 Worker 的 Adapter 类型。正式 Adapter 沿用 `CodingAgentAdapter` 的完成、取消、交互、结果、期限和 Cleanup 合同，没有新增公开 Adapter Mode、持久配置或平行 RuntimeAdapter。
@@ -66,6 +76,14 @@ TaskPackage 经 SQLite Manager 校验后创建 queued Attempt。Admission 事务
 Worker 接收私有 Bootstrap，经精确 OS 进程身份、Launch/Claim 绑定后进入一次执行。永久 Claim 不重放。Spawner 持续消费 stderr，不在内存累积无人订阅的日志。Worker 只有私有 SQLite 握手入口；旧 `dataRoot taskId attempt` JSON 执行入口已删除。
 
 合法 Result 经完整帧和绑定验证后先提交 SQLite，随后才验证 Worker 退出、Adapter proof、进程树和资源。Result、进程退出、Cleanup 与 Release 是独立事实。32 MiB canonical Result 和 v14 保持 [ADR-026](decisions/ADR-026-sqlite-result-contract.md)；COMMIT 不确定继续保留 poison/WRITER_INTENT，禁止猜测替代 Result 或重派。
+
+Release 一旦由持久 `released` Event 成立，后续 Wake `intent`、`queued`、
+`submission_unknown`、`turn_started` 或 `web_notify` Observation 只推进
+通知 revision，不撤销 Result、Cleanup 或 Release。Continue 以当前
+Operation revision 做 CAS，但 Release 证明按“该 revision 及其之前存在
+`released` Event”判断；原 Attempt、Result Digest、Cleanup/Release 证明和
+全部 Wake Event 均保留。活动 Worker、Workspace 占用、Cleanup 未验证或
+未知提交仍按原规则拒绝或先核对。
 
 执行、交付与清理期限保持 [ADR-027](decisions/ADR-027-execution-and-cleanup-deadlines.md)。Manager 一次解析 Task/Host 默认执行预算，Worker/Adapter 使用相同快照；执行结束即停止执行 timer，Adapter 清理使用独立预算。迟到或缺失 Cleanup proof 不自动释放路径。
 

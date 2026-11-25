@@ -449,6 +449,18 @@
       ]
     },
     {
+      "file": "test/executor-recovery.test.ts",
+      "type": "Integration",
+      "gate": "T2",
+      "domains": [
+        "manager-lifecycle",
+        "mcp-host",
+        "worker-launch",
+        "process-cleanup-and-locks",
+        "sqlite-persistence"
+      ]
+    },
+    {
       "file": "test/executor-wake.test.ts",
       "type": "Unit",
       "gate": "T1",

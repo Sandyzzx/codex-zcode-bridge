@@ -286,3 +286,43 @@ test('later Wake revisions do not break Release retry or Continue history',()=>{
     reopened.close();
   }
 });
+
+test('Continue accepts the current released revision after Wake observations',()=>{
+  const f=makeReleased('manager-current-revision');
+  try{
+    f.store.recordExecutorWakeObservation(wakeInput(f.ref,'intent'));
+    f.store.recordExecutorWakeObservation(wakeInput(f.ref,'queued',{
+      queue_message_id:'019c0000-0000-7000-8000-000000000099',
+    }));
+    f.store.recordExecutorWakeObservation(wakeInput(f.ref,'turn_started'));
+    const current=f.store.readOperation(f.ref.operation_id);
+    const continuation=f.store.createNextAttempt({
+      operation_id:'continue-from-manager-current-revision',
+      task_id:f.ref.task_id,
+      previous_attempt:1,
+      previous_operation_id:f.ref.operation_id,
+      expected_generation:f.ref.generation,
+      expected_revision:current.revision,
+      claim_id:f.releaseRequest.claim_id,
+      claim_worker_identity_digest:f.releaseRequest.claim_worker_identity_digest,
+      feedback:'continue after three later Wake revisions',
+      additional_requirements:[],
+    },{
+      workspaceValidator:()=>({state:'allow',fixture:true}),
+      executionPermissionCheck:()=>({state:'allow',fixture:true}),
+    });
+    assert.equal(continuation.attempt,2);
+    assert.equal(f.store.readTaskProjection(f.ref.task_id).current_attempt,2);
+  }finally{
+    f.store.close();
+    stores.delete(f.store);
+  }
+  const reopened=IsolatedAdmissionStore.open(f.dataRoot);
+  try{
+    const continued=reopened.readTaskLifecycle(f.ref.task_id).continuation;
+    assert.equal(continued.previous_revision,f.cleanupRevision+4);
+    assert.equal(wakeEvents(reopened,f.ref.operation_id).length,3);
+  }finally{
+    reopened.close();
+  }
+});

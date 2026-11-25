@@ -2,12 +2,12 @@
   "schema_version": 1,
   "platform": "win32",
   "runner": "windows-2022",
-  "measured_at": "2026-11-22",
-  "source": "PR #106 split-file estimates plus PR 2 Executor lifecycle estimates; estimates remain empirical, not a per-file benchmark",
+  "measured_at": "2026-11-25",
+  "source": "PR #106 split-file estimates plus PR 2 and Preview.17 Executor lifecycle estimates; estimates remain empirical, not a per-file benchmark",
   "shards": [
     {
       "id": 1,
-      "estimated_ms": 788774,
+      "estimated_ms": 818774,
       "tests": [
         {
           "file": "test/agent-report.test.ts",
@@ -56,6 +56,10 @@
         {
           "file": "test/executor-process.test.ts",
           "estimated_ms": 55000
+        },
+        {
+          "file": "test/executor-recovery.test.ts",
+          "estimated_ms": 30000
         },
         {
           "file": "test/executor-wake.test.ts",

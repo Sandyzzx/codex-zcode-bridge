@@ -12,7 +12,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import process from "node:process";
 import test from "node:test";
-import { resolveDataRoot, resolveMaxConcurrentWorkers } from "../src/mcp/main.js";
+import { executorAutoRecoveryEnabled, resolveDataRoot, resolveMaxConcurrentWorkers } from "../src/host/stdio.js";
 
 const MAIN_JS = fileURLToPath(new URL("../src/mcp/main.js", import.meta.url));
 const PLUGIN_ROOT = fileURLToPath(new URL("../../plugins/codex-zcode-bridge/", import.meta.url));
@@ -56,6 +56,7 @@ function isolatedInstall(name: string, copyPlugin = false) {
 function isolatedEnvironment(extra: NodeJS.ProcessEnv, profile: ReturnType<typeof isolatedInstall>): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
+    ZCODE_BRIDGE_EXECUTOR_AUTO_RECOVER: "0",
     ...extra,
     USERPROFILE: profile.userProfile,
     HOME: profile.userProfile,
@@ -233,6 +234,13 @@ test("worker concurrency defaults to eight and rejects out-of-range configuratio
   const invalid = resolveMaxConcurrentWorkers({ ZCODE_BRIDGE_MAX_CONCURRENT_WORKERS: "9" });
   assert.equal(invalid.maxConcurrentWorkers, 1);
   assert.match(invalid.warning ?? "", /integer from 1 to 8/);
+});
+
+test("automatic Executor recovery defaults on and has an explicit diagnostic disable", () => {
+  assert.equal(executorAutoRecoveryEnabled({}), true);
+  assert.equal(executorAutoRecoveryEnabled({ ZCODE_BRIDGE_EXECUTOR_AUTO_RECOVER: "1" }), true);
+  assert.equal(executorAutoRecoveryEnabled({ ZCODE_BRIDGE_EXECUTOR_AUTO_RECOVER: "0" }), false);
+  assert.equal(executorAutoRecoveryEnabled({ ZCODE_BRIDGE_EXECUTOR_AUTO_RECOVER: "off" }), false);
 });
 
 test("marketplace bundle starts through the shipped launcher without repo-local dependencies", { timeout: 30_000 }, (t) => {

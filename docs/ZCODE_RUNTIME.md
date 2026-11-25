@@ -1,13 +1,33 @@
 # ZCode 运行配置边界
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-24（ADR-054 授权机制退役；Task Console 自动启动开关）
-> Last verified: 2026-11-24，核对 v13 只读拒绝、未完成升级 Marker 保留、v14 Fresh/Existing 启动、v13 CLI/Schema 分发删除与 `ZCODE_BRIDGE_TASK_CONSOLE` 的持久配置路径（单测 + Cost Lab 全量 90/90）；真实模型、OAuth 与 Billing E2E 为 `NOT_RUN`。
-> Verified against: `406c56b848f41823c68a9013f81b645b6b19e0be`（Preview.16 发布提交；ADR-054 适配集成后核对 Resolver/factory/console/cost-lab 源码，并核对 Console 自动启动开关）
+> Last updated: 2026-11-25（ADR-060 Executor 自动恢复开关）
+> Last verified: 2026-11-25，核对真实 Executor 正常/异常退出后的自动恢复、恢复锁位于 Host 设置目录、默认开启与显式诊断关闭；Preview.17 完整 Host/CI 验证在集成阶段更新。
+> Verified against: A-line candidate based on `6af69b55d7ecb660c2ad2c923888cf7f1e8886c8`
 
 当前生产路径是 `node <installed-runtime>/resources/glm/zcode.cjs app-server --stdio --surface desktop`，不是历史 CLI `--prompt --json`。任务 Adapter 与模型目录探测共用 `createInstalledOfficialHostSessionFactory` 的同一启动合同；安装版兼容性由 `OfficialAppServerRuntimeResolver` 精确校验，配置项与用户设置方法见仓库 README。
 
 Task 受理时 MCP 会按需自动启动 loopback Task Console 并把验证过的 Deep Link 放进 receipt；`ZCODE_BRIDGE_TASK_CONSOLE`（环境变量或同一 `runtime-config.json` 设置键）取 `off`/`0`/`false` 时关闭该自动启动（默认 `auto`），此时 receipt 的 `console_link` 为 `available: false` / `WEB_CONSOLE_DISABLED`，已受理的 Task 不受影响。Cost Lab 隔离验证使用该开关，避免留下常驻 Console 进程；关闭自动启动不改变 Console 自身的独立生命周期。
+
+## Executor 自动恢复（ADR-060）
+
+Thin MCP 在首次建立或重新建立 Executor 控制通道时，如果本机 Named Pipe
+不可用，会调用一次自动恢复协调器；默认开启，不做持续轮询。协调器先探测
+健康 Executor，随后使用 `<settingsDirectory>/executor-recovery.lock`
+获取跨进程独占。该临时锁不写入 SQLite Authority 根，因此 Fresh root 的
+允许条目与原子 Bootstrap 合同不变。
+
+旧 Lease 只有在 Owner 的 PID、启动指纹、平台与身份版本共同证明已退出时才
+可归档。归档前会只读打开同一 `bridge.sqlite`，检查活动 `launch_intent` /
+Claim / Worker identity：Worker 仍存活、身份未知或 Launch outcome 未知时
+Fail Closed。安全归档后使用与 `zcode-bridge executor start` 相同的 Spawn
+实现启动 Executor，并等待 `executorStatus` 返回健康 Lease。两个并发请求
+最多产生一个恢复 Spawn。
+
+`ZCODE_BRIDGE_EXECUTOR_AUTO_RECOVER=0|false|off` 仅用于确定性传输诊断或
+隔离测试，显式关闭自动启动；默认、缺失或非法值均为开启。该开关不改变
+已有 Executor 连接、Lease 所有权、Worker Safety、Cleanup、Release 或
+SQLite 数据。
 
 ADR-038 后，插件资源目录只保留固定 ZCode 3.18.2 Official Host；ZCode 3.18.0 的整套 Runtime 不再随新制品分发，Preview.5 回滚继续使用其历史发布包。生产 Adapter 选择在构造前只接受 Windows x64 的 `official_host`；Linux、macOS、Windows 非 x64 与未知架构返回 `unsupported_worker_platform`。direct Adapter 只用于隔离测试注入，不是其他平台的生产回退。
 

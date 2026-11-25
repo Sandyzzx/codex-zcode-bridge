@@ -1,6 +1,5 @@
 #!/usr/bin/env node
-import { spawn } from "node:child_process";
-import { existsSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -20,11 +19,11 @@ import type {
 import { executorPipeName } from "../executor/pipe.js";
 import {
   clearExecutorLease,
-  EXECUTOR_UNLEASED_TRANSITION_ENV,
   inspectExecutorLease,
   type ExecutorLeaseInspection,
   type ExecutorLeaseRecord,
 } from "../executor/lease.js";
+import { spawnExecutorProcess } from "../executor/spawn.js";
 import { resolveTaskConsoleLink } from "../web/console-link.js";
 import {
   listTasksInputSchema,
@@ -493,37 +492,12 @@ function spawnExecutor(input: {
   readonly timeoutMs: number;
   readonly acceptUnleasedTransition?: true;
 }): { readonly pid: number | undefined } {
-  const executorEntry = resolveExecutorEntry();
-  const bridgeEntry = resolveBridgeEntry();
-  const child = spawn(process.execPath, [
-    executorEntry,
-    "--data-root", input.dataRoot,
-    "--bridge-entry", bridgeEntry,
-    "--settings-directory", input.settingsDirectory,
-    ...(input.heartbeatMs === undefined ? [] : ["--heartbeat-ms", String(input.heartbeatMs)]),
-  ], {
-    detached: true,
-    windowsHide: true,
-    stdio: "ignore",
-    env: {
-      ...process.env,
-      ...(input.acceptUnleasedTransition === true
-        ? { [EXECUTOR_UNLEASED_TRANSITION_ENV]: "1" }
-        : {}),
-    },
+  return spawnExecutorProcess({
+    dataRoot: input.dataRoot,
+    settingsDirectory: input.settingsDirectory,
+    ...(input.heartbeatMs === undefined ? {} : { heartbeatMs: input.heartbeatMs }),
+    ...(input.acceptUnleasedTransition === true ? { acceptUnleasedTransition: true as const } : {}),
   });
-  child.unref();
-  return { pid: child.pid };
-}
-
-function resolveExecutorEntry(): string {
-  const bundled = fileURLToPath(new URL("./executor.mjs", import.meta.url));
-  return existsSync(bundled) ? bundled : fileURLToPath(new URL("../executor/main.js", import.meta.url));
-}
-
-function resolveBridgeEntry(): string {
-  const bundled = fileURLToPath(new URL("./bridge.mjs", import.meta.url));
-  return existsSync(bundled) ? bundled : fileURLToPath(new URL("../mcp/main.js", import.meta.url));
 }
 
 async function tryExecutorStatus(
