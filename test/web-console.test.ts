@@ -380,8 +380,10 @@ test("Web Console serves a loopback task inspection surface without mutations", 
     );
     assert.match(String(page.json), /\/console/u);
     assert.match(String(page.json), /Experimental: task status and recovery operations are still being refined\./u);
-    assert.match(String(page.json), /data-i18n="taskList">Task inbox/u);
-    assert.match(String(page.json), /data-i18n="taskDetails">Task workspace/u);
+    assert.match(String(page.json), /class="summary-line"/u);
+    assert.match(String(page.json), /data-i18n="titleTasks">Tasks/u);
+    assert.doesNotMatch(String(page.json), /Task inbox|Task workspace/u);
+    assert.doesNotMatch(String(page.json), /class="stats\b/u);
     assert.doesNotMatch(String(page.json), /class="table-head"/u);
     assert.doesNotMatch(String(page.json), /id="page-cost-lab"/u);
     assert.doesNotMatch(String(page.json), /id="page-runtime"/u);

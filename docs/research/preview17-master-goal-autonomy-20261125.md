@@ -158,7 +158,7 @@ R10 只作为回归语义，不重派历史任务，不读取或修改 LumeCAE �
 | `npm run test:affected -- --development` | `PASS` | `TARGETED_TESTS_PASS`；T0 的 typecheck、build、plugin validation、generated freshness、`git diff --check` 均通过；隔离测试 15/15，0 fail，0 skip |
 | `npm run typecheck` | `PASS` | 由受影响门禁执行 |
 | `npm run build` | `PASS` | 由受影响门禁执行；生成物 final 与基线一致 |
-| `npm run validate:plugin` | `PASS` | `codex-zcode-bridge@2.0.0-preview.16` 结构有效 |
+| `npm run validate:plugin` | `PASS` | 集成后 `codex-zcode-bridge@2.0.0-preview.17` 结构有效 |
 | `npm run check:generated` | `PASS` | 14 个生成物 tracked 且 fresh |
 | 真实模型/Host 遵循率 | `NOT_RUN` | 本设计不宣称 |
 | 真实关联返工 Task E2E | `NOT_RUN` | 本设计不宣称 |

@@ -22,15 +22,21 @@ Authority 没有逐 Attempt Provider settlement 时，界面必须明确显示�
 - Console 主导航只保留 **任务 / Tasks**。Cost Lab 与 Runtime 不再占据独立
   主导航；其底层能力保留在 Diagnostics，继续使用同一 loopback Origin 和
   既有服务，不删除成本、Runtime 或 Billing 实现。
-- Task 列表提供运行中、需要处理、已完成三个计数和筛选，并使用 inbox 行而不是
-  宽表格。搜索按 Task 名称、Task ID、Workspace 与目标过滤，`All tasks` 下拉
-  与计数卡共用 bucket。每行显示 Task 名称、Workspace、状态、Attempt、模型、
-  套餐、执行消耗、更新时间与 Attention 摘要；Attention 行优先排序，已完成
-  Task 显示 Review ready / Awaiting review / Review blocked。
-- Task 详情在同一页面展开，固定按 Overview、Available actions、
-  Acceptance/Attention、Attempt 时间线、Result、Execution usage、默认折叠的
-  Execution facts（Wake/Cleanup/Release）和默认折叠的 Events 排列。先结论、
-  再动作、再证据、最后事件；历史 Attempt 只读选择，不创建并行详情页。
+- Task 页面顶部只用一行紧凑文字显示 Running / Needs attention / Completed，
+  不使用大型统计卡；计数与 `All tasks` 共用 bucket 并可点击筛选。搜索按
+  Task 名称、Task ID、Workspace 与目标过滤。
+- Task 列表使用 inbox 行而不是宽表格，每项最多三行：Task 名称与一个主要状态；
+  Workspace 简称、Model、Plan、Attempt 与更新时间；需要处理时的失败原因或
+  Attention 摘要。列表不重复完整路径、Usage、时间或状态；Model 与 Plan 同时
+  未观测时合并展示。Attention 行优先排序，已完成 Task 显示 Awaiting review /
+  Review blocked，不把 Worker completed 写成 Master accepted。
+- Task 详情在同一页面展开，固定为 Task header、Problem and actions、Work
+  history、Execution 和默认折叠的 Technical details。Problem and actions 合并
+  Acceptance、Attention 与 Available actions；Work history 合并 Attempt
+  timeline 与 Result；Execution 默认只显示一行摘要，展开后显示 Token、Cache、
+  Effort、Provider 成本与 Master/Worker Usage；Technical details 合并 Wake、
+  Cleanup、Release 与 Events。先结论、再动作、再证据、最后事件；历史 Attempt
+  只读选择，不创建并行详情页。
 - `Result.issues` 与 `Result failed` 是 Worker 报告事实，不是 Master 验收
   结论。Console 必须显示 `Result issues` / `Result failed` 与待复核提示，
   不得仅凭 Result 内容声称 Acceptance failed 或 Accepted。
