@@ -1,9 +1,9 @@
 # ZCode 运行配置边界
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-25（ADR-060 Executor 自动恢复开关）
-> Last verified: 2026-11-25，核对真实 Executor 正常/异常退出后的自动恢复、恢复锁位于 Host 设置目录、默认开启与显式诊断关闭；Preview.17 完整 Host/CI 验证在集成阶段更新。
-> Verified against: A-line candidate based on `6af69b55d7ecb660c2ad2c923888cf7f1e8886c8`
+> Last updated: 2026-11-25（Preview.17、ADR-060 Executor 自动恢复开关与 ADR-062 单页 Console）
+> Last verified: 2026-11-25，核对真实 Executor 正常/异常退出后的自动恢复、恢复锁位于 Host 设置目录、默认开启与显式诊断关闭，以及 Console 单页启动/Diagnostics 边界；Preview.17 完整 Host/CI 验证在集成阶段更新。
+> Verified against: `685c9158`（四条 Preview.17 工作线的代码集成快照；最终候选提交与 CI 结果由交付报告记录）。
 
 当前生产路径是 `node <installed-runtime>/resources/glm/zcode.cjs app-server --stdio --surface desktop`，不是历史 CLI `--prompt --json`。任务 Adapter 与模型目录探测共用 `createInstalledOfficialHostSessionFactory` 的同一启动合同；安装版兼容性由 `OfficialAppServerRuntimeResolver` 精确校验，配置项与用户设置方法见仓库 README。
 

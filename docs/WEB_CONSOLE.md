@@ -1,11 +1,11 @@
-# Bridge Operations Console
+# Bridge Task Workspace
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-25（Preview.17 单页 Task Console）
-> Last verified: 2026-11-25，核对单页列表/详情的 Workspace、逐 Attempt Usage 与 Provider 实际成本未观测状态、真实 SQLite Authority 到 IPC/HTTP/Chromium 的 Console projection、Attempt 切换、完整 Events 分页、Continue/Rework 的 Cleanup/Worker/Interaction/Wake 能力门、Cleanup recovery 的 `zcode_cancel` 边界、Diagnostics 零外部请求、双语与明暗主题；真实模型、真实 Desktop、真实 Queue Wake 和 Master Usage 不在已验证范围。
-> Verified against: `b9e1e829`
+> Last updated: 2026-11-25（Preview.17 Task Workspace 重构）
+> Last verified: 2026-11-25，核对 inbox 列表与三项筛选、Attention 优先排序、Completed-not-accepted 标签、详情八段顺序、动作前置、逐 Attempt Usage/Effort、Master 与 Worker 分栏、Provider 实际成本未观测状态、Execution facts 折叠、完整 Events 分页、真实 SQLite Authority 到 IPC/HTTP/Chromium 的 Console projection、Continue/Rework/Cleanup recovery 能力门、Diagnostics 零外部请求、双语、明暗主题与窄屏布局；真实模型、真实 Desktop、真实 Queue Wake 与 Master Usage 不在已验证范围。
+> Verified against: `9aa19c13`（实现与测试快照 `b9e1e829`，最终报告提交）
 
-Operations Console 是 Executor Control Pipe 的本地可视化 Adapter。它只有一个
+Task Workspace 是 Executor Control Pipe 的本地可视化 Adapter。它只有一个
 loopback Origin、一个 HTTP Server 和一个单页界面，不创建 Task、Manager、
 Worker 或第二套 SQLite Authority。任务、Attempt、Event、Result、Attention、
 Wake、Cleanup、Release 和执行 Usage 都来自 Executor 持有的同一份 Authority。
@@ -42,33 +42,41 @@ node dist/web-console.mjs --data-root <absolute-state-dir>
 ## 单页界面
 
 顶栏固定只包含品牌、Executor 状态、Diagnostics、语言和主题。页面主体是
-Task 列表与当前 Task 详情；标题使用 `Task details` / `任务详情`，顶部以低
-强调提示标明任务状态与恢复操作仍属实验性。旧 Dashboard、Runtime 和 Cost Lab
-主导航页面均已退役，Runtime 与 Cost Lab 能力移入 Diagnostics。
+单页 Task Workspace：左侧 `Task inbox` / `任务收件箱`，右侧
+`Task workspace` / `任务工作台`。顶部只保留低干扰实验性提示；旧 Dashboard、
+Runtime 和 Cost Lab 主导航页面均已退役，Runtime 与成本证据能力移入
+Diagnostics。
 
 ### Task 列表
 
 - `Running`、`Needs attention`、`Completed` 三个计数与可点击筛选。
-- 每行显示 Task 名称/目标、Workspace、状态、当前 Attempt、Model、Plan、
-  执行 Usage、更新时间和 Attention 摘要。列表中的 Workspace 保留末段路径并
-  提供完整路径提示；详情显示完整 Workspace。
-- Usage 单元同时显示 Discount 状态和 `Provider actual cost: Not observed`，
-  不把 Provider 成本省略成空白。
+- 列表使用 inbox 行而不是宽表格。每行显示 Task 名称、Task ID、状态、当前
+  Attempt、Model、Plan、Workspace、更新时间、Usage/Discount 摘要和
+  Attention 摘要；Workspace 单行截断并提供完整路径提示。
+- `Needs attention` 行优先排序，并使用轻微背景与左侧标记；具体原因直接显示
+  在行内，不藏在最后一列。
+- 已完成 Task 额外显示 `Review ready` / `Awaiting review` / `Review blocked`，
+  区分“Worker 已完成”和“Master 验收仍待处理/受阻”。
 - 筛选只改变本地投影；列表读取失败时保留错误信息，不伪造空列表。
 
 ### Task 详情
 
-详情固定按以下顺序显示：
+详情固定按“结论 → 动作 → 证据 → 事件”顺序显示：
 
-1. 当前状态、Executor 动作和阻塞原因。
-2. Attempt timeline；选择历史 Attempt 后该 Attempt 只读。
-3. 当前选中 Attempt 的 Result。
-4. Attention and Hold。
-5. Wake。
-6. Cleanup。
-7. Release。
-8. Execution Usage 与 Master Usage。
-9. Events。
+1. **Overview**：Task 名称、目标、状态、Attempt、Workspace、执行阶段和更新时间。
+2. **Available actions**：只显示服务端 capability 允许的 Continue、Create
+   related rework、Recover Cleanup、Reply 或 Request cancel；阻塞原因紧随按钮。
+3. **Acceptance and attention**：Completed-not-accepted、Attention 原因、
+   Hold、Pending Interaction 和未知 Reply Outcome。
+4. **Attempt timeline**：默认展开；选择历史 Attempt 后该 Attempt 只读。
+5. **Result**：当前选中 Attempt 的 Result、文件、测试和错误码。
+6. **Execution usage**：Plan、Discount、Model、Effort、Worker/Master 分栏、
+   Token、Cache 与 Provider 实际成本状态。
+7. **Execution facts**：Wake、Cleanup、Release，默认折叠。
+8. **Events**：默认折叠，按当前 Attempt 加载完整分页。
+
+Wake、Cleanup 与 Release 作为证据放在动作和失败原因之后，不再先于用户下一步
+动作出现。
 
 Task 和 Attempt 的当前/历史信息均来自 Console projection，不从 Workspace、
 Task 名称、模型名或 UI 缓存推断。Deep Link `?task_id=` 在列表加载后解析，
@@ -83,13 +91,21 @@ localStorage，支持 `light` / `dark` / `system` 和 `en` / `zh-CN`。
 - 每个 Attempt 的 Usage projection 都包含 `provider_cost`。Bridge Authority
   没有逐 Attempt Provider settlement 时，状态固定为 `not_observed`，金额与
   币种为 `null`，Reason 为 `bridge_authority_has_no_provider_settlement`；
-  UI 在有无 token Usage 时都显示这一事实，不推定为 `0` 或估算值。
+  详情在有无 token Usage 时都显示这一事实，不推定为 `0` 或估算值。
+- Plan、Discount、Model、Effort 使用独立标签。Effort 只来自 Result 的
+  effective/requested reasoning level 或 Task 请求，不从模型名推导。
+- Worker Usage 与 Master Usage 分栏。Worker 显示 Total/Input/Output、
+  Cache read/write、Reasoning 与来源；Master 没有记录时明确显示
+  `Not observed`，不退化为 `0`。
 - Start Plan 的 Coding Plan discount 为 `not_applicable`，只表示 provider kind
   下该折扣不适用。
 - Coding Plan 没有逐 Attempt settlement 证据时 discount 为 `not_observed`；
   不从套餐名称推断“已优惠”或具体金额。
 - Master Usage 固定为 `not_observed`，Reason 为
   `bridge_authority_does_not_record_master_usage`。
+- 界面只使用四种折扣状态：已应用、未应用、未观测、不适用。标签与金额
+  只来自 Authority/Runtime 的已观测字段；缺失数据不显示为 `0`，预计成本
+  不冒充 Provider 实际成本。
 
 ### Events
 
@@ -117,8 +133,7 @@ Event 数和 `All Events loaded`；不会把第一页误报为完整历史。
   `POST /api/tasks/:id/cancel`。取消请求不在地清除 Hold，也不直接写 Release。
 - **Interaction Reply**：仅 pending permission request 显示，调用
   `POST /api/tasks/:id/reply`。未知 Reply Outcome 只展示警告，不自动重发。
-- **zcode_cancel administrative Release**：Cleanup/release recovery 入口明确
-  要求 body 为
+- **Recover Cleanup**：界面只显示这一用户语言入口；后端仍要求 body 为
   `{"release_mode":"zcode_cancel_administrative_release"}`，并通过
   `POST /api/tasks/:id/recover-cleanup` 进入既有 `zcode_cancel` Recovery 状态机。
   它不会原地清除 Hold。若 Recovery 不能验证 Worker identity/Cleanup，操作
@@ -138,13 +153,13 @@ Diagnostics 是显式操作的 `<dialog>`。原独立 Runtime/Cost Lab 主导航
 
 - Runtime：静态 Inspect、Static check、授权零模型 Protocol probe、Candidate
   Report 导出。
-- Cost Lab：Environment、History、Verification entry。
+- 成本证据：Environment、History、Verification entry。
 - Auto Wake：读取和保存开关；默认开启。关闭后 Worker 完成只记录
   `web_notify` / `auto_wake_disabled`，不调用官方 Queue。
 
 打开页面、打开 Diagnostics、切换语言/主题、展开 Events 或轮询 Task 都不会
 请求 Runtime/Billing 外部能力。Runtime/Billing 读取或探针必须由用户显式点击。
-Cost Lab Verification entry 只读取确认状态，不自动开始真实验证。
+Verification entry 只读取确认状态，不自动开始真实验证。
 
 ## HTTP 与安全边界
 
@@ -182,5 +197,5 @@ Candidate Report 只生成待 Owner 审核的建议，不修改生产 Manifest�
   Chromium，但 Worker/Result 是 synthetic fixture；不是真实模型证据。
 - 真实 Desktop 全退、真实 Queue Wake、Master Usage、逐 Attempt Coding Plan
   settlement/discount 和完整 CI 仍需要后续验收。
-- 未授权的 Official Runtime 真实 Provider 执行保持
-  `BLOCKED_BY_AUTHORIZATION`。
+- 真实 Provider/Billing 读取和真实 Coding Plan 验证仍必须由用户显式点击
+  并确认；本轮 `NOT_RUN`，定向 synthetic Worker 证据不提升为真实账单结论。

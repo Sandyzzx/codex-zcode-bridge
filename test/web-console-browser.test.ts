@@ -502,7 +502,7 @@ test("real SQLite Authority drives the single-page Task Console in Chromium", {
     await page.goto(`${address.origin}/?task_id=${seeded.doneTaskId}`, { waitUntil: "domcontentloaded" });
     await page.selectOption("#language", "en");
     await page.waitForFunction(
-      () => document.querySelector("#task-detail h2")?.textContent === "task-done",
+      () => document.querySelector("#task-detail .detail-context .mono")?.textContent === "task-done",
       undefined,
       { timeout: 15_000 },
     );
@@ -512,18 +512,32 @@ test("real SQLite Authority drives the single-page Task Console in Chromium", {
     await waitForCount(page, "#count-completed", "1");
     assert.equal(new URL(page.url()).searchParams.get("task_id"), "task-done");
     assert.equal(await page.locator("#executor-state").textContent(), "ACTIVE");
-    assert.equal(await page.locator(".detail-panel .panel-head h2").textContent(), "Task details");
+    assert.equal(await page.locator(".detail-panel .panel-head h2").textContent(), "Task workspace");
     assert.equal(
       await page.locator("#experimental-notice").innerText(),
       "Experimental: task status and recovery operations are still being refined.",
     );
     assert.equal(
-      await page.locator(".task-row[data-task-id='task-done'] .cell[data-label='Workspace']").textContent(),
+      await page.locator(".task-row[data-task-id='task-done'] .task-workspace").textContent(),
       seeded.doneWorkspace,
     );
+    assert.equal(await page.locator(".task-list .table-head").count(), 0);
+    assert.equal(await page.locator(".task-row .task-main").count(), 5);
+    assert.equal(
+      await page.locator(".task-row[data-task-id='task-done'] .review-chip").textContent(),
+      "Review ready",
+    );
+    assert.equal(
+      await page.locator(".task-row[data-task-id='task-wake-unknown'] .review-chip").textContent(),
+      "Review blocked",
+    );
     assert.match(
-      await page.locator(".task-row[data-task-id='task-done'] .cell[data-label='Usage']").textContent() ?? "",
-      /Provider actual cost: Not observed/u,
+      await page.locator(".task-row[data-task-id='task-wake-unknown'] .task-attention").textContent() ?? "",
+      /Wake submission unknown/u,
+    );
+    assert.match(
+      await page.locator(".task-row[data-task-id='task-done'] .task-usage-line").textContent() ?? "",
+      /total 150 \/ in 120 \/ out 30/u,
     );
     const visibleEnglishCopy = await page.locator("body").innerText();
     for (const forbidden of [
@@ -533,6 +547,8 @@ test("real SQLite Authority drives the single-page Task Console in Chromium", {
       "Executor 的持久事实",
       "Choose a Task to inspect durable evidence",
       "READ-ONLY PROJECTION",
+      "Cost Lab",
+      "0.67",
     ]) {
       assert.equal(
         visibleEnglishCopy.toLowerCase().includes(forbidden.toLowerCase()),
@@ -548,34 +564,51 @@ test("real SQLite Authority drives the single-page Task Console in Chromium", {
     assert.equal(doneCapabilities.can_rework, true);
     assert.deepEqual(doneCapabilities.blockers, []);
 
-    const sections = await page.locator("#task-detail .section h3").allTextContents();
-    assert.deepEqual(sections.slice(0, 8), [
-      "Attempt timeline",
-      "Result for Attempt 2",
-      "Attention and Hold",
-      "Wake",
-      "Cleanup",
-      "Release",
-      "Execution usage",
-      "Events",
+    const sections = await page.locator("#task-detail [data-section]").evaluateAll((nodes) =>
+      nodes.map((node) => node.getAttribute("data-section")));
+    assert.deepEqual(sections, [
+      "overview",
+      "actions",
+      "acceptance",
+      "attempts",
+      "result",
+      "usage",
+      "execution-facts",
+      "events",
     ]);
     await waitForText(page, "#task-detail", "Start Plan");
     await waitForText(page, "#task-detail", "150");
     assert.equal(await page.getByRole("button", { name: "Create related rework" }).count(), 1);
     assert.equal(await page.getByRole("button", { name: "Continue" }).count(), 1);
     assert.equal(await page.getByRole("button", { name: "Accept" }).count(), 0);
+    assert.equal(await page.getByRole("button", { name: "Force release" }).count(), 0);
+    assert.equal(await page.getByRole("button", { name: "Clear Hold" }).count(), 0);
+    await waitForText(page, "#task-detail", "Plan · Start Plan");
+    await waitForText(page, "#task-detail", "Discount · Not applicable");
+    await waitForText(page, "#task-detail", "Effort: low");
+    assert.equal(await page.locator(".usage-column").count(), 2);
+    assert.equal(
+      await page.locator(".usage-fact").filter({ hasText: "Cache read" }).locator("strong").textContent(),
+      "Not observed",
+    );
+
+    await page.locator(".filter[data-filter='attention']").click();
+    assert.equal(await page.locator(".task-row").count(), 3);
+    assert.ok(await page.locator(".task-row").first().evaluate((node) => node.classList.contains("attention")));
+    await page.locator(".filter[data-filter='attention']").click();
+    assert.equal(await page.locator(".task-row").count(), 5);
 
     await page.locator(".attempt").filter({ hasText: "Attempt #1" }).click();
     await waitForText(page, "#task-detail", "Result for Attempt 1");
     await waitForText(page, "#task-detail", "Coding Plan");
-    const firstInput = page.locator(".usage-cell").filter({ hasText: "Input tokens" }).locator("strong");
+    const firstInput = page.locator(".usage-fact").filter({ hasText: "Input tokens" }).locator("strong");
     assert.equal(await firstInput.textContent(), "0", "a real zero must remain zero instead of becoming missing");
     await page.locator(".attempt").filter({ hasText: "Attempt #2" }).click();
     await waitForText(page, "#task-detail", "Result for Attempt 2");
-    const secondTotal = page.locator(".usage-cell").filter({ hasText: "Total tokens" }).locator("strong");
+    const secondTotal = page.locator(".usage-fact").filter({ hasText: "Total tokens" }).locator("strong");
     assert.equal(await secondTotal.textContent(), "150");
     await waitForText(page, "#task-detail", "Provider actual cost: Not observed");
-    await waitForText(page, "#task-detail", "bridge_authority_has_no_provider_settlement");
+    await waitForText(page, "#task-detail", "No provider settlement was recorded for this Attempt.");
     const providerCosts = await page.evaluate(async () => {
       const response = await fetch("/api/tasks/task-done/console");
       const body = await response.json() as {
@@ -624,7 +657,7 @@ test("real SQLite Authority drives the single-page Task Console in Chromium", {
     assert.equal(await page.locator("html").getAttribute("lang"), "zh-CN");
     await waitForText(page, "#task-detail", "Completed 不等于验收");
     await waitForText(page, "#experimental-notice", "实验性功能：任务状态与恢复操作仍在持续完善。");
-    assert.equal(await page.locator(".detail-panel .panel-head h2").textContent(), "任务详情");
+    assert.equal(await page.locator(".detail-panel .panel-head h2").textContent(), "任务工作台");
     await page.screenshot({ path: path.join(evidenceDirectory, "task-detail-attempts.png"), fullPage: true });
     await page.selectOption("#language", "en");
     await waitForText(page, "#experimental-notice", "Experimental: task status and recovery operations are still being refined.");
@@ -634,7 +667,7 @@ test("real SQLite Authority drives the single-page Task Console in Chromium", {
     const [reworkResponse] = await Promise.all([
       page.waitForResponse((response: PlaywrightResponse) =>
         response.request().method() === "POST" && response.url().endsWith("/api/tasks/task-done/rework")),
-      page.getByRole("button", { name: "Create linked Task" }).click(),
+      page.getByRole("button", { name: "Create rework Task" }).click(),
     ]);
     const reworkReceipt = (await reworkResponse.json() as {
       result: { task_id: string; relationship: string; source_task_id: string; source_attempt: number };
@@ -675,9 +708,9 @@ test("real SQLite Authority drives the single-page Task Console in Chromium", {
 
     await page.locator(".task-row").filter({ hasText: "task-cleanup" }).click();
     await waitForText(page, "#task-detail", "Cleanup unverified");
-    await waitForText(page, "#task-detail", "No runtime Usage was recorded for this Attempt.");
+    await waitForText(page, "#task-detail", "Usage was not observed. This is not zero.");
     await waitForText(page, "#task-detail", "Provider actual cost: Not observed");
-    await waitForText(page, "#task-detail", "bridge_authority_has_no_provider_settlement");
+    await waitForText(page, "#task-detail", "No provider settlement was recorded for this Attempt.");
     const cleanupCapabilities = await page.evaluate(async () => {
       const response = await fetch("/api/tasks/task-cleanup/console");
       return (await response.json() as { result: { action_capabilities: Record<string, unknown> } }).result.action_capabilities;
@@ -688,7 +721,7 @@ test("real SQLite Authority drives the single-page Task Console in Chromium", {
     assert.ok((cleanupCapabilities.blockers as string[]).includes("cleanup_unverified"));
     assert.equal(await page.getByRole("button", { name: "Continue", exact: true }).count(), 0);
     assert.equal(await page.getByRole("button", { name: "Create related rework", exact: true }).count(), 0);
-    assert.equal(await page.getByRole("button", { name: "zcode_cancel administrative Release" }).count(), 1);
+    assert.equal(await page.getByRole("button", { name: "Recover Cleanup" }).count(), 1);
     assert.equal(await page.getByRole("button", { name: "Force release" }).count(), 0);
     assert.equal(await page.getByRole("button", { name: "Clear Hold" }).count(), 0);
     let cleanupDialog = "";
@@ -699,18 +732,18 @@ test("real SQLite Authority drives the single-page Task Console in Chromium", {
     const [cleanupRecoveryResponse] = await Promise.all([
       page.waitForResponse((response: PlaywrightResponse) =>
         response.request().method() === "POST" && response.url().endsWith("/api/tasks/task-cleanup/recover-cleanup")),
-      page.getByRole("button", { name: "zcode_cancel administrative Release" }).click(),
+      page.getByRole("button", { name: "Recover Cleanup" }).click(),
     ]);
     const cleanupRecoveryBody = await cleanupRecoveryResponse.text();
     assert.equal(cleanupRecoveryResponse.status(), 500, cleanupRecoveryBody);
-    assert.match(cleanupDialog, /zcode_cancel/u);
+    assert.match(cleanupDialog, /Cleanup/u);
     const cleanupFailure = JSON.parse(cleanupRecoveryBody) as {
       error: { code: string; message: string };
     };
     assert.equal(cleanupFailure.error.code, "CANCEL_FAILED");
     assert.match(cleanupFailure.error.message, /worker_identity_unverifiable/u);
     await waitForText(page, "#task-detail", "Cleanup unverified");
-    assert.equal(await page.getByRole("button", { name: "zcode_cancel administrative Release" }).count(), 1);
+    assert.equal(await page.getByRole("button", { name: "Recover Cleanup" }).count(), 1);
     assert.equal(await page.getByRole("button", { name: "Continue", exact: true }).count(), 0);
     assert.equal(await page.getByRole("button", { name: "Create related rework", exact: true }).count(), 0);
     await page.screenshot({ path: path.join(evidenceDirectory, "cleanup-blocked.png"), fullPage: true });
@@ -727,6 +760,8 @@ test("real SQLite Authority drives the single-page Task Console in Chromium", {
     assert.ok((attentionCapabilities.blockers as string[]).includes("worker_active"));
     assert.equal(await page.getByRole("button", { name: "Continue", exact: true }).count(), 0);
     assert.equal(await page.getByRole("button", { name: "Create related rework", exact: true }).count(), 0);
+    assert.equal(await page.getByRole("button", { name: "Reply", exact: true }).count(), 1);
+    await page.getByRole("button", { name: "Reply", exact: true }).click();
     assert.equal(await page.getByRole("button", { name: "Send reply" }).count(), 1);
 
     await page.locator(".task-row").filter({ hasText: "task-queued" }).click();
@@ -763,7 +798,7 @@ test("real SQLite Authority drives the single-page Task Console in Chromium", {
 
     await page.reload({ waitUntil: "domcontentloaded" });
     await page.waitForFunction(
-      () => document.querySelector("#task-detail h2")?.textContent === "task-done",
+      () => document.querySelector("#task-detail .detail-context .mono")?.textContent === "task-done",
       undefined,
       { timeout: 15_000 },
     );

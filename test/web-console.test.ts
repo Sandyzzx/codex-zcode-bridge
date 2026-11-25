@@ -148,6 +148,7 @@ function consoleDetail(options: {
     provider_id: "account:bigmodel-individual-coding-plan",
     model_id: "GLM-5.3-Flash",
     source: "runtime" as const,
+    effort: { state: "observed" as const, value: "high", source: "runtime" as const },
   };
   const plan = {
     kind: "coding_plan" as const,
@@ -368,8 +369,9 @@ test("Web Console serves a loopback task inspection surface without mutations", 
     assert.match(String(page.json), /id="task-detail"/u);
     assert.match(String(page.json), /\/console/u);
     assert.match(String(page.json), /Experimental: task status and recovery operations are still being refined\./u);
-    assert.match(String(page.json), /data-i18n="taskDetails">Task details/u);
-    assert.match(String(page.json), /data-i18n="colWorkspace">Workspace/u);
+    assert.match(String(page.json), /data-i18n="taskList">Task inbox/u);
+    assert.match(String(page.json), /data-i18n="taskDetails">Task workspace/u);
+    assert.doesNotMatch(String(page.json), /class="table-head"/u);
     assert.doesNotMatch(String(page.json), /id="page-cost-lab"/u);
     assert.doesNotMatch(String(page.json), /id="page-runtime"/u);
     assert.doesNotMatch(String(page.json), /data-page="dashboard"/u);

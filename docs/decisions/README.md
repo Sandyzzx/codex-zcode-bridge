@@ -1,7 +1,7 @@
 # 决策路由 / Decisions
 
 > Status: AUTHORITATIVE（仅指本索引）
-> Last updated: 2026-11-25（Preview.17：ADR-060 Executor 崩溃恢复 + Continue Release 事实；ADR-063 Original E 素材来源）
+> Last updated: 2026-11-25（Preview.17：ADR-060 Executor 崩溃恢复、ADR-061 Master 自治返工、ADR-062 单页 Task Console、ADR-063 Original E 素材来源）
 > Last verified: 2026-11-24，核对 ADR-045/051/052 的合并状态、ADR-055 的 whole_task/staged 合同（PR #135，Release Gate 45200314368）、ADR-054 安装安全门禁与静态 Manifest 诊断分离，以及 ADR-059 对 ADR-051 授权门禁的退役范围。真实 Codex Host 的非空工程 Completion Wake E2E 为 `PASS — REAL`；严格 C/D、Desktop fully exited、真实 Provider/Billing 与真实模型 Skill 遵循率仍为 `NOT_RUN`。
 > Verified against: `codex/final-integration-20261124`（基于 PR #135 merge `7d0e6f35f` 与 ADR-054 适配 `15e75001` 的合并候选）。
 
@@ -49,6 +49,8 @@
 | Task Web Console | [050](ADR-050-local-task-web-console.md) | 仅 loopback；Root 级动态发现/CAS 复用、Deep Link 与跨页 summary；经同一 Executor Control 读取 Task/Event/Result/Attention 并显式转发 Cancel/Reply；不创建 Task、不打开 SQLite、不拥有 Executor 生命周期 |
 | Executor Wake | [051](ADR-051-executor-wake-delivery.md) | post-Release 一次性 Wake；投递顺序、Observation 不可改写与未知提交保护继续有效。授权文件与 loaded/idle 前置门禁由 [059](ADR-059-owner-binding-and-installed-auto-wake.md) 退役 |
 | Executor Recovery / Continue | [060](ADR-060-executor-crash-recovery-and-release-fact-continue.md) | Host 请求触发的自动 Lease/Executor 恢复；精确 Owner/Worker 证明、现有锁与 Spawn、无第二 Authority/常驻 Supervisor。Wake Observation 不撤销已成立 Release；Continue 按 CAS revision 内存在 `released` 事实判断 |
+| Master 自治返工 | [061](ADR-061-master-acceptance-driven-rework.md) | Master 对最终目标独立验收；普通工程缺陷优先 Continue，否则创建继承原合同的最小关联返工 Task；保留原证据，按进展熔断，不降低验收标准，不绕过未知 Queue 或用户决策边界 |
+| 单页任务管理 | [062](ADR-062-single-page-task-console.md) | 只保留 Tasks 主导航，列表与详情的 Task/Attempt/Result/Wake/Cleanup/Release/Usage 来自同一 Authority；Runtime/Cost Lab 移入 Diagnostics；动作按权威 capability fail-closed，成本与折扣不推断 |
 | Owner Binding / Auto Wake | [059](ADR-059-owner-binding-and-installed-auto-wake.md) | `_meta.threadId` 唯一身份来源；Binding 在受理/Attempt/Spawn 前持久化到同一 SQLite；安装即生效的 Auto Wake 默认开启；`web_notify`、Queue ACK、Turn Started、Master Accepted 分离；Late Wake 为独立补偿事实；receipt 携带验证过的 Console 链接。真实 Host Completion Wake E2E 为 `PASS — REAL` |
 | 插件素材 | [063](ADR-063-original-icon-provenance.md) | Owner 848×776 白底紫蓝双 Z 附件与 `7d66c2dad` 导出为唯一素材来源；固定 manifest、尺寸、字节数和 SHA-256；禁止用相近方案或重新绘制替代 |
 | Async Handoff | [052](ADR-052-async-master-handoff.md) | Task Scope 与 Handoff 分离；可靠受理后结束 Turn/停止轮询，断连不取消；loaded/idle Wake 后 Master 生命周期独立验收为 `PASS — REAL`；真实模型 Skill 遵循率与 Pending Interaction 原审批边界仍按未验证处理 |

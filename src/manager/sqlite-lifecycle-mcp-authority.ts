@@ -1781,11 +1781,24 @@ function consoleModelProjection(
     : null;
   if (runtimeModel && typeof runtimeModel.provider_id === "string" && runtimeModel.provider_id
     && typeof runtimeModel.model_id === "string" && runtimeModel.model_id) {
+    const runtimeEffort = typeof runtimeModel.effective_reasoning_level === "string"
+      && runtimeModel.effective_reasoning_level
+      ? runtimeModel.effective_reasoning_level
+      : null;
+    const requestedEffort = typeof runtimeModel.requested_reasoning_level === "string"
+      && runtimeModel.requested_reasoning_level
+      ? runtimeModel.requested_reasoning_level
+      : null;
     return {
       state: "observed",
       provider_id: runtimeModel.provider_id,
       model_id: runtimeModel.model_id,
       source: "runtime",
+      effort: runtimeEffort
+        ? { state: "observed", value: runtimeEffort, source: "runtime" }
+        : requestedEffort
+          ? { state: "requested", value: requestedEffort, source: "runtime" }
+          : { state: "not_observed", value: null, source: "none" },
     };
   }
   const requested = task.model;
@@ -1795,17 +1808,33 @@ function consoleModelProjection(
       provider_id: requested.provider_id,
       model_id: requested.model_id,
       source: "task_request",
+      effort: requested.reasoning_level
+        ? { state: "requested", value: requested.reasoning_level, source: "task_request" }
+        : { state: "not_observed", value: null, source: "none" },
     };
   }
   if (runtimeModel && typeof runtimeModel.requested_model === "string" && runtimeModel.requested_model) {
+    const requestedEffort = typeof runtimeModel.requested_reasoning_level === "string"
+      && runtimeModel.requested_reasoning_level
+      ? runtimeModel.requested_reasoning_level
+      : null;
     return {
       state: "requested",
       provider_id: null,
       model_id: runtimeModel.requested_model,
       source: "runtime",
+      effort: requestedEffort
+        ? { state: "requested", value: requestedEffort, source: "runtime" }
+        : { state: "not_observed", value: null, source: "none" },
     };
   }
-  return { state: "not_observed", provider_id: null, model_id: null, source: "none" };
+  return {
+    state: "not_observed",
+    provider_id: null,
+    model_id: null,
+    source: "none",
+    effort: { state: "not_observed", value: null, source: "none" },
+  };
 }
 
 function consolePlanProjection(model: ConsoleTaskModelProjection): ConsoleTaskPlanProjection {

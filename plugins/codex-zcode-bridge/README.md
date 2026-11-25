@@ -2,7 +2,7 @@
 
 把有明确边界的开发任务从 Codex 交给本机官方 ZCode Agent Runtime，在 Codex 中跟进进度，并独立审查实际改动后再决定是否接受。
 
-本插件属于 `2.0.0-preview.16`。Stable 通过独立的 Marketplace 渠道发布。
+本插件属于 `2.0.0-preview.17`。Stable 通过独立的 Marketplace 渠道发布。
 
 ## 支持范围
 
@@ -135,9 +135,12 @@ node dist/task-cli.mjs executor stop
 ## Task Web Console
 
 插件同时包含只读优先的 `dist/web-console.mjs`。它只绑定 `127.0.0.1`，通过同一
-Executor Control Pipe 读取 Task/Status/Event/Result，并允许显式 Cancel 和
-Interaction Reply。它不创建 Task、不打开 SQLite、不控制 Executor 生命周期，也不
-在页面加载时调用模型。
+Executor Control Pipe 读取 Task/Status/Event/Result，并允许显式 Continue、关联
+返工、Cleanup Recovery、Cancel 和 Interaction Reply。页面是单页 Task
+Workspace：左侧 inbox 先显示状态、失败原因和下一步动作，右侧按 Overview、
+Available actions、Acceptance/Attention、Attempt timeline、Result、
+Execution usage、折叠的 Wake/Cleanup/Release 证据和折叠 Events 排列。它不创建
+Task、不打开 SQLite、不控制 Executor 生命周期，也不在页面加载时调用模型。
 
 ```powershell
 node dist/web-console.mjs --data-root <absolute-state-dir>

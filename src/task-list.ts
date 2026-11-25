@@ -58,6 +58,11 @@ export interface ConsoleTaskModelProjection {
   readonly provider_id: string | null;
   readonly model_id: string | null;
   readonly source: "runtime" | "task_request" | "none";
+  readonly effort: {
+    readonly state: "observed" | "requested" | "not_observed";
+    readonly value: string | null;
+    readonly source: "runtime" | "task_request" | "none";
+  };
 }
 
 export interface ConsoleTaskPlanProjection {

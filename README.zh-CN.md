@@ -9,7 +9,7 @@ Codex ZCode Bridge 将 Codex 与本机官方 ZCode Agent Runtime 连接起来。
 - **持久化 Agent 任务委派。** 把目标、范围和验收条件一起交给 ZCode。Bridge 保存任务状态和结果，Codex 可以跟进或恢复中断的任务。
 - **复用官方 ZCode Runtime。** ZCode 使用自己的 AppServer 执行模型和工具，Codex 负责任务定义与结果审查。
 - **同时支持 Coding Plan 和 Start Plan。** 可使用 Z.ai Coding Plan 账户，也可选择 Start Plan。Start Plan 走独立官方认证路径，检查所选模型的权益，并按任务管理凭据。
-- **单页 Task Console 与显式诊断。** 在一个本地页面查看 Task、Attempt、Result、Cleanup、Release 与 Token 用量。Bridge 没有 Provider 结算证据时，Provider 实际成本会明确显示为未观测。Runtime 与 Cost Lab 检查位于 Diagnostics。
+- **单页 Task Workspace 与显式诊断。** 用可扫描的 Task 收件箱查看状态、失败原因与安全恢复动作，并在同一页面查看 Attempt、Result、Cleanup、Release 与 Token 用量。Bridge 没有 Provider 结算证据时，Provider 实际成本会明确显示为未观测。Runtime 与成本证据检查位于 Diagnostics。
 
 ## 预览版套餐支持
 
@@ -28,9 +28,9 @@ Bridge 复用本机安装的 ZCode Runtime，实际可用模型、套餐额度�
 
 预览版环境为 **Windows x64** 和 **Node.js `24.16.0`**。任何通过安全检查的官方 ZCode Desktop 安装均可运行（ADR-054）；已完成实际验证的版本如下列出。请先登录 ZCode，确认账户可使用目标套餐和模型，并准备 Git 和支持插件的 Codex。Node.js 和 ZCode 需单独安装。
 
-同一个 Codex 安装中选择一个 Marketplace 渠道即可。安装版 Runtime 集成、Cost Lab、SQLite v14-only 运行时、事件分页、可选结果摘要、独立 Executor 与 Thin MCP、Task CLI/Web Console、Async Master Handoff、持久化 Owner Binding 与安装即生效的 Auto Wake 位于预览版 `2.0.0-preview.16`，稳定版为 `v1.7.2`。
+同一个 Codex 安装中选择一个 Marketplace 渠道即可。安装版 Runtime 集成、SQLite v14-only 运行时、事件分页、可选结果摘要、独立 Executor 与 Thin MCP、Executor 崩溃自动恢复、单页 Task Workspace、带验收驱动返工的 Async Master Handoff、持久化 Owner Binding 与安装即生效的 Auto Wake 位于预览版 `2.0.0-preview.17`，稳定版为 `v1.7.2`。
 
-Auto Wake 不再需要逐任务授权文件：安装并启用插件即接受本机可信 Auto Wake 合同。可信 Codex Thread ID 来自 MCP Host 请求上下文，在 Worker 启动前持久化，并在 Release 后用于一次官方 Codex Queue 投递；该投递会以原会话当前模型恢复 Codex，因此可能产生额外 Codex 用量。可在 Task Console 的 Diagnostics 中关闭 Auto Wake，此时只保留 Web Console 观察、不提交 Queue。Queue ACK 不代表原 Turn 已启动，`web_notify` 只是 fallback observation。真实 Codex Host 的完成 Wake E2E（含非空工程交付）已于 2026-11-24 通过；Desktop 完全退出后的恢复、notLoaded 场景与 Official Runtime provenance 仍未验证。
+Auto Wake 不再需要逐任务授权文件：安装并启用插件即接受本机可信 Auto Wake 合同。可信 Codex Thread ID 来自 MCP Host 请求上下文，在 Worker 启动前持久化，并在 Release 后用于一次官方 Codex Queue 投递；该投递会以原会话当前模型恢复 Codex，因此可能产生额外 Codex 用量。可在 Task Workspace 的 Diagnostics 中关闭 Auto Wake，此时只保留 Web 观察、不提交 Queue。Queue ACK 不代表原 Turn 已启动，`web_notify` 只是 fallback observation。真实 Codex Host 的完成 Wake E2E（含非空工程交付）已于 2026-11-24 通过；Desktop 完全退出后的恢复、notLoaded 场景与 Official Runtime provenance 仍未验证。
 
 ### 预览版
 
@@ -67,7 +67,7 @@ codex plugin add codex-zcode-bridge@codex-zcode-bridge
 
 ## 查看任务与诊断
 
-任务回执会链接到本地 Task Console。在预览版源码目录执行：
+任务回执会链接到本地 Task Workspace。在预览版源码目录执行：
 
 ```powershell
 npm ci
@@ -76,9 +76,9 @@ npm run bridge:cli -- executor start
 npm run bridge:cli -- task console-url <task_id>
 ```
 
-Task 列表显示 Workspace、状态、Attempt、模型、套餐、消耗、更新时间和 Attention；任务详情显示完整 Workspace，以及逐 Attempt 的 Usage、折扣状态和 Provider 实际成本。没有 Provider 结算证据时，Provider 实际成本明确为 `not_observed`，原因码为 `bridge_authority_has_no_provider_settlement`，不会推定为 0 或估算值。
+Task 收件箱使用可扫描行显示 Workspace、状态、Attempt、模型、套餐、消耗、更新时间和行内 Attention 原因。需处理任务优先排序；已完成任务显示 Review ready / Awaiting review / Review blocked。同页 Task 工作台先显示 Overview、Available actions 与 Acceptance/Attention，再显示 Attempt 时间线、Result、Worker/Master 消耗、折叠的 Wake/Cleanup/Release 证据和折叠 Events。Plan、Discount、Model 与 Effort 分开显示。没有 Provider 结算证据时，Provider 实际成本明确为 `not_observed`，原因码为 `bridge_authority_has_no_provider_settlement`，不会推定为 0 或估算值。
 
-原独立的 Runtime 与 Cost Lab 主导航页面已退役。Runtime 静态检查、授权的零模型协议探针、Candidate Report 导出，以及 Cost Lab 的环境、历史与验证入口仍在 **Diagnostics** 中提供。打开 Task Console 或 Diagnostics 不会发出模型、Runtime 探针或 Billing 请求；每项外部读取或检查都必须显式点击。真实 Coding Plan 验证仍需既有显式确认流程。
+原独立的 Runtime 与 Cost Lab 主导航页面已退役。Runtime 静态检查、授权的零模型协议探针、Candidate Report 导出，以及成本证据的环境、历史与验证入口仍在 **Diagnostics** 中提供。打开 Task Workspace 或 Diagnostics 不会发出模型、Runtime 探针或 Billing 请求；每项外部读取或检查都必须显式点击。真实 Coding Plan 验证仍需既有显式确认流程。
 
 ## 文档
 

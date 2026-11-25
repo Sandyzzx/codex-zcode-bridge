@@ -1,9 +1,9 @@
 # 当前接口与兼容边界
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-25（ADR-060 Continue Release 事实与 Executor 自动恢复）
-> Last verified: 2026-11-25，核对真实 Store 在 3 条 Wake Observation 后用当前 revision Continue、真实 Thin MCP 在 Executor `SIGKILL` 后自动恢复并继续读取；Preview.17 完整 Host/CI 验证在集成阶段更新。
-> Verified against: A-line candidate based on `6af69b55d7ecb660c2ad2c923888cf7f1e8886c8`
+> Last updated: 2026-11-25（ADR-060 Continue Release 事实、ADR-061 Master 验收驱动返工与 ADR-062 单页 Task Console）
+> Last verified: 2026-11-25，核对真实 Store 在 3 条 Wake Observation 后用当前 revision Continue、真实 Thin MCP 在 Executor `SIGKILL` 后自动恢复并继续读取，以及真实 Authority + IPC + HTTP + Chromium 的 Console capability/blockers。Preview.17 完整 Host/CI 验证在集成阶段更新。
+> Verified against: `685c9158`（四条 Preview.17 工作线的代码集成快照；最终候选提交与 CI 结果由交付报告记录）。
 > ADR-039 Last verified: 2026-11-22，隔离 SQLite/MCP 覆盖 Receipt 保护、live descendant、活动 Worker、终止失败、completed/failed/waiting_for_master/cancelled 终态绑定、并发重复取消与 SQLite 历史校验；生产取消未重试。
 > ADR-047/048: Accepted for Preview；默认 `zcode_result` 保持完整，Summary 仍为显式 opt-in。
 
@@ -31,6 +31,24 @@ Executor 不可用时触发一次自动恢复。已有健康 Executor 直接复�
 Lease、启动并健康检查。恢复使用现有进程锁和 Spawn 入口，不新增 MCP 工具、
 第二 Authority 或常驻 Supervisor。`ZCODE_BRIDGE_EXECUTOR_AUTO_RECOVER=0`
 仅用于显式诊断/测试。恢复失败返回稳定诊断，不猜测 Lease 或 Worker 已退出。
+
+[ADR-061](decisions/ADR-061-master-acceptance-driven-rework.md)：Master 的
+目标自治不增加公共 MCP 工具或第二状态机。Worker 终态后必须回读持久
+Result/Events 并检查实际交付；普通工程缺陷优先用现有 `zcode_continue`
+（同 Task 新 Attempt），不可安全 Continue 时可创建继承原目标、Workspace、
+模型、Effort、预算与验收标准的最小关联 Task。原 Task、Attempt、Result
+digest、Cleanup/Release 和 Wake 证据全部保留。未知 Queue submission 只按
+原 Task 对账；目标/合同/权限/预算扩大、不可逆副作用与无法核实的安全状态
+仍停止并请求用户。`completed`、Queue ACK、Turn Started 或 Worker 自报都
+不是 Master Accepted。
+
+[ADR-062](decisions/ADR-062-single-page-task-console.md)：Task Console 的
+HTTP 写动作只是既有 Executor 能力的内部 Adapter。Continue、related rework
+和 Cleanup recovery 必须由服务端重读权威 capability；客户端按钮状态不是
+授权。related rework 回执关系为 `context_only`，不是 Authority
+parent/child edge。逐 Attempt Usage 在无 Provider settlement 时必须返回
+显式 `not_observed` / `bridge_authority_has_no_provider_settlement`，不得
+用 `0`、预计金额或模型推断补齐；这些投影不改变公开 MCP schema。
 
 Admission 在事务中检查 Capacity 及执行路径重叠，覆盖跨 Manager 竞争。Worker 精确身份、Launch token/receipt、Claim、Attempt/generation/revision CAS 保持绑定。最终 workspace use 校验先于 Launch Intent；拒绝只留下 untouched reserved，显式 queued Cancel 经原 CAS 终结并释放。Intent 后即可能已 Spawn，缺 Receipt/句柄、timeout 或 Manager 崩溃都不授权重新派发。
 
