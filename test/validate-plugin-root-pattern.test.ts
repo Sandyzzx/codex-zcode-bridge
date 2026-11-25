@@ -279,6 +279,7 @@ test("the real validator rejects injected development-path references and keeps 
     const pluginRoot = path.join(root, "plugins", "codex-zcode-bridge");
     for (const directory of [
       path.join(root, "scripts", "lib"),
+      path.join(pluginRoot, "assets"),
       path.join(pluginRoot, ".codex-plugin"),
       path.join(pluginRoot, "dist"),
       path.join(pluginRoot, "dist", "vendor"),
@@ -293,11 +294,26 @@ test("the real validator rejects injected development-path references and keeps 
     copyFileSync(path.join(scriptsDir, "validate-plugin.mjs"), path.join(root, "scripts", "validate-plugin.mjs"));
     copyFileSync(path.join(scriptsDir, "lib", "repo-root-pattern.mjs"), path.join(root, "scripts", "lib", "repo-root-pattern.mjs"));
 
-    const manifest = { name: "codex-zcode-bridge", version: "1.2.5" };
+    const packageManifest = { name: "codex-zcode-bridge", version: "1.2.5" };
+    const branding = {
+      logo: "./assets/logo.png",
+      composerIcon: "./assets/icon.png",
+    };
+    const pluginManifest = { ...packageManifest, interface: branding };
+    const codexPluginManifest = {
+      ...packageManifest,
+      extensions: { "com.openai": { interface: branding } },
+    };
     const mcp = { mcpServers: { zcode_bridge: { command: "node", args: ["./launch-node24.mjs"], env: { ZCODE_BRIDGE_PLUGIN_MODE: "1" } } } };
-    writeFileSync(path.join(root, "package.json"), JSON.stringify(manifest));
-    writeFileSync(path.join(pluginRoot, "plugin.json"), JSON.stringify(manifest));
-    writeFileSync(path.join(pluginRoot, ".codex-plugin", "plugin.json"), JSON.stringify(manifest));
+    writeFileSync(path.join(root, "package.json"), JSON.stringify(packageManifest));
+    writeFileSync(path.join(pluginRoot, "plugin.json"), JSON.stringify(pluginManifest));
+    writeFileSync(path.join(pluginRoot, ".codex-plugin", "plugin.json"), JSON.stringify(codexPluginManifest));
+    for (const asset of ["icon.png", "logo.png"]) {
+      copyFileSync(
+        path.join(repositoryRoot, "plugins", "codex-zcode-bridge", "assets", asset),
+        path.join(pluginRoot, "assets", asset),
+      );
+    }
     writeFileSync(path.join(pluginRoot, "mcp.json"), JSON.stringify(mcp));
     writeFileSync(path.join(pluginRoot, ".mcp.json"), JSON.stringify(mcp));
     writeFileSync(path.join(pluginRoot, "launch-node24.mjs"), "");
@@ -528,6 +544,22 @@ test("the real validator rejects injected development-path references and keeps 
     assert.match(
       `${schemaMismatchRun.stdout ?? ""}${schemaMismatchRun.stderr ?? ""}`,
       /bundled administrative recovery CLI does not embed SQLite schema v14/u,
+    );
+    writeFileSync(path.join(pluginRoot, "dist", "admin-abandon-held-operation.mjs"), "const SCHEMA_VERSION = 14;\n");
+
+    const iconPath = path.join(pluginRoot, "assets", "icon.png");
+    const changedIcon = readFileSync(iconPath);
+    changedIcon[changedIcon.length - 8] = changedIcon[changedIcon.length - 8]! ^ 0xff;
+    writeFileSync(iconPath, changedIcon);
+    const assetMismatchRun = spawnSync(process.execPath, [path.join(root, "scripts", "validate-plugin.mjs")], {
+      encoding: "utf8",
+      timeout: 60_000,
+      windowsHide: true,
+    });
+    assert.notEqual(assetMismatchRun.status, 0, "changed plugin artwork must be rejected");
+    assert.match(
+      `${assetMismatchRun.stdout ?? ""}${assetMismatchRun.stderr ?? ""}`,
+      /Plugin asset assets\/icon\.png does not match the Owner-selected artwork/u,
     );
   } finally {
     rmSync(tempBase, { recursive: true, force: true });
