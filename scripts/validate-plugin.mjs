@@ -4,6 +4,7 @@ import { existsSync } from "node:fs";
 import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { assertPluginInterfaceBranding } from "./lib/plugin-interface-branding.mjs";
 import { buildRepoRootLeakPattern } from "./lib/repo-root-pattern.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -31,11 +32,6 @@ const EXPECTED_PLUGIN_ASSETS = Object.freeze({
     sha256: "E97F3C292BE9A91A6F2E5BD01B04268D1EB36877921D856873F9070C1F34C5A0",
   }),
 });
-const EXPECTED_PLUGIN_BRANDING = Object.freeze({
-  logo: "./assets/logo.png",
-  composerIcon: "./assets/icon.png",
-});
-
 async function readJson(filePath, label) {
   try {
     return JSON.parse(await readFile(filePath, "utf8"));
@@ -131,15 +127,8 @@ for (const [label, manifest] of [["plugin.json", plugin], [".codex-plugin/plugin
     throw new Error(`${label} identity/version must match package.json (${pkg.name}@${pkg.version})`);
   }
 }
-for (const [label, interfaceSpec] of [
-  ["plugin.json", plugin.interface],
-  [".codex-plugin/plugin.json", codexPlugin.extensions?.["com.openai"]?.interface],
-]) {
-  if (interfaceSpec?.logo !== EXPECTED_PLUGIN_BRANDING.logo
-    || interfaceSpec?.composerIcon !== EXPECTED_PLUGIN_BRANDING.composerIcon) {
-    throw new Error(`${label} must reference the packaged plugin logo and composer icon`);
-  }
-}
+assertPluginInterfaceBranding(plugin, "plugin.json");
+assertPluginInterfaceBranding(codexPlugin, ".codex-plugin/plugin.json");
 for (const [relativePath, expected] of Object.entries(EXPECTED_PLUGIN_ASSETS)) {
   const bytes = await readFile(path.join(pluginRoot, relativePath));
   const dimensions = readPngDimensions(bytes, relativePath);

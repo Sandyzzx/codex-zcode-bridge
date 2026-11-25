@@ -13,7 +13,30 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import {
+  assertPluginInterfaceBranding,
+  EXPECTED_PLUGIN_BRANDING,
+} from "../scripts/lib/plugin-interface-branding.mjs";
 import { assertNotFilesystemRoot, buildRepoRootLeakPattern } from "../scripts/lib/repo-root-pattern.mjs";
+
+test("plugin branding must live in the top-level interface", () => {
+  assert.doesNotThrow(() => assertPluginInterfaceBranding(
+    { interface: EXPECTED_PLUGIN_BRANDING },
+    ".codex-plugin/plugin.json",
+  ));
+
+  for (const manifest of [
+    {},
+    { extensions: { "com.openai": { interface: EXPECTED_PLUGIN_BRANDING } } },
+    { interface: { logo: "./assets/logo.png", composerIcon: "./assets/other.png" } },
+    { interface: { logo: "./assets/other.png", composerIcon: "./assets/icon.png" } },
+  ]) {
+    assert.throws(
+      () => assertPluginInterfaceBranding(manifest, ".codex-plugin/plugin.json"),
+      /top-level interface\.logo=\.\/assets\/logo\.png and interface\.composerIcon=\.\/assets\/icon\.png/,
+    );
+  }
+});
 
 test("a short root like /app does not match unrelated URL or path segments", () => {
   const pattern = buildRepoRootLeakPattern("/app");
@@ -292,6 +315,10 @@ test("the real validator rejects injected development-path references and keeps 
       mkdirSync(directory, { recursive: true });
     }
     copyFileSync(path.join(scriptsDir, "validate-plugin.mjs"), path.join(root, "scripts", "validate-plugin.mjs"));
+    copyFileSync(
+      path.join(scriptsDir, "lib", "plugin-interface-branding.mjs"),
+      path.join(root, "scripts", "lib", "plugin-interface-branding.mjs"),
+    );
     copyFileSync(path.join(scriptsDir, "lib", "repo-root-pattern.mjs"), path.join(root, "scripts", "lib", "repo-root-pattern.mjs"));
 
     const packageManifest = { name: "codex-zcode-bridge", version: "1.2.5" };
@@ -302,7 +329,8 @@ test("the real validator rejects injected development-path references and keeps 
     const pluginManifest = { ...packageManifest, interface: branding };
     const codexPluginManifest = {
       ...packageManifest,
-      extensions: { "com.openai": { interface: branding } },
+      interface: branding,
+      extensions: { "com.openai": { hooks: "./hooks/hooks.json" } },
     };
     const mcp = { mcpServers: { zcode_bridge: { command: "node", args: ["./launch-node24.mjs"], env: { ZCODE_BRIDGE_PLUGIN_MODE: "1" } } } };
     writeFileSync(path.join(root, "package.json"), JSON.stringify(packageManifest));
