@@ -1289,7 +1289,12 @@ test("thin MCP automatically recovers an unavailable Executor before serving a r
   skip: process.platform !== "win32",
   timeout: 90_000,
 }, async () => {
-  const fixture = mkdtempSync(path.join(tmpdir(), "executor-thin-auto-recovery-"));
+  const fixtureBase = process.env.LOCALAPPDATA
+    && path.isAbsolute(process.env.LOCALAPPDATA)
+    ? path.join(process.env.LOCALAPPDATA, "Temp")
+    : tmpdir();
+  mkdirSync(fixtureBase, { recursive: true });
+  const fixture = mkdtempSync(path.join(fixtureBase, "executor-thin-auto-recovery-"));
   const localAppData = path.join(fixture, "local-app-data");
   const userProfile = path.join(fixture, "user-profile");
   const tempDirectory = path.join(fixture, "temp");
