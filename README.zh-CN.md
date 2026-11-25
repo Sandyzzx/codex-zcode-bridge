@@ -76,7 +76,9 @@ npm run bridge:cli -- executor start
 npm run bridge:cli -- task console-url <task_id>
 ```
 
-任务列表每项最多三行：第一行是任务名和一个主要状态；第二行是 Workspace 简称、模型、套餐、Attempt 与更新时间；只有需要处理时才增加第三行失败原因或 Attention 摘要。列表不重复完整路径、独立消耗行或连续 `Not observed`。Running / Needs attention / Completed 使用一行紧凑可点击计数，并提供名称/Workspace 搜索与共享 bucket 筛选。需处理任务优先排序；已完成任务显示 Awaiting review 或 Review blocked。顶栏使用发布资产中的原始 Z 图标字节，不再使用文字占位。同页详情压缩为 Task header 与四个区域：Problem and actions、Work history、Execution 和默认折叠的 Technical details。Execution 默认只显示 `模型 · 套餐 · 折扣 · 总 Token`，展开后才显示 Input/Output、Cache、Effort、Provider 成本、Worker 与 Master 消耗；Wake/Cleanup/Release/Events 保持折叠。Plan、Discount、Model 与 Effort 分开显示。没有 Provider 结算证据时，Provider 实际成本明确为 `not_observed`，原因码为 `bridge_authority_has_no_provider_settlement`，不会推定为 0 或估算值。
+任务列表每项最多三行：第一行是任务名和一个主要状态；第二行只显示实际观测到的 Workspace、模型、套餐、Attempt 与更新时间；只有需要处理时才增加第三行失败原因或 Attention 摘要。内部 Task/工作流标识、完整路径、重复消耗和缺失字段不进入普通视图。Running / Needs attention / Execution completed 使用一行紧凑可点击计数，并提供名称/Workspace 搜索与共享 bucket 筛选。需处理任务优先排序；执行完成任务显示 Awaiting review 或 Review blocked。顶栏使用发布资产中的原始 Z 图标字节，不再使用文字占位。同页详情标题只保留 Attempt、Workspace 与更新时间，完整 Workspace 路径按需展开；下方压缩为 Problem and actions、Work history、Execution 和默认折叠的 Technical details。Work history 保留 Attempt 时间线，并在其下直接显示所选 Result 摘要，不再重复 Result 标题、Attempt 编号或状态标签。Execution 默认只显示 `模型 · 套餐 · 折扣 · 总 Token`，展开后才显示已观测的 Input/Output、Cache、Effort、Provider 成本、Worker 与 Master 消耗；缺失字段隐藏并只汇总一次未观测项，不重复显示 `Not observed` 或伪造为 0。Wake/Cleanup/Release/Events 保持折叠。没有 Provider 结算证据时，Provider 实际成本不会被推定为零或估算值。
+
+执行完成不等于 Master 验收。当前 Authority 不提供 Master 验收结论，因此页面会明确显示“未记录验收”，不会自行推断或伪造 Accepted。
 
 原独立的 Runtime 与 Cost Lab 主导航页面已退役。Runtime 静态检查、授权的零模型协议探针、Candidate Report 导出，以及成本证据的环境、历史与验证入口仍在 **Diagnostics** 中提供。打开 Task Workspace 或 Diagnostics 不会发出模型、Runtime 探针或 Billing 请求；每项外部读取或检查都必须显式点击。真实 Coding Plan 验证仍需既有显式确认流程。
 

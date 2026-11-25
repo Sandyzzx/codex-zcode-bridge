@@ -149,9 +149,14 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 .hero-chips{display:flex;align-items:center;justify-content:flex-end;gap:4px;flex:0 0 auto;flex-wrap:wrap}
 .detail-context{display:flex;align-items:center;flex-wrap:wrap;gap:2px 6px;margin-top:6px;color:var(--muted);font:10px/1.45 var(--mono);min-width:0}
 .detail-context-sep{color:var(--line)}
-.detail-path{display:flex;align-items:baseline;gap:6px;margin-top:5px;min-width:0;color:var(--muted);font:9.5px/1.45 var(--mono)}
-.detail-path-label{flex:0 0 auto;color:var(--muted);font:9px var(--sans)}
-.detail-path code{min-width:0;overflow-wrap:anywhere}
+.detail-workspace{margin-top:5px;min-width:0;color:var(--muted);font:9.5px/1.45 var(--mono)}
+.detail-workspace>summary{display:inline-flex;align-items:baseline;gap:6px;cursor:pointer;list-style:none}
+.detail-workspace>summary::-webkit-details-marker{display:none}
+.detail-workspace>summary:after{content:"+";margin-left:2px;color:var(--muted);font:600 10px var(--mono)}
+.detail-workspace[open]>summary:after{content:"−"}
+.detail-workspace-label{flex:0 0 auto;color:var(--muted);font:9px var(--sans)}
+.detail-workspace code{min-width:0;overflow-wrap:anywhere}
+.detail-workspace-full{margin:5px 0 0 0;padding:5px 7px;border-left:1px solid var(--line);color:var(--text-2);font:9px/1.45 var(--mono);overflow-wrap:anywhere}
 .region{border-top:1px solid var(--line);margin-top:15px;padding-top:14px;min-width:0}
 .region:first-of-type{border-top:0;margin-top:0;padding-top:0}
 .region-title{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin:0 0 8px}
@@ -185,9 +190,6 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 .attempt span{display:block;margin-top:2px;overflow:hidden;color:var(--muted);font:8.5px var(--mono);text-overflow:ellipsis;white-space:nowrap}
 .attempt .status-chip{margin-top:4px}
 .result-block{margin-top:8px}
-.result-head{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
-.result-head h4{margin:0;color:var(--text-2);font:600 11px var(--sans)}
-.result-semantics{margin:4px 0 0;color:var(--muted);font:10px/1.45 var(--sans)}
 .result-summary{margin:7px 0 0;font:12px/1.6 var(--sans);white-space:pre-wrap;overflow-wrap:anywhere}
 .result-metrics{display:flex;align-items:center;gap:5px;flex-wrap:wrap;margin-top:6px;color:var(--muted);font:10px/1.45 var(--sans)}
 .result-metrics span+span:before{content:"·";margin-right:5px;color:var(--line)}
@@ -402,15 +404,15 @@ var TEXT={
     diagnostics:"Diagnostics",titleTasks:"Tasks",experimental:"Experimental",
     experimentalNotice:"Experimental: task status and recovery operations are still being refined.",
     lede:"Review task status, results, and recovery actions.",
-    running:"Running",attention:"Needs attention",completed:"Completed",waitingMasterShort:"Waiting for Master",
+    running:"Running",attention:"Needs attention",completed:"Execution completed",waitingMasterShort:"Waiting for Master",
     searchTasks:"Search tasks (name or workspace)",filterTasks:"Task filter",allTasks:"All tasks",refresh:"Refresh",
     loadingTasks:"Loading tasks...",noTasks:"No Task matches this filter.",chooseTask:"Select a task to review its status, result, and next action.",
     refreshFailed:"Could not refresh the Task list.",detailFailed:"Could not load this Task.",invalidTask:"Invalid Task ID.",sessionOffline:"Executor session is unavailable.",
-    completedReviewPending:"Completed · Awaiting review",completedReviewBlocked:"Completed · Review blocked",
+    completedReviewPending:"Execution completed · Awaiting review",completedReviewBlocked:"Execution completed · Review blocked",
     problemActions:"Problem and actions",workHistory:"Work history",execution:"Execution",technicalDetails:"Technical details",
     technicalHint:"Wake · Cleanup · Release · Events",
-    completedNotAccepted:"Completed is not acceptance. Master review is still required.",
-    review:"Review",current:"Current",usageSummaryNotObserved:"Usage not observed",modelPlanNotObserved:"Model and plan not observed",
+    completedNotAccepted:"Worker execution completed. Master acceptance is not recorded.",
+    review:"Review",current:"Current",usageSummaryNotObserved:"Execution usage not observed",executionUsage:"Execution usage",
     waitingMaster:"Waiting for Master review. This page does not create an acceptance.",
     workerActive:"A Worker or dispatch is active. Continue and related rework stay disabled.",
     resultFailed:"Result failed",resultFailedHint:"The Worker Result failed. This is not a Master acceptance decision; inspect the error and choose a safe recovery action.",
@@ -418,13 +420,11 @@ var TEXT={
     cleanup:"Cleanup",cleanupPending:"Cleanup is pending.",cleanupUnverified:"Cleanup is unverified. Release is not proven.",cleanupVerified:"Cleanup verified.",cleanupNotRequired:"Cleanup is not required.",cleanupNotStarted:"Cleanup has not started.",cleanupPendingShort:"Pending.",cleanupUnverifiedShort:"Unverified. Release is not proven.",
     wake:"Wake",wakeSubmissionUnknown:"Queue state needs verification. The page will not resend automatically.",wakeWebNotify:"Web notification only; the official Queue was not opened.",
     hold:"Hold",holdActive:"Active Hold: {reason}",noAttentionItems:"No blocking issue is active.",
-    pendingInteraction:"Pending interaction",replyUnknownWarning:"A previous reply may have reached the Worker. Reconcile before sending anything else; this page will not resend automatically.",
+    pendingInteraction:"Pending interaction",pendingInteractionHint:"A reply is required before this Task can continue.",replyUnknownWarning:"A previous reply may have reached the Worker. Reconcile before sending anything else; this page will not resend automatically.",
     needsMaster:"Needs Master decision",resultSubmissionError:"Result submission error",
-    resultFor:"Result for Attempt {n}",resultMissing:"No Result was observed for this Attempt.",resultDetails:"Result details",
+    resultMissing:"No Result was observed for this Attempt.",resultDetails:"Result details",
     issues:"Issues",filesChanged:"Files changed",tests:"Tests",started:"Started",finished:"Finished",
-    workerCompleted:"Worker completed. Master acceptance is not recorded.",workerFailed:"Worker failed. Master acceptance is not recorded.",
-    workerCancelled:"Worker execution was cancelled.",masterReviewPending:"Worker completed. Master review is pending.",
-    masterAcceptanceNotRecorded:"Master acceptance is not recorded by this Task.",masterAccepted:"Master accepted.",
+    masterAccepted:"Master accepted. Final goal resolved.",masterAcceptedShort:"Master accepted",
     continue:"Continue",continueHint:"Create the next Attempt from this released Result.",continueFeedback:"Feedback for the next Attempt",continueRequirements:"Additional requirements, one per line",continueSubmit:"Start continuation",
     rework:"Create related rework",reworkHint:"Creates a new Task with the same goal and acceptance boundaries. The original Task, Attempts and results stay intact.",reworkFeedback:"Review feedback for the new Task",reworkSubmit:"Create rework Task",
     reply:"Reply",replyForm:"Reply to permission request",request:"Request",decision:"Decision",reason:"Reason",sendReply:"Send reply",
@@ -432,8 +432,6 @@ var TEXT={
     cancel:"Request cancel",cancelConfirm:"Request cancellation of the active Attempt? This never forces Release.",
     cleanupRecovery:"Recover Cleanup",cleanupRecoveryConfirm:"Retry the Cleanup check for this Task? This re-checks the Worker and Cleanup facts, never clears a Hold, and does not bypass the Task state machine.",
     actionUnavailable:"No safe action is available for this Task right now.",actionBlocked:"Blocked by: {reasons}.",
-    continueSafe:"Continue is safe for this released Result.",reworkSafe:"Create a related rework Task with the same goal and acceptance boundaries.",
-    cleanupNeedsVerification:"Cleanup must be verified before this Task can be continued or reworked.",
     historicalReadOnly:"This is a historical Attempt. Actions apply only to the current Attempt.",
     task:"Task",attempt:"Attempt",workspace:"Workspace",updated:"Updated",model:"Model",plan:"Plan",discount:"Discount",effort:"Effort",status:"Status",result:"Result",
     notObserved:"Not observed",notAvailable:"Not available",dash:"--",unknown:"Unknown",
@@ -441,9 +439,10 @@ var TEXT={
     planCoding:"Coding Plan",planStart:"Start Plan",planOther:"Other",planNotObserved:"Not observed",
     applied:"Applied",notApplied:"Not applied",notApplicable:"Not applicable",
     inputTokens:"Input tokens",outputTokens:"Output tokens",cacheRead:"Cache read",cacheWrite:"Cache write",reasoning:"Reasoning",totalTokens:"Total tokens",
-    providerActualCost:"Provider actual cost",providerCostUnavailable:"No provider settlement was recorded for this Attempt.",
-    masterUsage:"Master usage",workerUsage:"Worker usage",workerUsageHint:"Tokens recorded for this Attempt.",masterUsageUnavailable:"Master token usage is not recorded by this Task.",
-    usageNotObserved:"Usage was not observed. This is not zero.",usageSource:"Usage source",finality:"Finality",observedAt:"Observed at",
+    providerActualCost:"Provider actual cost",
+    masterUsage:"Master usage",workerUsage:"Worker usage",workerUsageHint:"Tokens recorded for this Attempt.",
+    usageSource:"Usage source",finality:"Finality",observedAt:"Observed at",
+    notObservedFields:"Not observed: {fields}.",
     tokens:"{n} tokens",oneFileChanged:"{n} file changed",filesChangedCount:"{n} files changed",
     noTests:"No tests reported",testsSummary:"{passed} passed",testsFailedSummary:"{failed} failed",testsNotRunSummary:"{notRun} not run",
     events:"Events",loadingEvents:"Loading all Events...",eventsComplete:"All Events loaded",eventsFiltered:"Attempt {n}",eventsCount:"{n} Events",eventsEmpty:"No Events were recorded for this Attempt.",
@@ -467,15 +466,15 @@ var TEXT={
     diagnostics:"诊断",titleTasks:"任务",experimental:"实验性",
     experimentalNotice:"实验性功能：任务状态与恢复操作仍在持续完善。",
     lede:"查看任务状态、结果与可用的恢复操作。",
-    running:"进行中",attention:"需处理",completed:"已完成",waitingMasterShort:"等待 Master",
+    running:"进行中",attention:"需处理",completed:"执行完成",waitingMasterShort:"等待 Master",
     searchTasks:"搜索任务（名称或 Workspace）",filterTasks:"任务筛选",allTasks:"全部任务",refresh:"刷新",
     loadingTasks:"正在读取任务...",noTasks:"没有符合筛选条件的任务。",chooseTask:"选择一个任务，查看状态、结果与下一步。",
     refreshFailed:"刷新任务列表失败。",detailFailed:"读取该任务失败。",invalidTask:"Task ID 无效。",sessionOffline:"Executor 会话不可用。",
-    completedReviewPending:"已完成 · 待验收",completedReviewBlocked:"已完成 · 验收受阻",
+    completedReviewPending:"执行完成 · 待验收",completedReviewBlocked:"执行完成 · 验收受阻",
     problemActions:"问题与操作",workHistory:"执行历史",execution:"执行消耗",technicalDetails:"技术详情",
     technicalHint:"Wake · Cleanup · Release · Events",
-    completedNotAccepted:"Completed 不等于验收，仍需 Master 复核。",
-    review:"验收",current:"当前",usageSummaryNotObserved:"未观测到 Usage",modelPlanNotObserved:"模型与套餐未观测",
+    completedNotAccepted:"Worker 执行完成，未记录 Master 验收结论。",
+    review:"验收",current:"当前",usageSummaryNotObserved:"未观测到执行消耗",executionUsage:"执行消耗",
     waitingMaster:"等待 Master 复核。本页面不会伪造验收。",
     workerActive:"Worker 或派发仍在进行，继续与关联返工保持禁用。",
     resultFailed:"Result 失败",resultFailedHint:"Worker Result 失败。这不是 Master 验收结论；请检查错误并选择安全的恢复操作。",
@@ -483,13 +482,11 @@ var TEXT={
     cleanup:"Cleanup",cleanupPending:"Cleanup 仍在等待。",cleanupUnverified:"Cleanup 未验证，Release 未被证明。",cleanupVerified:"Cleanup 已验证。",cleanupNotRequired:"无需 Cleanup。",cleanupNotStarted:"Cleanup 尚未开始。",cleanupPendingShort:"等待中。",cleanupUnverifiedShort:"未验证，Release 未被证明。",
     wake:"Wake",wakeSubmissionUnknown:"Queue 状态需要核实；页面不会自动重发。",wakeWebNotify:"仅 Web 通知，未打开官方 Queue。",
     hold:"Hold",holdActive:"活动 Hold：{reason}",noAttentionItems:"当前没有阻塞问题。",
-    pendingInteraction:"待处理交互",replyUnknownWarning:"上一次回复可能已到达 Worker。请先对账，不要自动重发；本页面不会自动重发。",
+    pendingInteraction:"待处理交互",pendingInteractionHint:"需要先回复，任务才能继续。",replyUnknownWarning:"上一次回复可能已到达 Worker。请先对账，不要自动重发；本页面不会自动重发。",
     needsMaster:"需要 Master 决策",resultSubmissionError:"Result 提交错误",
-    resultFor:"Attempt {n} 的 Result",resultMissing:"该 Attempt 未观测到 Result。",resultDetails:"Result 详情",
+    resultMissing:"该 Attempt 未观测到 Result。",resultDetails:"Result 详情",
     issues:"问题",filesChanged:"变更文件",tests:"测试",started:"开始",finished:"结束",
-    workerCompleted:"Worker 已完成，未记录 Master 验收结论。",workerFailed:"Worker 失败，未记录 Master 验收结论。",
-    workerCancelled:"Worker 执行已取消。",masterReviewPending:"Worker 已完成，等待 Master 复核。",
-    masterAcceptanceNotRecorded:"该任务未记录 Master 验收结论。",masterAccepted:"Master 已验收。",
+    masterAccepted:"Master 已验收，最终目标已解决。",masterAcceptedShort:"Master 已验收",
     continue:"继续",continueHint:"基于这个已 Release 的 Result 创建下一个 Attempt。",continueFeedback:"给下一个 Attempt 的反馈",continueRequirements:"补充要求，每行一条",continueSubmit:"开始继续",
     rework:"创建关联返工",reworkHint:"会创建一个新 Task，继承原目标与验收边界；原 Task、Attempt 与结果完整保留。",reworkFeedback:"给新 Task 的审查反馈",reworkSubmit:"创建返工 Task",
     reply:"回复",replyForm:"回复权限请求",request:"请求",decision:"决定",reason:"原因",sendReply:"发送回复",
@@ -497,8 +494,6 @@ var TEXT={
     cancel:"请求取消",cancelConfirm:"请求取消当前 Attempt？这不会强制 Release。",
     cleanupRecovery:"恢复 Cleanup",cleanupRecoveryConfirm:"重新核对 Worker 与 Cleanup 事实？此操作不会清除 Hold，也不会绕过任务状态机。",
     actionUnavailable:"当前任务暂时没有安全可执行的动作。",actionBlocked:"阻塞原因：{reasons}。",
-    continueSafe:"该 Result 已 Release，可以安全继续。",reworkSafe:"创建一个继承原目标与验收边界的关联返工 Task。",
-    cleanupNeedsVerification:"Cleanup 验证通过前，不能继续或创建关联返工。",
     historicalReadOnly:"这是历史 Attempt，动作只作用于当前 Attempt。",
     task:"任务",attempt:"Attempt",workspace:"Workspace",updated:"更新时间",model:"模型",plan:"套餐",discount:"优惠",effort:"Effort",status:"状态",result:"Result",
     notObserved:"未观测",notAvailable:"不可用",dash:"--",unknown:"未知",
@@ -506,9 +501,10 @@ var TEXT={
     planCoding:"Coding Plan",planStart:"Start Plan",planOther:"其他",planNotObserved:"未观测",
     applied:"已应用",notApplied:"未应用",notApplicable:"不适用",
     inputTokens:"输入 tokens",outputTokens:"输出 tokens",cacheRead:"缓存读取",cacheWrite:"缓存写入",reasoning:"推理 tokens",totalTokens:"总 tokens",
-    providerActualCost:"Provider 实际成本",providerCostUnavailable:"该 Attempt 没有记录 Provider 结算金额。",
-    masterUsage:"Master 消耗",workerUsage:"Worker 消耗",workerUsageHint:"该 Attempt 记录的 Token 消耗。",masterUsageUnavailable:"该任务没有记录 Master Token 消耗。",
-    usageNotObserved:"未观测到 Usage；这不等于 0。",usageSource:"Usage 来源",finality:"最终性",observedAt:"观测时间",
+    providerActualCost:"Provider 实际成本",
+    masterUsage:"Master 消耗",workerUsage:"Worker 消耗",workerUsageHint:"该 Attempt 记录的 Token 消耗。",
+    usageSource:"Usage 来源",finality:"最终性",observedAt:"观测时间",
+    notObservedFields:"未观测：{fields}。",
     tokens:"{n} tokens",oneFileChanged:"变更 {n} 个文件",filesChangedCount:"变更 {n} 个文件",
     noTests:"未报告测试",testsSummary:"{passed} 通过",testsFailedSummary:"{failed} 失败",testsNotRunSummary:"{notRun} 未运行",
     events:"Events",loadingEvents:"正在加载完整 Events...",eventsComplete:"全部 Events 已加载",eventsFiltered:"Attempt {n}",eventsCount:"{n} 条 Events",eventsEmpty:"该 Attempt 没有记录 Events。",
@@ -529,8 +525,8 @@ var TEXT={
   }
 };
 var STATUS={
-  en:{queued:"Queued",running:"Running",completed:"Completed",failed:"Failed",cancelled:"Cancelled",waiting_for_master:"Waiting for Master"},
-  "zh-CN":{queued:"排队中",running:"执行中",completed:"已完成",failed:"失败",cancelled:"已取消",waiting_for_master:"等待 Master"}
+  en:{queued:"Queued",running:"Running",completed:"Execution completed",failed:"Failed",cancelled:"Cancelled",waiting_for_master:"Waiting for Master"},
+  "zh-CN":{queued:"排队中",running:"执行中",completed:"执行完成",failed:"失败",cancelled:"已取消",waiting_for_master:"等待 Master"}
 };
 var REASON={
   en:{pending_interaction:"Pending interaction",interaction_reply_outcome_unknown:"Reply outcome unknown",cleanup_pending:"Cleanup pending",cleanup_unverified:"Cleanup unverified",waiting_for_master:"Waiting for Master",needs_master_decision:"Needs Master decision",task_failed:"Task failed",worker_active:"Task is still running",wake_submission_unknown:"Queue state needs verification",wake_web_notify:"Web notification",result_submission_failed:"Result submission failed",release_not_completed:"Release is not complete",release_cleanup_unverified:"Release Cleanup is unverified",administrative_release_unverified:"Administrative Release is unverified"},
@@ -546,7 +542,7 @@ function chip(text,cls){return el("span","status-chip "+(cls||""),text);}
 function number(value){return typeof value==="number"&&Number.isFinite(value)?value.toLocaleString(state.lang):t("dash");}
 function formatDate(value){if(!value)return t("dash");var date=new Date(value);if(Number.isNaN(date.getTime()))return t("dash");return date.toLocaleString(state.lang);}
 function formatShortDate(value){if(!value)return t("dash");var date=new Date(value);if(Number.isNaN(date.getTime()))return t("dash");try{return date.toLocaleString(state.lang,{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"});}catch(_ignore){return formatDate(value);}}
-function workspaceShort(value){var text=String(value||"").trim();if(!text)return t("notObserved");var parts=text.split(/[\\/]+/).filter(Boolean);return parts.length?parts[parts.length-1]:text;}
+function workspaceShort(value){var text=String(value||"").trim();if(!text)return "";var parts=text.split(/[\\/]+/).filter(Boolean);return parts.length?parts[parts.length-1]:text;}
 function setError(message){var box=$("#global-error");if(!box)return;box.textContent=message||"";box.classList.toggle("visible",Boolean(message));}
 function toast(message,error){var node=$("#toast");if(!node)return;node.textContent=message;node.classList.toggle("error",Boolean(error));node.classList.add("show");clearTimeout(toast._timer);toast._timer=setTimeout(function(){node.classList.remove("show");},3200);}
 function errorMessage(error){if(!error)return t("unknown");return error.message||String(error);}
@@ -589,7 +585,8 @@ function taskTitle(task){return task&&task.name||task&&task.objective||(task&&ta
 function taskMatchesQuery(task,query){if(!query)return true;var hay=[taskTitle(task),task.task_id,task.workspace,task.objective].join(" ").toLowerCase();return hay.indexOf(query)>=0;}
 function taskStatusMeta(task){
   var label=statusLabel(task.status),cls=task.status;
-  if(task.status==="completed"){
+  if(task.master_accepted===true){label=t("masterAcceptedShort");cls="ok";}
+  else if(task.status==="completed"){
     var caps=task.action_capabilities||{};
     if(caps.can_continue||caps.can_rework){label=t("completedReviewPending");cls="completed review-pending";}
     else{label=t("completedReviewBlocked");cls="completed review-blocked";}
@@ -606,16 +603,6 @@ function attentionSummary(task){
   return shown.join(" · ");
 }
 function metaItem(text,mono){return el("span","task-meta-item"+(mono?" mono":""),text);}
-function reviewSemantics(detail,attempt){
-  var result=attempt&&attempt.result;
-  if(!result)return "";
-  if(result.status==="failed")return t("workerFailed");
-  if(detail.master_accepted===true)return t("masterAccepted");
-  if(detail.status==="waiting_for_master")return t("masterReviewPending");
-  if(detail.status==="completed")return t("masterAcceptanceNotRecorded");
-  if(result.status==="cancelled")return t("workerCancelled");
-  return t("workerCompleted");
-}
 function fileSummary(count){return count===1?t("oneFileChanged",{n:count}):t("filesChangedCount",{n:count});}
 function testsSummary(tests){
   var values=Array.isArray(tests)?tests:[];
@@ -671,15 +658,12 @@ function renderTaskInbox(){
     line1.appendChild(chip(meta.label,meta.cls));
     main.appendChild(line1);
     var line2=el("span","task-line task-line-meta");
-    line2.appendChild(metaItem(workspaceShort(task.workspace)));
-    if(modelPlanText({model:task.model,plan:task.plan})===t("modelPlanNotObserved")){
-      line2.appendChild(metaItem(t("modelPlanNotObserved")));
-    }else{
-      line2.appendChild(metaItem(modelText(task.model)));
-      line2.appendChild(metaItem(planText(task.plan)));
-    }
+    var workspaceName=workspaceShort(task.workspace);
+    if(workspaceName)line2.appendChild(metaItem(workspaceName));
+    if(task.model&&task.model.state!=="not_observed")line2.appendChild(metaItem(modelText(task.model)));
+    if(task.plan&&task.plan.kind!=="not_observed")line2.appendChild(metaItem(planText(task.plan)));
     line2.appendChild(metaItem(t("attempt")+" #"+String(task.attempt)));
-    line2.appendChild(metaItem(formatShortDate(task.updated_at)));
+    if(task.updated_at)line2.appendChild(metaItem(formatShortDate(task.updated_at)));
     main.appendChild(line2);
     if(task.needs_attention){
       var problem=attentionSummary(task);
@@ -700,10 +684,12 @@ function renderDetail(){renderDetailV2();}
 function renderDetailV2(){
   var target=$("#task-detail");if(!target)return;
   target.replaceChildren();
+  target.removeAttribute("data-task-id");
   if(!state.selected){target.appendChild(el("div","detail-empty",t("chooseTask")));return;}
   if(state.detailError){target.appendChild(el("p","action-note blocked",state.detailError));return;}
   if(!state.detail){target.appendChild(el("div","detail-empty",t("loadingDetail")));return;}
   var detail=state.detail;
+  target.setAttribute("data-task-id",detail.task_id);
   var attempt=currentAttempt();
   if(!attempt){target.appendChild(el("div","detail-empty",t("chooseTask")));return;}
   var meta=taskStatusMeta(detail);
@@ -714,29 +700,33 @@ function renderDetailV2(){
   left.appendChild(el("h2","",taskTitle(detail)));
   if(detail.objective&&detail.objective!==taskTitle(detail))left.appendChild(el("p","",detail.objective));
   var context=el("div","detail-context");
-  context.appendChild(el("span","detail-task-id mono",detail.task_id));
-  context.appendChild(el("span","detail-context-sep","·"));
   context.appendChild(el("span","",t("attempt")+" #"+String(attempt.attempt)));
-  context.appendChild(el("span","detail-context-sep","·"));
-  context.appendChild(el("span","",modelPlanText(attempt)));
-  context.appendChild(el("span","detail-context-sep","·"));
-  context.appendChild(el("span","",t("updated")+" "+formatDate(detail.updated_at)));
+  if(detail.updated_at){
+    context.appendChild(el("span","detail-context-sep","·"));
+    context.appendChild(el("span","",t("updated")+" "+formatDate(detail.updated_at)));
+  }
   left.appendChild(context);
   var chips=el("div","hero-chips");
   chips.appendChild(chip(meta.label,meta.cls));
-  if(detail.needs_attention)chips.appendChild(chip(t("attention"),"review-blocked"));
   title.appendChild(left);title.appendChild(chips);header.appendChild(title);
-  var pathLine=el("div","detail-path");
-  pathLine.appendChild(el("span","detail-path-label",t("workspace")));
-  pathLine.appendChild(el("code","",detail.workspace||t("notObserved")));
-  header.appendChild(pathLine);
+  if(detail.workspace){
+    var pathDetails=el("details","detail-workspace");
+    var pathSummary=el("summary","");
+    pathSummary.appendChild(el("span","detail-workspace-label",t("workspace")));
+    pathSummary.appendChild(el("code","",workspaceShort(detail.workspace)));
+    pathDetails.appendChild(pathSummary);
+    var pathFull=el("div","detail-workspace-full");
+    pathFull.appendChild(document.createTextNode(detail.workspace));
+    pathDetails.appendChild(pathFull);
+    header.appendChild(pathDetails);
+  }
   target.appendChild(header);
   target.appendChild(renderProblemActions(detail,attempt,attempt.attempt===detail.attempt));
   target.appendChild(renderWorkHistory(detail,attempt));
   target.appendChild(renderExecution(detail,attempt));
   target.appendChild(renderTechnicalDetails(attempt));
 }
-function problemItems(detail,attempt){
+function problemItems(detail,attempt,current){
   var items=[];
   var result=attempt.result;
   var resultFailed=Boolean(result&&(result.status==="failed"||result.error_code));
@@ -749,18 +739,18 @@ function problemItems(detail,attempt){
     items.push({kind:resultFailed?"bad":"warn",label:t("resultIssues"),text:issues});
   }
   if(result&&result.needs_master_decision)items.push({kind:"warn",label:t("needsMaster"),text:t("waitingMaster")});
-  if(attempt.pending_requests&&attempt.pending_requests.length)items.push({kind:"warn",label:t("pendingInteraction"),text:attempt.pending_requests.join(" · ")});
+  if(attempt.pending_requests&&attempt.pending_requests.length)items.push({kind:"warn",label:t("pendingInteraction"),text:t("pendingInteractionHint")});
   if(attempt.reply_outcome_unknown_requests&&attempt.reply_outcome_unknown_requests.length)items.push({kind:"bad",label:t("replyUnknownWarning"),text:""});
   if(attempt.cleanup&&attempt.cleanup.state==="pending")items.push({kind:"warn",label:t("cleanup"),text:t("cleanupPendingShort")});
   if(attempt.cleanup&&attempt.cleanup.state==="unverified")items.push({kind:"warn",label:t("cleanup"),text:t("cleanupUnverifiedShort")});
-  if(attempt.hold&&attempt.hold.active)items.push({kind:"bad",label:t("hold"),text:(attempt.hold.reason_code||t("unknown"))+(attempt.hold.at?" · "+formatDate(attempt.hold.at):"")});
+  if(attempt.hold&&attempt.hold.active)items.push({kind:"bad",label:t("hold"),text:(attempt.hold.reason_code?reasonLabel(attempt.hold.reason_code):t("unknown"))+(attempt.hold.at?" · "+formatDate(attempt.hold.at):"")});
   if(attempt.wake&&attempt.wake.state==="submission_unknown")items.push({kind:"warn",label:t("wake"),text:t("wakeSubmissionUnknown")});
   if(attempt.wake&&attempt.wake.state==="web_notify")items.push({kind:"info",label:t("wake"),text:t("wakeWebNotify")});
   if(detail.result_submission_error)items.push({kind:"bad",label:t("resultSubmissionError"),text:detail.result_submission_error});
-  if(detail.status==="waiting_for_master")items.push({kind:"warn",label:t("review"),text:t("waitingMaster")});
-  if(detail.status==="completed")items.push({kind:"info",label:t("review"),text:t("completedNotAccepted")});
-  if(detail.status==="failed"&&!resultFailed)items.push({kind:"bad",label:statusLabel("failed"),text:t("resultFailedHint")});
-  if(detail.status==="queued"||detail.status==="running")items.push({kind:"info",label:statusLabel(detail.status),text:t("workerActive")});
+  if(current&&detail.status==="waiting_for_master"&&!resultFailed)items.push({kind:"warn",label:t("review"),text:t("waitingMaster")});
+  if(current&&detail.status==="completed"&&!resultFailed&&detail.master_accepted!==true)items.push({kind:"info",label:t("review"),text:t("completedNotAccepted")});
+  if(current&&detail.status==="failed"&&!resultFailed)items.push({kind:"bad",label:statusLabel("failed"),text:t("resultFailedHint")});
+  if(current&&(detail.status==="queued"||detail.status==="running"))items.push({kind:"info",label:statusLabel(detail.status),text:t("workerActive")});
   if(!items.length)items.push({kind:"ok",label:t("noAttentionItems"),text:""});
   return items;
 }
@@ -781,7 +771,7 @@ function renderProblemActions(detail,attempt,current){
   var section=el("section","region");
   section.setAttribute("data-section","problem-actions");
   section.appendChild(sectionTitle(t("problemActions")));
-  var items=problemItems(detail,attempt);
+  var items=problemItems(detail,attempt,current);
   var box=el("div","problem "+severity(items));
   items.forEach(function(item){
     var line=el("p","problem-line");
@@ -802,12 +792,9 @@ function renderProblemActions(detail,attempt,current){
   if(caps.can_reply){var replyButton=el("button","button",t("reply"));replyButton.type="button";replyButton.addEventListener("click",function(){state.actionForm=state.actionForm==="reply"?null:"reply";renderDetail();});actions.appendChild(replyButton);}
   if(caps.can_cancel){var cancelButton=el("button","button danger",t("cancel"));cancelButton.type="button";cancelButton.addEventListener("click",function(){void cancelTask();});actions.appendChild(cancelButton);}
   if(actions.children.length)section.appendChild(actions);
-  if(caps.can_continue)section.appendChild(el("p","action-note",t("continueSafe")));
-  else if(caps.can_rework)section.appendChild(el("p","action-note",t("reworkSafe")));
-  else if(caps.can_recover_cleanup)section.appendChild(el("p","action-note",t("cleanupNeedsVerification")));
-  if(!actions.children.length)section.appendChild(el("p","action-note",t("actionUnavailable")));
   var blockers=actionBlockerReasons(caps);
   if(!caps.can_continue&&!caps.can_rework&&blockers.length&&detail.status!=="queued"&&detail.status!=="running")section.appendChild(el("p","action-note blocked",t("actionBlocked",{reasons:blockers.join("; ")})));
+  else if(!actions.children.length)section.appendChild(el("p","action-note",t("actionUnavailable")));
   if(state.actionForm==="continue"&&caps.can_continue)section.appendChild(renderContinueForm());
   if(state.actionForm==="rework"&&caps.can_rework)section.appendChild(renderReworkForm());
   if(state.actionForm==="reply"&&caps.can_reply)section.appendChild(renderReplyForm(attempt));
@@ -816,7 +803,7 @@ function renderProblemActions(detail,attempt,current){
 function renderWorkHistory(detail,attempt){
   var section=el("section","region");
   section.setAttribute("data-section","work-history");
-  section.appendChild(sectionTitle(t("workHistory"),t("attempt")+" "+String(attempt.attempt)+" / "+String(detail.attempts.length)));
+  section.appendChild(sectionTitle(t("workHistory")));
   var tabs=el("div","attempts");
   detail.attempts.forEach(function(item){
     var button=el("button","attempt"+(item.attempt===state.selectedAttempt?" active":""));
@@ -831,18 +818,14 @@ function renderWorkHistory(detail,attempt){
   section.appendChild(tabs);
   var result=attempt.result;
   var block=el("div","result-block");
-  var head=el("div","result-head");
-  head.appendChild(el("h4","",t("resultFor",{n:attempt.attempt})));
-  head.appendChild(chip(result?statusLabel(result.status):t("notObserved"),result?result.status:""));
-  block.appendChild(head);
-  var semantics=reviewSemantics(detail,attempt);
-  if(semantics)block.appendChild(el("p","result-semantics",semantics));
   if(result){
     if(result.summary)block.appendChild(el("p","result-summary",result.summary));
     var metrics=el("div","result-metrics");
-    metrics.appendChild(el("span","",fileSummary(Array.isArray(result.files_changed)?result.files_changed.length:0)));
-    metrics.appendChild(el("span","",testsSummary(result.tests)));
-    block.appendChild(metrics);
+    var files=Array.isArray(result.files_changed)?result.files_changed.length:0;
+    var tests=Array.isArray(result.tests)?result.tests.length:0;
+    if(files)metrics.appendChild(el("span","",fileSummary(files)));
+    if(tests)metrics.appendChild(el("span","",testsSummary(result.tests)));
+    if(metrics.children.length)block.appendChild(metrics);
     var hasDetails=(result.issues&&result.issues.length)||(result.files_changed&&result.files_changed.length)||(result.tests&&result.tests.length)||result.error_code||result.started_at||result.finished_at;
     if(hasDetails){
       var details=el("details","result-details");
@@ -857,19 +840,19 @@ function renderWorkHistory(detail,attempt){
       }
       if(result.files_changed&&result.files_changed.length){
         body.appendChild(el("p","detail-label",t("filesChanged")));
-        var files=el("ul","detail-list");
-        result.files_changed.forEach(function(file){files.appendChild(el("li","",file));});
-        body.appendChild(files);
+        var fileList=el("ul","detail-list");
+        result.files_changed.forEach(function(file){fileList.appendChild(el("li","",file));});
+        body.appendChild(fileList);
       }
       if(result.tests&&result.tests.length){
         body.appendChild(el("p","detail-label",t("tests")));
-        var tests=el("ul","detail-list");
+        var testList=el("ul","detail-list");
         result.tests.forEach(function(test){
           var row=el("li","test-row"+(test.status==="failed"?" test-failed":test.status==="not_run"?" test-not-run":""));
           row.textContent=test.status+"  "+test.command+(test.details?"\n"+test.details:"");
-          tests.appendChild(row);
+          testList.appendChild(row);
         });
-        body.appendChild(tests);
+        body.appendChild(testList);
       }
       if(result.started_at||result.finished_at){
         var times=el("div","result-metrics");
@@ -902,22 +885,42 @@ function renderExecution(detail,attempt){
   details.addEventListener("toggle",function(){state.executionOpen=details.open;});
   var body=el("div","execution-body");
   var grid=el("div","exec-grid");
-  grid.appendChild(execCell(t("model"),modelText(attempt.model)+" · "+modelSourceText(attempt.model)));
-  grid.appendChild(execCell(t("effort"),effortText(attempt.model)+" · "+effortSourceText(attempt.model)));
-  grid.appendChild(execCell(t("plan"),planText(attempt.plan)));
-  grid.appendChild(execCell(t("discount"),discountText(attempt.discount)));
+  var modelObserved=attempt.model&&attempt.model.state!=="not_observed";
+  var planObserved=attempt.plan&&attempt.plan.kind!=="not_observed";
+  var discountObserved=attempt.discount&&attempt.discount.state!=="not_observed";
+  var effortObserved=attempt.model&&attempt.model.effort&&attempt.model.effort.state!=="not_observed"&&attempt.model.effort.value;
+  var missing=[];
+  if(modelObserved)grid.appendChild(execCell(t("model"),modelText(attempt.model)));
+  else missing.push(t("model"));
+  if(planObserved)grid.appendChild(execCell(t("plan"),planText(attempt.plan)));
+  else missing.push(t("plan"));
+  if(discountObserved)grid.appendChild(execCell(t("discount"),discountText(attempt.discount)));
+  else missing.push(t("discount"));
+  if(effortObserved)grid.appendChild(execCell(t("effort"),effortText(attempt.model)));
+  else missing.push(t("effort"));
   var usage=attempt.usage||{state:"not_observed"};
-  grid.appendChild(execCell(t("inputTokens"),metricText(usage.input_tokens)));
-  grid.appendChild(execCell(t("outputTokens"),metricText(usage.output_tokens)));
-  grid.appendChild(execCell(t("cacheRead"),metricText(usage.cached_input_tokens)));
-  grid.appendChild(execCell(t("cacheWrite"),metricText(usage.cached_write_input_tokens)));
-  grid.appendChild(execCell(t("reasoning"),metricText(usage.reasoning_tokens)));
-  grid.appendChild(execCell(t("totalTokens"),metricText(usage.total_tokens)));
-  body.appendChild(grid);
-  var provider=el("div","provider-cost");
-  provider.appendChild(el("strong","",t("providerActualCost")+": "+t("notObserved")));
-  provider.appendChild(el("small","",t("providerCostUnavailable")));
-  body.appendChild(provider);
+  var tokenFields=[
+    [t("inputTokens"),usage.input_tokens],
+    [t("outputTokens"),usage.output_tokens],
+    [t("cacheRead"),usage.cached_input_tokens],
+    [t("cacheWrite"),usage.cached_write_input_tokens],
+    [t("reasoning"),usage.reasoning_tokens],
+    [t("totalTokens"),usage.total_tokens],
+  ];
+  if(usage.state==="observed"){
+    tokenFields.forEach(function(field){if(field[1]!==null&&field[1]!==undefined)grid.appendChild(execCell(field[0],number(field[1])));else missing.push(field[0]);});
+  }else{
+    missing.push(t("executionUsage"));
+  }
+  if(grid.children.length)body.appendChild(grid);
+  var provider=attempt.usage&&attempt.usage.provider_cost;
+  if(provider&&provider.state==="observed"&&provider.amount!==null&&provider.amount!==undefined){
+    var providerLine=el("div","provider-cost");
+    providerLine.appendChild(el("strong","",t("providerActualCost")+": "+String(provider.amount)+(provider.currency?" "+provider.currency:"")));
+    body.appendChild(providerLine);
+  }else{
+    missing.push(t("providerActualCost"));
+  }
   if(usage.state==="observed"){
     var sourceParts=[];
     if(usage.source)sourceParts.push(t("usageSource")+": "+usage.source);
@@ -925,17 +928,26 @@ function renderExecution(detail,attempt){
     if(usage.observed_at)sourceParts.push(t("observedAt")+": "+formatDate(usage.observed_at));
     if(sourceParts.length)body.appendChild(el("p","action-note",sourceParts.join(" · ")));
     if(usage.conflicts&&usage.conflicts.length)body.appendChild(el("p","action-note blocked",usage.conflicts.join(", ")));
-  }else{
-    body.appendChild(el("p","action-note",t("usageNotObserved")));
   }
   var worker=el("div","usage-scope");
-  worker.appendChild(el("b","",t("workerUsage")+": "+usageTotalText(usage)));
-  worker.appendChild(el("small","",usage.state==="observed"?t("workerUsageHint"):t("usageNotObserved")));
-  body.appendChild(worker);
-  var master=el("div","usage-scope");
-  master.appendChild(el("b","",t("masterUsage")+": "+t("notObserved")));
-  master.appendChild(el("small","",t("masterUsageUnavailable")));
-  body.appendChild(master);
+  if(usage.state==="observed"&&usage.total_tokens!==null&&usage.total_tokens!==undefined){
+    worker.appendChild(el("b","",t("workerUsage")+": "+usageTotalText(usage)));
+    worker.appendChild(el("small","",t("workerUsageHint")));
+    body.appendChild(worker);
+  }else{
+    missing.push(t("workerUsage"));
+  }
+  var master=detail.master_usage;
+  if(master&&master.state==="observed"&&master.total_tokens!==null&&master.total_tokens!==undefined){
+    var masterLine=el("div","usage-scope");
+    masterLine.appendChild(el("b","",t("masterUsage")+": "+t("tokens",{n:number(master.total_tokens)})));
+    body.appendChild(masterLine);
+  }else{
+    missing.push(t("masterUsage"));
+  }
+  var uniqueMissing=[];
+  missing.forEach(function(label){if(uniqueMissing.indexOf(label)<0)uniqueMissing.push(label);});
+  if(uniqueMissing.length)body.appendChild(el("p","action-note",t("notObservedFields",{fields:uniqueMissing.join(", ")})));
   details.appendChild(body);
   return details;
 }

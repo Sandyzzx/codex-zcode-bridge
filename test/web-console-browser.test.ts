@@ -325,11 +325,11 @@ function seedConsole(dataRoot: string): SeededConsole {
       expected_generation: 0,
       maintenance: { dispatch_blocked: true, writers_drained: true },
     });
-    const doneWorkspace = path.join(workspaceRoot, "done");
-    const cleanupWorkspace = path.join(workspaceRoot, "cleanup");
-    const attentionWorkspace = path.join(workspaceRoot, "attention");
-    const queuedWorkspace = path.join(workspaceRoot, "queued");
-    const wakeUnknownWorkspace = path.join(workspaceRoot, "wake-unknown");
+    const doneWorkspace = path.join(workspaceRoot, "release-workspace");
+    const cleanupWorkspace = path.join(workspaceRoot, "cleanup-recovery");
+    const attentionWorkspace = path.join(workspaceRoot, "interactive-review");
+    const queuedWorkspace = path.join(workspaceRoot, "dispatch-queue");
+    const wakeUnknownWorkspace = path.join(workspaceRoot, "delivery-reconciliation");
     for (const workspace of [doneWorkspace, cleanupWorkspace, attentionWorkspace, queuedWorkspace, wakeUnknownWorkspace]) mkdirSync(workspace, { recursive: true });
 
     const doneTaskId = "task-done";
@@ -428,6 +428,14 @@ async function waitForCount(page: Page, selector: string, value: string): Promis
   );
 }
 
+async function waitForSelectedTask(page: Page, taskId: string): Promise<void> {
+  await page.waitForFunction(
+    (expected) => document.querySelector("#task-detail")?.getAttribute("data-task-id") === expected,
+    taskId,
+    { timeout: 15_000 },
+  );
+}
+
 test("real SQLite Authority drives the single-page Task Console in Chromium", {
   timeout: 180_000,
   skip: chromePath === null ? "Google Chrome is not installed for the browser E2E" : false,
@@ -509,12 +517,13 @@ test("real SQLite Authority drives the single-page Task Console in Chromium", {
     await page.goto(`${address.origin}/?task_id=${seeded.doneTaskId}`, { waitUntil: "domcontentloaded" });
     await page.selectOption("#language", "en");
     await page.selectOption("#theme", "light");
-    await page.waitForFunction(
-      () => document.querySelector("#task-detail .detail-context .mono")?.textContent === "task-done",
-      undefined,
-      { timeout: 15_000 },
+    await waitForSelectedTask(page, "task-done");
+    await waitForText(page, "#task-detail", "Worker execution completed. Master acceptance is not recorded.");
+    assert.equal(
+      ((await page.locator("#task-detail").innerText()).match(/Master acceptance is not recorded/gu) ?? []).length,
+      1,
+      "the current-task review state must be explained once",
     );
-    await waitForText(page, "#task-detail", "Completed is not acceptance");
     await waitForCount(page, "#count-running", "1");
     await waitForCount(page, "#count-attention", "3");
     await waitForCount(page, "#count-completed", "1");
@@ -539,7 +548,10 @@ test("real SQLite Authority drives the single-page Task Console in Chromium", {
     assert.equal(brandSrc?.startsWith("data:image/png;base64,"), true);
     assert.ok(await page.locator(".brand-icon").evaluate((image: HTMLImageElement) => image.naturalWidth) >= 32);
     const doneRow = page.locator(".task-row[data-task-id='task-done']");
-    assert.equal(await doneRow.locator(".task-line-meta .task-meta-item").first().textContent(), "done");
+    assert.equal(
+      await doneRow.locator(".task-line-meta .task-meta-item").first().textContent(),
+      "release-workspace",
+    );
     assert.equal(
       (await doneRow.textContent() ?? "").includes(seeded.doneWorkspace),
       false,
@@ -549,11 +561,11 @@ test("real SQLite Authority drives the single-page Task Console in Chromium", {
     assert.equal(await page.locator(".task-row .task-main").count(), 5);
     assert.equal(
       await doneRow.locator(".status-chip").textContent(),
-      "Completed · Awaiting review",
+      "Execution completed · Awaiting review",
     );
     assert.equal(
       await page.locator(".task-row[data-task-id='task-wake-unknown'] .status-chip").textContent(),
-      "Completed · Review blocked",
+      "Execution completed · Review blocked",
     );
     assert.match(
       await page.locator(".task-row[data-task-id='task-wake-unknown'] .task-line-problem").textContent() ?? "",
@@ -572,10 +584,10 @@ test("real SQLite Authority drives the single-page Task Console in Chromium", {
       0,
       "the task list must not repeat Not observed for model and plan",
     );
-    await waitForText(
-      page,
-      ".task-row[data-task-id='task-queued'] .task-line-meta",
-      "Model and plan not observed",
+    assert.equal(
+      (await page.locator(".task-row[data-task-id='task-queued']").textContent() ?? "").includes("Not observed"),
+      false,
+      "missing model and plan fields must be hidden from the task list",
     );
     const visibleEnglishCopy = await page.locator("body").innerText();
     for (const forbidden of [
@@ -587,6 +599,12 @@ test("real SQLite Authority drives the single-page Task Console in Chromium", {
       "READ-ONLY PROJECTION",
       "Cost Lab",
       "0.67",
+      "task-done",
+      "task-attention",
+      "task-cleanup",
+      "task-queued",
+      "wake-unknown",
+      "request-permission-browser",
     ]) {
       assert.equal(
         visibleEnglishCopy.toLowerCase().includes(forbidden.toLowerCase()),
@@ -625,13 +643,27 @@ test("real SQLite Authority drives the single-page Task Console in Chromium", {
     );
     await executionDetails.locator(":scope > summary").click();
     assert.notEqual(await executionDetails.getAttribute("open"), null);
-    await waitForText(page, "#task-detail", "low · Observed");
+    await waitForText(page, "#task-detail", "GLM-5.3");
     assert.equal(
-      await page.locator(".usage-fact").filter({ hasText: "Cache read" }).locator("strong").textContent(),
-      "Not observed",
+      await page.locator(".usage-fact").filter({ hasText: "Cache read" }).count(),
+      0,
+      "unobserved fields must be hidden instead of rendered as Not observed",
     );
-    await waitForText(page, "#task-detail", "Provider actual cost: Not observed");
-    await waitForText(page, "#task-detail", "No provider settlement was recorded for this Attempt.");
+    const executionText = await executionDetails.innerText();
+    assert.equal(
+      (executionText.match(/Not observed:/gu) ?? []).length,
+      1,
+      "expanded execution must summarize unavailable fields once",
+    );
+    assert.match(
+      executionText,
+      /Not observed: Cache read, Cache write, Reasoning, Provider actual cost, Master usage\./u,
+    );
+    assert.equal(
+      executionText.includes("Provider actual cost: Not observed"),
+      false,
+      "provider cost must not be repeated after the aggregate explanation",
+    );
     await page.screenshot({ path: path.join(evidenceDirectory, "execution-expanded.png"), fullPage: true });
     await executionDetails.locator(":scope > summary").click();
     assert.equal(await executionDetails.getAttribute("open"), null);
@@ -652,24 +684,36 @@ test("real SQLite Authority drives the single-page Task Console in Chromium", {
     assert.equal(await page.locator(".task-row").count(), 5);
 
     await page.locator(".attempt").filter({ hasText: "Attempt #1" }).click();
-    await waitForText(page, "#task-detail", "Result for Attempt 1");
+    await waitForText(page, "#task-detail", "Synthetic first attempt failed.");
     await waitForText(page, "#task-detail", "Coding Plan");
     await waitForText(page, "#task-detail", "Result issues");
     await waitForText(page, "#task-detail", "Result failed");
     const firstAttemptDetail = await page.locator("#task-detail").innerText();
     assert.equal(
+      firstAttemptDetail.includes("Master acceptance is not recorded"),
+      false,
+      "a historical failed Attempt must not inherit the current Task review explanation",
+    );
+    assert.equal(
+      firstAttemptDetail.includes("Worker execution completed"),
+      false,
+      "a historical failed Attempt must not be described as Worker execution completed",
+    );
+    assert.equal(
       firstAttemptDetail.includes("Acceptance failed"),
       false,
       "Worker Result issues and failures must not be presented as a Master acceptance decision",
     );
+    await executionDetails.locator(":scope > summary").click();
     const firstInput = page.locator(".usage-fact").filter({ hasText: "Input tokens" }).locator("strong");
     assert.equal(await firstInput.textContent(), "0", "a real zero must remain zero instead of becoming missing");
+    await executionDetails.locator(":scope > summary").click();
     await page.locator(".attempt").filter({ hasText: "Attempt #2" }).click();
-    await waitForText(page, "#task-detail", "Result for Attempt 2");
+    await waitForText(page, "#task-detail", "Synthetic second attempt delivered the reviewed change.");
+    await executionDetails.locator(":scope > summary").click();
     const secondTotal = page.locator(".usage-fact").filter({ hasText: "Total tokens" }).locator("strong");
     assert.equal(await secondTotal.textContent(), "150");
-    await waitForText(page, "#task-detail", "Provider actual cost: Not observed");
-    await waitForText(page, "#task-detail", "No provider settlement was recorded for this Attempt.");
+    await executionDetails.locator(":scope > summary").click();
     const providerCosts = await page.evaluate(async () => {
       const response = await fetch("/api/tasks/task-done/console");
       const body = await response.json() as {
@@ -720,20 +764,20 @@ test("real SQLite Authority drives the single-page Task Console in Chromium", {
     await page.screenshot({ path: path.join(evidenceDirectory, "tasks-desktop-dark.png"), fullPage: true });
     await page.selectOption("#theme", "light");
     await page.locator(".attempt").filter({ hasText: "Attempt #1" }).click();
-    await waitForText(page, "#task-detail", "Result for Attempt 1");
+    await waitForText(page, "#task-detail", "Synthetic first attempt failed.");
     await page.screenshot({ path: path.join(evidenceDirectory, "task-review-failed.png"), fullPage: true });
     await page.selectOption("#language", "zh-CN");
     assert.equal(await page.locator("html").getAttribute("lang"), "zh-CN");
-    await waitForText(page, "#task-detail", "Completed 不等于验收");
     await waitForText(page, "#experimental-notice", "实验性功能：任务状态与恢复操作仍在持续完善。");
-    assert.equal(await page.locator(".task-row[data-task-id='task-done'] .status-chip").textContent(), "已完成 · 待验收");
+    assert.equal(await page.locator(".task-row[data-task-id='task-done'] .status-chip").textContent(), "执行完成 · 待验收");
     await page.locator(".attempt").filter({ hasText: "Attempt #2" }).click();
-    await waitForText(page, "#task-detail", "Attempt 2 的 Result");
+    await waitForText(page, "#task-detail", "Synthetic second attempt delivered the reviewed change.");
+    await waitForText(page, "#task-detail", "Worker 执行完成，未记录 Master 验收结论。");
     await page.screenshot({ path: path.join(evidenceDirectory, "tasks-zh.png"), fullPage: true });
     await page.selectOption("#language", "en");
     await waitForText(page, "#experimental-notice", "Experimental: task status and recovery operations are still being refined.");
     await page.locator(".attempt").filter({ hasText: "Attempt #2" }).click();
-    await waitForText(page, "#task-detail", "Result for Attempt 2");
+    await waitForText(page, "#task-detail", "Synthetic second attempt delivered the reviewed change.");
     await page.setViewportSize({ width: 390, height: 900 });
     await page.screenshot({ path: path.join(evidenceDirectory, "tasks-narrow.png"), fullPage: true });
     const narrowOverflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
@@ -785,10 +829,18 @@ test("real SQLite Authority drives the single-page Task Console in Chromium", {
     assert.equal(await page.getByRole("button", { name: "Continue" }).count(), 0);
 
     await page.locator(".task-row[data-task-id='task-cleanup']").click();
+    await waitForSelectedTask(page, "task-cleanup");
     await waitForText(page, "#task-detail", "Cleanup unverified");
-    await waitForText(page, "#task-detail", "Usage was not observed. This is not zero.");
-    await waitForText(page, "#task-detail", "Provider actual cost: Not observed");
-    await waitForText(page, "#task-detail", "No provider settlement was recorded for this Attempt.");
+    await page.locator("details[data-section='execution'] > summary").click();
+    await waitForText(page, "#task-detail", "Not observed:");
+    const cleanupExecutionText = await page.locator("details[data-section='execution']").innerText();
+    assert.equal(
+      (cleanupExecutionText.match(/Not observed:/gu) ?? []).length,
+      1,
+      "missing execution data must be summarized once",
+    );
+    assert.match(cleanupExecutionText, /Execution usage/u);
+    await page.locator("details[data-section='execution'] > summary").click();
     const cleanupCapabilities = await page.evaluate(async () => {
       const response = await fetch("/api/tasks/task-cleanup/console");
       return (await response.json() as { result: { action_capabilities: Record<string, unknown> } }).result.action_capabilities;
@@ -827,7 +879,13 @@ test("real SQLite Authority drives the single-page Task Console in Chromium", {
     await page.screenshot({ path: path.join(evidenceDirectory, "cleanup-blocked.png"), fullPage: true });
 
     await page.locator(".task-row[data-task-id='task-attention']").click();
-    await waitForText(page, "#task-detail", "request-permission-browser");
+    await waitForSelectedTask(page, "task-attention");
+    await waitForText(page, "#task-detail", "A reply is required before this Task can continue.");
+    assert.equal(
+      (await page.locator("#task-detail").innerText()).includes("request-permission-browser"),
+      false,
+      "raw interaction request IDs must stay out of the normal detail view",
+    );
     const attentionCapabilities = await page.evaluate(async () => {
       const response = await fetch("/api/tasks/task-attention/console");
       return (await response.json() as { result: { action_capabilities: Record<string, unknown> } }).result.action_capabilities;
@@ -844,7 +902,12 @@ test("real SQLite Authority drives the single-page Task Console in Chromium", {
     assert.equal(await page.getByRole("button", { name: "Send reply" }).count(), 1);
 
     await page.locator(".task-row[data-task-id='task-queued']").click();
-    await waitForText(page, "#task-detail", "task-queued");
+    await waitForSelectedTask(page, "task-queued");
+    assert.equal(
+      (await page.locator("#task-detail").innerText()).includes("task-queued"),
+      false,
+      "internal Task IDs must stay out of the normal detail view",
+    );
     const queuedCapabilities = await page.evaluate(async () => {
       const response = await fetch("/api/tasks/task-queued/console");
       return (await response.json() as { result: { action_capabilities: Record<string, unknown> } }).result.action_capabilities;
@@ -871,7 +934,7 @@ test("real SQLite Authority drives the single-page Task Console in Chromium", {
     await page.screenshot({ path: path.join(evidenceDirectory, "task-review-blocked.png"), fullPage: true });
 
     await page.locator(".task-row[data-task-id='task-done']").click();
-    await waitForText(page, "#task-detail", "task-done");
+    await waitForSelectedTask(page, "task-done");
     await page.setViewportSize({ width: 1440, height: 1000 });
     executorOverride = "unavailable";
     await page.reload({ waitUntil: "domcontentloaded" });
@@ -885,11 +948,7 @@ test("real SQLite Authority drives the single-page Task Console in Chromium", {
     await page.screenshot({ path: path.join(evidenceDirectory, "executor-unavailable.png"), fullPage: true });
     executorOverride = null;
     await page.reload({ waitUntil: "domcontentloaded" });
-    await page.waitForFunction(
-      () => document.querySelector("#task-detail .detail-context .mono")?.textContent === "task-done",
-      undefined,
-      { timeout: 15_000 },
-    );
+    await waitForSelectedTask(page, "task-done");
     assert.equal(new URL(page.url()).searchParams.get("task_id"), "task-done");
     assert.equal(await page.evaluate(() => localStorage.getItem("bridge.ui.theme")), "light");
     assert.equal(await page.evaluate(() => localStorage.getItem("bridge.ui.language")), "en");

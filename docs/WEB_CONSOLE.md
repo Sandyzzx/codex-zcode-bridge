@@ -1,8 +1,8 @@
 # Bridge Task Workspace
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-25（Preview.17 Task Workspace 第二轮减法整改）
-> Last verified: 2026-11-25，核对单行计数筛选、最多三行任务列表、合并未观测标签、详情四段顺序、动作前置、逐 Attempt Usage/Effort、Master 与 Worker 分栏、Provider 实际成本未观测状态、Technical details 折叠、完整 Events 分页、真实 SQLite Authority 到 IPC/HTTP/Chromium 的 Console projection、Continue/Rework/Cleanup recovery 能力门、原始 Z 图标字节绑定、Diagnostics 零外部请求、双语、明暗主题与窄屏布局；真实模型、真实 Desktop、真实 Queue Wake 与 Master Usage 不在已验证范围。
+> Last updated: 2026-11-25（Preview.17 最终 UI 冻结）
+> Last verified: 2026-11-25，核对内部 Task/工作流标识隐藏、缺失字段隐藏与单次未观测汇总、Attempt 与 Result 合并、Execution completed 与 Master accepted 分离、Workspace 简称与按需完整路径、单行计数筛选、最多三行任务列表、动作前置、逐 Attempt Usage/Effort、Master 与 Worker 分栏、Technical details 折叠、完整 Events 分页、真实 SQLite Authority 到 IPC/HTTP/Chromium 的 Console projection、Continue/Rework/Cleanup recovery 能力门、原始 Z 图标字节绑定、Diagnostics 零外部请求、双语、明暗主题与窄屏布局；真实模型、真实 Desktop、真实 Queue Wake 与 Master Usage 不在已验证范围。
 > Verified against: `471b1f35`（Preview.17 集成快照；最终候选提交与 CI 结果由交付报告记录）
 
 Task Workspace 是 Executor Control Pipe 的本地可视化 Adapter。它只有一个
@@ -48,12 +48,13 @@ node dist/web-console.mjs --data-root <absolute-state-dir>
 Dashboard、Task inbox/workspace 重复栏目标题、Runtime 和 Cost Lab 主导航页面
 均已退役；Runtime 与成本证据能力保留在 Diagnostics。
 
-页面标题下使用一行紧凑的 `Running` / `Needs attention` / `Completed` 计数，
+页面标题下使用一行紧凑的 `Running` / `Needs attention` / `Execution completed`
+计数，
 不使用大型统计卡。三个计数同时是筛选入口。
 
 ### Task 列表
 
-- `Running`、`Needs attention`、`Completed` 三个计数与可点击筛选；计数行与
+- `Running`、`Needs attention`、`Execution completed` 三个计数与可点击筛选；计数行与
   `All tasks` 下拉共用同一 bucket 状态，再点当前计数可清除筛选。
 - 搜索框按 Task 名称、Task ID、Workspace 与目标实时过滤；筛选和搜索只改变本地
   投影，不产生 Authority 写操作。
@@ -61,12 +62,12 @@ Dashboard、Task inbox/workspace 重复栏目标题、Runtime 和 Cost Lab 主�
   状态；第二行是 Workspace 简称、Model、Plan、Attempt 和更新时间；第三行只在
   需要处理时显示失败原因或 Attention 摘要。
 - 列表不重复显示完整 Workspace 路径、独立 Usage 行、更新时间或状态。完整
-  Workspace 路径只在详情中提供。Model 与 Plan 同时未观测时显示一个合并标签，
-  避免在主视图中重复 `Not observed`。
+  Workspace 路径只在详情中按需展开。缺失的 Workspace、Model、Plan 或时间
+  字段直接隐藏，不渲染 `Not observed` 占位。
 - `Needs attention` 行优先排序，并使用轻微背景与左侧标记；具体原因直接显示
   在第三行，而不是藏在最后一列。
-- 已完成 Task 额外显示 `Awaiting review` / `Review blocked`，
-  区分“Worker 已完成”和“Master 验收仍待处理/受阻”。
+- 执行完成 Task 额外显示 `Awaiting review` / `Review blocked`，区分“Worker
+  执行完成”和“Master 验收仍待处理/受阻”。
 - 筛选只改变本地投影；列表读取失败时保留错误信息，不伪造空列表。
 
 ### Task 详情
@@ -74,23 +75,26 @@ Dashboard、Task inbox/workspace 重复栏目标题、Runtime 和 Cost Lab 主�
 详情固定按“结论 → 动作 → 证据 → 技术明细”顺序显示，并且不再为每个事实创建
 独立卡片：
 
-1. **Task header**：Task 名称、Task ID、Attempt、Model / Plan、更新时间与完整
-   Workspace。它不是独立 Overview 卡片。
+1. **Task header**：Task 名称、Attempt、Workspace 简称与更新时间。完整
+   Workspace 路径默认折叠，按需展开；普通视图不显示内部 Task ID。它不是
+   独立 Overview 卡片。
 2. **Problem and actions**：合并 Acceptance、Attention 与 Available actions。
-   先显示 Worker 报告的 Result issues / Result failed、Completed-not-accepted、
-   Attention、Hold、Pending Interaction 和未知 Reply Outcome，再紧接服务端
-   capability 允许的 Continue、Create related rework、Recover Cleanup、
-   Reply 或 Request cancel。Result issues 与 Result failed 都不是 Master 验收
-   结论；界面不会把 Worker completed 写成 Master accepted，也不会仅凭 Worker
-   自报问题声称“验收失败”。
+   先显示 Worker 报告的 Result issues / Result failed、当前 Task 的
+   “execution completed, acceptance not recorded”、Attention、Hold、Pending
+   Interaction 和未知 Reply Outcome，再紧接服务端 capability 允许的 Continue、
+   Create related rework、Recover Cleanup、Reply 或 Request cancel。Result
+   issues 与 Result failed 都不是 Master 验收结论；界面不会把 Worker execution
+   completed 写成 Master accepted，也不会仅凭 Worker 自报问题声称“验收失败”。
+   当前 Authority 不提供 Master acceptance 字段，因此界面不推断 Accepted。
 3. **Work history**：合并 Attempt timeline 和 Result。默认展开当前 Attempt；
-   选择历史 Attempt 后该 Attempt 只读。显示 Result 摘要、变更文件数和测试
-   摘要；完整 Result 和文件列表按需展开。Worker Completed、Master Review
-   Pending 与 Master Accepted 保持语义区分。
+   选择历史 Attempt 后该 Attempt 只读。Result 显示摘要、变更文件数和测试
+   摘要，不再重复 Result 标题、Attempt 编号或独立状态标签；完整 Result 和
+   文件列表按需展开。历史失败 Attempt 不继承当前 Task 的验收说明。
 4. **Execution**：默认只显示
    `Model · Plan · Discount · Total tokens` 一行；展开后显示 Input / Output、
    Cache read / write、Reasoning、Effort、Provider 实际成本、Worker Usage 与
-   Master Usage。没有观测的数据不显示为 `0`。
+   Master Usage。没有观测的字段默认隐藏，展开时只生成一条
+   `Not observed: …` 汇总；不显示为 `0`，也不逐字段重复未观测。
 5. **Technical details**：Wake、Cleanup、Release 与 Events 合并为一个默认
    折叠区；只有展开 Events 时才按当前 Attempt 加载完整分页。
 
@@ -106,16 +110,18 @@ localStorage，支持 `light` / `dark` / `system` 和 `en` / `zh-CN`。
 ### Usage、Plan 与 Discount
 
 - Result 中真实存在的零 token 值保持为 `0`，不会显示成“未观测”。
-- 缺少整套 Usage 时显示 `not_observed`；不根据文本、时长或模型名推算。
+- 缺少整套 Usage 时隐藏逐项数值，并在 Execution 展开时合并为一条未观测
+  汇总；不根据文本、时长或模型名推算，也不转换成 `0`。
 - 每个 Attempt 的 Usage projection 都包含 `provider_cost`。Bridge Authority
   没有逐 Attempt Provider settlement 时，状态固定为 `not_observed`，金额与
   币种为 `null`，Reason 为 `bridge_authority_has_no_provider_settlement`；
-  详情在有无 token Usage 时都显示这一事实，不推定为 `0` 或估算值。
+  没有可靠金额时详情不创建 Provider 成本字段，只在展开 Execution 的未观测
+  汇总中列出一次；不推定为 `0` 或估算值。
 - Plan、Discount、Model、Effort 使用独立标签。Effort 只来自 Result 的
   effective/requested reasoning level 或 Task 请求，不从模型名推导。
-- Worker Usage 与 Master Usage 分栏。Worker 显示 Total/Input/Output、
-  Cache read/write、Reasoning 与来源；Master 没有记录时明确显示
-  `Not observed`，不退化为 `0`。
+- Worker Usage 与 Master Usage 在已观测时保持分栏。Worker 显示
+  Total/Input/Output、Cache read/write、Reasoning 与来源；Master 没有记录时
+  不创建伪造数值，只在未观测汇总中列出一次，不退化为 `0`。
 - Start Plan 的 Coding Plan discount 为 `not_applicable`，只表示 provider kind
   下该折扣不适用。
 - Coding Plan 没有逐 Attempt settlement 证据时 discount 为 `not_observed`；
