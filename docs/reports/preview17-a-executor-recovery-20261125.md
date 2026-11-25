@@ -93,3 +93,14 @@
 本报告不把定向测试或合成 Executor 结果提升为 Preview.17 最终验收。
 `npm run test:affected` 是开发期受影响/延期门禁，其上述结果不是完整 CI
 PASS；完整 Windows/Ubuntu 矩阵仍需在集成或发布候选阶段执行。
+
+## 集成后状态（2026-11-25）
+
+- 完整 `npm test`：1,153 tests，1,151 pass，2 existing skip，0 fail；
+  typecheck、build、Plugin Validation 与 14 个生成物 freshness 通过。
+- 真实 Host 运行 `PREVIEW17-REAL-HOST-AUTOREWORK-20261125-R2` 在
+  Attempt 1 验收失败后自动 `zcode_continue`，Attempt 2 通过；两轮
+  Result/Cleanup/Release 可回读，每轮一次 Queue，原 Thread 各自新 Turn。
+  该运行验证的是正常 Continue 路径，不是 Executor 崩溃恢复路径；本报告
+  的恢复故障注入证据仍独立有效。
+- Windows/Ubuntu PR CI 与合并事实由最终交付报告记录。

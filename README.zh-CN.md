@@ -28,9 +28,9 @@ Bridge 复用本机安装的 ZCode Runtime，实际可用模型、套餐额度�
 
 预览版环境为 **Windows x64** 和 **Node.js `24.16.0`**。任何通过安全检查的官方 ZCode Desktop 安装均可运行（ADR-054）；已完成实际验证的版本如下列出。请先登录 ZCode，确认账户可使用目标套餐和模型，并准备 Git 和支持插件的 Codex。Node.js 和 ZCode 需单独安装。
 
-同一个 Codex 安装中选择一个 Marketplace 渠道即可。安装版 Runtime 集成、SQLite v14-only 运行时、事件分页、可选结果摘要、独立 Executor 与 Thin MCP、Executor 崩溃自动恢复、单页 Task Workspace、带验收驱动返工的 Async Master Handoff、持久化 Owner Binding 与安装即生效的 Auto Wake 位于预览版 `2.0.0-preview.17`，稳定版为 `v1.7.2`。
+同一个 Codex 安装中选择一个 Marketplace 渠道即可。安装版 Runtime 集成、SQLite v14-only 运行时、事件分页、可选结果摘要、独立 Executor 与 Thin MCP、Executor 崩溃自动恢复、单页 Task Workspace、带验收驱动返工的 Async Master Handoff、持久化 Owner Binding 与安装即生效的 Auto Wake 位于预览版 `2.0.0-preview.17`，稳定版为 `v1.7.2`。插件 manifest 在 Codex 顶层 `interface` 声明 Owner 确认的 Z 图标，插件页不再回退到通用图标。
 
-Auto Wake 不再需要逐任务授权文件：安装并启用插件即接受本机可信 Auto Wake 合同。可信 Codex Thread ID 来自 MCP Host 请求上下文，在 Worker 启动前持久化，并在 Release 后用于一次官方 Codex Queue 投递；该投递会以原会话当前模型恢复 Codex，因此可能产生额外 Codex 用量。可在 Task Workspace 的 Diagnostics 中关闭 Auto Wake，此时只保留 Web 观察、不提交 Queue。Queue ACK 不代表原 Turn 已启动，`web_notify` 只是 fallback observation。真实 Codex Host 的完成 Wake E2E（含非空工程交付）已于 2026-11-24 通过；Desktop 完全退出后的恢复、notLoaded 场景与 Official Runtime provenance 仍未验证。
+Auto Wake 不再需要逐任务授权文件：安装并启用插件即接受本机可信 Auto Wake 合同。可信 Codex Thread ID 来自 MCP Host 请求上下文，在 Worker 启动前持久化，并在 Release 后用于一次官方 Codex Queue 投递；该投递会以原会话当前模型恢复 Codex，因此可能产生额外 Codex 用量。可在 Task Workspace 的 Diagnostics 中关闭 Auto Wake，此时只保留 Web 观察、不提交 Queue。Queue ACK 不代表原 Turn 已启动，`web_notify` 只是 fallback observation。真实 Codex Host 的完成 Wake E2E（含非空工程交付）已于 2026-11-24 通过。2026-11-25 的第二次真实 Host 运行通过了验收驱动闭环：Worker 完成且 Result 可回读、独立验收失败、无需用户批准的自动 `zcode_continue`、第二轮 Attempt、每轮仅一次 Queue 交付、原 Thread 新 Turn，以及同一验收命令通过后的 `GOAL ACCEPTED`。Desktop 完全退出后的恢复、notLoaded 场景、Windows 重启恢复、严格 Wake C/D 与 Official Runtime provenance 仍未验证。
 
 ### 预览版
 

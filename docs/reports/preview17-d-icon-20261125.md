@@ -71,13 +71,38 @@ Owner 纠正后的唯一目标附件：
 | 检查 | 状态 | 证据 |
 |---|---|---|
 | 根 `plugin.json` 引用 | `PASS` | `logo=./assets/logo.png`，`composerIcon=./assets/icon.png` |
-| `.codex-plugin/plugin.json` 引用 | `PASS` | 同上 |
+| `.codex-plugin/plugin.json` 顶层 `interface` | `PASS`（2026-11-25 修复） | 修复前只写在 `extensions.com.openai.interface`，Codex 不读取；现为顶层 `interface.logo` / `interface.composerIcon` |
 | README 资产路径 | `PASS / NO_CHANGE` | README 不以额外路径重复声明素材 |
 | Preview.16 既有 Release ZIP | `PASS` | ZIP 内 `assets/icon.png` 5,315 bytes / `4C6577…`；`assets/logo.png` 47,354 bytes / `E97F3C…` |
 | 已安装 Codex Preview.16 cache | `PASS` | 两个资产与 ZIP、仓库目标同哈希 |
 | 本地插件 `git archive` smoke | `PASS` | 包内两个资产与提交树同字节、同 SHA-256 |
 | 新 Preview.17 Release ZIP | `NOT_RUN` | 本轮不 build/push/tag/release |
-| 新候选重新安装后的图标刷新 | `NOT_RUN` | 需要后续集成与安装 |
+| 新候选重新安装后的真实插件页 | `PASS` | 重新安装 `2.0.0-preview.17+codex.iconfix` 测试副本后，插件详情页与侧栏均显示 Z 图标；见 [实机截图](preview17-d-icon-20261125/installed-plugin-page.png) |
+
+### 4.1 Codex 插件页图标接线缺陷
+
+素材文件和安装缓存字节都正确，但真实插件页仍显示通用黄色文档/光标
+回退图。根因不是 PNG、尺寸或构建，而是 manifest 字段位置：
+
+- 修复前 `.codex-plugin/plugin.json` 只把 `displayName`、`logo`、
+  `composerIcon` 放在 `extensions.com.openai.interface`。
+- Codex 安装后的插件详情页读取的是清单顶层 `interface`；已知正常的
+  OpenAI 内置、远程与本地插件均使用顶层字段。
+- 顶层缺失时，Codex 会静默使用通用回退图，不会报 manifest 错误。
+
+修复只移动字段，不替换素材：
+
+- 顶层新增完整 `interface`（显示名、描述、能力、默认提示、`logo`、
+  `composerIcon`）。
+- `extensions.com.openai.hooks` 保持在原位置。
+- `scripts/validate-plugin.mjs` 改为强制校验两个 manifest 的顶层
+  `interface`，嵌套位置不再被接受。
+- `test/validate-plugin-root-pattern.test.ts` 增加顶层/嵌套/错误路径
+  回归；validator fixture 同步改为顶层布局。
+
+为刷新已安装缓存，验证副本使用
+`2.0.0-preview.17+codex.iconfix` 构建元数据；仓库和最终发布版本仍为
+`2.0.0-preview.17`，不把本地 cachebuster 带入候选。
 
 ## 5. 验证
 
@@ -89,10 +114,11 @@ Owner 纠正后的唯一目标附件：
 | `npm run build` | `PASS` |
 | `npm run validate:plugin` | `PASS` |
 | `npm run check:generated` | `PASS` |
-| validator 定向测试 | `PASS`，15/15 |
+| validator 定向测试 | `PASS`，16/16（新增顶层 interface 回归） |
 | `npm run test:affected -- --development` | `PASS`，52 pass / 0 fail / 1 platform skip；`FULL_SUITE_DEFERRED_TO_RELEASE_GATE` |
 | 完整 `npm test` / Windows / Ubuntu CI | `NOT_RUN` |
-| 新 Release 制品与全新安装 E2E | `NOT_RUN` |
+| 新候选重新安装与插件页视觉核验 | `PASS`（Windows Codex 26.1120.6357.0） |
+| 新 Release 制品与 Stable E2E | `NOT_RUN`（本轮不发布） |
 
-通知类验证不替代真实 Codex UI 的图标缓存刷新；最终显示仍以重新安装候选
-插件后的 Host 检查为准。
+通知类验证不替代真实 Codex UI 的图标缓存刷新；上表最后一项已经以重新
+安装候选插件后的真实插件页核验为准。

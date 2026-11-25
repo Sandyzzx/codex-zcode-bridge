@@ -5,7 +5,7 @@
 > Branch: `codex/preview17-b-master-autonomy-20261125`
 > Base: `6af69b55d7ecb660c2ad2c923888cf7f1e8886c8` (`origin/preview`)
 > Scope: 只改现有 Master Skill 的验收与返工行为、离线决策夹具和本设计记录；不改变 MCP Schema、SQLite、Executor、Worker 或发布流程。
-> Evidence boundary: Markdown 合同、确定性模拟、静态哈希和本地 Tokenizer 计数；真实模型遵循率、真实 Host 缓存收益与真实关联返工 Task 均未运行。
+> Evidence boundary: Markdown 合同、确定性模拟、静态哈希、本地 Tokenizer 计数，以及一次真实 Host 的验收失败 → 自动 `zcode_continue` 返工 → 第二轮验收通过运行。真实 Skill 遵循率、真实 Host 缓存收益与真实关联返工 Task 仍未测量。
 
 ## 1. 问题与结论
 
@@ -160,9 +160,10 @@ R10 只作为回归语义，不重派历史任务，不读取或修改 LumeCAE �
 | `npm run build` | `PASS` | 由受影响门禁执行；生成物 final 与基线一致 |
 | `npm run validate:plugin` | `PASS` | 集成后 `codex-zcode-bridge@2.0.0-preview.17` 结构有效 |
 | `npm run check:generated` | `PASS` | 14 个生成物 tracked 且 fresh |
-| 真实模型/Host 遵循率 | `NOT_RUN` | 本设计不宣称 |
-| 真实关联返工 Task E2E | `NOT_RUN` | 本设计不宣称 |
-| 完整 `npm test` / 跨平台矩阵 | `NOT_RUN` | 受影响范围只需定向开发门禁；未以定向结果冒充完整回归 |
+| 真实 Host 自动 Continue 闭环 | `PASS — 单次真实运行` | 实际安装候选、原生 MCP、真实 Queue/Wake；Attempt 1 验收失败后 Master 自动 `zcode_continue`，Attempt 2 通过同一验收后 `GOAL ACCEPTED`。见 [E2E 报告](../reports/preview17-real-host-e2e-20261125.md) |
+| 真实 Skill 遵循率 | `NOT_MEASURED` | 单次运行不构成遵循率统计 |
+| 真实关联返工 Task E2E | `NOT_RUN` | 本次走同 Task Continue 路径；关联 Task 只有确定性夹具覆盖 |
+| 完整 `npm test` / 跨平台矩阵 | `NOT_RUN`（本工作线阶段） | 最终集成门禁在交付阶段执行；本表保留工作线阶段事实 |
 
 首次受影响门禁在本地依赖初始化前因缺少 `node_modules/playwright-core/browsers.json` 停止，未进入测试；执行 worktree 内 `npm ci --no-audit --no-fund` 后重跑同一门禁通过。该初始化不改变 tracked 文件。
 
@@ -176,8 +177,27 @@ R10 只作为回归语义，不重派历史任务，不读取或修改 LumeCAE �
 
 ## 6. 剩余风险
 
-1. 真实 Master 模型是否稳定遵循新段落未测量；静态夹具不能替代模型 A/B。
-2. 关联返工 Task 的端到端行为未在真实 Host 创建，字段继承目前是 Skill 合同而非运行时强制。
+1. 真实 Master 模型已在一个受控场景遵循“验收失败后自动 Continue”，但稳定遵循率未测量；单次运行不能替代模型 A/B。
+2. 关联返工 Task 的端到端行为仍未在真实 Host 创建，字段继承目前是 Skill 合同而非运行时强制。
 3. R10 只验证语义与模拟决策；没有重派历史 R10，也没有触碰 LumeCAE 生产数据。
 4. Token 数来自 `js-tiktoken/o200k_base` 代理口径，不是 Host 实际计费、Cache Read/Write 或跨平台字节差异。
 5. Queue 未知时不重提交流程沿用现有 Async 合同；真实网络中断下的手工对账仍需 Host 验证。
+
+## 7. 真实 Host 交叉证据
+
+2026-11-25 的
+`PREVIEW17-REAL-HOST-AUTOREWORK-20261125-R2` 使用实际安装的 Preview.17
+候选和原生 `zcode_*` MCP 工具完成一次真实闭环：
+
+- Attempt 1 正常 `completed`，Result Digest 与 Cleanup/Release 均可回读；
+  独立验收因缺少 `witness.txt` 失败。
+- Master 未请求用户批准普通返工，生成一次性 witness 后对同一 Task 调用
+  `zcode_continue`。
+- Attempt 2 保留 `ready.txt` 并新增 `witness.txt`；同一验收脚本输出
+  `PREVIEW17_ACCEPTANCE_OK` 后 Master 才报告 `GOAL ACCEPTED`。
+- 两个 Attempt 各只有一次 Queue 交付；原 Owner Thread 各收到一个新 Turn。
+- Executor 的 Host Turn 身份仍为 `turn_start_unverified`；Host 侧新 Turn
+  观测不提升为 Adapter 已验证的 `turn_started`。
+
+详细 Digest、Cleanup/Release/Queue 序号、事件计数与边界见
+[Preview.17 真实 Host 自动返工与验收 E2E](../reports/preview17-real-host-e2e-20261125.md)。

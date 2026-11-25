@@ -217,5 +217,9 @@ E2E 在 Preview.17 最终集成报告中继续执行；本报告不把定向结�
   Provider settlement；界面明确未记录，不做推断。
 - 截图是 headless Chromium 视觉证据，不替代人工 UI/UX、Windows DPI 或
   Marketplace/Codex 安装后的品牌刷新验收。
-- 真实模型 Skill 遵循率、Token Cache 效率与真实 Host 自动返工闭环不在本
-  工作线验证范围。
+- 真实模型 Skill 遵循率与 Token Cache 效率不在本工作线验证范围。
+- 真实 Host 自动返工闭环已由独立 E2E
+  `PREVIEW17-REAL-HOST-AUTOREWORK-20261125-R2` 覆盖（原生 MCP、Queue、
+  Wake、两轮验收）；该运行不经过本 WebUI，不把浏览器合成证据提升为真实
+  Desktop UI 证据。见
+  [真实 Host E2E](../preview17-real-host-e2e-20261125.md)。

@@ -56,6 +56,27 @@
 字节数与 SHA-256。真实 validator 测试注入合法 PNG 结构但改变像素，要求
 固定哈希校验拒绝该素材。素材路径同时纳入 CI/release 影响域。
 
+### 4. Codex 插件页要求顶层 `interface`（2026-11-25 补充）
+
+Preview.17 集成时在真实 Codex 插件页观察到：素材字节、尺寸和安装缓存
+均正确，但页面显示通用回退图标。根因是 `.codex-plugin/plugin.json`
+把品牌字段只放在 `extensions.com.openai.interface`。Codex 读取的是清单
+顶层 `interface`；嵌套扩展命名空间没有品牌语义，缺失时静默回退。
+
+决策：
+
+- 根 `plugin.json` 与 `.codex-plugin/plugin.json` 都必须在顶层声明
+  `interface.logo=./assets/logo.png` 与
+  `interface.composerIcon=./assets/icon.png`。
+- `extensions.com.openai` 只保留 hooks 等扩展字段，不复制 interface。
+- `scripts/lib/plugin-interface-branding.mjs` 提供唯一校验函数；
+  `scripts/validate-plugin.mjs` 对两个 manifest 强制执行。
+- 顶层缺失、嵌套替代、任一图标路径错误都必须使 Plugin Validation
+  失败。
+
+该补充不改变素材身份、目标尺寸或 Codex 读取资产的方式；只修正 manifest
+接线并增加防回归门禁。
+
 ## Non-Changes
 
 - 不修改插件 manifest schema、MCP 接口、任务状态或发布流程。
@@ -71,5 +92,8 @@
 - `npm run validate:plugin` 通过；负向素材测试通过。
 - Preview.16 既有 Release ZIP 与已安装 Codex cache 均包含相同 blob 和
   SHA-256。
+- 顶层 `interface` 修复后，重新安装的 Preview.17 候选在真实 Codex
+  插件详情页与侧栏显示同一 Z 图标；证据见
+  [实机截图](../reports/preview17-d-icon-20261125/installed-plugin-page.png)。
 - 完整回归、跨平台 CI 与新的 Release 制品属于后续发布门禁，本 ADR 不把
   本地定向验证提升为发布通过。
