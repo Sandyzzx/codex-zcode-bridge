@@ -14,6 +14,9 @@ import type {
   ZCodeInteractionReplyInput,
 } from "../interfaces.js";
 import type {
+  ConsoleTaskDetail,
+  ConsoleTaskListInput,
+  ConsoleTaskListPage,
   ExecutorTaskManagement,
   ListTasksInput,
   TaskListPage,
@@ -110,6 +113,14 @@ export class RemoteTaskManager implements ProgressTaskManager, ExecutorTaskManag
 
   async listTasks(input: ListTasksInput = {}): Promise<TaskListPage> {
     return this.#call("listTasks", input) as unknown as TaskListPage;
+  }
+
+  async listConsoleTasks(input: ConsoleTaskListInput = {}): Promise<ConsoleTaskListPage> {
+    return this.#call("listConsoleTasks", input) as unknown as ConsoleTaskListPage;
+  }
+
+  async getConsoleTaskDetail(taskId: string): Promise<ConsoleTaskDetail> {
+    return this.#call("getConsoleTaskDetail", { task_id: taskId }) as unknown as ConsoleTaskDetail;
   }
 
   async getStatus(taskId: string): Promise<TaskStatusRecord> {

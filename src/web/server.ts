@@ -1,11 +1,17 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import type { Socket } from "node:net";
 import type { ProgressTaskManager } from "../interfaces.js";
-import type { ExecutorTaskManagement, ListTasksInput, TaskListPage } from "../task-list.js";
-import { listTasksInputSchema } from "../task-list.js";
+import type {
+  ConsoleTaskDetail,
+  ConsoleTaskListInput,
+  ExecutorTaskManagement,
+  ListTasksInput,
+  TaskListPage,
+} from "../task-list.js";
+import { consoleTaskListInputSchema, listTasksInputSchema } from "../task-list.js";
 import { zcodeEventsInputSchema, zcodeInteractionReplyInputSchema } from "../api-schemas.js";
-import type { GetEventsInput, TaskResult, ZCodeInteractionReplyInput } from "../interfaces.js";
+import type { GetEventsInput, TaskPackage, TaskResult, ZCodeInteractionReplyInput } from "../interfaces.js";
 import { readAutoWakeSetting, writeAutoWakeSetting } from "../runtime/auto-wake-setting.js";
 import { OPERATIONS_CONSOLE_HTML } from "./console-ui.js";
 
@@ -18,7 +24,7 @@ const TASK_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/u;
 export type TaskConsoleManager = Pick<
   ProgressTaskManager,
   "getStatus" | "getEvents" | "getResult" | "cancelTask" | "replyToInteraction" | "getAttention"
-> & Partial<ExecutorTaskManagement>;
+> & Partial<Pick<ProgressTaskManager, "createTask" | "continueTask">> & Partial<ExecutorTaskManagement>;
 
 export interface TaskConsoleServerOptions {
   readonly manager: TaskConsoleManager;
@@ -193,6 +199,9 @@ function taskErrorStatus(error: unknown): number {
     : "";
   if (code === "TASK_NOT_FOUND" || code === "NOT_FOUND") return 404;
   if (code === "TASK_NOT_FINISHED" || code === "TASK_STATE" || code === "TASK_CANCEL_REQUESTED") return 409;
+  if (code === "TASK_ID_CONFLICT" || code === "TASK_ALREADY_EXISTS") return 409;
+  if (code === "TASK_INVALID" || code === "WEB_INVALID_INPUT") return 400;
+  if (code === "TASK_PROJECTION_UNAVAILABLE") return 501;
   if (code === "provider_config_invalid" || code === "PROVIDER_CONFIG_INVALID") return 400;
   if (code === "EXECUTOR_UNAVAILABLE" || code === "SUBMISSION_UNKNOWN") return 503;
   if (code === "REQUEST_CANCELLED") return 408;
@@ -327,12 +336,17 @@ export function createTaskConsoleServer(options: TaskConsoleServerOptions): Task
       return;
     }
     if (url.pathname === "/api/tasks") {
+      if (options.manager.listConsoleTasks) {
+        const input = parseConsoleListQuery(url.searchParams);
+        json(response, 200, { ok: true, result: await options.manager.listConsoleTasks(input) });
+        return;
+      }
       if (!options.manager.listTasks) throw failure(501, "WEB_LIST_UNAVAILABLE", "task listing is unavailable");
       const input = parseListQuery(url.searchParams);
       json(response, 200, { ok: true, result: await options.manager.listTasks(input) });
       return;
     }
-    const match = /^\/api\/tasks\/([^/]+)(?:\/(status|summary|events|result|attention))?$/u.exec(url.pathname);
+    const match = /^\/api\/tasks\/([^/]+)(?:\/(status|summary|events|result|attention|console))?$/u.exec(url.pathname);
     if (!match) throw failure(404, "WEB_NOT_FOUND", "route not found");
     const taskId = decodeTaskId(match[1]!);
     const action = match[2] ?? "status";
@@ -357,6 +371,13 @@ export function createTaskConsoleServer(options: TaskConsoleServerOptions): Task
         throw failure(501, "WEB_ATTENTION_UNAVAILABLE", "attention projection is unavailable");
       }
       json(response, 200, { ok: true, result: await options.manager.getAttention(taskId) });
+      return;
+    }
+    if (action === "console") {
+      if (!options.manager.getConsoleTaskDetail) {
+        throw failure(501, "TASK_PROJECTION_UNAVAILABLE", "console task projection is unavailable");
+      }
+      json(response, 200, { ok: true, result: consoleDetailForHttp(await options.manager.getConsoleTaskDetail(taskId)) });
       return;
     }
     const view = url.searchParams.get("view") ?? "summary";
@@ -412,13 +433,93 @@ export function createTaskConsoleServer(options: TaskConsoleServerOptions): Task
       });
       return;
     }
-    const match = /^\/api\/tasks\/([^/]+)\/(cancel|reply)$/u.exec(url.pathname);
+    const match = /^\/api\/tasks\/([^/]+)\/(cancel|reply|continue|rework|recover-cleanup)$/u.exec(url.pathname);
     if (!match) throw failure(404, "WEB_NOT_FOUND", "route not found");
     const taskId = decodeTaskId(match[1]!);
     const action = match[2];
     const body = await readJson(request);
+    if (action === "recover-cleanup") {
+      if (!options.manager.getConsoleTaskDetail) {
+        throw failure(501, "CLEANUP_RECOVERY_UNAVAILABLE", "Cleanup recovery is unavailable");
+      }
+      if (body.release_mode !== "zcode_cancel_administrative_release") {
+        throw failure(400, "WEB_INVALID_INPUT", "release_mode must be zcode_cancel_administrative_release");
+      }
+      const source = await options.manager.getConsoleTaskDetail(taskId);
+      if (!source.action_capabilities.can_recover_cleanup) {
+        throw failure(409, "TASK_STATE", "this Task is not eligible for zcode_cancel Release recovery");
+      }
+      // This is an explicit user-authorized entry into the existing
+      // zcode_cancel Recovery state machine. It never clears a Hold in place or
+      // writes Release facts directly.
+      json(response, 200, {
+        ok: true,
+        result: {
+          ...await options.manager.cancelTask(taskId),
+          release_mode: "zcode_cancel_administrative_release",
+        },
+      });
+      return;
+    }
     if (action === "cancel") {
       json(response, 200, { ok: true, result: await options.manager.cancelTask(taskId) });
+      return;
+    }
+    if (action === "continue") {
+      if (!options.manager.continueTask || !options.manager.getConsoleTaskDetail) {
+        throw failure(501, "CONTINUE_UNAVAILABLE", "task continuation is unavailable");
+      }
+      const source = await options.manager.getConsoleTaskDetail(taskId);
+      if (!source.action_capabilities.can_continue) {
+        throw failure(409, "TASK_STATE", "this Task is not eligible for a verified continuation");
+      }
+      const feedback = boundedText(body.feedback, "feedback", 16_000);
+      const additionalRequirements = stringList(body.additional_requirements, "additional_requirements", 100, 4_096);
+      const operationId = body.operation_id === undefined
+        ? randomUUID()
+        : boundedToken(body.operation_id, "operation_id", 128);
+      const receipt = await options.manager.continueTask({
+        task_id: taskId,
+        feedback,
+        additional_requirements: additionalRequirements,
+        operation_id: operationId,
+      });
+      json(response, 200, { ok: true, result: receipt });
+      return;
+    }
+    if (action === "rework") {
+      if (!options.manager.createTask || !options.manager.getConsoleTaskDetail) {
+        throw failure(501, "REWORK_UNAVAILABLE", "related rework is unavailable");
+      }
+      const source = await options.manager.getConsoleTaskDetail(taskId);
+      if (!source.action_capabilities.can_rework) {
+        throw failure(409, "TASK_STATE", "an active Task cannot be duplicated for related rework");
+      }
+      const feedback = boundedText(body.feedback, "feedback", 16_000);
+      const sourceTask = source.task;
+      const context = [
+        sourceTask.context?.trim(),
+        "RELATED REWORK",
+        `Source task: ${taskId}`,
+        `Source Attempt: ${source.attempt}`,
+        "Relationship: context-only; SQLite Authority has no persistent Task parent/child edge.",
+        `Reviewer request: ${feedback}`,
+      ].filter((value): value is string => Boolean(value)).join("\n\n");
+      const next: TaskPackage = {
+        ...sourceTask,
+        task_id: `task-${randomUUID()}`,
+        context,
+      };
+      const receipt = await options.manager.createTask(next);
+      json(response, 200, {
+        ok: true,
+        result: {
+          ...receipt,
+          relationship: "context_only",
+          source_task_id: taskId,
+          source_attempt: source.attempt,
+        },
+      });
       return;
     }
     let input: ZCodeInteractionReplyInput;
@@ -522,6 +623,59 @@ function parseListQuery(query: URLSearchParams): ListTasksInput {
   } catch (error) {
     throw failure(400, "WEB_INVALID_QUERY", errorMessage(error));
   }
+}
+
+function parseConsoleListQuery(query: URLSearchParams): ConsoleTaskListInput {
+  const raw = {
+    ...(query.get("after_task_id") === null ? {} : { after_task_id: query.get("after_task_id")! }),
+    ...(queryNumber(query, "limit", 1, 100) === undefined ? {} : { limit: queryNumber(query, "limit", 1, 100)! }),
+    ...(query.get("bucket") === null ? {} : { bucket: query.get("bucket")! }),
+  };
+  try {
+    return consoleTaskListInputSchema.parse(raw) as ConsoleTaskListInput;
+  } catch (error) {
+    throw failure(400, "WEB_INVALID_QUERY", errorMessage(error));
+  }
+}
+
+function boundedText(value: unknown, field: string, maxBytes: number): string {
+  if (typeof value !== "string" || !value.trim() || value.includes("\0")
+    || Buffer.byteLength(value, "utf8") > maxBytes) {
+    throw failure(400, "WEB_INVALID_INPUT", `${field} must be non-empty text within ${maxBytes} bytes`);
+  }
+  return value.trim();
+}
+
+function boundedToken(value: unknown, field: string, maxLength: number): string {
+  if (typeof value !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_-]*$/u.test(value)
+    || value.length > maxLength) {
+    throw failure(400, "WEB_INVALID_INPUT", `${field} must be a bounded stable token`);
+  }
+  return value;
+}
+
+function stringList(value: unknown, field: string, maxItems: number, maxItemBytes: number): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > maxItems) {
+    throw failure(400, "WEB_INVALID_INPUT", `${field} must be an array with at most ${maxItems} items`);
+  }
+  return value.map((entry) => {
+    if (typeof entry !== "string" || !entry.trim() || entry.includes("\0")
+      || Buffer.byteLength(entry, "utf8") > maxItemBytes) {
+      throw failure(400, "WEB_INVALID_INPUT", `${field} contains invalid text`);
+    }
+    return entry.trim();
+  });
+}
+
+function consoleDetailForHttp(detail: ConsoleTaskDetail): ConsoleTaskDetail {
+  // The prompt context is execution input, not durable evidence needed by the
+  // browser. Related rework uses the internal projection directly so it can
+  // carry that context into the new Task without exposing it over HTTP.
+  const task = Object.fromEntries(
+    Object.entries(detail.task).filter(([key]) => key !== "context"),
+  ) as unknown as TaskPackage;
+  return { ...detail, task };
 }
 
 function parseEventsQuery(query: URLSearchParams, taskId: string): GetEventsInput {

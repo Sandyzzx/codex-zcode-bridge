@@ -1282,6 +1282,7 @@
       "gate": "T2",
       "domains": [
         "manager-lifecycle",
+        "sqlite-persistence",
         "test-execution-contract"
       ]
     },

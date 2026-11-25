@@ -475,6 +475,10 @@ export interface SqliteLifecyclePort {
   readTaskProjection(taskId: string): { task_id: string; status: string; current_attempt: number; created_at: string } | null;
   readAttempt(taskId: string, attempt: number): { task_id: string; attempt: number; generation: number | null; status: string; created_at: string } | null;
   readTaskLifecycle(taskId: string): CandidateTaskLifecycleSnapshot | null;
+  readTaskConsoleProjection(
+    taskId: string,
+    options?: { readonly includeAttempts?: boolean },
+  ): Readonly<Record<string, unknown>> | null;
   readTaskAttention(taskId: string): CandidateTaskAttentionSnapshot | null;
   readRecoverableQueuedAttempts(): readonly Readonly<{
     readonly task: CandidateTaskPackage;

@@ -9,7 +9,7 @@ Codex ZCode Bridge connects Codex with the official ZCode Agent Runtime on your 
 - **Persistent task delegation.** Send a whole task with its scope and acceptance checks. Bridge saves progress and results so Codex can follow up or recover interrupted work.
 - **Official ZCode Runtime.** ZCode uses its own AppServer to run the model and tools. Codex defines the task and reviews the result.
 - **Coding Plan and Start Plan.** Use your Z.ai Coding Plan account or select Start Plan, which uses its own official authentication, model entitlement checks, and task-scoped credentials.
-- **Cost Lab billing verification.** Check your installed runtime and reconcile model usage against the official credit ledger from a local web page.
+- **Task Console with explicit diagnostics.** Follow Task, Attempt, Result, Cleanup, Release, and token usage in one local page. Provider actual cost stays visibly not observed when Bridge has no settlement. Runtime and Cost Lab checks live in Diagnostics.
 
 ## Plans in Preview
 
@@ -30,7 +30,7 @@ For Preview, use **Windows x64** and **Node.js `24.16.0`**. Any safe official ZC
 
 Use one marketplace channel per Codex installation. Preview `2.0.0-preview.16` (prerelease) contains the installed Runtime integration, Cost Lab, SQLite v14-only runtime, bounded Event monitoring, opt-in Result summaries, the independent Executor with Thin MCP, Task CLI and Web Console, Async Master handoff, persisted Owner Binding, and Auto Wake that is enabled by installing the plugin. Stable remains at `v1.7.2`.
 
-Auto Wake needs no per-task authorization file: installing and enabling the plugin is the local trusted Auto Wake contract. The trusted Codex Thread ID comes from the MCP Host request context, is persisted before the Worker starts, and is used for one official Codex Queue delivery after Release. That delivery resumes the original Codex session with its current model, so it can consume additional Codex usage. You can turn Auto Wake off in WebUI Settings; Bridge then keeps the Web Console observation only and submits no Queue message. Queue acknowledgement is not proof that the original Turn started, and `web_notify` is only a fallback observation. A real Codex Host completion-wake E2E with a non-empty engineering delivery passed on 2026-11-24; Desktop fully exited recovery, the notLoaded case and Official Runtime provenance remain unverified.
+Auto Wake needs no per-task authorization file: installing and enabling the plugin is the local trusted Auto Wake contract. The trusted Codex Thread ID comes from the MCP Host request context, is persisted before the Worker starts, and is used for one official Codex Queue delivery after Release. That delivery resumes the original Codex session with its current model, so it can consume additional Codex usage. You can turn Auto Wake off in Task Console Diagnostics; Bridge then keeps the Web Console observation only and submits no Queue message. Queue acknowledgement is not proof that the original Turn started, and `web_notify` is only a fallback observation. A real Codex Host completion-wake E2E with a non-empty engineering delivery passed on 2026-11-24; Desktop fully exited recovery, the notLoaded case and Official Runtime provenance remain unverified.
 
 ### Preview
 
@@ -65,17 +65,20 @@ Start a new Codex conversation after installation and review the plugin's `Sessi
 
 Run Bridge in a trusted single-user environment. A Git worktree helps organize edits. Filesystem permissions still belong to your OS account.
 
-## Check your credits with Cost Lab
+## Inspect tasks and diagnostics
 
-Open [Cost Lab — Local Billing Verification](tools/cost-lab/README.md) for setup and usage. From a Preview source checkout:
+Task receipts link to the local Task Console. From a Preview source checkout:
 
 ```powershell
 npm ci
 npm run build
-npm run cost-lab:web
+npm run bridge:cli -- executor start
+npm run bridge:cli -- task console-url <task_id>
 ```
 
-Open the local address printed by the command. The page shows runtime checks, model tokens, official credits, and verification history. Loading it uses no model quota. A real Coding Plan verification requires your explicit confirmation. Cost Lab offers offline checks for Start Plan.
+The Task list shows Workspace, status, Attempt, model, Plan, usage, updated time, and Attention. Task details contains the full Workspace and per-Attempt usage, discount state, and Provider actual cost. When Bridge has no provider settlement, Provider actual cost is explicitly `not_observed` with `bridge_authority_has_no_provider_settlement`; it is never inferred as zero or an estimate.
+
+The former standalone Runtime and Cost Lab main-navigation pages are retired. Runtime inspection, the authorized zero-model protocol probe, candidate report export, and Cost Lab environment/history/verification remain available under **Diagnostics**. Opening the Task Console or Diagnostics performs no model, Runtime-probe, or Billing request; each external read or check requires an explicit click. A real Coding Plan verification still requires its explicit confirmation flow.
 
 ## Documentation
 

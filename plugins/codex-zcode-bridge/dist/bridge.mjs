@@ -28005,6 +28005,11 @@ var listTasksInputSchema = strictObject({
     "waiting_for_master"
   ]).optional()
 });
+var consoleTaskListInputSchema = strictObject({
+  after_task_id: taskIdSchema.optional(),
+  limit: number2().int().min(1).max(MAX_TASK_LIST_LIMIT).optional(),
+  bucket: _enum(["running", "attention", "completed"]).optional()
+});
 
 // src/executor/protocol.ts
 var EXECUTOR_CONTROL_PROTOCOL_VERSION = 1;
@@ -28021,6 +28026,8 @@ var taskAdmissionSchema = strictObject({
 var executorControlParamsSchemas = {
   createTask: strictObject({ task: zcodeTaskInputSchema, admission: taskAdmissionSchema.optional() }),
   listTasks: listTasksInputSchema,
+  listConsoleTasks: consoleTaskListInputSchema,
+  getConsoleTaskDetail: strictObject({ task_id: nonEmptyString }),
   getStatus: strictObject({ task_id: nonEmptyString }),
   getResult: strictObject({ task_id: nonEmptyString, view: _enum(["summary", "full"]).optional() }),
   getResultPage: strictObject({ task_id: nonEmptyString, offset_bytes: number2().int().nonnegative(), max_bytes: number2().int().min(1024).max(4194304) }),
@@ -28331,6 +28338,12 @@ var RemoteTaskManager = class {
   }
   async listTasks(input = {}) {
     return this.#call("listTasks", input);
+  }
+  async listConsoleTasks(input = {}) {
+    return this.#call("listConsoleTasks", input);
+  }
+  async getConsoleTaskDetail(taskId) {
+    return this.#call("getConsoleTaskDetail", { task_id: taskId });
   }
   async getStatus(taskId) {
     return this.#call("getStatus", { task_id: taskId });
