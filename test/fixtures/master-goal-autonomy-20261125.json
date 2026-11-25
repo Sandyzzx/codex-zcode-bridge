@@ -1,0 +1,364 @@
+{
+  "version": 1,
+  "generated_at": "2026-11-25",
+  "kind": "deterministic Master acceptance-followup contract",
+  "evidence_boundary": "Static Markdown contract and simulated decisions only; no live model execution.",
+  "token_budget": {
+    "measurement_scope": "Complete installed Skill package loaded from the Windows worktree in manifest order: SKILL.md followed by sorted references/*.md with directory separators preserved by the filesystem.",
+    "line_endings": "Worktree bytes with core.autocrlf=true (CRLF); normalized-LF control is also recorded in the design report.",
+    "tokenizer_package": "js-tiktoken",
+    "tokenizer_version": "1.0.21",
+    "encoding": "o200k_base",
+    "preview16_commit": "6af69b55d7ecb660c2ad2c923888cf7f1e8886c8",
+    "load_order": [
+      "SKILL.md",
+      "references/async-handoff.md",
+      "references/delegation-policy.md",
+      "references/goal-lifecycle.md",
+      "references/monitoring-and-approval.md",
+      "references/reporting.md",
+      "references/review-and-recovery.md",
+      "references/runtime-boundaries.md",
+      "references/task-dispatch.md"
+    ],
+    "preview16_full_tokens": 14221,
+    "preview17_full_tokens": 14213,
+    "net_increase": -8,
+    "hard_max_net_increase": 100,
+    "target_net_increase": 0,
+    "preview16_per_file_tokens": {
+      "SKILL.md": 2727,
+      "references/async-handoff.md": 2404,
+      "references/delegation-policy.md": 819,
+      "references/goal-lifecycle.md": 387,
+      "references/monitoring-and-approval.md": 2281,
+      "references/reporting.md": 1010,
+      "references/review-and-recovery.md": 1814,
+      "references/runtime-boundaries.md": 779,
+      "references/task-dispatch.md": 1992
+    },
+    "preview17_per_file_tokens": {
+      "SKILL.md": 2727,
+      "references/async-handoff.md": 2404,
+      "references/delegation-policy.md": 819,
+      "references/goal-lifecycle.md": 387,
+      "references/monitoring-and-approval.md": 2281,
+      "references/reporting.md": 1010,
+      "references/review-and-recovery.md": 1806,
+      "references/runtime-boundaries.md": 779,
+      "references/task-dispatch.md": 1992
+    },
+    "stable_prefix_tokens": 9663,
+    "stable_prefix_percent_of_preview16": 67.95,
+    "preview16_sha256_normalized_lf": {
+      "SKILL.md": "022ec35846f61479ce74101124b144614e9b24861b4d22622291c18eaeb7346d",
+      "references/async-handoff.md": "718ef5406cbd8bc3c68ee8b82b6a3a79aa84a0d3dcd23706556fc215138c923b",
+      "references/delegation-policy.md": "13d1e2acb539755547263a0fa9d35d72064a2bfbce1d9b149029d26f0e1a4438",
+      "references/goal-lifecycle.md": "f75776f06718d1c8b7037fdd1d742f850513a956cbc0759c7525dda5db82f0ce",
+      "references/monitoring-and-approval.md": "bdc9141ce80b1d4bb50318f5f099d05a9f0c5e080407f08ace58d251f44670c4",
+      "references/reporting.md": "a0cbaacc11deef91d148162a39625f53dc92ef94dfdba4a5a3299c150412bc93",
+      "references/review-and-recovery.md": "ba647d91addc0f1a05cc488d8e4a7ee9c2edb12f5e7aac823312ec119a4d8643",
+      "references/runtime-boundaries.md": "3438e41ba26ae4376f587bcd4ecdc546b25f41c6636c5c1711e28eefff409bd2",
+      "references/task-dispatch.md": "3a30ddda05e267cd56940e2690edc9b0914764402daca8a1567bb02fc10090b9"
+    },
+    "preview17_sha256_normalized_lf": {
+      "SKILL.md": "022ec35846f61479ce74101124b144614e9b24861b4d22622291c18eaeb7346d",
+      "references/async-handoff.md": "718ef5406cbd8bc3c68ee8b82b6a3a79aa84a0d3dcd23706556fc215138c923b",
+      "references/delegation-policy.md": "13d1e2acb539755547263a0fa9d35d72064a2bfbce1d9b149029d26f0e1a4438",
+      "references/goal-lifecycle.md": "f75776f06718d1c8b7037fdd1d742f850513a956cbc0759c7525dda5db82f0ce",
+      "references/monitoring-and-approval.md": "bdc9141ce80b1d4bb50318f5f099d05a9f0c5e080407f08ace58d251f44670c4",
+      "references/reporting.md": "a0cbaacc11deef91d148162a39625f53dc92ef94dfdba4a5a3299c150412bc93",
+      "references/review-and-recovery.md": "739cd562a0f0438a797183aca5a6db1c700b0b8a1bf060971e660a07292774f0",
+      "references/runtime-boundaries.md": "3438e41ba26ae4376f587bcd4ecdc546b25f41c6636c5c1711e28eefff409bd2",
+      "references/task-dispatch.md": "3a30ddda05e267cd56940e2690edc9b0914764402daca8a1567bb02fc10090b9"
+    }
+  },
+  "r10_regression": {
+    "scope": "Semantic regression only; do not re-dispatch historical R10 or read/modify LumeCAE production data.",
+    "must_fail_acceptance": [
+      {
+        "id": "main-window-foreground",
+        "observation": "The main window remains foreground.",
+        "reason": "Foreground main window does not prove the dialog or control receives input."
+      },
+      {
+        "id": "partial-mouse-events",
+        "observation": "The caller continues after only some mouse events are sent.",
+        "reason": "A partial injection sequence does not prove the requested input completed."
+      }
+    ],
+    "expected_action": "continue_rework"
+  },
+  "cases": [
+    {
+      "id": "independent-acceptance-passes",
+      "accepted": true,
+      "blocker": "none",
+      "continue_eligible": false,
+      "workspace_safe": true,
+      "previous_rework": false,
+      "same_root_cause": false,
+      "progress": false,
+      "expected": {
+        "action": "accept",
+        "preserve_evidence": true,
+        "inherit_fields": false,
+        "lower_acceptance": false,
+        "queue_resubmit": false,
+        "approval_for_ordinary_defect": false
+      }
+    },
+    {
+      "id": "ordinary-defect-rework",
+      "accepted": false,
+      "blocker": "none",
+      "continue_eligible": true,
+      "workspace_safe": true,
+      "previous_rework": false,
+      "same_root_cause": true,
+      "progress": false,
+      "expected": {
+        "action": "continue_rework",
+        "preserve_evidence": true,
+        "inherit_fields": true,
+        "lower_acceptance": false,
+        "queue_resubmit": false,
+        "approval_for_ordinary_defect": false
+      }
+    },
+    {
+      "id": "r10-main-window-foreground",
+      "accepted": false,
+      "blocker": "none",
+      "continue_eligible": true,
+      "workspace_safe": true,
+      "previous_rework": false,
+      "same_root_cause": true,
+      "progress": false,
+      "expected": {
+        "action": "continue_rework",
+        "preserve_evidence": true,
+        "inherit_fields": true,
+        "lower_acceptance": false,
+        "queue_resubmit": false,
+        "approval_for_ordinary_defect": false
+      }
+    },
+    {
+      "id": "r10-partial-mouse-events",
+      "accepted": false,
+      "blocker": "none",
+      "continue_eligible": true,
+      "workspace_safe": true,
+      "previous_rework": false,
+      "same_root_cause": true,
+      "progress": false,
+      "expected": {
+        "action": "continue_rework",
+        "preserve_evidence": true,
+        "inherit_fields": true,
+        "lower_acceptance": false,
+        "queue_resubmit": false,
+        "approval_for_ordinary_defect": false
+      }
+    },
+    {
+      "id": "safe-linked-rework",
+      "accepted": false,
+      "blocker": "none",
+      "continue_eligible": false,
+      "workspace_safe": true,
+      "previous_rework": false,
+      "same_root_cause": true,
+      "progress": false,
+      "expected": {
+        "action": "linked_rework",
+        "preserve_evidence": true,
+        "inherit_fields": true,
+        "lower_acceptance": false,
+        "queue_resubmit": false,
+        "approval_for_ordinary_defect": false
+      }
+    },
+    {
+      "id": "unsafe-linked-rework-holds",
+      "accepted": false,
+      "blocker": "none",
+      "continue_eligible": false,
+      "workspace_safe": false,
+      "previous_rework": false,
+      "same_root_cause": true,
+      "progress": false,
+      "expected": {
+        "action": "hold",
+        "preserve_evidence": true,
+        "inherit_fields": false,
+        "lower_acceptance": false,
+        "queue_resubmit": false,
+        "approval_for_ordinary_defect": false
+      }
+    },
+    {
+      "id": "same-root-no-progress-circuits",
+      "accepted": false,
+      "blocker": "none",
+      "continue_eligible": true,
+      "workspace_safe": true,
+      "previous_rework": true,
+      "same_root_cause": true,
+      "progress": false,
+      "expected": {
+        "action": "circuit_break",
+        "preserve_evidence": true,
+        "inherit_fields": false,
+        "lower_acceptance": false,
+        "queue_resubmit": false,
+        "approval_for_ordinary_defect": false
+      }
+    },
+    {
+      "id": "same-root-with-progress-continues",
+      "accepted": false,
+      "blocker": "none",
+      "continue_eligible": true,
+      "workspace_safe": true,
+      "previous_rework": true,
+      "same_root_cause": true,
+      "progress": true,
+      "expected": {
+        "action": "continue_rework",
+        "preserve_evidence": true,
+        "inherit_fields": true,
+        "lower_acceptance": false,
+        "queue_resubmit": false,
+        "approval_for_ordinary_defect": false
+      }
+    },
+    {
+      "id": "different-root-does-not-circuit",
+      "accepted": false,
+      "blocker": "none",
+      "continue_eligible": true,
+      "workspace_safe": true,
+      "previous_rework": true,
+      "same_root_cause": false,
+      "progress": false,
+      "expected": {
+        "action": "continue_rework",
+        "preserve_evidence": true,
+        "inherit_fields": true,
+        "lower_acceptance": false,
+        "queue_resubmit": false,
+        "approval_for_ordinary_defect": false
+      }
+    },
+    {
+      "id": "new-authorization-needed",
+      "accepted": false,
+      "blocker": "authorization_scope",
+      "continue_eligible": true,
+      "workspace_safe": true,
+      "previous_rework": false,
+      "same_root_cause": true,
+      "progress": true,
+      "expected": {
+        "action": "hold",
+        "preserve_evidence": true,
+        "inherit_fields": false,
+        "lower_acceptance": false,
+        "queue_resubmit": false,
+        "approval_for_ordinary_defect": false
+      }
+    },
+    {
+      "id": "contract-decision-needed",
+      "accepted": false,
+      "blocker": "contract_decision",
+      "continue_eligible": true,
+      "workspace_safe": true,
+      "previous_rework": false,
+      "same_root_cause": true,
+      "progress": false,
+      "expected": {
+        "action": "hold",
+        "preserve_evidence": true,
+        "inherit_fields": false,
+        "lower_acceptance": false,
+        "queue_resubmit": false,
+        "approval_for_ordinary_defect": false
+      }
+    },
+    {
+      "id": "pending-interaction-blocks-rework",
+      "accepted": false,
+      "blocker": "pending_interaction",
+      "continue_eligible": true,
+      "workspace_safe": true,
+      "previous_rework": false,
+      "same_root_cause": true,
+      "progress": false,
+      "expected": {
+        "action": "hold",
+        "preserve_evidence": true,
+        "inherit_fields": false,
+        "lower_acceptance": false,
+        "queue_resubmit": false,
+        "approval_for_ordinary_defect": false
+      }
+    },
+    {
+      "id": "usage-exhausted-blocks-rework",
+      "accepted": false,
+      "blocker": "usage_exhausted",
+      "continue_eligible": true,
+      "workspace_safe": true,
+      "previous_rework": false,
+      "same_root_cause": true,
+      "progress": false,
+      "expected": {
+        "action": "hold",
+        "preserve_evidence": true,
+        "inherit_fields": false,
+        "lower_acceptance": false,
+        "queue_resubmit": false,
+        "approval_for_ordinary_defect": false
+      }
+    },
+    {
+      "id": "unknown-hold-blocks-rework",
+      "accepted": false,
+      "blocker": "hold_unknown",
+      "continue_eligible": true,
+      "workspace_safe": true,
+      "previous_rework": false,
+      "same_root_cause": true,
+      "progress": false,
+      "expected": {
+        "action": "hold",
+        "preserve_evidence": true,
+        "inherit_fields": false,
+        "lower_acceptance": false,
+        "queue_resubmit": false,
+        "approval_for_ordinary_defect": false
+      }
+    },
+    {
+      "id": "unknown-queue-reconciles",
+      "accepted": false,
+      "blocker": "queue_unknown",
+      "continue_eligible": true,
+      "workspace_safe": true,
+      "previous_rework": false,
+      "same_root_cause": true,
+      "progress": false,
+      "expected": {
+        "action": "reconcile_queue",
+        "preserve_evidence": true,
+        "inherit_fields": false,
+        "lower_acceptance": false,
+        "queue_resubmit": false,
+        "approval_for_ordinary_defect": false
+      }
+    }
+  ]
+}
