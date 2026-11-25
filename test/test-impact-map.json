@@ -17,6 +17,7 @@
         "tsconfig.test.json",
         "release-please-config.json",
         ".release-please-manifest.json",
+        "plugins/codex-zcode-bridge/assets/**",
         "plugins/codex-zcode-bridge/dist/**",
         "plugins/codex-zcode-bridge/worker/**",
         "scripts/build-core.mjs",
