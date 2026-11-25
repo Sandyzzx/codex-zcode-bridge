@@ -3,7 +3,7 @@
 > Status: AUTHORITATIVE
 > Last updated: 2026-11-25（Preview.17 候选：ADR-060 Executor 恢复、ADR-061 Master 自治返工、ADR-062 单页 Task Console、ADR-063 Original E 素材）
 > Last verified: 2026-11-25，核对四条 Preview.17 工作线的代码集成、真实 Store Continue、真实 Executor 崩溃/恢复与 Worker 保护、Master 确定性策略夹具、真实 SQLite Authority + IPC + HTTP + Chromium 单页 Console（内部标识与缺失字段隐藏、单次未观测汇总、Execution completed 与 Master accepted 分离、Result 合并、单行计数筛选、最多三行任务列表、详情四段、品牌图标字节、动作前置与证据折叠），以及正确图标 blob/validator。Preview.17 完整回归、Windows/Ubuntu CI、安装后图标刷新和真实 Host E2E 在集成阶段记录；严格 C/D、Desktop fully exited、notLoaded、Windows 重启与真实 Queue Wake 仍为 `NOT_RUN`。
-> Verified against: `471b1f35`（Preview.17 集成快照；最终候选提交与 CI 结果由交付报告记录）。
+> Verified against: `3ddc6f78`（Preview.17 最终 UI 冻结；最终候选提交与 CI 结果由交付报告记录）。
 
 当前发布状态：
 

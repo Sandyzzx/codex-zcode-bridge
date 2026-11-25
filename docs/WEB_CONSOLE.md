@@ -3,7 +3,7 @@
 > Status: AUTHORITATIVE
 > Last updated: 2026-11-25（Preview.17 最终 UI 冻结）
 > Last verified: 2026-11-25，核对内部 Task/工作流标识隐藏、缺失字段隐藏与单次未观测汇总、Attempt 与 Result 合并、Execution completed 与 Master accepted 分离、Workspace 简称与按需完整路径、单行计数筛选、最多三行任务列表、动作前置、逐 Attempt Usage/Effort、Master 与 Worker 分栏、Technical details 折叠、完整 Events 分页、真实 SQLite Authority 到 IPC/HTTP/Chromium 的 Console projection、Continue/Rework/Cleanup recovery 能力门、原始 Z 图标字节绑定、Diagnostics 零外部请求、双语、明暗主题与窄屏布局；真实模型、真实 Desktop、真实 Queue Wake 与 Master Usage 不在已验证范围。
-> Verified against: `471b1f35`（Preview.17 集成快照；最终候选提交与 CI 结果由交付报告记录）
+> Verified against: `3ddc6f78`（Preview.17 最终 UI 冻结；最终候选提交与 CI 结果由交付报告记录）
 
 Task Workspace 是 Executor Control Pipe 的本地可视化 Adapter。它只有一个
 loopback Origin、一个 HTTP Server 和一个单页界面，不创建 Task、Manager、
