@@ -42,6 +42,9 @@
 
 - `plugin.json` 与 `.codex-plugin/plugin.json` 的 `logo` 固定引用
   `./assets/logo.png`，`composerIcon` 固定引用 `./assets/icon.png`。
+- WebUI 顶栏品牌标必须嵌入同一份 `assets/icon.png` 的 PNG 字节（测试校验
+  解码后 SHA-256），不得使用 `B/` 文字、近似图案或另行重绘。WebUI 是插件
+  资产的消费者，不是新的素材来源。
 - Marketplace 包、Release ZIP 和安装后的 Codex cache 必须包含上述同一
   份资产；安装缓存不能成为新的素材来源。
 - 只有新的 Owner 决策可以替换素材。相似图案、重新绘制或不同导出包不得

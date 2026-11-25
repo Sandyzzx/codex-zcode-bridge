@@ -76,7 +76,7 @@ npm run bridge:cli -- executor start
 npm run bridge:cli -- task console-url <task_id>
 ```
 
-Task 收件箱使用可扫描行显示 Workspace、状态、Attempt、模型、套餐、消耗、更新时间和行内 Attention 原因。需处理任务优先排序；已完成任务显示 Review ready / Awaiting review / Review blocked。同页 Task 工作台先显示 Overview、Available actions 与 Acceptance/Attention，再显示 Attempt 时间线、Result、Worker/Master 消耗、折叠的 Wake/Cleanup/Release 证据和折叠 Events。Plan、Discount、Model 与 Effort 分开显示。没有 Provider 结算证据时，Provider 实际成本明确为 `not_observed`，原因码为 `bridge_authority_has_no_provider_settlement`，不会推定为 0 或估算值。
+Task 收件箱使用可扫描行显示 Workspace、状态、Attempt、模型、套餐、消耗、更新时间和行内 Attention 原因，并提供名称/Workspace 搜索与共享 bucket 筛选。需处理任务优先排序；已完成任务显示 Review ready / Awaiting review / Review blocked。顶栏使用发布资产中的原始 Z 图标字节，不再使用文字占位。同页 Task 工作台先显示 Overview、Available actions 与 Acceptance/Attention，再显示 Attempt 时间线、Result、Worker/Master 消耗、折叠的 Wake/Cleanup/Release 证据和折叠 Events。Plan、Discount、Model 与 Effort 分开显示。没有 Provider 结算证据时，Provider 实际成本明确为 `not_observed`，原因码为 `bridge_authority_has_no_provider_settlement`，不会推定为 0 或估算值。
 
 原独立的 Runtime 与 Cost Lab 主导航页面已退役。Runtime 静态检查、授权的零模型协议探针、Candidate Report 导出，以及成本证据的环境、历史与验证入口仍在 **Diagnostics** 中提供。打开 Task Workspace 或 Diagnostics 不会发出模型、Runtime 探针或 Billing 请求；每项外部读取或检查都必须显式点击。真实 Coding Plan 验证仍需既有显式确认流程。
 

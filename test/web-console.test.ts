@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { createHash } from "node:crypto";
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -367,6 +368,16 @@ test("Web Console serves a loopback task inspection surface without mutations", 
     assert.match(String(page.json), /id="diagnostics"/u);
     assert.match(String(page.json), /id="task-list"/u);
     assert.match(String(page.json), /id="task-detail"/u);
+    assert.match(String(page.json), /id="task-search"/u);
+    assert.match(String(page.json), /id="bucket-filter"/u);
+    assert.match(String(page.json), /class="brand-icon"/u);
+    assert.doesNotMatch(String(page.json), /class="brand-mark">B\//u);
+    const brandData = /class="brand-icon" src="data:image\/png;base64,([^"]+)"/u.exec(String(page.json))?.[1];
+    assert.ok(brandData);
+    assert.equal(
+      createHash("sha256").update(Buffer.from(brandData, "base64")).digest("hex").toUpperCase(),
+      "4C657714FE423243DA63191AE949FBF2DADC37FC8F994A6432FC1F92E2C4D1CC",
+    );
     assert.match(String(page.json), /\/console/u);
     assert.match(String(page.json), /Experimental: task status and recovery operations are still being refined\./u);
     assert.match(String(page.json), /data-i18n="taskList">Task inbox/u);

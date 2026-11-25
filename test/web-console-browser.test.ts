@@ -514,9 +514,16 @@ test("real SQLite Authority drives the single-page Task Console in Chromium", {
     assert.equal(await page.locator("#executor-state").textContent(), "ACTIVE");
     assert.equal(await page.locator(".detail-panel .panel-head h2").textContent(), "Task workspace");
     assert.equal(
-      await page.locator("#experimental-notice").innerText(),
+      await page.locator("#experimental-notice .experimental-label").textContent(),
+      "Experimental",
+    );
+    assert.equal(
+      await page.locator("#experimental-notice").getAttribute("title"),
       "Experimental: task status and recovery operations are still being refined.",
     );
+    const brandSrc = await page.locator(".brand-icon").getAttribute("src");
+    assert.equal(brandSrc?.startsWith("data:image/png;base64,"), true);
+    assert.ok(await page.locator(".brand-icon").evaluate((image: HTMLImageElement) => image.naturalWidth) >= 32);
     assert.equal(
       await page.locator(".task-row[data-task-id='task-done'] .task-workspace").textContent(),
       seeded.doneWorkspace,
@@ -533,7 +540,7 @@ test("real SQLite Authority drives the single-page Task Console in Chromium", {
     );
     assert.match(
       await page.locator(".task-row[data-task-id='task-wake-unknown'] .task-attention").textContent() ?? "",
-      /Wake submission unknown/u,
+      /Queue state needs verification/u,
     );
     assert.match(
       await page.locator(".task-row[data-task-id='task-done'] .task-usage-line").textContent() ?? "",
@@ -597,10 +604,27 @@ test("real SQLite Authority drives the single-page Task Console in Chromium", {
     assert.ok(await page.locator(".task-row").first().evaluate((node) => node.classList.contains("attention")));
     await page.locator(".filter[data-filter='attention']").click();
     assert.equal(await page.locator(".task-row").count(), 5);
+    await page.locator("#task-search").fill("wake");
+    assert.equal(await page.locator(".task-row").count(), 1);
+    assert.equal(await page.locator(".task-row .task-id").textContent(), "task-wake-unknown");
+    await page.locator("#task-search").fill("");
+    assert.equal(await page.locator(".task-row").count(), 5);
+    await page.selectOption("#bucket-filter", "attention");
+    assert.equal(await page.locator(".task-row").count(), 3);
+    await page.selectOption("#bucket-filter", "");
+    assert.equal(await page.locator(".task-row").count(), 5);
 
     await page.locator(".attempt").filter({ hasText: "Attempt #1" }).click();
     await waitForText(page, "#task-detail", "Result for Attempt 1");
     await waitForText(page, "#task-detail", "Coding Plan");
+    await waitForText(page, "#task-detail", "Result issues");
+    await waitForText(page, "#task-detail", "Result failed");
+    const firstAttemptDetail = await page.locator("#task-detail").innerText();
+    assert.equal(
+      firstAttemptDetail.includes("Acceptance failed"),
+      false,
+      "Worker Result issues and failures must not be presented as a Master acceptance decision",
+    );
     const firstInput = page.locator(".usage-fact").filter({ hasText: "Input tokens" }).locator("strong");
     assert.equal(await firstInput.textContent(), "0", "a real zero must remain zero instead of becoming missing");
     await page.locator(".attempt").filter({ hasText: "Attempt #2" }).click();
@@ -778,7 +802,7 @@ test("real SQLite Authority drives the single-page Task Console in Chromium", {
     assert.equal(await page.getByRole("button", { name: "Request cancel", exact: true }).count(), 1);
 
     await page.locator(".task-row").filter({ hasText: "task-wake-unknown" }).click();
-    await waitForText(page, "#task-detail", "Wake submission unknown");
+    await waitForText(page, "#task-detail", "Queue state needs verification");
     const wakeUnknownCapabilities = await page.evaluate(async () => {
       const response = await fetch("/api/tasks/task-wake-unknown/console");
       return (await response.json() as { result: { action_capabilities: Record<string, unknown> } }).result.action_capabilities;

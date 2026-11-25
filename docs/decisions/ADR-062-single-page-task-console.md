@@ -23,13 +23,17 @@ Authority 没有逐 Attempt Provider settlement 时，界面必须明确显示�
   主导航；其底层能力保留在 Diagnostics，继续使用同一 loopback Origin 和
   既有服务，不删除成本、Runtime 或 Billing 实现。
 - Task 列表提供运行中、需要处理、已完成三个计数和筛选，并使用 inbox 行而不是
-  宽表格。每行显示 Task 名称、Workspace、状态、Attempt、模型、套餐、执行消耗、
-  更新时间与 Attention 摘要；Attention 行优先排序，已完成 Task 显示
-  Review ready / Awaiting review / Review blocked。
+  宽表格。搜索按 Task 名称、Task ID、Workspace 与目标过滤，`All tasks` 下拉
+  与计数卡共用 bucket。每行显示 Task 名称、Workspace、状态、Attempt、模型、
+  套餐、执行消耗、更新时间与 Attention 摘要；Attention 行优先排序，已完成
+  Task 显示 Review ready / Awaiting review / Review blocked。
 - Task 详情在同一页面展开，固定按 Overview、Available actions、
   Acceptance/Attention、Attempt 时间线、Result、Execution usage、默认折叠的
   Execution facts（Wake/Cleanup/Release）和默认折叠的 Events 排列。先结论、
   再动作、再证据、最后事件；历史 Attempt 只读选择，不创建并行详情页。
+- `Result.issues` 与 `Result failed` 是 Worker 报告事实，不是 Master 验收
+  结论。Console 必须显示 `Result issues` / `Result failed` 与待复核提示，
+  不得仅凭 Result 内容声称 Acceptance failed 或 Accepted。
 - Console 只投影 Executor 持有的同一 SQLite Authority；HTTP 不返回
   `task.context`，不创建第二 Authority、Task、Manager 或持久 UI 缓存。
 - Continue 与 related rework 只能依据服务端重新读取的权威 capability。
@@ -48,7 +52,9 @@ Authority 没有逐 Attempt Provider settlement 时，界面必须明确显示�
   默认 `0.67` 倍率。Master Usage 与 Worker Usage 分栏，并明确是否记录。
 - 页面保留双语、浅色/深色、桌面优先与窄屏布局；失败原因使用普通用户语言，
   同时保留真实状态、原因码和安全阻塞信息。
-- 顶部使用低干扰实验性提示，不以宣传性架构说明替代任务事实。
+- 顶部品牌标直接使用插件发布资产 `assets/icon.png` 的原始 PNG 字节，不使用
+  `B/` 文字占位或相似重绘；实验性提示使用低干扰胶囊，不以宣传性架构说明
+  替代任务事实。
 
 ## Non-Changes
 

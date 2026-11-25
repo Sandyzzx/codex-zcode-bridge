@@ -3,7 +3,7 @@
 > Status: IMPLEMENTED — TARGETED / REAL AUTHORITY + BROWSER, SYNTHETIC WORKER
 > Date: 2026-11-25（Asia/Shanghai）
 > Baseline: `origin/preview` `6af69b55d7ecb660c2ad2c923888cf7f1e8886c8`
-> Implementation snapshot: 以本报告所在最终 WebUI 提交为准
+> Implementation snapshot: Preview.17 Task Workspace 第二版（Owner 参考稿收紧）
 
 ## 目标与结论
 
@@ -19,26 +19,28 @@ Runtime 主导航。
 
 | 区域 | 内容 |
 |---|---|
-| 顶栏 | Logo、Bridge Task Console、弱化 Active、Diagnostics、Language、Theme |
-| 提示 | 低干扰实验性说明 |
-| 首屏 | `Tasks` 标题、一句任务说明、Running / Needs attention / Completed 三个数字筛选 |
-| 左栏（约 40%） | `Task inbox`：Attention 优先的 inbox 行，不是宽表格 |
-| 右栏（约 60%） | `Task workspace`：Overview → Actions → Acceptance/Attention → Attempt timeline → Result → Execution usage → Execution facts → Events |
+| 顶栏 | 原始 Z 图标（直接使用插件 `icon.png` 字节）、Bridge Task Console、低干扰 Experimental 胶囊、弱化 Active、Diagnostics、Language、Theme |
+| 首屏 | 左栏 `Tasks` 标题与一句任务说明；右栏 Running / Needs attention / Completed 三个可点击数字卡 |
+| 左栏（约 40%） | `Task inbox`：搜索框 + All tasks 筛选 + Attention 优先的 inbox 行，不是宽表格 |
+| 右栏（约 60%） | `Task workspace`：Overview → Available actions → Acceptance/Attention → Attempt timeline → Result → Execution usage → Execution facts → Events |
 | Diagnostics | 二级 dialog；保留 Runtime 检查与成本证据入口，不占主导航 |
 
 ### Task inbox
 
 每行包含 Task 名称、Task ID、状态、Attempt、Model、Plan、Workspace、更新时间、
-Usage/Discount 摘要与 Attention 摘要。`Needs attention` 行优先排序并使用轻背景
-和左侧标记；具体原因直接显示在行内。已完成 Task 显示 Review ready /
-Awaiting review / Review blocked，区分 Worker 完成与 Master 验收状态。
+Usage/Discount 摘要与 Attention 摘要。搜索按名称、Task ID、Workspace 与目标过滤；
+三个数字卡与 All tasks 下拉共用同一 bucket 状态。`Needs attention` 行优先排序并
+使用轻背景和左侧标记；具体原因直接显示在行内，不藏在最后一列。已完成 Task 显示
+Review ready / Awaiting review / Review blocked，区分 Worker 完成与 Master 验收状态。
 
 ### Task workspace
 
 1. **Overview**：名称、目标、状态、Attempt、Workspace、执行阶段、创建/更新时间。
-2. **Available actions**：只渲染服务端 capability 允许的动作。
-3. **Acceptance and attention**：Completed-not-accepted、Hold、Pending
-   Interaction、未知 Reply Outcome 和阻塞原因。
+2. **Available actions**：只渲染服务端 capability 允许的动作；Continue 与关联
+   返工在证据之前出现。
+3. **Acceptance and attention**：Result issues 与 Result failed 优先显示，
+   并明确二者都不是 Master 验收结论；Completed not accepted、Hold、Pending
+   Interaction、未知 Reply Outcome 和阻塞原因按真实 Authority 状态显示。
 4. **Attempt timeline**：默认展开，历史 Attempt 只读。
 5. **Result**：默认展开。
 6. **Execution usage**：默认展开，Plan/Discount/Model/Effort 与
@@ -49,6 +51,8 @@ Awaiting review / Review blocked，区分 Worker 完成与 Master 验收状态�
 ## 交互与动作逻辑
 
 - 三个统计卡是真实筛选器；点击后列表只保留对应 bucket，再点一次清除筛选。
+- 搜索框按 Task 名称、Task ID、Workspace 与目标实时过滤；All tasks 下拉与统计卡
+  双向同步，筛选只改变本地投影，不发起额外 Authority 写操作。
 - 选择 Task 更新 `?task_id=`；窄屏选择后自动滚到 Task workspace。
 - 选择 Attempt 只切换当前详情和 Usage，不改变 Task 或创建新 Attempt。
 - Continue 仅在服务端 `action_capabilities.can_continue=true` 时渲染；表单创建
@@ -68,6 +72,10 @@ Awaiting review / Review blocked，区分 Worker 完成与 Master 验收状态�
 
 - 列表读取 `/api/tasks`，详情读取 `/api/tasks/:id/console`；页面没有静态任务
   假数据，也没有独立的 UI Task 缓存。
+- 顶栏品牌图标直接嵌入发布资产 `plugins/codex-zcode-bridge/assets/icon.png` 的
+  原始 PNG 字节；单元测试校验解码后的 SHA-256 为
+  `4C657714FE423243DA63191AE949FBF2DADC37FC8F994A6432FC1F92E2C4D1CC`，浏览器
+  测试校验图片实际解码成功，不再使用 `B/` 文字占位。
 - 状态、Attempt、Result、Attention、Wake、Cleanup、Release 与 Usage 全部来自
   同一 SQLite Authority 的 Console projection。
 - 真实零 Token 保持 `0`；整套 Usage 缺失显示 `Not observed`，不显示 `0`。
@@ -91,7 +99,9 @@ Worker、Result、Wake 与 Usage 是 **SYNTHETIC WORKER / NOT REAL MODEL**；不
 
 | 检查 | 状态 | 证据 |
 |---|---|---|
-| Task inbox、非表格结构、Attention 优先排序 | `PASS — TARGETED` | Chromium E2E 8 个列表断言、筛选 3/5 行、Attention 行 |
+| Task inbox、非表格结构、Attention 优先排序 | `PASS — TARGETED` | Chromium E2E 列表断言、筛选 3/5 行、Attention 行 |
+| 搜索与 All tasks 筛选 | `PASS — TARGETED` | 搜索 `wake` 只剩 1 行；清空恢复 5 行；下拉 attention 3 行 |
+| 原始图标字节绑定 | `PASS — TARGETED` | base64 解码 SHA-256 等于 `4C657714…`；Chromium `naturalWidth >= 32` |
 | Completed-not-accepted 区分 | `PASS — TARGETED` | Review ready / Review blocked 行标签 |
 | 详情八段顺序与折叠证据层 | `PASS — TARGETED` | `data-section` 顺序断言；Execution facts/Events 默认关闭 |
 | Available actions 仅按 capability 渲染 | `PASS — TARGETED` | done、cleanup、attention、queued、wake-unknown 五类页面 |
@@ -128,6 +138,8 @@ Worker、Result、Wake 与 Usage 是 **SYNTHETIC WORKER / NOT REAL MODEL**；不
 - Cleanup recovery 从 Cleanup 证据区移到 Available actions，且只显示安全入口。
 - 新增 Effort 投影，Usage 明确 Plan/Discount/Model/Effort 与 Master/Worker 分栏。
 - 删除顶部内部机制文案、网格背景、重阴影和多页面导航。
+- 顶部改为真实 Z 图标 + 低干扰 Experimental 胶囊；删除 `B/` 文字占位。
+- 首屏按参考稿把概况卡放到详情列上方，左栏增加搜索与 bucket 下拉。
 - 增加 390px 窄屏 Attempt 自动换行与选择后滚到详情。
 - 失败原因改为普通用户语言，同时保留真实阻塞原因与未观测状态。
 

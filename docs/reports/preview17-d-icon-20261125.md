@@ -53,6 +53,8 @@ Owner 纠正后的唯一目标附件：
   `783561004e952b7ad60a7bd3c7ff62239f99d031`。
 - `plugins/codex-zcode-bridge/assets/logo.png` 恢复为
   `5b9c7e08422817c1f51f414193e3e69d9ae4aaa0`。
+- WebUI 顶栏改为嵌入同一份 `icon.png` 原始字节（解码后 SHA-256
+  `4C657714…`），删除此前的 `B/` 文字占位；浏览器测试校验图片可解码。
 - 两个资产均为 8-bit RGB PNG、无 alpha 通道、白色背景；`icon` 为
   128×128，`logo` 为 512×512。
 - `scripts/validate-plugin.mjs` 固定两个 manifest 引用、尺寸、字节数和

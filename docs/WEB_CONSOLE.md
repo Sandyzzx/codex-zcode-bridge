@@ -2,7 +2,7 @@
 
 > Status: AUTHORITATIVE
 > Last updated: 2026-11-25（Preview.17 Task Workspace 重构）
-> Last verified: 2026-11-25，核对 inbox 列表与三项筛选、Attention 优先排序、Completed-not-accepted 标签、详情八段顺序、动作前置、逐 Attempt Usage/Effort、Master 与 Worker 分栏、Provider 实际成本未观测状态、Execution facts 折叠、完整 Events 分页、真实 SQLite Authority 到 IPC/HTTP/Chromium 的 Console projection、Continue/Rework/Cleanup recovery 能力门、Diagnostics 零外部请求、双语、明暗主题与窄屏布局；真实模型、真实 Desktop、真实 Queue Wake 与 Master Usage 不在已验证范围。
+> Last verified: 2026-11-25，核对 inbox 列表、搜索与三项筛选、Attention 优先排序、Completed-not-accepted 标签、详情八段顺序、动作前置、逐 Attempt Usage/Effort、Master 与 Worker 分栏、Provider 实际成本未观测状态、Execution facts 折叠、完整 Events 分页、真实 SQLite Authority 到 IPC/HTTP/Chromium 的 Console projection、Continue/Rework/Cleanup recovery 能力门、原始 Z 图标字节绑定、Diagnostics 零外部请求、双语、明暗主题与窄屏布局；真实模型、真实 Desktop、真实 Queue Wake 与 Master Usage 不在已验证范围。
 > Verified against: `9aa19c13`（实现与测试快照 `b9e1e829`，最终报告提交）
 
 Task Workspace 是 Executor Control Pipe 的本地可视化 Adapter。它只有一个
@@ -41,15 +41,19 @@ node dist/web-console.mjs --data-root <absolute-state-dir>
 
 ## 单页界面
 
-顶栏固定只包含品牌、Executor 状态、Diagnostics、语言和主题。页面主体是
-单页 Task Workspace：左侧 `Task inbox` / `任务收件箱`，右侧
-`Task workspace` / `任务工作台`。顶部只保留低干扰实验性提示；旧 Dashboard、
-Runtime 和 Cost Lab 主导航页面均已退役，Runtime 与成本证据能力移入
-Diagnostics。
+顶栏固定只包含原始 Z 品牌图标、`Bridge Task Console`、低干扰 `Experimental`
+胶囊、弱化的 Executor 状态、Diagnostics、语言和主题。品牌图标直接使用插件
+`assets/icon.png` 的原始字节，不使用文字占位或相似重绘。页面主体是单页 Task
+Workspace：左侧 `Task inbox` / `任务收件箱`，右侧 `Task workspace` / `任务工作台`。
+旧 Dashboard、Runtime 和 Cost Lab 主导航页面均已退役，Runtime 与成本证据能力
+移入 Diagnostics。
 
 ### Task 列表
 
-- `Running`、`Needs attention`、`Completed` 三个计数与可点击筛选。
+- `Running`、`Needs attention`、`Completed` 三个计数与可点击筛选；统计卡与
+  `All tasks` 下拉共用同一 bucket 状态。
+- 搜索框按 Task 名称、Task ID、Workspace 与目标实时过滤；筛选和搜索只改变本地
+  投影，不产生 Authority 写操作。
 - 列表使用 inbox 行而不是宽表格。每行显示 Task 名称、Task ID、状态、当前
   Attempt、Model、Plan、Workspace、更新时间、Usage/Discount 摘要和
   Attention 摘要；Workspace 单行截断并提供完整路径提示。
@@ -66,8 +70,11 @@ Diagnostics。
 1. **Overview**：Task 名称、目标、状态、Attempt、Workspace、执行阶段和更新时间。
 2. **Available actions**：只显示服务端 capability 允许的 Continue、Create
    related rework、Recover Cleanup、Reply 或 Request cancel；阻塞原因紧随按钮。
-3. **Acceptance and attention**：Completed-not-accepted、Attention 原因、
-   Hold、Pending Interaction 和未知 Reply Outcome。
+3. **Acceptance and attention**：先显示 Worker 报告的 Result issues 或 Result
+   failed、可读原因与 Completed-not-accepted，再显示 Attention 原因、Hold、
+   Pending Interaction 和未知 Reply Outcome。Result issues 与 Result failed
+   都不是 Master 验收结论；界面不会把 Worker completed 写成 Master accepted，
+   也不会仅凭 Worker 自报问题声称“验收失败”。
 4. **Attempt timeline**：默认展开；选择历史 Attempt 后该 Attempt 只读。
 5. **Result**：当前选中 Attempt 的 Result、文件、测试和错误码。
 6. **Execution usage**：Plan、Discount、Model、Effort、Worker/Master 分栏、
