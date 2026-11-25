@@ -12,6 +12,8 @@ import {
 export interface ExecutorControlClientOptions {
   readonly pipeName: string;
   readonly connectTimeoutMs?: number;
+  /** Invoked once after the control pipe is unavailable, then connect retries. */
+  readonly recoverUnavailable?: () => Promise<void>;
 }
 
 interface PendingRequest {
@@ -40,15 +42,41 @@ function submissionUnknownCode(method: ExecutorControlRequest["method"]): string
 export class ExecutorControlClient {
   readonly #pipeName: string;
   readonly #connectTimeoutMs: number;
+  readonly #recoverUnavailable: (() => Promise<void>) | undefined;
   #socket: net.Socket | null = null;
+  #connectPromise: Promise<void> | null = null;
   #pending = new Map<string, PendingRequest>();
 
   constructor(options: ExecutorControlClientOptions) {
     this.#pipeName = options.pipeName;
     this.#connectTimeoutMs = options.connectTimeoutMs ?? 5_000;
+    this.#recoverUnavailable = options.recoverUnavailable;
   }
 
   async connect(): Promise<void> {
+    if (this.#socket && !this.#socket.destroyed) return;
+    if (this.#connectPromise) return this.#connectPromise;
+    const attempt = (async () => {
+      try {
+        await this.#connectOnce();
+      } catch (error) {
+        if (!this.#recoverUnavailable
+          || !(error instanceof Error && "code" in error && error.code === "EXECUTOR_UNAVAILABLE")) {
+          throw error;
+        }
+        await this.#recoverUnavailable();
+        await this.#connectOnce();
+      }
+    })();
+    this.#connectPromise = attempt;
+    try {
+      await attempt;
+    } finally {
+      if (this.#connectPromise === attempt) this.#connectPromise = null;
+    }
+  }
+
+  async #connectOnce(): Promise<void> {
     if (this.#socket && !this.#socket.destroyed) return;
     await new Promise<void>((resolve, reject) => {
       const socket = net.connect(this.#pipeName);

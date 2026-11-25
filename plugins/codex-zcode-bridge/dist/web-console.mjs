@@ -7232,13 +7232,37 @@ function submissionUnknownCode(method) {
 var ExecutorControlClient = class {
   #pipeName;
   #connectTimeoutMs;
+  #recoverUnavailable;
   #socket = null;
+  #connectPromise = null;
   #pending = /* @__PURE__ */ new Map();
   constructor(options) {
     this.#pipeName = options.pipeName;
     this.#connectTimeoutMs = options.connectTimeoutMs ?? 5e3;
+    this.#recoverUnavailable = options.recoverUnavailable;
   }
   async connect() {
+    if (this.#socket && !this.#socket.destroyed) return;
+    if (this.#connectPromise) return this.#connectPromise;
+    const attempt = (async () => {
+      try {
+        await this.#connectOnce();
+      } catch (error2) {
+        if (!this.#recoverUnavailable || !(error2 instanceof Error && "code" in error2 && error2.code === "EXECUTOR_UNAVAILABLE")) {
+          throw error2;
+        }
+        await this.#recoverUnavailable();
+        await this.#connectOnce();
+      }
+    })();
+    this.#connectPromise = attempt;
+    try {
+      await attempt;
+    } finally {
+      if (this.#connectPromise === attempt) this.#connectPromise = null;
+    }
+  }
+  async #connectOnce() {
     if (this.#socket && !this.#socket.destroyed) return;
     await new Promise((resolve, reject) => {
       const socket = net.connect(this.#pipeName);

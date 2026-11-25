@@ -1838,7 +1838,7 @@ export class IsolatedAdmissionStore {
       if(!eligible.has(taskRow.status)||taskRow.status!==previousAttempt.status||taskRow.status!==previous.result_status)
         fail(taskRow.status==='cancelled'?'continue_cancelled_not_supported':'continue_status_not_eligible');
       if(previous.phase!=='released'||!previous.result_digest||!previous.result_commit_ref||!previous.claim_id
-        ||!this.#db.prepare("SELECT 1 FROM manager_operation_events WHERE operation_id=? AND event_type='released' AND sequence=?").get(previous.operation_id,input.expected_revision))
+        ||!this.#db.prepare("SELECT 1 FROM manager_operation_events WHERE operation_id=? AND event_type='released' AND sequence<=?").get(previous.operation_id,input.expected_revision))
         fail('continue_prior_not_released');
       this.#assertRecoveryNotLatched(previous.operation_id);
       const nextAttempt=input.previous_attempt+1;
@@ -3771,7 +3771,7 @@ export class IsolatedAdmissionStore {
         if(!prior||prior.task_id!==a.task_id||prior.attempt!==c.previous_attempt||prior.generation!==c.previous_generation
           ||prior.revision<c.previous_revision||prior.claim_id!==c.previous_claim_id||prior.claim_worker_identity_digest!==c.previous_worker_identity_digest
           ||prior.phase!=='released'||!['completed','failed','waiting_for_master'].includes(prior.result_status)
-          ||!this.#db.prepare("SELECT 1 FROM manager_operation_events WHERE operation_id=? AND event_type='released' AND sequence=?").get(prior.operation_id,c.previous_revision)
+          ||!this.#db.prepare("SELECT 1 FROM manager_operation_events WHERE operation_id=? AND event_type='released' AND sequence<=?").get(prior.operation_id,c.previous_revision)
           ||priorAttempt?.status!==prior.result_status)fail('continue_history_mismatch');
         const current=this.#db.prepare('SELECT current_attempt,status FROM tasks WHERE task_id=?').get(a.task_id);
         const cancelledCurrent=current?.status==='cancelled'&&a.status==='cancelled'&&a.queued_cancel_id!==null;

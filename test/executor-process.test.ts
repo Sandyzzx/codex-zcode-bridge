@@ -1284,3 +1284,111 @@ test("a real Executor commits a synthetic Worker Result, Cleanup, and Release ac
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("thin MCP automatically recovers an unavailable Executor before serving a read", {
+  skip: process.platform !== "win32",
+  timeout: 90_000,
+}, async () => {
+  const fixture = mkdtempSync(path.join(tmpdir(), "executor-thin-auto-recovery-"));
+  const localAppData = path.join(fixture, "local-app-data");
+  const userProfile = path.join(fixture, "user-profile");
+  const tempDirectory = path.join(fixture, "temp");
+  const root = path.join(localAppData, "CodexZCodeBridge", "state");
+  const settingsDirectory = path.join(userProfile, ".codex", "codex-zcode-bridge");
+  for (const directory of [root, settingsDirectory, tempDirectory]) mkdirSync(directory, { recursive: true });
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    LOCALAPPDATA: localAppData,
+    USERPROFILE: userProfile,
+    HOME: userProfile,
+    TEMP: tempDirectory,
+    TMP: tempDirectory,
+    TMPDIR: tempDirectory,
+    ZCODE_BRIDGE_MCP_TRANSPORT: "control",
+    ZCODE_BRIDGE_EXECUTOR_AUTO_RECOVER: "1",
+    ZCODE_BRIDGE_TASK_CONSOLE: "off",
+  };
+  delete env.ZCODE_BRIDGE_DATA_DIR;
+  delete env.ZCODE_BRIDGE_PLUGIN_MODE;
+  let session: ReturnType<typeof startThinMcp> | undefined;
+  let recoveredPid: number | undefined;
+  let client: ExecutorControlClient | undefined;
+  try {
+    session = startThinMcp(env);
+    session.child.stdin.write([
+      JSON.stringify({
+        jsonrpc: "2.0", id: 1, method: "initialize",
+        params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "auto-recovery", version: "0.0.0" } },
+      }),
+      JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
+      "",
+    ].join("\n"));
+    assert.ok((await session.waitForResponse(1)).result);
+    session.child.stdin.write([
+      JSON.stringify({
+        jsonrpc: "2.0", id: 2, method: "tools/call",
+        params: { name: "zcode_status", arguments: { task_id: "ghost-after-crash" } },
+      }),
+      "",
+    ].join("\n"));
+    const response = await session.waitForResponse(2) as {
+      result?: { isError?: boolean; structuredContent?: { error?: { code?: string } } };
+    };
+    assert.equal(response.result?.isError, true, session.stderr());
+    assert.equal(response.result?.structuredContent?.error?.code, "TASK_NOT_FOUND");
+    assert.match(session.stderr(), /EXECUTOR_START_RECOVERED/u);
+    const lease = JSON.parse(readFileSync(path.join(root, EXECUTOR_LEASE_FILE), "utf8")) as {
+      owner?: { process_id?: number };
+    };
+    recoveredPid = lease.owner?.process_id;
+    assert.ok(Number.isSafeInteger(recoveredPid));
+    const firstProcessId = recoveredPid!;
+    process.kill(firstProcessId, "SIGKILL");
+    await waitForProcessExit(firstProcessId, 15_000);
+    recoveredPid = undefined;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    session.child.stdin.write([
+      JSON.stringify({
+        jsonrpc: "2.0", id: 3, method: "tools/call",
+        params: { name: "zcode_status", arguments: { task_id: "ghost-after-crash" } },
+      }),
+      "",
+    ].join("\n"));
+    const recovered = await session.waitForResponse(3) as {
+      result?: { isError?: boolean; structuredContent?: { error?: { code?: string } } };
+    };
+    assert.equal(recovered.result?.isError, true, session.stderr());
+    assert.equal(recovered.result?.structuredContent?.error?.code, "TASK_NOT_FOUND");
+    assert.match(session.stderr(), /EXECUTOR_LEASE_RECOVERED/u);
+    const recoveredLease = JSON.parse(readFileSync(path.join(root, EXECUTOR_LEASE_FILE), "utf8")) as {
+      owner?: { process_id?: number };
+    };
+    recoveredPid = recoveredLease.owner?.process_id;
+    assert.ok(Number.isSafeInteger(recoveredPid));
+    assert.notEqual(recoveredPid, firstProcessId);
+    client = new ExecutorControlClient({ pipeName: executorPipeName(root), connectTimeoutMs: 3_000 });
+    await client.connect();
+    const shutdown = await client.request("shutdown", {});
+    assert.equal(shutdown.ok, true);
+    const deadline = Date.now() + 15_000;
+    while (existsSync(path.join(root, EXECUTOR_LEASE_FILE)) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.equal(existsSync(path.join(root, EXECUTOR_LEASE_FILE)), false);
+    await waitForProcessExit(recoveredPid!, 15_000);
+    recoveredPid = undefined;
+    session.child.stdin.end();
+    const exit = await session.exit;
+    assert.equal(exit.code, 0, session.stderr());
+  } finally {
+    client?.close();
+    session?.child.kill();
+    if (recoveredPid !== undefined) {
+      try { process.kill(recoveredPid, "SIGKILL"); } catch { /* already exited */ }
+      await waitForProcessExit(recoveredPid, 15_000).catch(() => undefined);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    rmSync(fixture, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+  }
+});

@@ -6,11 +6,10 @@ var __export = (target, all) => {
 };
 
 // src/cli/main.ts
-import { spawn as spawn3 } from "node:child_process";
-import { existsSync as existsSync6, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import path6 from "node:path";
 import process2 from "node:process";
-import { fileURLToPath as fileURLToPath4 } from "node:url";
+import { fileURLToPath as fileURLToPath5 } from "node:url";
 
 // src/runtime/sqlite-install-config.ts
 import { existsSync as existsSync2, lstatSync, mkdirSync, readFileSync as readFileSync2, realpathSync } from "node:fs";
@@ -6719,13 +6718,37 @@ function submissionUnknownCode(method) {
 var ExecutorControlClient = class {
   #pipeName;
   #connectTimeoutMs;
+  #recoverUnavailable;
   #socket = null;
+  #connectPromise = null;
   #pending = /* @__PURE__ */ new Map();
   constructor(options) {
     this.#pipeName = options.pipeName;
     this.#connectTimeoutMs = options.connectTimeoutMs ?? 5e3;
+    this.#recoverUnavailable = options.recoverUnavailable;
   }
   async connect() {
+    if (this.#socket && !this.#socket.destroyed) return;
+    if (this.#connectPromise) return this.#connectPromise;
+    const attempt = (async () => {
+      try {
+        await this.#connectOnce();
+      } catch (error2) {
+        if (!this.#recoverUnavailable || !(error2 instanceof Error && "code" in error2 && error2.code === "EXECUTOR_UNAVAILABLE")) {
+          throw error2;
+        }
+        await this.#recoverUnavailable();
+        await this.#connectOnce();
+      }
+    })();
+    this.#connectPromise = attempt;
+    try {
+      await attempt;
+    } finally {
+      if (this.#connectPromise === attempt) this.#connectPromise = null;
+    }
+  }
+  async #connectOnce() {
     if (this.#socket && !this.#socket.destroyed) return;
     await new Promise((resolve, reject) => {
       const socket = net.connect(this.#pipeName);
@@ -6966,16 +6989,53 @@ function executorPipeName(root) {
   return `\\\\.\\pipe\\codex-zcode-bridge-executor-v1-${authorityRootDigest(root)}`;
 }
 
-// src/web/console-link.ts
+// src/executor/spawn.ts
 import { spawn as spawn2 } from "node:child_process";
-import { existsSync as existsSync5 } from "node:fs";
+import { existsSync as existsSync4 } from "node:fs";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
+function spawnExecutorProcess(input) {
+  const executorEntry = input.executorEntryPath ?? resolveExecutorEntry(input.moduleUrl);
+  const bridgeEntry = input.bridgeEntryPath ?? resolveBridgeEntry(input.moduleUrl);
+  const child = spawn2(process.execPath, [
+    executorEntry,
+    "--data-root",
+    input.dataRoot,
+    "--bridge-entry",
+    bridgeEntry,
+    "--settings-directory",
+    input.settingsDirectory,
+    ...input.heartbeatMs === void 0 ? [] : ["--heartbeat-ms", String(input.heartbeatMs)]
+  ], {
+    detached: true,
+    windowsHide: true,
+    stdio: "ignore",
+    env: {
+      ...process.env,
+      ...input.acceptUnleasedTransition === true ? { [EXECUTOR_UNLEASED_TRANSITION_ENV]: "1" } : {}
+    }
+  });
+  child.unref();
+  return { pid: child.pid };
+}
+function resolveExecutorEntry(moduleUrl = import.meta.url) {
+  const bundled = fileURLToPath3(new URL("./executor.mjs", moduleUrl));
+  return existsSync4(bundled) ? bundled : fileURLToPath3(new URL("../executor/main.js", moduleUrl));
+}
+function resolveBridgeEntry(moduleUrl = import.meta.url) {
+  const bundled = fileURLToPath3(new URL("./bridge.mjs", moduleUrl));
+  return existsSync4(bundled) ? bundled : fileURLToPath3(new URL("../mcp/main.js", moduleUrl));
+}
+
+// src/web/console-link.ts
+import { spawn as spawn3 } from "node:child_process";
+import { existsSync as existsSync6 } from "node:fs";
+import { fileURLToPath as fileURLToPath4 } from "node:url";
 
 // src/web/discovery.ts
 import { createHash as createHash2 } from "node:crypto";
 import {
   closeSync as closeSync2,
-  existsSync as existsSync4,
+  existsSync as existsSync5,
   lstatSync as lstatSync3,
   openSync as openSync2,
   readFileSync as readFileSync4,
@@ -7055,7 +7115,7 @@ function parseRecord(value) {
 }
 function readTaskConsoleDiscovery(dataRoot) {
   const file = taskConsoleDiscoveryPath(dataRoot);
-  if (!existsSync4(file)) return null;
+  if (!existsSync5(file)) return null;
   try {
     const stat = lstatSync3(file);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size > DISCOVERY_LIMIT_BYTES) {
@@ -7139,11 +7199,11 @@ function sleep(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 function resolveTaskConsoleEntry() {
-  const bundled = fileURLToPath3(new URL("./web-console.mjs", import.meta.url));
-  return existsSync5(bundled) ? bundled : fileURLToPath3(new URL("../web/main.js", import.meta.url));
+  const bundled = fileURLToPath4(new URL("./web-console.mjs", import.meta.url));
+  return existsSync6(bundled) ? bundled : fileURLToPath4(new URL("../web/main.js", import.meta.url));
 }
 function spawnTaskConsole(input) {
-  const child = spawn2(process.execPath, [
+  const child = spawn3(process.execPath, [
     resolveTaskConsoleEntry(),
     "--data-root",
     input.dataRoot,
@@ -7571,36 +7631,12 @@ function defaultClient(pipeName, connectTimeoutMs) {
   });
 }
 function spawnExecutor(input) {
-  const executorEntry = resolveExecutorEntry();
-  const bridgeEntry = resolveBridgeEntry();
-  const child = spawn3(process2.execPath, [
-    executorEntry,
-    "--data-root",
-    input.dataRoot,
-    "--bridge-entry",
-    bridgeEntry,
-    "--settings-directory",
-    input.settingsDirectory,
-    ...input.heartbeatMs === void 0 ? [] : ["--heartbeat-ms", String(input.heartbeatMs)]
-  ], {
-    detached: true,
-    windowsHide: true,
-    stdio: "ignore",
-    env: {
-      ...process2.env,
-      ...input.acceptUnleasedTransition === true ? { [EXECUTOR_UNLEASED_TRANSITION_ENV]: "1" } : {}
-    }
+  return spawnExecutorProcess({
+    dataRoot: input.dataRoot,
+    settingsDirectory: input.settingsDirectory,
+    ...input.heartbeatMs === void 0 ? {} : { heartbeatMs: input.heartbeatMs },
+    ...input.acceptUnleasedTransition === true ? { acceptUnleasedTransition: true } : {}
   });
-  child.unref();
-  return { pid: child.pid };
-}
-function resolveExecutorEntry() {
-  const bundled = fileURLToPath4(new URL("./executor.mjs", import.meta.url));
-  return existsSync6(bundled) ? bundled : fileURLToPath4(new URL("../executor/main.js", import.meta.url));
-}
-function resolveBridgeEntry() {
-  const bundled = fileURLToPath4(new URL("./bridge.mjs", import.meta.url));
-  return existsSync6(bundled) ? bundled : fileURLToPath4(new URL("../mcp/main.js", import.meta.url));
 }
 async function tryExecutorStatus(pipeName, dependencies) {
   const client = (dependencies.createClient ?? defaultClient)(pipeName, 250);
@@ -7710,7 +7746,7 @@ function writeJson(io, value) {
 function sleep2(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
-if (process2.argv[1] && path6.resolve(process2.argv[1]) === path6.resolve(fileURLToPath4(import.meta.url))) {
+if (process2.argv[1] && path6.resolve(process2.argv[1]) === path6.resolve(fileURLToPath5(import.meta.url))) {
   process2.exitCode = await runTaskCli(process2.argv.slice(2));
 }
 export {
