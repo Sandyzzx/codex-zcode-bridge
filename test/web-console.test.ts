@@ -1,12 +1,19 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { createHash } from "node:crypto";
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import type { TaskPackage, TaskStatusRecord } from "../src/interfaces.js";
-import type { ListTasksInput, TaskListPage } from "../src/task-list.js";
+import type { ContinueTaskInput, TaskPackage, TaskReceipt, TaskStatusRecord } from "../src/interfaces.js";
+import type {
+  ConsoleTaskDetail,
+  ConsoleTaskListInput,
+  ConsoleTaskListPage,
+  ListTasksInput,
+  TaskListPage,
+} from "../src/task-list.js";
 import { createTaskConsoleServer, type TaskConsoleManager } from "../src/web/server.js";
 import {
   fetchTaskConsoleSession,
@@ -130,6 +137,156 @@ function controlManager() {
   };
 }
 
+function consoleDetail(options: {
+  readonly canContinue?: boolean;
+  readonly canRework?: boolean;
+  readonly canRecoverCleanup?: boolean;
+  readonly context?: string;
+} = {}): ConsoleTaskDetail {
+  const timestamp = "2026-01-01T00:02:00Z";
+  const model = {
+    state: "observed" as const,
+    provider_id: "account:bigmodel-individual-coding-plan",
+    model_id: "GLM-5.3-Flash",
+    source: "runtime" as const,
+    effort: { state: "observed" as const, value: "high", source: "runtime" as const },
+  };
+  const plan = {
+    kind: "coding_plan" as const,
+    provider_id: model.provider_id,
+    source: "runtime" as const,
+  };
+  const usage = {
+    state: "observed" as const,
+    source: "runtime",
+    scope: "attempt",
+    observed_at: timestamp,
+    finality: "reported" as const,
+    input_tokens: 120,
+    cached_input_tokens: 0,
+    cached_write_input_tokens: null,
+    output_tokens: 30,
+    reasoning_tokens: null,
+    total_tokens: 150,
+    conflicts: [],
+    provider_cost: {
+      state: "not_observed" as const,
+      scope: "per_attempt" as const,
+      amount: null,
+      currency: null,
+      reason_code: "bridge_authority_has_no_provider_settlement" as const,
+    },
+  };
+  const attempt = {
+    attempt: 1,
+    status: "completed" as const,
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: timestamp,
+    current: true,
+    operation_phase: "released",
+    model,
+    plan,
+    usage,
+    discount: { state: "not_observed" as const, source: "per_attempt_settlement" as const,
+      reason_code: "no_per_attempt_settlement_evidence" },
+    result: {
+      status: "completed" as const,
+      summary: "console projection fixture",
+      error_code: null,
+      issues: [],
+      files_changed: ["src/example.ts"],
+      tests: [{ command: "npm test", status: "passed" as const, details: null }],
+      needs_master_decision: false,
+      started_at: "2026-01-01T00:00:10Z",
+      finished_at: timestamp,
+    },
+    wake: null,
+    cleanup: { state: "verified" as const, reason_code: "released" },
+    release: { state: "released" as const, cleanup_verified: true, reason_code: "released" },
+    hold: { active: false, reason_code: null, at: null },
+    pending_requests: [],
+    reply_outcome_unknown_requests: [],
+  };
+  return {
+    task_id: "task-a",
+    name: "Inspect the durable result",
+    status: "completed",
+    attempt: 1,
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: timestamp,
+    workspace: "C:\\work",
+    objective: "Inspect the durable result",
+    model,
+    plan,
+    usage,
+    discount: attempt.discount,
+    cleanup: attempt.cleanup,
+    release: attempt.release,
+    needs_attention: false,
+    attention_reasons: [],
+    action_capabilities: {
+      can_continue: options.canContinue === true,
+      can_rework: options.canRework === true,
+      can_cancel: false,
+      can_recover_cleanup: options.canRecoverCleanup === true,
+      can_reply: false,
+      blockers: [],
+    },
+    task: {
+      task_id: "task-a",
+      workspace: "C:\\work",
+      objective: "Inspect the durable result",
+      requirements: [],
+      allowed_paths: [],
+      forbidden_paths: [],
+      acceptance_criteria: [],
+      test_commands: [],
+      context: options.context ?? "secret-context-must-not-cross-http",
+    },
+    attempts: [attempt],
+    master_usage: {
+      state: "not_observed",
+      reason_code: "bridge_authority_does_not_record_master_usage",
+    },
+    result_submission_error: null,
+  };
+}
+
+function consoleFixture(detail: ConsoleTaskDetail) {
+  const base = manager();
+  const calls = { ...base.calls, continue: 0, rework: 0, detail: 0, listConsole: 0 };
+  const fixture = {
+    ...base,
+    calls,
+    detail,
+    continued: null as ContinueTaskInput | null,
+    created: null as TaskPackage | null,
+    async listConsoleTasks(_input: ConsoleTaskListInput): Promise<ConsoleTaskListPage> {
+      calls.listConsole += 1;
+      return { tasks: [fixture.detail], next_task_id: null, has_more: false };
+    },
+    async getConsoleTaskDetail(_taskId: string): Promise<ConsoleTaskDetail> {
+      calls.detail += 1;
+      return fixture.detail;
+    },
+    async cancelTask(taskId: string): Promise<TaskStatusRecord> {
+      calls.cancel += 1;
+      return base.cancelTask(taskId);
+    },
+    async createTask(task: TaskPackage): Promise<TaskReceipt> {
+      calls.rework += 1;
+      fixture.created = task;
+      return { task_id: task.task_id, status: "queued", created_at: "2026-01-01T00:03:00Z" };
+    },
+    async continueTask(input: ContinueTaskInput): Promise<TaskReceipt> {
+      calls.continue += 1;
+      fixture.continued = input;
+      return { task_id: input.task_id, status: "queued", created_at: "2026-01-01T00:03:00Z" };
+    },
+  };
+  return fixture;
+}
+
 interface HttpResponse {
   readonly status: number;
   readonly headers: http.IncomingHttpHeaders;
@@ -202,13 +359,39 @@ test("Web Console serves a loopback task inspection surface without mutations", 
 
     const page = await request(address, "/");
     assert.equal(page.status, 200);
-    assert.match(String(page.json), /Bridge Operations Console/u);
+    assert.match(String(page.json), /Bridge Task Console/u);
     assert.match(String(page.json), /id="language"/u);
     assert.match(String(page.json), /id="theme"/u);
-    assert.match(String(page.json), /id="page-cost-lab"/u);
-    assert.match(String(page.json), /id="page-runtime"/u);
-    assert.match(String(page.json), /id="count-wake"/u);
-    assert.match(String(page.json), /id="dashboard-wake"/u);
+    assert.match(String(page.json), /id="count-running"/u);
+    assert.match(String(page.json), /id="count-attention"/u);
+    assert.match(String(page.json), /id="count-completed"/u);
+    assert.match(String(page.json), /id="diagnostics"/u);
+    assert.match(String(page.json), /id="task-list"/u);
+    assert.match(String(page.json), /id="task-detail"/u);
+    assert.match(String(page.json), /id="task-search"/u);
+    assert.match(String(page.json), /id="bucket-filter"/u);
+    assert.match(String(page.json), /class="brand-icon"/u);
+    assert.doesNotMatch(String(page.json), /class="brand-mark">B\//u);
+    const brandData = /class="brand-icon" src="data:image\/png;base64,([^"]+)"/u.exec(String(page.json))?.[1];
+    assert.ok(brandData);
+    assert.equal(
+      createHash("sha256").update(Buffer.from(brandData, "base64")).digest("hex").toUpperCase(),
+      "4C657714FE423243DA63191AE949FBF2DADC37FC8F994A6432FC1F92E2C4D1CC",
+    );
+    assert.match(String(page.json), /\/console/u);
+    assert.match(String(page.json), /Experimental: task status and recovery operations are still being refined\./u);
+    assert.match(String(page.json), /class="summary-line"/u);
+    assert.match(String(page.json), /data-i18n="titleTasks">Tasks/u);
+    assert.doesNotMatch(String(page.json), /Task inbox|Task workspace/u);
+    assert.doesNotMatch(String(page.json), /class="stats\b/u);
+    assert.doesNotMatch(String(page.json), /class="table-head"/u);
+    assert.doesNotMatch(String(page.json), /id="page-cost-lab"/u);
+    assert.doesNotMatch(String(page.json), /id="page-runtime"/u);
+    assert.doesNotMatch(String(page.json), /data-page="dashboard"/u);
+    assert.doesNotMatch(String(page.json), /Accept Task/u);
+    assert.doesNotMatch(String(page.json), /Durable task authority|Durable Executor truth|Executor 的持久事实/iu);
+    assert.doesNotMatch(String(page.json), /Read-only projection|READ-ONLY PROJECTION/iu);
+    assert.doesNotMatch(String(page.json), /SQLite Authority|Choose a Task to inspect durable evidence/iu);
     const inlineScript = /<script>([\s\S]+)<\/script>/u.exec(String(page.json))?.[1];
     assert.ok(inlineScript);
     assert.doesNotThrow(() => new Function(inlineScript));
@@ -305,6 +488,127 @@ test("Web Console mutations require same-origin CSRF and preserve task actions",
     });
     assert.equal(replied.status, 200);
     assert.equal(fixture.calls.reply, 1);
+  } finally {
+    await server.close();
+  }
+});
+
+test("Web Console serves Console projections, redacts Task context, and guards Continue/Rework", async () => {
+  const fixture = consoleFixture(consoleDetail({ canContinue: false, canRework: false }));
+  const server = createTaskConsoleServer({ manager: fixture });
+  try {
+    const address = await server.start();
+    const list = await request(address, "/api/tasks?limit=10");
+    assert.equal(list.status, 200);
+    assert.equal(fixture.calls.listConsole, 1);
+    const listed = (list.json as { result: ConsoleTaskListPage }).result;
+    assert.equal(listed.tasks[0]?.plan.kind, "coding_plan");
+    assert.equal(listed.tasks[0]?.usage.total_tokens, 150);
+    assert.deepEqual(listed.tasks[0]?.usage.provider_cost, {
+      state: "not_observed",
+      scope: "per_attempt",
+      amount: null,
+      currency: null,
+      reason_code: "bridge_authority_has_no_provider_settlement",
+    });
+
+    const consoleResponse = await request(address, "/api/tasks/task-a/console");
+    assert.equal(consoleResponse.status, 200);
+    const consoleText = JSON.stringify(consoleResponse.json);
+    assert.doesNotMatch(consoleText, /secret-context-must-not-cross-http/u);
+    const detail = (consoleResponse.json as { result: ConsoleTaskDetail }).result;
+    assert.equal(detail.task.context, undefined);
+    assert.equal(detail.attempts[0]?.usage.cached_input_tokens, 0);
+    assert.equal(
+      detail.attempts[0]?.usage.provider_cost.reason_code,
+      "bridge_authority_has_no_provider_settlement",
+    );
+
+    const session = await request(address, "/api/session");
+    const token = (session.json as { result: { csrf_token: string } }).result.csrf_token;
+    const ineligibleCleanup = await request(address, "/api/tasks/task-a/recover-cleanup", {
+      method: "POST",
+      body: { release_mode: "zcode_cancel_administrative_release" },
+      headers: { Origin: address.origin, "X-ZCode-Bridge-CSRF": token },
+    });
+    assert.equal(ineligibleCleanup.status, 409);
+    assert.equal(fixture.calls.cancel, 0);
+
+    fixture.detail = consoleDetail({ canRecoverCleanup: true });
+    const implicitCleanup = await request(address, "/api/tasks/task-a/recover-cleanup", {
+      method: "POST",
+      body: { release_mode: "clear_hold" },
+      headers: { Origin: address.origin, "X-ZCode-Bridge-CSRF": token },
+    });
+    assert.equal(implicitCleanup.status, 400);
+    assert.equal(fixture.calls.cancel, 0);
+    const recoveredCleanup = await request(address, "/api/tasks/task-a/recover-cleanup", {
+      method: "POST",
+      body: { release_mode: "zcode_cancel_administrative_release" },
+      headers: { Origin: address.origin, "X-ZCode-Bridge-CSRF": token },
+    });
+    assert.equal(recoveredCleanup.status, 200);
+    assert.equal(fixture.calls.cancel, 1);
+    assert.equal(
+      (recoveredCleanup.json as { result: { release_mode: string } }).result.release_mode,
+      "zcode_cancel_administrative_release",
+    );
+    fixture.detail = consoleDetail();
+
+    const missingCsrf = await request(address, "/api/tasks/task-a/continue", {
+      method: "POST",
+      body: { feedback: "next attempt" },
+      headers: { Origin: address.origin },
+    });
+    assert.equal(missingCsrf.status, 403);
+
+    const ineligibleContinue = await request(address, "/api/tasks/task-a/continue", {
+      method: "POST",
+      body: { feedback: "next attempt" },
+      headers: { Origin: address.origin, "X-ZCode-Bridge-CSRF": token },
+    });
+    assert.equal(ineligibleContinue.status, 409);
+    assert.equal(fixture.calls.continue, 0);
+
+    fixture.detail = consoleDetail({ canContinue: true, canRework: false });
+    const emptyFeedback = await request(address, "/api/tasks/task-a/continue", {
+      method: "POST",
+      body: { feedback: "   " },
+      headers: { Origin: address.origin, "X-ZCode-Bridge-CSRF": token },
+    });
+    assert.equal(emptyFeedback.status, 400);
+    const continued = await request(address, "/api/tasks/task-a/continue", {
+      method: "POST",
+      body: { feedback: "address the review", additional_requirements: ["keep scope"] },
+      headers: { Origin: address.origin, "X-ZCode-Bridge-CSRF": token },
+    });
+    assert.equal(continued.status, 200);
+    assert.equal(fixture.calls.continue, 1);
+    assert.equal(fixture.continued?.feedback, "address the review");
+    assert.deepEqual(fixture.continued?.additional_requirements, ["keep scope"]);
+
+    const runningRework = await request(address, "/api/tasks/task-a/rework", {
+      method: "POST",
+      body: { feedback: "try another approach" },
+      headers: { Origin: address.origin, "X-ZCode-Bridge-CSRF": token },
+    });
+    assert.equal(runningRework.status, 409);
+    assert.equal(fixture.calls.rework, 0);
+
+    fixture.detail = consoleDetail({ canContinue: false, canRework: true, context: "source context" });
+    const rework = await request(address, "/api/tasks/task-a/rework", {
+      method: "POST",
+      body: { feedback: "try another approach" },
+      headers: { Origin: address.origin, "X-ZCode-Bridge-CSRF": token },
+    });
+    assert.equal(rework.status, 200);
+    assert.equal(fixture.calls.rework, 1);
+    assert.match(String(fixture.created?.context), /source context/u);
+    assert.match(String(fixture.created?.context), /RELATED REWORK/u);
+    assert.match(String(fixture.created?.context), /Source task: task-a/u);
+    const receipt = (rework.json as { result: { relationship: string; source_task_id: string } }).result;
+    assert.equal(receipt.relationship, "context_only");
+    assert.equal(receipt.source_task_id, "task-a");
   } finally {
     await server.close();
   }
@@ -487,9 +791,8 @@ test("Web Console exposes non-secret discovery identity and resolves deep links 
     const html = String(page.json);
     assert.match(html, /taskIdFromLocation/u);
     assert.match(html, /history\.replaceState/u);
-    assert.match(html, /Promise\.allSettled/u);
-    assert.match(html, /Result pending/u);
-    assert.match(html, /\/summary/u);
+    assert.match(html, /ensureEvents/u);
+    assert.match(html, /\/console/u);
     const attention = await request(address, "/api/tasks/task-a/attention");
     assert.equal(attention.status, 200);
     assert.deepEqual((attention.json as { result: { pending_requests: string[] } }).result.pending_requests, ["request-a"]);

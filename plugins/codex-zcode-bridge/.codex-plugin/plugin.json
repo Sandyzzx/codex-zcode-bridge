@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "codex-zcode-bridge",
-  "version": "2.0.0-preview.16",
+  "version": "2.0.0-preview.17",
   "description": "Let Codex delegate development tasks to your local ZCode runtime and review their progress and results.",
   "author": {
     "name": "Sandy"
@@ -15,27 +15,27 @@
     "mcp",
     "developer-tools"
   ],
+  "interface": {
+    "displayName": "Zcode Bridge (Preview)",
+    "shortDescription": "Delegate development tasks to your local ZCode runtime.",
+    "longDescription": "Delegate development tasks to ZCode through a local MCP bridge, follow progress in Codex, and review changes before accepting them.",
+    "developerName": "Sandy",
+    "category": "Developer tools",
+    "capabilities": [
+      "MCP tools",
+      "Task delegation"
+    ],
+    "defaultPrompt": [
+      "Delegate this development task to ZCode and follow it through completion.",
+      "Ask ZCode to fix this issue using the specified model.",
+      "Review the progress and final changes from a ZCode task."
+    ],
+    "logo": "./assets/logo.png",
+    "composerIcon": "./assets/icon.png"
+  },
   "extensions": {
     "com.openai": {
-      "hooks": "./hooks/hooks.json",
-      "interface": {
-        "displayName": "Zcode Bridge (Preview)",
-        "shortDescription": "Delegate development tasks to your local ZCode runtime.",
-        "longDescription": "Delegate development tasks to ZCode through a local MCP bridge, follow progress in Codex, and review changes before accepting them.",
-        "developerName": "Sandy",
-        "category": "Developer tools",
-        "capabilities": [
-          "MCP tools",
-          "Task delegation"
-        ],
-        "defaultPrompt": [
-          "Delegate this development task to ZCode and follow it through completion.",
-          "Ask ZCode to fix this issue using the specified model.",
-          "Review the progress and final changes from a ZCode task."
-        ],
-        "logo": "./assets/logo.png",
-        "composerIcon": "./assets/icon.png"
-      }
+      "hooks": "./hooks/hooks.json"
     }
   }
 }

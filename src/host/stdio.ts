@@ -7,6 +7,7 @@ import { ExecutorControlClient } from "../executor/control-client.js";
 import { RemoteModelSettings } from "../executor/remote-model-settings.js";
 import { RemoteTaskManager } from "../executor/remote-task-manager.js";
 import { executorPipeName } from "../executor/pipe.js";
+import { createExecutorRecoveryCoordinator } from "../executor/recovery.js";
 import { createBridgeServer, SERVER_VERSION } from "../mcp/server.js";
 import type { McpDoctorReport } from "../mcp/contracts.js";
 import type { TaskConsoleLink } from "../interfaces.js";
@@ -121,6 +122,15 @@ export function resolveMcpTransport(env: NodeJS.ProcessEnv): "control" {
   return "control";
 }
 
+/**
+ * Automatic recovery is the production default. The explicit disable switch
+ * keeps transport-only diagnostics deterministic without spawning a service.
+ */
+export function executorAutoRecoveryEnabled(env: NodeJS.ProcessEnv): boolean {
+  const raw = env["ZCODE_BRIDGE_EXECUTOR_AUTO_RECOVER"]?.trim().toLowerCase();
+  return raw !== "0" && raw !== "false" && raw !== "off";
+}
+
 async function readExecutorDoctor(client: ExecutorControlClient): Promise<McpDoctorReport> {
   await client.connect();
   const response = await client.request("doctor", {});
@@ -132,11 +142,26 @@ async function readExecutorDoctor(client: ExecutorControlClient): Promise<McpDoc
   return response.result as unknown as McpDoctorReport;
 }
 
-async function startThinBridge(host: BridgeHostProfile, version: string): Promise<void> {
+async function startThinBridge(host: BridgeHostProfile, version: string, bridgeEntryPath: string): Promise<void> {
   validateHostProfile(host);
   const authoritySelection = loadInstallAuthoritySelection(host);
   const resolved = resolveSqliteStateDirectory(authoritySelection, process.env);
-  const client = new ExecutorControlClient({ pipeName: executorPipeName(resolved.dataRoot) });
+  const pipeName = executorPipeName(resolved.dataRoot);
+  const autoRecovery = executorAutoRecoveryEnabled(process.env);
+  const recovery = autoRecovery
+    ? createExecutorRecoveryCoordinator({
+      dataRoot: resolved.dataRoot,
+      settingsDirectory: host.settingsDirectory,
+      bridgeEntryPath,
+      pipeName,
+    })
+    : null;
+  const client = new ExecutorControlClient({
+    pipeName,
+    ...(recovery
+      ? { recoverUnavailable: () => recovery.ensureRunning().then(() => undefined) }
+      : {}),
+  });
   const taskConsoleAutostart = taskConsoleAutostartEnabled(
     loadPersistedRuntimeEnvironment(process.env, undefined, host),
   );
@@ -198,14 +223,16 @@ async function startThinBridge(host: BridgeHostProfile, version: string): Promis
   process.on("SIGTERM", () => shutdown("SIGTERM"));
   console.error(`[bridge] data root: ${resolved.dataRoot}`);
   console.error("[bridge] Executor control transport enabled; no local SQLite Manager is constructed");
+  console.error(`[bridge] Executor automatic recovery ${autoRecovery ? "enabled" : "disabled"}`);
   console.error(`[bridge] ${host.name} thin stdio MCP server ready`);
 }
 
 export async function startBridge(
   host: BridgeHostProfile = codexHostProfile(),
   version = SERVER_VERSION,
-  _bridgeEntryPath = process.argv[1],
+  bridgeEntryPath = process.argv[1],
 ): Promise<void> {
   resolveMcpTransport(process.env);
-  await startThinBridge(host, version);
+  if (!bridgeEntryPath) throw new Error("Bridge entry path is unavailable");
+  await startThinBridge(host, version, path.resolve(bridgeEntryPath));
 }

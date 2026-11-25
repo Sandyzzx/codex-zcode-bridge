@@ -5,7 +5,9 @@ import type {
   ZCodeInteractionReplyInput,
 } from "../interfaces.js";
 import {
+  consoleTaskListInputSchema,
   listTasksInputSchema,
+  type ConsoleTaskListInput,
   type ListTasksInput,
 } from "../task-list.js";
 import * as z from "zod/v4";
@@ -27,6 +29,8 @@ export const EXECUTOR_CONTROL_FRAME_LIMIT_BYTES = 33 * 1024 * 1024;
 export type ExecutorControlMethod =
   | "createTask"
   | "listTasks"
+  | "listConsoleTasks"
+  | "getConsoleTaskDetail"
   | "getStatus"
   | "getResult"
   | "getResultPage"
@@ -77,6 +81,8 @@ export interface ExecutorControlResponse {
 export interface ExecutorControlParamsByMethod {
   createTask: { readonly task: ZcodeTaskInput; readonly admission?: TaskAdmission };
   listTasks: ListTasksInput;
+  listConsoleTasks: ConsoleTaskListInput;
+  getConsoleTaskDetail: { readonly task_id: string };
   getStatus: { readonly task_id: string };
   getResult: { readonly task_id: string; readonly view?: "summary" | "full" };
   getResultPage: { readonly task_id: string; readonly offset_bytes: number; readonly max_bytes: number };
@@ -117,6 +123,8 @@ export const executorControlParamsSchemas: {
 } = {
   createTask: z.strictObject({ task: zcodeTaskInputSchema, admission: taskAdmissionSchema.optional() }),
   listTasks: listTasksInputSchema,
+  listConsoleTasks: consoleTaskListInputSchema,
+  getConsoleTaskDetail: z.strictObject({ task_id: nonEmptyString }),
   getStatus: z.strictObject({ task_id: nonEmptyString }),
   getResult: z.strictObject({ task_id: nonEmptyString, view: z.enum(["summary", "full"]).optional() }),
   getResultPage: z.strictObject({ task_id: nonEmptyString, offset_bytes: z.number().int().nonnegative(), max_bytes: z.number().int().min(1024).max(4_194_304) }),

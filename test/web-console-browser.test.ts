@@ -1,20 +1,29 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
-import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir, userInfo } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { chromium } from "playwright-core";
-import type { TaskStatusRecord } from "../src/interfaces.js";
-import type { ListTasksInput, TaskListPage } from "../src/task-list.js";
 import {
-  createTaskConsoleServer,
-  type CostLabConsoleApplication,
-  type RuntimeCompatibilityConsoleApplication,
-  type TaskConsoleManager,
-} from "../src/web/server.js";
+  chromium,
+  type BrowserContext,
+  type Page,
+  type Request as PlaywrightRequest,
+  type Response as PlaywrightResponse,
+} from "playwright-core";
+import { IsolatedAdmissionStore, digest } from "../src/sqlite-candidate/wp6b2b1/store.mjs";
+import { SqliteLifecycleMcpAuthority } from "../src/manager/sqlite-lifecycle-mcp-authority.js";
+import { createTrustedLocalCandidateContext } from "../src/executor/production-composition.js";
+import { startExecutorControlServer } from "../src/executor/control-server.js";
+import { ExecutorControlClient } from "../src/executor/control-client.js";
+import { RemoteTaskManager } from "../src/executor/remote-task-manager.js";
+import { executorPipeName } from "../src/executor/pipe.js";
+import { createTaskConsoleServer } from "../src/web/server.js";
 
 const chromePath = resolveChromeExecutable();
+const OWNER_THREAD_ID = "019c0000-0000-7000-8000-000000000001";
+const CODING_PLAN = "account:bigmodel-individual-coding-plan";
+const START_PLAN = "account:bigmodel-start-plan";
 
 function resolveChromeExecutable(): string | null {
   const candidates = [
@@ -26,346 +35,932 @@ function resolveChromeExecutable(): string | null {
   return candidates.find((candidate) => existsSync(candidate)) ?? null;
 }
 
-interface BrowserFixture extends TaskConsoleManager {
-  state: "running" | "completed";
-  statusCalls: number;
-  cancelCalls: number;
+function iso(seconds: number): string {
+  return new Date(Date.UTC(2026, 0, 1, 0, 0, seconds)).toISOString();
 }
 
-function browserFixture(): BrowserFixture {
-  const fixture: BrowserFixture = {
-    state: "running",
-    statusCalls: 0,
-    cancelCalls: 0,
-    async listTasks(input: ListTasksInput): Promise<TaskListPage> {
-      if (input.after_task_id === undefined) {
-        return {
-          tasks: [{
-            task_id: "task-a",
-            status: "running",
-            attempt: 1,
-            created_at: "2026-01-01T00:00:00Z",
-            workspace: "C:\\work",
-            objective: "First-page task",
-          }],
-          next_task_id: "task-a",
-          has_more: true,
-        };
-      }
-      if (input.after_task_id === "task-a") {
-        return {
-          tasks: [{
-            task_id: "task-deep",
-            status: fixture.state,
-            attempt: 2,
-            created_at: "2026-01-01T00:00:00Z",
-            workspace: "C:\\work",
-            objective: "Deep-linked task",
-            wake: {
-              state: "web_notify",
-              reason_code: "owner_thread_unavailable",
-              at: "2026-01-01T00:02:30Z",
-            },
-          }],
-          next_task_id: null,
-          has_more: false,
-        };
-      }
-      return { tasks: [], next_task_id: null, has_more: false };
-    },
-    async getStatus(taskId): Promise<TaskStatusRecord> {
-      fixture.statusCalls += 1;
-      return {
-        task_id: taskId,
-        status: fixture.state,
-        attempt: taskId === "task-deep" ? 2 : 1,
-        created_at: "2026-01-01T00:00:00Z",
-        updated_at: "2026-01-01T00:02:00Z",
-        started_at: "2026-01-01T00:00:10Z",
-        finished_at: fixture.state === "completed" ? "2026-01-01T00:02:00Z" : null,
-        worker_pid: 4242,
-        zcode_session_id: "session-browser",
-        exit_code: fixture.state === "completed" ? 0 : null,
-      };
-    },
-    async getEvents(input) {
-      return {
-        task_id: input.task_id,
-        status: fixture.state,
-        events: [{
-          seq: 1,
-          at: "2026-01-01T00:00:10Z",
-          type: "turn_started",
-          summary: "Browser fixture started",
-        }],
-        next_seq: 1,
-        has_more: false,
-      };
-    },
-    async getResult(taskId) {
-      if (fixture.state !== "completed") {
-        throw Object.assign(new Error("task is not finished"), { code: "TASK_NOT_FINISHED" });
-      }
-      return {
-        task_id: taskId,
-        status: "completed",
-        summary: "Synthetic browser result",
-        files_changed: [],
-        tests: [],
-        issues: [],
-        needs_master_decision: false,
-        zcode_output: "browser evidence",
-        exit_code: 0,
-        session_id: "session-browser",
-        attempt: taskId === "task-deep" ? 2 : 1,
-        started_at: "2026-01-01T00:00:10Z",
-        finished_at: "2026-01-01T00:02:00Z",
-      };
-    },
-    async getAttention(taskId) {
-      return {
-        task_id: taskId,
-        attempt: taskId === "task-deep" ? 2 : 1,
-        status: fixture.state,
-        pending_requests: [],
-      };
-    },
-    async cancelTask(taskId) {
-      fixture.cancelCalls += 1;
-      return this.getStatus(taskId);
-    },
-    async replyToInteraction() {
-      throw new Error("not used");
-    },
-  };
-  return fixture;
+function allow(): { readonly state: "allow"; readonly fixture: true } {
+  return { state: "allow", fixture: true };
 }
 
-function browserCostLab(calls: string[]): CostLabConsoleApplication {
+function taskPackage(taskId: string, workspace: string, objective: string): Record<string, unknown> {
   return {
-    async mountEndpoints() {},
-    async handleRequest(request: IncomingMessage, response: ServerResponse) {
-      const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
-      calls.push(`${request.method} ${pathname}`);
-      request.resume();
-      const data = (() => {
-        if (pathname === "/api/cost-lab/session") {
-          return {
-            csrf_token: "browser-cost-token",
-            provider: "account:bigmodel-individual-coding-plan",
-            model: "GLM-5.3-Flash",
-            confirmation_phrase: "not used",
-          };
-        }
-        if (pathname === "/api/cost-lab/environment") {
-          return {
-            zcode: {
-              runtime_status: "OFFICIAL_RUNTIME_EXPERIMENTAL",
-              version: "3.19.0.10774",
-              installation_safety: "OFFICIAL_INSTALLATION_SAFE",
-              discount_status: "OFFICIAL_DISCOUNT_NOT_VERIFIED",
-            },
-            billing_reader: { status: "NOT_RUN" },
-          };
-        }
-        if (pathname === "/api/cost-lab/history") return { items: [] };
-        if (pathname === "/api/cost-lab/billing/startplan/latest") return { snapshot: null };
-        if (pathname === "/api/cost-lab/billing/startplan/history") return { items: [] };
-        return { items: [] };
-      })();
-      const body = `${JSON.stringify({ ok: true, data })}\n`;
-      response.writeHead(200, {
-        "Content-Type": "application/json; charset=utf-8",
-        "Content-Length": String(Buffer.byteLength(body)),
-      });
-      response.end(body);
-    },
-    async close() {},
+    task_id: taskId,
+    workspace,
+    objective,
+    requirements: ["Synthetic browser fixture"],
+    allowed_paths: [],
+    forbidden_paths: [],
+    acceptance_criteria: ["Exercise the Console"],
+    test_commands: ["npm test"],
   };
 }
 
-function browserRuntime(calls: string[]): RuntimeCompatibilityConsoleApplication {
+function model(providerId: string, modelId: string): Record<string, unknown> {
   return {
-    async inspect() {
-      calls.push("inspect");
-      return {
-        fingerprint: "a".repeat(64),
-        runtime_changed: true,
-        previous_fingerprint: "b".repeat(64),
-        changed_assets: ["bundle"],
-        manifest_modified: false,
-        model_requests: 0,
-        installation: {
-          desktop_version: "3.19.0.10774",
-          desktop_app_version: "3.19.0",
-          desktop_build_commit_id: "abc123",
-          node_version: "24.16.0",
-          installation_safety: "OFFICIAL_INSTALLATION_SAFE",
-          runtime_status: "OFFICIAL_RUNTIME_EXPERIMENTAL",
-          manifest_status: "EXPERIMENTAL",
-          experimental_authorization: { state: "authorized", scopes: ["coding_plan_probe"] },
-          assets: {
-            bundle: { bytes: 1, sha256: "1".repeat(64) },
-            runtime_host: { bytes: 2, sha256: "2".repeat(64) },
-            builtin_provider_config: { bytes: 3, sha256: "3".repeat(64) },
-            desktop_executable: { bytes: 4, sha256: "4".repeat(64) },
-            desktop_archive: { bytes: 5, sha256: "5".repeat(64) },
-          },
-        },
-        capabilities: {
-          installation_safety: { status: "SAFE", source: "static", limitation: null },
-          manifest_compatibility: { status: "EXPERIMENTAL", source: "manifest", limitation: null },
-          protocol: { status: "PASS", source: "zero-model probe", limitation: null },
-          coding_plan_execution: { status: "NOT_RUN", source: "none", limitation: "Not authorized" },
-        },
-        evidence: [],
-      };
-    },
-    async runAuthorizedProtocolProbe() {
-      calls.push("probe");
-      throw new Error("browser fixture must not run a protocol probe");
-    },
-    async candidateReport() {
-      calls.push("candidate");
-      return { kind: "runtime_compatibility_candidate" };
-    },
+    executor: "zcode",
+    provider_id: providerId,
+    model_id: modelId,
+    requested_model: modelId,
+    requested_reasoning_level: "low",
+    effective_reasoning_level: "low",
+    effective_reasoning_level_source: "runtime",
+    selection_source: "browser-fixture",
+    effective_at: iso(1),
+    session_id: "synthetic-session",
+    turn_id: "synthetic-turn",
   };
 }
 
-async function waitForText(page: import("playwright-core").Page, selector: string, text: string): Promise<void> {
+function usage(input: number | null, output: number | null, total: number | null): Record<string, unknown> {
+  return {
+    source: "runtime",
+    scope: "attempt",
+    observed_at: iso(2),
+    finality: "reported",
+    input_tokens: input,
+    output_tokens: output,
+    total_tokens: total,
+    cached_input_tokens: input === 0 ? 0 : null,
+    cached_write_input_tokens: null,
+    reasoning_tokens: null,
+    conflicts: [],
+    dropped_unknown_keys: 0,
+  };
+}
+
+function result(
+  taskId: string,
+  attempt: number,
+  status: "completed" | "failed",
+  summary: string,
+  executionModel: Record<string, unknown>,
+  executionUsage: Record<string, unknown> | null,
+): Record<string, unknown> {
+  return {
+    task_id: taskId,
+    attempt,
+    status,
+    summary,
+    files_changed: ["src/example.ts"],
+    tests: [{ command: "npm test", status: "passed" }],
+    issues: status === "failed" ? ["Synthetic first-attempt failure"] : [],
+    needs_master_decision: false,
+    zcode_output: "SYNTHETIC WORKER / NOT REAL MODEL",
+    exit_code: status === "completed" ? 0 : 1,
+    session_id: "synthetic-session",
+    started_at: iso(10),
+    finished_at: iso(20),
+    ...(status === "failed" ? { error_code: "synthetic_failure" } : {}),
+    ...(executionUsage ? { usage: executionUsage } : {}),
+    model: executionModel,
+  };
+}
+
+function openAttempt(
+  store: any,
+  taskId: string,
+  attempt: number,
+  workspace: string,
+  suffix: string,
+): Record<string, any> {
+  const operationId = `operation-${suffix}`;
+  const launchId = `launch-${suffix}`;
+  const admitted = store.admitOperation(
+    { operation_id: operationId, task_id: taskId, attempt, workspace_ref: workspace },
+    { workspaceValidator: allow, executionPermissionCheck: allow },
+  );
+  const launch = {
+    operation_id: operationId,
+    task_id: taskId,
+    attempt,
+    generation: admitted.generation,
+    revision: admitted.revision,
+    launch_id: launchId,
+    launch_epoch: 1,
+    launch_token: `synthetic-browser-token-${suffix}-012345`,
+  };
+  const intent = store.createLaunchIntent(launch);
+  const processId = 45000 + attempt + suffix.length;
+  const startFingerprint = `synthetic-start-${suffix}`;
+  const receipt = store.recordLaunchReceipt({
+    ...launch,
+    revision: intent.revision,
+    receipt_id: `receipt-${suffix}`,
+    launch_identity: { source: "synthetic_fixture", fixture: true, process_id: processId, start_fingerprint: startFingerprint },
+  });
+  store.commitPermanentClaim({
+    ...launch,
+    revision: receipt.revision,
+    claim_id: `claim-${suffix}`,
+    worker_identity: {
+      source: "synthetic_fixture",
+      fixture: true,
+      worker_id: `worker-${suffix}`,
+      incarnation: `incarnation-${suffix}`,
+      process_id: processId,
+      start_fingerprint: startFingerprint,
+    },
+  });
+  const operation = store.readOperation(operationId);
+  return {
+    operation_id: operationId,
+    task_id: taskId,
+    attempt,
+    generation: operation.generation,
+    revision: operation.revision,
+    claim_id: operation.claim_id,
+    claim_worker_identity_digest: operation.claim_worker_identity_digest,
+    launch_receipt_digest: operation.launch_receipt_digest,
+    process_id: processId,
+    start_fingerprint: startFingerprint,
+  };
+}
+
+function commit(
+  store: any,
+  ref: Record<string, any>,
+  value: Record<string, unknown>,
+): void {
+  const operation = store.readOperation(ref.operation_id);
+  store.commitResult({
+    operation_id: ref.operation_id,
+    task_id: ref.task_id,
+    attempt: ref.attempt,
+    generation: ref.generation,
+    revision: operation.revision,
+    claim_id: ref.claim_id,
+    claim_worker_identity_digest: ref.claim_worker_identity_digest,
+    result_status: value.status,
+    result: value,
+  });
+}
+
+function cleanupEvidence(store: any, ref: Record<string, any>): Record<string, unknown> {
+  const operation = store.readOperation(ref.operation_id);
+  return {
+    source: "synthetic_fixture",
+    fixture: true,
+    operation_id: ref.operation_id,
+    task_id: ref.task_id,
+    attempt: ref.attempt,
+    generation: ref.generation,
+    claim_id: ref.claim_id,
+    worker_identity_digest: ref.claim_worker_identity_digest,
+    launch_receipt_digest: ref.launch_receipt_digest,
+    result_commit_ref: operation.result_commit_ref,
+    process_tree_digest: digest({ root: ref.process_id, start: ref.start_fingerprint, children: [] }),
+    resources_digest: digest({ operation: ref.operation_id, resources: [] }),
+    root_process_id: ref.process_id,
+    root_start_fingerprint: ref.start_fingerprint,
+    worker_tree_complete: true,
+    operation_resources_complete: true,
+    workspace_touched: false,
+  };
+}
+
+function release(store: any, ref: Record<string, any>): number {
+  const operation = store.readOperation(ref.operation_id);
+  const fence = {
+    operation_id: ref.operation_id,
+    task_id: ref.task_id,
+    attempt: ref.attempt,
+    generation: ref.generation,
+    revision: operation.revision,
+    claim_id: ref.claim_id,
+    claim_worker_identity_digest: ref.claim_worker_identity_digest,
+  };
+  const pending = store.beginCleanup(fence);
+  const verified = store.recordCleanupEvidence({
+    ...fence,
+    revision: pending.revision,
+    outcome: "verified",
+    cleanup_evidence: cleanupEvidence(store, ref),
+  });
+  const released = store.releaseCapacity({
+    ...fence,
+    revision: verified.revision,
+    cleanup_digest: verified.cleanup_digest,
+  });
+  return released.revision;
+}
+
+function leaveCleanupUnverified(store: any, ref: Record<string, any>): void {
+  const operation = store.readOperation(ref.operation_id);
+  const fence = {
+    operation_id: ref.operation_id,
+    task_id: ref.task_id,
+    attempt: ref.attempt,
+    generation: ref.generation,
+    revision: operation.revision,
+    claim_id: ref.claim_id,
+    claim_worker_identity_digest: ref.claim_worker_identity_digest,
+  };
+  const pending = store.beginCleanup(fence);
+  store.recordCleanupEvidence({
+    ...fence,
+    revision: pending.revision,
+    outcome: "unverified",
+    probe_state: "unknown",
+    reason: "synthetic_browser_cleanup_unknown",
+  });
+}
+
+function appendSyntheticEvents(store: any, ref: Record<string, any>, count: number): void {
+  for (let index = 1; index <= count; index += 1) {
+    store.appendRuntimeTaskEvent({
+      operation_id: ref.operation_id,
+      task_id: ref.task_id,
+      attempt: ref.attempt,
+      generation: ref.generation,
+      claim_id: ref.claim_id,
+      worker_sequence: index,
+      event_type: index % 2 === 1 ? "model_output" : "tool_status",
+      at: iso(1000 + index),
+      summary: `Synthetic Worker event ${index} / NOT REAL MODEL`,
+      details: { index, fixture: "SYNTHETIC WORKER / NOT REAL MODEL" },
+    });
+  }
+}
+
+function wake(store: any, ref: Record<string, any>, state: string, suffix: string, extra: Record<string, unknown> = {}): void {
+  store.recordExecutorWakeObservation({
+    operation_id: ref.operation_id,
+    task_id: ref.task_id,
+    attempt: ref.attempt,
+    generation: ref.generation,
+    state,
+    thread_id: OWNER_THREAD_ID,
+    delivery_id: digest({ contract: "browser-e2e-wake-delivery-v1", task: ref.task_id, attempt: ref.attempt, suffix }),
+    policy_digest: digest({ policy: "browser-e2e" }),
+    authorization_digest: digest({ authorization: "browser-e2e" }),
+    reason_code: "loaded_idle_exact_config",
+    ...extra,
+  });
+}
+
+interface SeededConsole {
+  readonly dataRoot: string;
+  readonly settingsDirectory: string;
+  readonly doneTaskId: string;
+  readonly doneWorkspace: string;
+  readonly cleanupTaskId: string;
+  readonly cleanupWorkspace: string;
+  readonly attentionTaskId: string;
+  readonly attentionWorkspace: string;
+  readonly queuedTaskId: string;
+  readonly queuedWorkspace: string;
+  readonly wakeUnknownTaskId: string;
+  readonly wakeUnknownWorkspace: string;
+}
+
+function seedConsole(dataRoot: string): SeededConsole {
+  const workspaceRoot = path.join(dataRoot, "workspaces");
+  mkdirSync(workspaceRoot, { recursive: true });
+  const store: any = IsolatedAdmissionStore.initialize(dataRoot, { managedDataDirectory: true });
+  try {
+    store.provisionCapacity({
+      operation_id: "browser-policy",
+      capacity_limit: 8,
+      expected_generation: 0,
+      maintenance: { dispatch_blocked: true, writers_drained: true },
+    });
+    const doneWorkspace = path.join(workspaceRoot, "release-workspace");
+    const cleanupWorkspace = path.join(workspaceRoot, "cleanup-recovery");
+    const attentionWorkspace = path.join(workspaceRoot, "interactive-review");
+    const queuedWorkspace = path.join(workspaceRoot, "dispatch-queue");
+    const wakeUnknownWorkspace = path.join(workspaceRoot, "delivery-reconciliation");
+    for (const workspace of [doneWorkspace, cleanupWorkspace, attentionWorkspace, queuedWorkspace, wakeUnknownWorkspace]) mkdirSync(workspace, { recursive: true });
+
+    const doneTaskId = "task-done";
+    store.createTask(taskPackage(doneTaskId, doneWorkspace, "Deliver the completed Attempt"), iso(0));
+    const first = openAttempt(store, doneTaskId, 1, doneWorkspace, "done-a1");
+    commit(store, first, result(doneTaskId, 1, "failed", "Synthetic first attempt failed.", model(CODING_PLAN, "GLM-5.3-Flash"), usage(0, 0, 0)));
+    const firstReleasedRevision = release(store, first);
+    store.createNextAttempt({
+      operation_id: "continue-done-a2",
+      task_id: doneTaskId,
+      feedback: "Retry after the synthetic first-attempt failure.",
+      additional_requirements: [],
+      previous_attempt: 1,
+      previous_operation_id: first.operation_id,
+      expected_generation: first.generation,
+      expected_revision: firstReleasedRevision,
+      claim_id: first.claim_id,
+      claim_worker_identity_digest: first.claim_worker_identity_digest,
+    }, { workspaceValidator: allow, executionPermissionCheck: allow });
+    const second = openAttempt(store, doneTaskId, 2, doneWorkspace, "done-a2");
+    appendSyntheticEvents(store, second, 245);
+    commit(store, second, result(doneTaskId, 2, "completed", "Synthetic second attempt delivered the reviewed change.", model(START_PLAN, "GLM-5.3"), usage(120, 30, 150)));
+    release(store, second);
+    wake(store, second, "intent", "done-delivery");
+    wake(store, second, "queued", "done-delivery", { queue_message_id: "019c0000-0000-7000-8000-000000000099" });
+    wake(store, second, "turn_started", "done-delivery");
+
+    const cleanupTaskId = "task-cleanup";
+    store.createTask(taskPackage(cleanupTaskId, cleanupWorkspace, "Hold an unverified Cleanup for review"), iso(30));
+    const cleanupAttempt = openAttempt(store, cleanupTaskId, 1, cleanupWorkspace, "cleanup-a1");
+    commit(store, cleanupAttempt, result(cleanupTaskId, 1, "completed", "Synthetic Result with unverified Cleanup.", model(CODING_PLAN, "GLM-5.3-Flash"), null));
+    leaveCleanupUnverified(store, cleanupAttempt);
+
+    const attentionTaskId = "task-attention";
+    store.createTask(taskPackage(attentionTaskId, attentionWorkspace, "Ask for an explicit permission decision"), iso(40));
+    const attentionAttempt = openAttempt(store, attentionTaskId, 1, attentionWorkspace, "attention-a1");
+    const attentionOperation = store.readOperation(attentionAttempt.operation_id);
+    store.recordInteractionRequest({
+      operation_id: attentionAttempt.operation_id,
+      task_id: attentionAttempt.task_id,
+      attempt: attentionAttempt.attempt,
+      generation: attentionAttempt.generation,
+      claim_id: attentionAttempt.claim_id,
+      worker_identity_digest: attentionAttempt.claim_worker_identity_digest,
+      expected_revision: attentionOperation.revision,
+      request: {
+        request_id: "request-permission-browser",
+        method: "interaction/requestPermission",
+        params: { tool: "shell", command: "npm test", description: "Synthetic permission request" },
+      },
+    });
+
+    const queuedTaskId = "task-queued";
+    store.createTask(taskPackage(queuedTaskId, queuedWorkspace, "Remain queued behind the dispatch fence"), iso(50));
+
+    const wakeUnknownTaskId = "task-wake-unknown";
+    store.createTask(taskPackage(wakeUnknownTaskId, wakeUnknownWorkspace, "Require Wake reconciliation before action"), iso(60));
+    const wakeUnknownAttempt = openAttempt(store, wakeUnknownTaskId, 1, wakeUnknownWorkspace, "wake-unknown-a1");
+    commit(store, wakeUnknownAttempt, result(wakeUnknownTaskId, 1, "completed", "Synthetic Result with an unknown Queue submission.", model(CODING_PLAN, "GLM-5.3-Flash"), usage(10, 5, 15)));
+    release(store, wakeUnknownAttempt);
+    wake(store, wakeUnknownAttempt, "intent", "wake-unknown-delivery");
+    wake(store, wakeUnknownAttempt, "submission_unknown", "wake-unknown-delivery");
+
+    return {
+      dataRoot,
+      settingsDirectory: path.join(dataRoot, "settings"),
+      doneTaskId,
+      doneWorkspace,
+      cleanupTaskId,
+      cleanupWorkspace,
+      attentionTaskId,
+      attentionWorkspace,
+      queuedTaskId,
+      queuedWorkspace,
+      wakeUnknownTaskId,
+      wakeUnknownWorkspace,
+    };
+  } finally {
+    store.close();
+  }
+}
+
+async function waitForText(page: Page, selector: string, text: string, timeout = 15_000): Promise<void> {
   await page.waitForFunction(
-    ({ selector: target, text: expected }) =>
-      document.querySelector(target)?.textContent?.includes(expected) === true,
+    ({ selector: target, text: expected }) => document.querySelector(target)?.textContent?.includes(expected) === true,
     { selector, text },
-    { timeout: 10_000 },
+    { timeout },
   );
 }
 
-test("real Chromium preserves Task deep links, UI preferences, and zero-cost console views", {
-  timeout: 60_000,
+async function waitForCount(page: Page, selector: string, value: string): Promise<void> {
+  await page.waitForFunction(
+    ({ selector: target, value: expected }) => document.querySelector(target)?.textContent?.trim() === expected,
+    { selector, value },
+    { timeout: 15_000 },
+  );
+}
+
+async function waitForSelectedTask(page: Page, taskId: string): Promise<void> {
+  await page.waitForFunction(
+    (expected) => document.querySelector("#task-detail")?.getAttribute("data-task-id") === expected,
+    taskId,
+    { timeout: 15_000 },
+  );
+}
+
+test("real SQLite Authority drives the single-page Task Console in Chromium", {
+  timeout: 180_000,
   skip: chromePath === null ? "Google Chrome is not installed for the browser E2E" : false,
 }, async () => {
-  const fixture = browserFixture();
-  const costCalls: string[] = [];
-  const runtimeCalls: string[] = [];
-  const server = createTaskConsoleServer({
-    manager: fixture,
-    costLab: browserCostLab(costCalls),
-    runtimeCompatibility: browserRuntime(runtimeCalls),
-    executorStatus: async () => ({ state: "active", lease_id: "lease-browser" }),
-  });
+  const root = mkdtempSync(path.join(tmpdir(), "web-console-authority-"));
+  const seeded = seedConsole(root);
+  mkdirSync(seeded.settingsDirectory, { recursive: true });
+  const host = { name: "web-console-browser", settingsDirectory: seeded.settingsDirectory };
+  const workerEntryPath = path.resolve("dist-test/src/worker/worker-main.js");
+  const bridgeEntryPath = fileURLToPath(import.meta.url);
+  let authority: SqliteLifecycleMcpAuthority | null = null;
+  let control: Awaited<ReturnType<typeof startExecutorControlServer>> | null = null;
+  let client: ExecutorControlClient | null = null;
+  let consoleServer: ReturnType<typeof createTaskConsoleServer> | null = null;
+  let browser: BrowserContext | null = null;
   const profileBase = path.join(process.env.LOCALAPPDATA ?? tmpdir(), "Temp");
   mkdirSync(profileBase, { recursive: true });
-  const profile = mkdtempSync(path.join(profileBase, `bridge-web-console-${process.pid}-`));
-  const context = await chromium.launchPersistentContext(profile, {
-    executablePath: chromePath!,
-    headless: true,
-    locale: "en-US",
-    args: ["--disable-background-networking", "--no-first-run"],
-    // The isolated runner relocates HOME/USERPROFILE; Chrome still needs the
-    // real OS home to initialize its path service. The browser data stays in
-    // the short-lived profile above.
-    env: { ...process.env, HOME: userInfo().homedir, USERPROFILE: userInfo().homedir },
-  });
-  const page = context.pages()[0] ?? await context.newPage();
+  const profile = mkdtempSync(path.join(profileBase, `bridge-web-console-authority-${process.pid}-`));
   const pageErrors: string[] = [];
   const pageRequests: string[] = [];
-  page.on("pageerror", (error) => pageErrors.push(error.message));
-  page.on("request", (request) => pageRequests.push(request.url()));
   try {
-    const address = await server.start();
-    await page.goto(`${address.origin}/?task_id=task-deep#tasks`, { waitUntil: "domcontentloaded" });
-    await page.waitForFunction(
-      () => document.querySelector("#task-detail h3")?.textContent === "task-deep",
-    );
-    await waitForText(page, "#task-detail", "Result pending");
-    assert.equal(new URL(page.url()).searchParams.get("task_id"), "task-deep");
+    authority = await SqliteLifecycleMcpAuthority.create({
+      dataRoot: seeded.dataRoot,
+      databaseFileName: "operations.sqlite3",
+      managedDataDirectory: true,
+      workerEntryPath,
+      bridgeEntryPath,
+      hostProfile: host,
+      trustedLocalContext: createTrustedLocalCandidateContext(host),
+      testOnlyFakeAdapter: true,
+      testProcessProbeTimeoutMs: 25,
+      testShutdownWaitMs: 2_000,
+      dispatchFence: () => "browser_e2e_dispatch_fence",
+    });
+    const pipeName = executorPipeName(seeded.dataRoot);
+    control = await startExecutorControlServer({
+      pipeName,
+      manager: authority,
+      leaseId: "lease-browser-console",
+      executorIdleState: () => ({ idle: true, blockers: [] }),
+    });
+    client = new ExecutorControlClient({ pipeName });
+    await client.connect();
+    const remote = new RemoteTaskManager(client);
+    let executorOverride: string | null = null;
+    consoleServer = createTaskConsoleServer({
+      manager: remote,
+      consoleId: "console-browser-authority",
+      authorityRootDigest: "a".repeat(64),
+      settingsDirectory: seeded.settingsDirectory,
+      executorStatus: async () => {
+        if (executorOverride !== null) {
+          return { state: executorOverride, reason: "synthetic_browser_executor_unavailable" };
+        }
+        const response = await client!.request("executorStatus", {});
+        if (!response.ok) throw Object.assign(new Error(response.error?.message ?? "EXECUTOR_STATUS_FAILED"), {
+          code: response.error?.code ?? "EXECUTOR_STATUS_FAILED",
+        });
+        return response.result ?? {};
+      },
+    });
+    const address = await consoleServer.start();
 
-    fixture.state = "completed";
-    await page.waitForFunction(
-      () => document.querySelector("#task-detail")?.textContent?.includes("Synthetic browser result") === true,
-      undefined,
-      { timeout: 12_000 },
-    );
-    assert.ok(fixture.statusCalls >= 2, "the selected Task must be refreshed by the existing polling loop");
+    browser = await chromium.launchPersistentContext(profile, {
+      executablePath: chromePath!,
+      headless: true,
+      locale: "en-US",
+      viewport: { width: 1440, height: 1000 },
+      args: ["--disable-background-networking", "--no-first-run"],
+      env: { ...process.env, HOME: userInfo().homedir, USERPROFILE: userInfo().homedir },
+    });
+    const page = browser.pages()[0] ?? await browser.newPage();
+    page.on("pageerror", (error: Error) => pageErrors.push(error.message));
+    page.on("request", (request: PlaywrightRequest) => pageRequests.push(request.url()));
+    const evidenceDirectory = process.env.BRIDGE_BROWSER_EVIDENCE_DIR
+      ?? path.resolve("docs/reports/preview17-c-webui-20261125/screenshots");
+    mkdirSync(evidenceDirectory, { recursive: true });
 
-    await page.locator(".task-row").filter({ hasText: "task-a" }).click();
-    await page.waitForFunction(() => new URL(location.href).searchParams.get("task_id") === "task-a");
-    await page.waitForFunction(
-      () => document.querySelector("#task-detail h3")?.textContent === "task-a",
+    await page.goto(`${address.origin}/?task_id=${seeded.doneTaskId}`, { waitUntil: "domcontentloaded" });
+    await page.selectOption("#language", "en");
+    await page.selectOption("#theme", "light");
+    await waitForSelectedTask(page, "task-done");
+    await waitForText(page, "#task-detail", "Worker execution completed. Master acceptance is not recorded.");
+    assert.equal(
+      ((await page.locator("#task-detail").innerText()).match(/Master acceptance is not recorded/gu) ?? []).length,
+      1,
+      "the current-task review state must be explained once",
+    );
+    await waitForCount(page, "#count-running", "1");
+    await waitForCount(page, "#count-attention", "3");
+    await waitForCount(page, "#count-completed", "1");
+    assert.equal(new URL(page.url()).searchParams.get("task_id"), "task-done");
+    assert.equal(await page.locator("#executor-notice").getAttribute("hidden"), "");
+    assert.equal(await page.locator("#executor-notice").getAttribute("data-state"), "active");
+    assert.equal(
+      await page.locator("#task-detail .detail-title h2").textContent(),
+      "Deliver the completed Attempt",
+    );
+    assert.equal(await page.getByText("Task workspace", { exact: true }).count(), 0);
+    assert.equal(await page.getByText("Task inbox", { exact: true }).count(), 0);
+    assert.equal(
+      await page.locator("#experimental-notice .experimental-label").textContent(),
+      "Experimental",
     );
     assert.equal(
-      await page.locator("#task-detail h3").textContent(),
-      "task-a",
-      "manual Task selection must update both the detail and the URL",
+      await page.locator("#experimental-notice").getAttribute("title"),
+      "Experimental: task status and recovery operations are still being refined.",
     );
-
-    for (const theme of ["light", "dark", "system"]) {
-      await page.selectOption("#theme", theme);
-      assert.equal(await page.locator("html").getAttribute("data-theme"), theme);
+    const brandSrc = await page.locator(".brand-icon").getAttribute("src");
+    assert.equal(brandSrc?.startsWith("data:image/png;base64,"), true);
+    assert.ok(await page.locator(".brand-icon").evaluate((image: HTMLImageElement) => image.naturalWidth) >= 32);
+    const doneRow = page.locator(".task-row[data-task-id='task-done']");
+    assert.equal(
+      await doneRow.locator(".task-line-meta .task-meta-item").first().textContent(),
+      "release-workspace",
+    );
+    assert.equal(
+      (await doneRow.textContent() ?? "").includes(seeded.doneWorkspace),
+      false,
+      "the task list must not repeat the full workspace path",
+    );
+    assert.equal(await page.locator(".task-list .table-head").count(), 0);
+    assert.equal(await page.locator(".task-row .task-main").count(), 5);
+    assert.equal(
+      await doneRow.locator(".status-chip").textContent(),
+      "Execution completed · Awaiting review",
+    );
+    assert.equal(
+      await page.locator(".task-row[data-task-id='task-wake-unknown'] .status-chip").textContent(),
+      "Execution completed · Review blocked",
+    );
+    assert.match(
+      await page.locator(".task-row[data-task-id='task-wake-unknown'] .task-line-problem").textContent() ?? "",
+      /Queue state needs verification/u,
+    );
+    assert.equal(await page.locator(".task-usage-line").count(), 0);
+    assert.equal(
+      (await doneRow.textContent() ?? "").includes("150 tokens"),
+      false,
+      "the task list must not repeat execution usage",
+    );
+    assert.equal(
+      await page
+        .locator(".task-row[data-task-id='task-queued'] .task-meta-item")
+        .evaluateAll((nodes) => nodes.filter((node) => node.textContent === "Not observed").length),
+      0,
+      "the task list must not repeat Not observed for model and plan",
+    );
+    assert.equal(
+      (await page.locator(".task-row[data-task-id='task-queued']").textContent() ?? "").includes("Not observed"),
+      false,
+      "missing model and plan fields must be hidden from the task list",
+    );
+    const visibleEnglishCopy = await page.locator("body").innerText();
+    for (const forbidden of [
+      "DURABLE TASK AUTHORITY",
+      "Follow the original Attempt",
+      "SQLite Authority",
+      "Executor 的持久事实",
+      "Choose a Task to inspect durable evidence",
+      "READ-ONLY PROJECTION",
+      "Cost Lab",
+      "0.67",
+      "task-done",
+      "task-attention",
+      "task-cleanup",
+      "task-queued",
+      "wake-unknown",
+      "request-permission-browser",
+    ]) {
+      assert.equal(
+        visibleEnglishCopy.toLowerCase().includes(forbidden.toLowerCase()),
+        false,
+        `retired internal copy must not be visible: ${forbidden}`,
+      );
     }
-    await page.selectOption("#theme", "dark");
-    await page.selectOption("#language", "zh-CN");
-    assert.equal(await page.locator("html").getAttribute("lang"), "zh-CN");
+    const doneCapabilities = await page.evaluate(async () => {
+      const response = await fetch("/api/tasks/task-done/console");
+      return (await response.json() as { result: { action_capabilities: Record<string, unknown> } }).result.action_capabilities;
+    });
+    assert.equal(doneCapabilities.can_continue, true);
+    assert.equal(doneCapabilities.can_rework, true);
+    assert.deepEqual(doneCapabilities.blockers, []);
+
+    const sections = await page.locator("#task-detail [data-section]").evaluateAll((nodes) =>
+      nodes.map((node) => node.getAttribute("data-section")));
+    assert.deepEqual(sections, [
+      "problem-actions",
+      "work-history",
+      "execution",
+      "technical-details",
+    ]);
+    await waitForText(page, "#task-detail", "Start Plan");
+    await waitForText(page, "#task-detail", "150 tokens");
+    assert.equal(await page.getByRole("button", { name: "Create related rework" }).count(), 1);
+    assert.equal(await page.getByRole("button", { name: "Continue" }).count(), 1);
+    assert.equal(await page.getByRole("button", { name: "Accept" }).count(), 0);
+    assert.equal(await page.getByRole("button", { name: "Force release" }).count(), 0);
+    assert.equal(await page.getByRole("button", { name: "Clear Hold" }).count(), 0);
+    const executionDetails = page.locator("details[data-section='execution']");
+    assert.equal(await executionDetails.getAttribute("open"), null);
+    assert.match(
+      await executionDetails.locator("summary .execution-line").textContent() ?? "",
+      /GLM-5\.3.*Start Plan.*Not applicable.*150 tokens/u,
+    );
+    await executionDetails.locator(":scope > summary").click();
+    assert.notEqual(await executionDetails.getAttribute("open"), null);
+    await waitForText(page, "#task-detail", "GLM-5.3");
     assert.equal(
-      await page.evaluate(() => localStorage.getItem("bridge.ui.theme")),
-      "dark",
+      await page.locator(".usage-fact").filter({ hasText: "Cache read" }).count(),
+      0,
+      "unobserved fields must be hidden instead of rendered as Not observed",
+    );
+    const executionText = await executionDetails.innerText();
+    assert.equal(
+      (executionText.match(/Not observed:/gu) ?? []).length,
+      1,
+      "expanded execution must summarize unavailable fields once",
+    );
+    assert.match(
+      executionText,
+      /Not observed: Cache read, Cache write, Reasoning, Provider actual cost, Master usage\./u,
     );
     assert.equal(
-      await page.evaluate(() => localStorage.getItem("bridge.ui.language")),
-      "zh-CN",
+      executionText.includes("Provider actual cost: Not observed"),
+      false,
+      "provider cost must not be repeated after the aggregate explanation",
     );
+    await page.screenshot({ path: path.join(evidenceDirectory, "execution-expanded.png"), fullPage: true });
+    await executionDetails.locator(":scope > summary").click();
+    assert.equal(await executionDetails.getAttribute("open"), null);
 
-    await page.reload({ waitUntil: "domcontentloaded" });
-    await page.waitForFunction(
-      () => document.querySelector("#task-detail h3")?.textContent === "task-a",
-    );
-    assert.equal(new URL(page.url()).searchParams.get("task_id"), "task-a");
-    assert.equal(await page.locator("html").getAttribute("data-theme"), "dark");
-    assert.equal(await page.locator("html").getAttribute("lang"), "zh-CN");
+    await page.locator(".summary-item[data-filter='attention']").click();
+    assert.equal(await page.locator(".task-row").count(), 3);
+    assert.ok(await page.locator(".task-row").first().evaluate((node) => node.classList.contains("attention")));
+    await page.locator(".summary-item[data-filter='attention']").click();
+    assert.equal(await page.locator(".task-row").count(), 5);
+    await page.locator("#task-search").fill("wake");
+    assert.equal(await page.locator(".task-row").count(), 1);
+    assert.equal(await page.locator(".task-row").getAttribute("data-task-id"), "task-wake-unknown");
+    await page.locator("#task-search").fill("");
+    assert.equal(await page.locator(".task-row").count(), 5);
+    await page.selectOption("#bucket-filter", "attention");
+    assert.equal(await page.locator(".task-row").count(), 3);
+    await page.selectOption("#bucket-filter", "");
+    assert.equal(await page.locator(".task-row").count(), 5);
+
+    await page.locator(".attempt").filter({ hasText: "Attempt #1" }).click();
+    await waitForText(page, "#task-detail", "Synthetic first attempt failed.");
+    await waitForText(page, "#task-detail", "Coding Plan");
+    await waitForText(page, "#task-detail", "Result issues");
+    await waitForText(page, "#task-detail", "Result failed");
+    const firstAttemptDetail = await page.locator("#task-detail").innerText();
     assert.equal(
-      await page.locator(".task-row.selected .task-id").textContent(),
-      "task-a",
-      "a deep link restored after refresh must retain its selected row",
+      firstAttemptDetail.includes("Master acceptance is not recorded"),
+      false,
+      "a historical failed Attempt must not inherit the current Task review explanation",
     );
-
-    await page.locator('.tab[data-page="cost-lab"]').click();
-    await page.waitForFunction(
-      () => document.querySelector("#cost-runtime")?.textContent === "OFFICIAL_RUNTIME_EXPERIMENTAL",
+    assert.equal(
+      firstAttemptDetail.includes("Worker execution completed"),
+      false,
+      "a historical failed Attempt must not be described as Worker execution completed",
     );
-    await waitForText(page, "#page-cost-lab", "Coding Plan");
-    assert.ok(costCalls.some((call) => call === "GET /api/cost-lab/environment"));
-    assert.equal(costCalls.some((call) =>
-      call.includes("/verifications") ||
-      call.includes("/billing/snapshot") ||
-      call.includes("/billing/startplan/refresh")), false);
-
-    await page.locator('.tab[data-page="runtime"]').click();
-    await page.waitForFunction(
-      () => document.querySelector("#runtime-fingerprint")?.textContent === "aaaaaaaaaaaa…aaaaaaaa",
+    assert.equal(
+      firstAttemptDetail.includes("Acceptance failed"),
+      false,
+      "Worker Result issues and failures must not be presented as a Master acceptance decision",
     );
-    await waitForText(page, "#page-runtime", "RUNTIME_CHANGED");
-    assert.deepEqual(runtimeCalls, ["inspect"]);
-    assert.equal(pageRequests.some((url) =>
-      url.includes("/api/runtime/protocol-probe") ||
-      url.includes("/api/cost-lab/verifications") ||
-      url.includes("/api/cost-lab/billing/snapshot")), false);
-
-    const evidenceDirectory = process.env.BRIDGE_BROWSER_EVIDENCE_DIR;
-    if (evidenceDirectory) {
-      mkdirSync(evidenceDirectory, { recursive: true });
-      await page.screenshot({
-        path: path.join(evidenceDirectory, "operations-console-runtime.png"),
-        fullPage: true,
+    await executionDetails.locator(":scope > summary").click();
+    const firstInput = page.locator(".usage-fact").filter({ hasText: "Input tokens" }).locator("strong");
+    assert.equal(await firstInput.textContent(), "0", "a real zero must remain zero instead of becoming missing");
+    await executionDetails.locator(":scope > summary").click();
+    await page.locator(".attempt").filter({ hasText: "Attempt #2" }).click();
+    await waitForText(page, "#task-detail", "Synthetic second attempt delivered the reviewed change.");
+    await executionDetails.locator(":scope > summary").click();
+    const secondTotal = page.locator(".usage-fact").filter({ hasText: "Total tokens" }).locator("strong");
+    assert.equal(await secondTotal.textContent(), "150");
+    await executionDetails.locator(":scope > summary").click();
+    const providerCosts = await page.evaluate(async () => {
+      const response = await fetch("/api/tasks/task-done/console");
+      const body = await response.json() as {
+        result: { attempts: Array<{ usage: { provider_cost: Record<string, unknown> } }> };
+      };
+      return body.result.attempts.map((attempt) => attempt.usage.provider_cost);
+    });
+    assert.ok(providerCosts.length >= 2);
+    for (const providerCost of providerCosts) {
+      assert.deepEqual(providerCost, {
+        state: "not_observed",
+        scope: "per_attempt",
+        amount: null,
+        currency: null,
+        reason_code: "bridge_authority_has_no_provider_settlement",
       });
     }
 
-    await page.close();
-    assert.equal(fixture.cancelCalls, 0, "closing the browser must not cancel an Executor-owned Task");
+    const technicalDetails = page.locator("details[data-section='technical-details']");
+    assert.equal(await technicalDetails.getAttribute("open"), null);
+    await technicalDetails.locator(":scope > summary").click();
+    assert.notEqual(await technicalDetails.getAttribute("open"), null);
+    await page.locator("details.events > summary").click();
+    await waitForText(page, "#events-body", "All Events loaded", 20_000);
+    const eventRows = await page.locator("#events-body .event-row").count();
+    assert.ok(eventRows >= 245, `full Events pagination must load past the 200-row page, got ${eventRows}`);
+    await page.screenshot({ path: path.join(evidenceDirectory, "technical-details.png"), fullPage: true });
+    await page.locator("details.events > summary").click();
+    await technicalDetails.locator(":scope > summary").click();
+    assert.equal(await technicalDetails.getAttribute("open"), null);
+
+    await page.getByRole("button", { name: "Diagnostics" }).click();
+    await page.waitForFunction(() => document.querySelector("#diagnostics")?.hasAttribute("open") === true);
+    await waitForText(page, "#diag-output", "Settings loaded");
+    assert.equal(
+      pageRequests.some((url) => url.includes("/api/runtime") || url.includes("/api/cost-lab")),
+      false,
+      "opening Diagnostics must not run Runtime or Billing reads",
+    );
+    await page.screenshot({ path: path.join(evidenceDirectory, "diagnostics.png"), fullPage: true });
+    await page.getByRole("button", { name: "Close" }).click();
+
+    await page.selectOption("#theme", "light");
+    assert.equal(await page.locator("html").getAttribute("data-theme"), "light");
+    await page.screenshot({ path: path.join(evidenceDirectory, "tasks-desktop-light.png"), fullPage: true });
+    await page.selectOption("#theme", "dark");
+    assert.equal(await page.locator("html").getAttribute("data-theme"), "dark");
+    await page.screenshot({ path: path.join(evidenceDirectory, "tasks-desktop-dark.png"), fullPage: true });
+    await page.selectOption("#theme", "light");
+    await page.locator(".attempt").filter({ hasText: "Attempt #1" }).click();
+    await waitForText(page, "#task-detail", "Synthetic first attempt failed.");
+    await page.screenshot({ path: path.join(evidenceDirectory, "task-review-failed.png"), fullPage: true });
+    await page.selectOption("#language", "zh-CN");
+    assert.equal(await page.locator("html").getAttribute("lang"), "zh-CN");
+    await waitForText(page, "#experimental-notice", "实验性功能：任务状态与恢复操作仍在持续完善。");
+    assert.equal(await page.locator(".task-row[data-task-id='task-done'] .status-chip").textContent(), "执行完成 · 待验收");
+    await page.locator(".attempt").filter({ hasText: "Attempt #2" }).click();
+    await waitForText(page, "#task-detail", "Synthetic second attempt delivered the reviewed change.");
+    await waitForText(page, "#task-detail", "Worker 执行完成，未记录 Master 验收结论。");
+    await page.screenshot({ path: path.join(evidenceDirectory, "tasks-zh.png"), fullPage: true });
+    await page.selectOption("#language", "en");
+    await waitForText(page, "#experimental-notice", "Experimental: task status and recovery operations are still being refined.");
+    await page.locator(".attempt").filter({ hasText: "Attempt #2" }).click();
+    await waitForText(page, "#task-detail", "Synthetic second attempt delivered the reviewed change.");
+    await page.setViewportSize({ width: 390, height: 900 });
+    await page.screenshot({ path: path.join(evidenceDirectory, "tasks-narrow.png"), fullPage: true });
+    const narrowOverflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    assert.ok(narrowOverflow <= 1, `narrow layout must not overflow horizontally (${narrowOverflow}px)`);
+    await page.setViewportSize({ width: 1440, height: 1000 });
+
+    await page.getByRole("button", { name: "Create related rework" }).click();
+    await page.locator(".form-card textarea[name='feedback']").fill("Synthetic reviewer asks for a linked rework.");
+    const [reworkResponse] = await Promise.all([
+      page.waitForResponse((response: PlaywrightResponse) =>
+        response.request().method() === "POST" && response.url().endsWith("/api/tasks/task-done/rework")),
+      page.getByRole("button", { name: "Create rework Task" }).click(),
+    ]);
+    const reworkReceipt = (await reworkResponse.json() as {
+      result: { task_id: string; relationship: string; source_task_id: string; source_attempt: number };
+    }).result;
+    assert.equal(reworkReceipt.relationship, "context_only");
+    assert.equal(reworkReceipt.source_task_id, "task-done");
+    assert.equal(reworkReceipt.source_attempt, 2);
+    await page.waitForFunction(
+      (taskId: string) => Array.from(document.querySelectorAll(".task-row"))
+        .some((row) => (row as HTMLElement).getAttribute("data-task-id") === taskId),
+      reworkReceipt.task_id,
+      { timeout: 20_000 },
+    );
+    const linkedProjection = await page.evaluate(async (taskId: string) => {
+      const response = await fetch(`/api/tasks/${encodeURIComponent(taskId!)}/console`);
+      return response.json();
+    }, reworkReceipt.task_id);
+    assert.equal(linkedProjection.result.task_id, reworkReceipt.task_id);
+    assert.equal(linkedProjection.result.task.context, undefined);
+
+    await page.getByRole("button", { name: "Continue" }).click();
+    await page.locator(".form-card textarea[name='feedback']").fill("Continue the synthetic Task after review.");
+    const [continueResponse] = await Promise.all([
+      page.waitForResponse((response: PlaywrightResponse) =>
+        response.request().method() === "POST" && response.url().endsWith("/api/tasks/task-done/continue")),
+      page.getByRole("button", { name: "Start continuation" }).click(),
+    ]);
+    const continueBody = await continueResponse.text();
+    assert.equal(continueResponse.status(), 200, continueBody);
+    await page.waitForFunction(
+      () => document.querySelector("#task-detail")?.textContent?.includes("Attempt #3") === true,
+      undefined,
+      { timeout: 20_000 },
+    );
+    await waitForText(page, "#task-detail", "A Worker or dispatch is active");
+    assert.equal(await page.getByRole("button", { name: "Create related rework" }).count(), 0);
+    assert.equal(await page.getByRole("button", { name: "Continue" }).count(), 0);
+
+    await page.locator(".task-row[data-task-id='task-cleanup']").click();
+    await waitForSelectedTask(page, "task-cleanup");
+    await waitForText(page, "#task-detail", "Cleanup unverified");
+    await page.locator("details[data-section='execution'] > summary").click();
+    await waitForText(page, "#task-detail", "Not observed:");
+    const cleanupExecutionText = await page.locator("details[data-section='execution']").innerText();
+    assert.equal(
+      (cleanupExecutionText.match(/Not observed:/gu) ?? []).length,
+      1,
+      "missing execution data must be summarized once",
+    );
+    assert.match(cleanupExecutionText, /Execution usage/u);
+    await page.locator("details[data-section='execution'] > summary").click();
+    const cleanupCapabilities = await page.evaluate(async () => {
+      const response = await fetch("/api/tasks/task-cleanup/console");
+      return (await response.json() as { result: { action_capabilities: Record<string, unknown> } }).result.action_capabilities;
+    });
+    assert.equal(cleanupCapabilities.can_continue, false);
+    assert.equal(cleanupCapabilities.can_rework, false);
+    assert.equal(cleanupCapabilities.can_recover_cleanup, true);
+    assert.ok((cleanupCapabilities.blockers as string[]).includes("cleanup_unverified"));
+    assert.equal(await page.getByRole("button", { name: "Continue", exact: true }).count(), 0);
+    assert.equal(await page.getByRole("button", { name: "Create related rework", exact: true }).count(), 0);
+    assert.equal(await page.getByRole("button", { name: "Recover Cleanup" }).count(), 1);
+    assert.equal(await page.getByRole("button", { name: "Force release" }).count(), 0);
+    assert.equal(await page.getByRole("button", { name: "Clear Hold" }).count(), 0);
+    let cleanupDialog = "";
+    page.once("dialog", async (dialog) => {
+      cleanupDialog = dialog.message();
+      await dialog.accept();
+    });
+    const [cleanupRecoveryResponse] = await Promise.all([
+      page.waitForResponse((response: PlaywrightResponse) =>
+        response.request().method() === "POST" && response.url().endsWith("/api/tasks/task-cleanup/recover-cleanup")),
+      page.getByRole("button", { name: "Recover Cleanup" }).click(),
+    ]);
+    const cleanupRecoveryBody = await cleanupRecoveryResponse.text();
+    assert.equal(cleanupRecoveryResponse.status(), 500, cleanupRecoveryBody);
+    assert.match(cleanupDialog, /Cleanup/u);
+    const cleanupFailure = JSON.parse(cleanupRecoveryBody) as {
+      error: { code: string; message: string };
+    };
+    assert.equal(cleanupFailure.error.code, "CANCEL_FAILED");
+    assert.match(cleanupFailure.error.message, /worker_identity_unverifiable/u);
+    await waitForText(page, "#task-detail", "Cleanup unverified");
+    assert.equal(await page.getByRole("button", { name: "Recover Cleanup" }).count(), 1);
+    assert.equal(await page.getByRole("button", { name: "Continue", exact: true }).count(), 0);
+    assert.equal(await page.getByRole("button", { name: "Create related rework", exact: true }).count(), 0);
+    await page.screenshot({ path: path.join(evidenceDirectory, "cleanup-blocked.png"), fullPage: true });
+
+    await page.locator(".task-row[data-task-id='task-attention']").click();
+    await waitForSelectedTask(page, "task-attention");
+    await waitForText(page, "#task-detail", "A reply is required before this Task can continue.");
+    assert.equal(
+      (await page.locator("#task-detail").innerText()).includes("request-permission-browser"),
+      false,
+      "raw interaction request IDs must stay out of the normal detail view",
+    );
+    const attentionCapabilities = await page.evaluate(async () => {
+      const response = await fetch("/api/tasks/task-attention/console");
+      return (await response.json() as { result: { action_capabilities: Record<string, unknown> } }).result.action_capabilities;
+    });
+    assert.equal(attentionCapabilities.can_continue, false);
+    assert.equal(attentionCapabilities.can_rework, false);
+    assert.ok((attentionCapabilities.blockers as string[]).includes("pending_interaction"));
+    assert.ok((attentionCapabilities.blockers as string[]).includes("worker_active"));
+    assert.equal(await page.getByRole("button", { name: "Continue", exact: true }).count(), 0);
+    assert.equal(await page.getByRole("button", { name: "Create related rework", exact: true }).count(), 0);
+    assert.equal(await page.getByRole("button", { name: "Reply", exact: true }).count(), 1);
+    await page.screenshot({ path: path.join(evidenceDirectory, "task-running.png"), fullPage: true });
+    await page.getByRole("button", { name: "Reply", exact: true }).click();
+    assert.equal(await page.getByRole("button", { name: "Send reply" }).count(), 1);
+
+    await page.locator(".task-row[data-task-id='task-queued']").click();
+    await waitForSelectedTask(page, "task-queued");
+    assert.equal(
+      (await page.locator("#task-detail").innerText()).includes("task-queued"),
+      false,
+      "internal Task IDs must stay out of the normal detail view",
+    );
+    const queuedCapabilities = await page.evaluate(async () => {
+      const response = await fetch("/api/tasks/task-queued/console");
+      return (await response.json() as { result: { action_capabilities: Record<string, unknown> } }).result.action_capabilities;
+    });
+    assert.equal(queuedCapabilities.can_continue, false);
+    assert.equal(queuedCapabilities.can_rework, false);
+    assert.ok((queuedCapabilities.blockers as string[]).includes("worker_active"));
+    assert.equal(await page.getByRole("button", { name: "Continue", exact: true }).count(), 0);
+    assert.equal(await page.getByRole("button", { name: "Create related rework", exact: true }).count(), 0);
+    assert.equal(await page.getByRole("button", { name: "Request cancel", exact: true }).count(), 1);
+    await page.screenshot({ path: path.join(evidenceDirectory, "task-queued.png"), fullPage: true });
+
+    await page.locator(".task-row[data-task-id='task-wake-unknown']").click();
+    await waitForText(page, "#task-detail", "Queue state needs verification");
+    const wakeUnknownCapabilities = await page.evaluate(async () => {
+      const response = await fetch("/api/tasks/task-wake-unknown/console");
+      return (await response.json() as { result: { action_capabilities: Record<string, unknown> } }).result.action_capabilities;
+    });
+    assert.equal(wakeUnknownCapabilities.can_continue, false);
+    assert.equal(wakeUnknownCapabilities.can_rework, false);
+    assert.ok((wakeUnknownCapabilities.blockers as string[]).includes("wake_submission_unknown"));
+    assert.equal(await page.getByRole("button", { name: "Continue", exact: true }).count(), 0);
+    assert.equal(await page.getByRole("button", { name: "Create related rework", exact: true }).count(), 0);
+    await page.screenshot({ path: path.join(evidenceDirectory, "task-review-blocked.png"), fullPage: true });
+
+    await page.locator(".task-row[data-task-id='task-done']").click();
+    await waitForSelectedTask(page, "task-done");
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    executorOverride = "unavailable";
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.waitForFunction(
+      () => document.querySelector("#executor-notice")?.hasAttribute("hidden") === false,
+      undefined,
+      { timeout: 15_000 },
+    );
+    await waitForText(page, "#executor-notice", "Executor unavailable.");
+    assert.equal(await page.locator("#executor-notice").getAttribute("data-state"), "unavailable");
+    await page.screenshot({ path: path.join(evidenceDirectory, "executor-unavailable.png"), fullPage: true });
+    executorOverride = null;
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await waitForSelectedTask(page, "task-done");
+    assert.equal(new URL(page.url()).searchParams.get("task_id"), "task-done");
+    assert.equal(await page.evaluate(() => localStorage.getItem("bridge.ui.theme")), "light");
+    assert.equal(await page.evaluate(() => localStorage.getItem("bridge.ui.language")), "en");
+    assert.equal(await page.locator("#executor-notice").getAttribute("hidden"), "");
     assert.deepEqual(pageErrors, []);
   } finally {
-    await context.close().catch(() => undefined);
+    await browser?.close().catch(() => undefined);
+    await consoleServer?.close().catch(() => undefined);
+    client?.close();
+    await control?.close().catch(() => undefined);
+    await authority?.shutdown().catch(() => undefined);
+    rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
     rmSync(profile, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
-    await server.close().catch(() => undefined);
   }
 });

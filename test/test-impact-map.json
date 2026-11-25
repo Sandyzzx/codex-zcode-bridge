@@ -17,6 +17,7 @@
         "tsconfig.test.json",
         "release-please-config.json",
         ".release-please-manifest.json",
+        "plugins/codex-zcode-bridge/assets/**",
         "plugins/codex-zcode-bridge/dist/**",
         "plugins/codex-zcode-bridge/worker/**",
         "scripts/build-core.mjs",
@@ -437,6 +438,18 @@
     },
     {
       "file": "test/executor-process.test.ts",
+      "type": "Integration",
+      "gate": "T2",
+      "domains": [
+        "manager-lifecycle",
+        "mcp-host",
+        "worker-launch",
+        "process-cleanup-and-locks",
+        "sqlite-persistence"
+      ]
+    },
+    {
+      "file": "test/executor-recovery.test.ts",
       "type": "Integration",
       "gate": "T2",
       "domains": [
@@ -1269,6 +1282,7 @@
       "gate": "T2",
       "domains": [
         "manager-lifecycle",
+        "sqlite-persistence",
         "test-execution-contract"
       ]
     },

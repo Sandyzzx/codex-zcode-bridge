@@ -76,6 +76,12 @@ async function dispatch(
     case "listTasks":
       if (!manager.listTasks) throw Object.assign(new Error("TASK_LIST_UNAVAILABLE"), { code: "TASK_LIST_UNAVAILABLE" });
       return await manager.listTasks(request.params) as unknown as Record<string, unknown>;
+    case "listConsoleTasks":
+      if (!manager.listConsoleTasks) throw Object.assign(new Error("TASK_LIST_UNAVAILABLE"), { code: "TASK_LIST_UNAVAILABLE" });
+      return await manager.listConsoleTasks(request.params) as unknown as Record<string, unknown>;
+    case "getConsoleTaskDetail":
+      if (!manager.getConsoleTaskDetail) throw Object.assign(new Error("TASK_PROJECTION_UNAVAILABLE"), { code: "TASK_PROJECTION_UNAVAILABLE" });
+      return await manager.getConsoleTaskDetail(request.params.task_id) as unknown as Record<string, unknown>;
     case "getStatus": return await manager.getStatus(request.params.task_id) as unknown as Record<string, unknown>;
     case "getResult": return await manager.getResult(request.params.task_id, request.params.view) as unknown as Record<string, unknown>;
     case "getResultPage": {
@@ -146,6 +152,8 @@ const MUTATING_METHODS = new Set<ExecutorControlRequest["method"]>([
 const CONTROL_METHODS = new Set<ExecutorControlRequest["method"]>([
   ...MUTATING_METHODS,
   "listTasks",
+  "listConsoleTasks",
+  "getConsoleTaskDetail",
   "getStatus",
   "getResult",
   "getResultPage",

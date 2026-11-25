@@ -4,6 +4,7 @@ import { existsSync } from "node:fs";
 import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { assertPluginInterfaceBranding } from "./lib/plugin-interface-branding.mjs";
 import { buildRepoRootLeakPattern } from "./lib/repo-root-pattern.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -17,7 +18,20 @@ const EXPECTED_RUNTIME_HOST = Object.freeze({
   signerCommonName: "北京智谱华章科技股份有限公司",
   signerOrganization: "北京智谱华章科技股份有限公司",
 });
-
+const EXPECTED_PLUGIN_ASSETS = Object.freeze({
+  "assets/icon.png": Object.freeze({
+    bytes: 5315,
+    width: 128,
+    height: 128,
+    sha256: "4C657714FE423243DA63191AE949FBF2DADC37FC8F994A6432FC1F92E2C4D1CC",
+  }),
+  "assets/logo.png": Object.freeze({
+    bytes: 47354,
+    width: 512,
+    height: 512,
+    sha256: "E97F3C292BE9A91A6F2E5BD01B04268D1EB36877921D856873F9070C1F34C5A0",
+  }),
+});
 async function readJson(filePath, label) {
   try {
     return JSON.parse(await readFile(filePath, "utf8"));
@@ -41,6 +55,15 @@ function validatePeX64(bytes, label) {
     || bytes.readUInt16LE(peOffset + 4) !== 0x8664) {
     throw new Error(`${label} is not a Windows x64 PE executable`);
   }
+}
+
+function readPngDimensions(bytes, label) {
+  if (bytes.length < 24
+    || !bytes.subarray(0, 8).equals(Buffer.from("89504e470d0a1a0a", "hex"))
+    || bytes.toString("ascii", 12, 16) !== "IHDR") {
+    throw new Error(`${label} is not a PNG with an IHDR header`);
+  }
+  return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
 }
 
 function verifyWindowsAuthenticode(filePath) {
@@ -102,6 +125,19 @@ for (const [label, manifest] of [["plugin.json", plugin], [".codex-plugin/plugin
     /^[a-z0-9-]+$/.test(manifest.version.slice(`${pkg.version}+codex.`.length));
   if (manifest.name !== pkg.name || (manifest.version !== pkg.version && !hasLocalCachebuster)) {
     throw new Error(`${label} identity/version must match package.json (${pkg.name}@${pkg.version})`);
+  }
+}
+assertPluginInterfaceBranding(plugin, "plugin.json");
+assertPluginInterfaceBranding(codexPlugin, ".codex-plugin/plugin.json");
+for (const [relativePath, expected] of Object.entries(EXPECTED_PLUGIN_ASSETS)) {
+  const bytes = await readFile(path.join(pluginRoot, relativePath));
+  const dimensions = readPngDimensions(bytes, relativePath);
+  const sha256 = createHash("sha256").update(bytes).digest("hex").toUpperCase();
+  if (bytes.length !== expected.bytes
+    || dimensions.width !== expected.width
+    || dimensions.height !== expected.height
+    || sha256 !== expected.sha256) {
+    throw new Error(`Plugin asset ${relativePath} does not match the Owner-selected artwork`);
   }
 }
 for (const [label, mcp] of [["mcp.json", portableMcp], [".mcp.json", codexMcp]]) {
