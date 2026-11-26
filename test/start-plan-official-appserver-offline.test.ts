@@ -148,15 +148,15 @@ test("offline Start Plan account and runtime-auth simulation never falls back to
     assert.equal(verified?.states["account:bigmodel-start-plan"]?.current, true);
     assert.equal(verified?.states["account:bigmodel-individual-coding-plan"]?.current, false);
 
-    assert.throws(
-      () => buildAccountProviderPayload(
-        config,
-        { providerId: "account:bigmodel-start-plan", modelId: "GLM-5.3" },
-        root,
-        "account:bigmodel-start-plan",
-      ),
-      /start_plan_model_not_registered/u,
+    const dynamicModel = buildAccountProviderPayload(
+      config,
+      { providerId: "account:bigmodel-start-plan", modelId: "GLM-5.3" },
+      root,
+      "account:bigmodel-start-plan",
     );
+    assert.equal(dynamicModel?.providers["account:bigmodel-start-plan"]?.access.entitled, true);
+    assert.equal(dynamicModel?.states["account:bigmodel-start-plan"]?.current, true);
+    assert.equal(dynamicModel?.states["account:bigmodel-individual-coding-plan"]?.current, false);
 
     const startPlanFallback = testOnlyRuntimeAuthReply("account:bigmodel-start-plan", config);
     assert.equal(startPlanFallback.headersApplied, false);

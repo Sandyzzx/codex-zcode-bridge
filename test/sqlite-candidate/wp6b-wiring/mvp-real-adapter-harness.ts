@@ -40,7 +40,7 @@ import { createPlatformProbe } from "../../../src/runtime/process-probe.js";
 
 import {
   createTaskModelRouter,
-  readStartPlanRoutingRegistry,
+  buildModelRoutingCatalog,
   StartPlanEntitlementJournal,
 } from "../../../src/runtime/model-routing.js";
 
@@ -317,7 +317,7 @@ function writeFakeRuntime(name: string, variant: RuntimeVariant): FakeRuntimeFix
         // account-backed Provider ID. Keep it first so routing exercises the
         // current official identity rather than a legacy compatibility alias.
         providerId: "account:bigmodel-individual-coding-plan",
-        config: { builtinModelIds: ["GLM-5.3-Flash"], access: { type: "zhipu-account", mode: "individual-coding-plan", accountType: "bigmodel" } },
+        config: { builtinModelIds: ["GLM-5.3-Flash", "GLM-9-CodingOnly"], access: { type: "zhipu-account", mode: "individual-coding-plan", accountType: "bigmodel" } },
         // Legacy compatibility alias retained for explicit-provider tests.
       }, {
         providerId: "builtin:bigmodel-coding-plan",
@@ -567,8 +567,7 @@ async function withRealAdapterMcp(
         } : {}),
         ...(options.routingHooks ? { routeTaskModel: createTaskModelRouter({
           settings: () => ({ preferStartPlan: options.routingHooks!.preferStartPlan ?? true, defaultProviderId: options.routingHooks!.defaultProviderId ?? "" }),
-          journal: options.routingHooks.journal,
-          registry: async () => readStartPlanRoutingRegistry({ providerBuiltinConfigFile: runtime.builtinConfig, providerPersonalConfigFile: runtime.personalConfig }),
+          catalog: async () => fixtureRoutingCatalog(runtime.builtinConfig, runtime.personalConfig),
         }) } : {}),
         ...(options.runtimeVariant?.startsWith("private-auth") ? (options.startPlanIssuerPerDispatch
           ? { startPlanPrivateAuthFactory: async () => await options.startPlanIssuerPerDispatch!(runtime, hostProfile) ?? null }
@@ -794,6 +793,34 @@ function routingEnvIssuerFactory(gate: { entitlement: StartPlanLiveEntitlement }
       authentication: hostAuthenticationResolver(() => loginState.account),
     });
   };
+}
+
+function fixtureRoutingCatalog(builtinConfigFile: string, personalConfigFile: string) {
+  const rules = [builtinConfigFile, personalConfigFile].flatMap((file) => {
+    try {
+      const table = JSON.parse(readFileSync(file, "utf8")) as { config?: { providerConfigRules?: { providerRules?: unknown[] } } };
+      return Array.isArray(table.config?.providerConfigRules?.providerRules)
+        ? table.config!.providerConfigRules!.providerRules!
+        : [];
+    } catch {
+      return [];
+    }
+  });
+  const models = rules.flatMap((raw) => {
+    const rule = raw as { providerId?: string; config?: { access?: { mode?: string }; builtinModelIds?: unknown[] } };
+    if (typeof rule.providerId !== "string"
+        || (rule.config?.access?.mode !== "start-plan" && rule.config?.access?.mode !== "individual-coding-plan")
+        || !Array.isArray(rule.config.builtinModelIds)) return [];
+    return rule.config.builtinModelIds
+      .filter((modelId): modelId is string => typeof modelId === "string")
+      .map((modelId) => ({
+        provider_id: rule.providerId!,
+        model_id: modelId,
+        reasoning_levels: [{ value: "low" }, { value: "high" }, { value: "max" }],
+        reasoning_default_level: "max",
+      }));
+  });
+  return buildModelRoutingCatalog(models);
 }
 
 export {

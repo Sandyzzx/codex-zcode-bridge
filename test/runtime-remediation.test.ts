@@ -55,7 +55,7 @@ test("raw runtime failure messages never enter public progress", async () => {
   } finally { await fixture.cleanup(); }
 });
 
-test("host-specific defaults and cache remain isolated, preserve unknown settings, and refresh on provider change", async () => {
+test("host-specific defaults remain isolated, preserve unknown settings, and read live catalogs", async () => {
   const fixture = await runtimeFixture();
   try {
     const sessionFactory = fakeCatalogSessionFactory(fixture.config);
@@ -75,17 +75,19 @@ test("host-specific defaults and cache remain isolated, preserve unknown setting
     assert.equal(config.ZCODE_BRIDGE_TIMEOUT_MS, "60000");
     assert.equal((await settings.listModels(fixture.root)).cache_status, "refreshed");
     const initialSessions = sessionFactory.sessionCount;
-    assert.equal((await settings.listModels(fixture.root)).cache_status, "fresh");
-    assert.equal(sessionFactory.sessionCount, initialSessions);
-    await writeFile(fixture.config.providerBuiltinConfigFile, JSON.stringify({ config: { revision: 2 } }));
     assert.equal((await settings.listModels(fixture.root)).cache_status, "refreshed");
     assert.equal(sessionFactory.sessionCount, initialSessions + 1);
+    await writeFile(fixture.config.providerBuiltinConfigFile, JSON.stringify({ config: { revision: 2 } }));
+    assert.equal((await settings.listModels(fixture.root)).cache_status, "refreshed");
+    assert.equal(sessionFactory.sessionCount, initialSessions + 2);
     const cacheDirectory = path.join(fixture.host.settingsDirectory, "model-catalog");
     const cache = (await readdir(cacheDirectory))[0]!;
     const originalCache = JSON.parse(await readFile(path.join(cacheDirectory, cache), "utf8"));
     originalCache.models[0].private_metadata = { secret: "PRIVATE_CACHE" };
     await writeFile(path.join(cacheDirectory, cache), JSON.stringify(originalCache));
+    const beforeSessions = sessionFactory.sessionCount;
     assert.doesNotMatch(JSON.stringify(await settings.listModels(fixture.root)), /PRIVATE_CACHE|private_metadata/);
+    assert.equal(sessionFactory.sessionCount, beforeSessions + 1);
     await writeFile(path.join(cacheDirectory, cache), "{broken");
     assert.equal((await settings.listModels(fixture.root)).cache_status, "refreshed");
     await settings.clearDefaultModel();

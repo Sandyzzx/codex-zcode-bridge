@@ -655,7 +655,7 @@ function readAsarMetadataFiles(archivePath) {
     const headerBuffer = Buffer.alloc(headerBytes);
     readExact(fd, headerBuffer, headerBytes, 16);
     const root = parseObject(headerBuffer, "asar header");
-    if (!isRecord2(root.files)) throw new Error("asar header file table is not an object");
+    if (!isRecord(root.files)) throw new Error("asar header file table is not an object");
     const buildEntry = findEntry(root.files, BUILD_METADATA_PATH);
     if (buildEntry === null) throw new Error("asar build metadata is missing");
     const packageEntry = findEntry(root.files, ["package.json"]);
@@ -674,9 +674,9 @@ function findEntry(root, parts) {
     const part = parts[index];
     if (!Object.hasOwn(files, part)) return null;
     const current = files[part];
-    if (!isRecord2(current)) throw new Error(`asar ${part} entry is not an object`);
+    if (!isRecord(current)) throw new Error(`asar ${part} entry is not an object`);
     if (index === parts.length - 1) return current;
-    if (!isRecord2(current.files)) throw new Error(`asar ${part} entry is not a directory`);
+    if (!isRecord(current.files)) throw new Error(`asar ${part} entry is not a directory`);
     files = current.files;
   }
   return null;
@@ -734,7 +734,7 @@ function invalidLaunchIdentity() {
 function isMissingFile(error2) {
   return typeof error2 === "object" && error2 !== null && "code" in error2 && error2.code === "ENOENT";
 }
-function isRecord2(value) {
+function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 var ZCODE_APP_VERSION_ENV, ZCODE_BUILD_COMMIT_ID_ENV, APP_SERVER_ARGS, BUILD_METADATA_PATH, MAX_ASAR_HEADER_BYTES, MAX_METADATA_BYTES, VERSION_PATTERN, BUILD_COMMIT_PATTERN;
@@ -771,7 +771,7 @@ var init_node_runtime = __esm({
 });
 
 // src/runtime/official-runtime-authorization.ts
-import { createHash as createHash3 } from "node:crypto";
+import { createHash as createHash2 } from "node:crypto";
 function computeOfficialInstallationFingerprint(input) {
   const normalized = {
     schema_version: 1,
@@ -804,7 +804,7 @@ function computeOfficialInstallationFingerprint(input) {
     },
     node_version: input.node_version
   };
-  return createHash3("sha256").update(JSON.stringify(normalized), "utf8").digest("hex");
+  return createHash2("sha256").update(JSON.stringify(normalized), "utf8").digest("hex");
 }
 var init_official_runtime_authorization = __esm({
   "src/runtime/official-runtime-authorization.ts"() {
@@ -813,12 +813,12 @@ var init_official_runtime_authorization = __esm({
 });
 
 // src/runtime/official-app-server-runtime.ts
-import { createHash as createHash4 } from "node:crypto";
+import { createHash as createHash3 } from "node:crypto";
 import { execFile } from "node:child_process";
 import { closeSync as closeSync2, createReadStream, openSync as openSync2, readSync as readSync2 } from "node:fs";
 import { lstat, realpath } from "node:fs/promises";
 import { homedir as homedir3 } from "node:os";
-import path8 from "node:path";
+import path7 from "node:path";
 import { promisify } from "node:util";
 function isOfficialCodingPlanProvider(providerId) {
   return providerId === OFFICIAL_CODING_PLAN_PROVIDER_ID || providerId === "bigmodel-individual-coding-plan" || providerId === "builtin:bigmodel-coding-plan";
@@ -881,7 +881,7 @@ async function inspectWindowsExecutable(filePath) {
   let signerThumbprint = null;
   if (systemRoot) {
     try {
-      const powershell = path8.join(
+      const powershell = path7.join(
         systemRoot,
         "System32",
         "WindowsPowerShell",
@@ -963,14 +963,14 @@ async function canonicalFileInside(root, candidate, label) {
   const stat2 = await lstat(candidate);
   if (!stat2.isFile() || stat2.isSymbolicLink()) throw new Error(`${label} is not a regular file`);
   const resolved = await realpath(candidate);
-  const relative = path8.relative(root, resolved);
-  if (!relative || relative === ".." || relative.startsWith(`..${path8.sep}`) || path8.isAbsolute(relative)) {
+  const relative = path7.relative(root, resolved);
+  if (!relative || relative === ".." || relative.startsWith(`..${path7.sep}`) || path7.isAbsolute(relative)) {
     throw new Error(`${label} resolves outside the installed ZCode root`);
   }
   return resolved;
 }
 async function sha256File(filePath) {
-  const hash = createHash4("sha256");
+  const hash = createHash3("sha256");
   await new Promise((resolve, reject) => {
     const stream = createReadStream(filePath);
     stream.on("data", (chunk) => hash.update(chunk));
@@ -1016,7 +1016,7 @@ async function probeWindowsFileVersion(executable) {
   const encoded = Buffer.from(script, "utf16le").toString("base64");
   const systemRoot = process.env["SystemRoot"]?.trim();
   if (!systemRoot) throw new Error("SystemRoot is unavailable for the Windows version probe");
-  const powershell = path8.join(
+  const powershell = path7.join(
     systemRoot,
     "System32",
     "WindowsPowerShell",
@@ -1174,17 +1174,17 @@ var init_official_app_server_runtime = __esm({
           );
           runtimeHostPath = await canonicalFileInside(
             installDir,
-            path8.join(installDir, "resources", "tools", "runtime-host", "zcode-runtime-host.exe"),
+            path7.join(installDir, "resources", "tools", "runtime-host", "zcode-runtime-host.exe"),
             "installed runtime-host"
           );
           desktopExecutablePath = await canonicalFileInside(
             installDir,
-            path8.join(installDir, "ZCode.exe"),
+            path7.join(installDir, "ZCode.exe"),
             "installed Desktop executable"
           );
           desktopArchivePath = await canonicalFileInside(
             installDir,
-            path8.join(installDir, "resources", "app.asar"),
+            path7.join(installDir, "resources", "app.asar"),
             "installed Desktop archive"
           );
         } catch (error2) {
@@ -2173,11 +2173,11 @@ import { spawn as spawn4 } from "node:child_process";
 import { createHash as createHash12 } from "node:crypto";
 import { version as readOsVersion } from "node:os";
 import path15 from "node:path";
-function isRecord5(value) {
+function isRecord4(value) {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 function normalizeOfficialStartPlanAuthentication(value) {
-  if (!isRecord5(value)) return null;
+  if (!isRecord4(value)) return null;
   const accountIdentity = typeof value.accountIdentity === "string" ? value.accountIdentity.trim() : "";
   const requestCredential = typeof value.requestCredential === "string" ? value.requestCredential.trim() : "";
   const deviceMid = typeof value.deviceMid === "string" ? value.deviceMid.trim() : "";
@@ -2193,8 +2193,8 @@ function normalizeOfficialStartPlanAuthentication(value) {
   });
 }
 function asOfficialBillingEnvelope(value) {
-  if (!isRecord5(value)) return null;
-  const data = isRecord5(value.data) ? value.data : void 0;
+  if (!isRecord4(value)) return null;
+  const data = isRecord4(value.data) ? value.data : void 0;
   return {
     success: value.success,
     code: value.code,
@@ -2210,7 +2210,7 @@ function isSuccessfulBusinessEnvelope(envelope) {
   return envelope.success !== false && (envelope.code === void 0 || envelope.code === 0 || envelope.code === 200);
 }
 function stringKeyedArray(value) {
-  return Array.isArray(value) ? value.filter(isRecord5) : [];
+  return Array.isArray(value) ? value.filter(isRecord4) : [];
 }
 function isActiveStartPlan(plan) {
   const status = typeof plan.status === "string" ? plan.status.trim().toLowerCase() : "";
@@ -2314,11 +2314,11 @@ function hasPendingActivation(envelope) {
 }
 function extractProviderCode(value) {
   if (!value) return void 0;
-  const error2 = isRecord5(value.error) ? value.error : void 0;
+  const error2 = isRecord4(value.error) ? value.error : void 0;
   const candidates = [
     value.providerCode,
     error2?.providerCode,
-    error2 && isRecord5(error2) ? error2.code : void 0,
+    error2 && isRecord4(error2) ? error2.code : void 0,
     value.code
   ];
   const raw = candidates.find((candidate) => typeof candidate === "number" || typeof candidate === "string");
@@ -2667,7 +2667,7 @@ var init_start_plan_production_auth = __esm({
           let providerCode2;
           try {
             const parsed = await response2.json();
-            if (isRecord5(parsed)) {
+            if (isRecord4(parsed)) {
               body2 = parsed;
               providerCode2 = extractProviderCode(parsed);
             }
@@ -2698,7 +2698,7 @@ var init_start_plan_production_auth = __esm({
         let providerCode;
         try {
           const parsed = await response2.json();
-          if (isRecord5(parsed)) {
+          if (isRecord4(parsed)) {
             body = parsed;
             providerCode = extractProviderCode(parsed);
           }
@@ -3155,7 +3155,7 @@ __export(store_exports, {
 import { DatabaseSync } from "node:sqlite";
 import { createHash as createHash15, randomUUID as randomUUID4 } from "node:crypto";
 import { spawnSync as spawnSync2 } from "node:child_process";
-import { existsSync as existsSync9, lstatSync as lstatSync2, realpathSync as realpathSync3, readFileSync as readFileSync9, writeFileSync as writeFileSync2, openSync as openSync4, closeSync as closeSync4, fsyncSync, unlinkSync as unlinkSync3, renameSync as renameSync3, statSync as statSync5, readSync as readSync3 } from "node:fs";
+import { existsSync as existsSync8, lstatSync as lstatSync2, realpathSync as realpathSync3, readFileSync as readFileSync8, writeFileSync as writeFileSync2, openSync as openSync4, closeSync as closeSync4, fsyncSync, unlinkSync as unlinkSync3, renameSync as renameSync3, statSync as statSync5, readSync as readSync3 } from "node:fs";
 import path16 from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 function canonical4(value) {
@@ -3343,7 +3343,7 @@ function upgradeLegacyAdminAbandonmentSchema(db) {
   return true;
 }
 function rejectV13UpgradeMarker(databasePath) {
-  if (existsSync9(v13UpgradeMarker(databasePath))) fail2("unsupported_sqlite_schema", V13_UPGRADE_MARKER_MESSAGE);
+  if (existsSync8(v13UpgradeMarker(databasePath))) fail2("unsupported_sqlite_schema", V13_UPGRADE_MARKER_MESSAGE);
 }
 function walChecksum(buffer, start, length, s0, s1, littleEndian) {
   for (let offset = start; offset < start + length; offset += 8) {
@@ -3355,7 +3355,7 @@ function walChecksum(buffer, start, length, s0, s1, littleEndian) {
   return [s0, s1];
 }
 function walPageOneVersion(walPath, mainVersion) {
-  if (!existsSync9(walPath)) return mainVersion;
+  if (!existsSync8(walPath)) return mainVersion;
   const fd = openSync4(walPath, "r");
   try {
     const header = Buffer.alloc(32);
@@ -3960,7 +3960,7 @@ function parseAuthoritySourceManifest(sourceManifestJson, sourceManifestDigest) 
   return { ...parsed, kind: "raw_json_archive_cutover" };
 }
 function pathsFor(root, { databaseFileName = "operations.sqlite3", managedDataDirectory = false, allowCutoverPending = false, allowUnpublishedCutover = false, allowFreshBootstrapPending = false } = {}) {
-  if (typeof root !== "string" || !path16.isAbsolute(root) || !existsSync9(root) || !lstatSync2(root).isDirectory() || lstatSync2(root).isSymbolicLink()) fail2("invalid_data_root");
+  if (typeof root !== "string" || !path16.isAbsolute(root) || !existsSync8(root) || !lstatSync2(root).isDirectory() || lstatSync2(root).isSymbolicLink()) fail2("invalid_data_root");
   if (typeof databaseFileName !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/u.test(databaseFileName) || databaseFileName === "." || databaseFileName === "..") fail2("invalid_database_file_name");
   const resolved = realpathSync3.native(root);
   if (!managedDataDirectory) {
@@ -3991,7 +3991,7 @@ function pathsFor(root, { databaseFileName = "operations.sqlite3", managedDataDi
 function readPublishedCutoverReceipt(file) {
   let value;
   try {
-    value = JSON.parse(readFileSync9(file, "utf8"));
+    value = JSON.parse(readFileSync8(file, "utf8"));
   } catch {
     fail2("cutover_publication_receipt_unreadable");
   }
@@ -4004,8 +4004,8 @@ function assertCutoverPublicationGate(db, paths) {
   const switched = db.prepare("SELECT * FROM authority_switch").all();
   if (switched.length === 0) return;
   if (switched.length !== 1) fail2("authority_receipt_missing_or_ambiguous");
-  const pending = existsSync9(paths.cutoverPending);
-  const published = existsSync9(paths.cutoverPublished);
+  const pending = existsSync8(paths.cutoverPending);
+  const published = existsSync8(paths.cutoverPublished);
   if (pending && published) fail2("cutover_publication_receipt_ambiguous");
   if (pending) {
     if (!paths.allowCutoverPending) fail2("cutover_publish_pending");
@@ -4023,7 +4023,7 @@ function processStartEvidence2(pid) {
   try {
     if (process.platform === "linux") {
       try {
-        const stat2 = readFileSync9(`/proc/${pid}/stat`, "utf8");
+        const stat2 = readFileSync8(`/proc/${pid}/stat`, "utf8");
         const fingerprint = stat2.slice(stat2.lastIndexOf(")") + 2).split(" ")[19]?.trim();
         return fingerprint ? { state: "live", fingerprint } : { state: "unknown" };
       } catch (e) {
@@ -4070,7 +4070,7 @@ function writerIntentIdentity() {
 function readWriterIntent(file) {
   try {
     const stat2 = lstatSync2(file);
-    if (stat2.isFile() && !stat2.isSymbolicLink() && stat2.size <= 65536) return JSON.parse(readFileSync9(file, "utf8"));
+    if (stat2.isFile() && !stat2.isSymbolicLink() && stat2.size <= 65536) return JSON.parse(readFileSync8(file, "utf8"));
   } catch {
   }
   return null;
@@ -4103,7 +4103,7 @@ function writePoison(file, value) {
   try {
     renameSync3(tmp, file);
   } catch (error2) {
-    if (!existsSync9(file)) throw error2;
+    if (!existsSync8(file)) throw error2;
     try {
       unlinkSync3(tmp);
     } catch {
@@ -4409,9 +4409,9 @@ var init_store = __esm({
     init_json_history_result_exceptions();
     init_task_feedback_projection();
     HERE = path16.dirname(fileURLToPath4(import.meta.url));
-    SCHEMA = readFileSync9(new URL("./schema.sql", import.meta.url), "utf8");
-    RUNTIME_EVENTS_SCHEMA = readFileSync9(new URL("./runtime-events.sql", import.meta.url), "utf8");
-    ADMIN_ABANDONMENT_SCHEMA = readFileSync9(new URL("./admin-abandonment.sql", import.meta.url), "utf8");
+    SCHEMA = readFileSync8(new URL("./schema.sql", import.meta.url), "utf8");
+    RUNTIME_EVENTS_SCHEMA = readFileSync8(new URL("./runtime-events.sql", import.meta.url), "utf8");
+    ADMIN_ABANDONMENT_SCHEMA = readFileSync8(new URL("./admin-abandonment.sql", import.meta.url), "utf8");
     NORMALIZED_ADMIN_ABANDONMENT_SCHEMA = ADMIN_ABANDONMENT_SCHEMA.replace(/\r\n?/gu, "\n");
     LEGACY_ADMIN_ABANDONMENT_SCHEMA = NORMALIZED_ADMIN_ABANDONMENT_SCHEMA.replace(
       "event_sequence INTEGER NOT NULL CHECK(event_sequence=original_revision+1)",
@@ -4572,7 +4572,7 @@ var init_store = __esm({
       static initialize(root, options = {}) {
         const p = pathsFor(root, options);
         rejectV13UpgradeMarker(p.db);
-        if (existsSync9(p.db) || existsSync9(p.cutoverPending) || existsSync9(p.cutoverPublished) || existsSync9(p.poison) || existsSync9(p.intent)) fail2("root_not_empty");
+        if (existsSync8(p.db) || existsSync8(p.cutoverPending) || existsSync8(p.cutoverPublished) || existsSync8(p.poison) || existsSync8(p.intent)) fail2("root_not_empty");
         if (options.onFreshBootstrapStage !== void 0 && typeof options.onFreshBootstrapStage !== "function") fail2("invalid_fresh_bootstrap_stage_hook");
         const freshBootstrapStage = options.onFreshBootstrapStage;
         const db = new DatabaseSync(p.db, { timeout: 5e3 });
@@ -4610,12 +4610,12 @@ var init_store = __esm({
       }
       static open(root, { fault, ...pathOptions } = {}) {
         const p = pathsFor(root, pathOptions);
-        if (existsSync9(p.bootstrapPending) && !p.allowBootstrapPending) fail2("sqlite_bootstrap_pending");
-        if (existsSync9(p.cutoverPending)) fail2("cutover_publish_pending");
-        if (existsSync9(p.poison)) fail2("root_poisoned");
-        if (existsSync9(p.intent) && !retireWriterIntent(p)) fail2("root_writer_busy");
+        if (existsSync8(p.bootstrapPending) && !p.allowBootstrapPending) fail2("sqlite_bootstrap_pending");
+        if (existsSync8(p.cutoverPending)) fail2("cutover_publish_pending");
+        if (existsSync8(p.poison)) fail2("root_poisoned");
+        if (existsSync8(p.intent) && !retireWriterIntent(p)) fail2("root_writer_busy");
         rejectV13UpgradeMarker(p.db);
-        if (!existsSync9(p.db)) fail2("database_missing");
+        if (!existsSync8(p.db)) fail2("database_missing");
         preflightSchemaVersion(p.db);
         const db = new DatabaseSync(p.db, { timeout: 5e3 });
         db.exec("PRAGMA foreign_keys=ON");
@@ -4645,10 +4645,10 @@ var init_store = __esm({
       /** Open only the current candidate schema read-only for conservative recovery inspection. */
       static openForRecovery(root, options = {}) {
         const p = pathsFor(root, options);
-        if (existsSync9(p.bootstrapPending)) fail2("sqlite_bootstrap_pending");
-        if (existsSync9(p.cutoverPending) && !p.allowCutoverPending) fail2("cutover_publish_pending");
+        if (existsSync8(p.bootstrapPending)) fail2("sqlite_bootstrap_pending");
+        if (existsSync8(p.cutoverPending) && !p.allowCutoverPending) fail2("cutover_publish_pending");
         rejectV13UpgradeMarker(p.db);
-        if (!existsSync9(p.db)) fail2("database_missing");
+        if (!existsSync8(p.db)) fail2("database_missing");
         preflightSchemaVersion(p.db);
         const db = new DatabaseSync(p.db, { timeout: 5e3, readOnly: true });
         try {
@@ -4677,7 +4677,7 @@ var init_store = __esm({
         this.#db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
       }
       get poisoned() {
-        return this.#poisoned || existsSync9(this.#paths.poison);
+        return this.#poisoned || existsSync8(this.#paths.poison);
       }
       get foreignKeysEnabled() {
         this.#assertOpen();
@@ -6891,7 +6891,7 @@ var init_store = __esm({
             events: this.#db.prepare("SELECT * FROM manager_operation_events ORDER BY operation_id,sequence").all()
           };
         });
-        return { ...snapshot, root_poisoned: this.poisoned || existsSync9(this.#paths.intent) };
+        return { ...snapshot, root_poisoned: this.poisoned || existsSync8(this.#paths.intent) };
       }
       /** Read-only recovery entry point. Writable Stores cannot be used as Recovery authority. */
       readRecoverySnapshot() {
@@ -6927,7 +6927,7 @@ var init_store = __esm({
           }
           this.#db.exec("COMMIT");
           transaction = false;
-          const poisoned = this.poisoned, writerIntent = existsSync9(this.#paths.intent);
+          const poisoned = this.poisoned, writerIntent = existsSync8(this.#paths.intent);
           const rootBlocked = Boolean(integrityError || meta2.length !== 1 || poisoned || writerIntent);
           const operationsWithRecovery = operations.map((row) => {
             const adminAbandonment = adminAbandonments.get(row.operation_id);
@@ -8096,9 +8096,9 @@ var init_store = __esm({
           }
           throw e;
         } finally {
-          if (settled && !this.#poisoned && !existsSync9(this.#paths.poison)) {
+          if (settled && !this.#poisoned && !existsSync8(this.#paths.poison)) {
             try {
-              const intent = JSON.parse(readFileSync9(this.#paths.intent, "utf8"));
+              const intent = JSON.parse(readFileSync8(this.#paths.intent, "utf8"));
               if (intent.token !== token) fail2("writer_intent_identity_mismatch");
               unlinkSync3(this.#paths.intent);
             } catch (e) {
@@ -9919,46 +9919,34 @@ function validateFailureFacts(value) {
   return value;
 }
 
-// src/executor/production-composition.ts
-init_errors();
-
 // src/runtime/model-routing.ts
 init_errors();
-import { existsSync as existsSync4, readFileSync as readFileSync4 } from "node:fs";
+init_official_app_server_runtime();
 var START_PLAN_PROVIDER_ID = "account:bigmodel-start-plan";
 var START_PLAN_ALIAS_SUFFIX = "-StartPlan";
 function stripStartPlanAlias(modelId) {
   if (!modelId.endsWith(START_PLAN_ALIAS_SUFFIX)) return null;
   const base = modelId.slice(0, -START_PLAN_ALIAS_SUFFIX.length).trim();
-  return base ? base : null;
+  return base || null;
 }
-function readStartPlanRoutingRegistry(config2) {
-  const rules = [config2.providerBuiltinConfigFile, config2.providerPersonalConfigFile].flatMap((file) => readProviderRules(readJson(file)));
-  const startPlanModelIds = [];
-  const codingPlanProviders = [];
-  for (const rule of rules) {
-    if (!isRecord(rule) || typeof rule.providerId !== "string") continue;
-    const access = isRecord(rule.config) && isRecord(rule.config.access) ? rule.config.access : null;
-    const builtin = isRecord(rule.config) && Array.isArray(rule.config.builtinModelIds) ? rule.config.builtinModelIds.filter((id) => typeof id === "string" && id.trim().length > 0) : [];
-    if (rule.providerId === START_PLAN_PROVIDER_ID) {
-      for (const id of builtin) if (!startPlanModelIds.includes(id)) startPlanModelIds.push(id);
-      continue;
-    }
-    if (access?.mode === "individual-coding-plan" && builtin.length > 0) {
-      codingPlanProviders.push({ providerId: rule.providerId, modelIds: builtin });
-    }
-  }
-  return { startPlanModelIds, codingPlanProviders };
+function buildModelRoutingCatalog(models) {
+  return {
+    entries: models.map((model) => ({
+      providerId: model.provider_id,
+      modelId: model.model_id,
+      reasoningLevels: (model.reasoning_levels ?? []).map((level) => level.value),
+      reasoningDefaultLevel: model.reasoning_default_level ?? null
+    }))
+  };
 }
-function startPlanAliasCatalogEntries(registry2) {
-  return registry2.startPlanModelIds.map((modelId) => ({
-    provider_id: START_PLAN_PROVIDER_ID,
-    model_id: `${modelId}${START_PLAN_ALIAS_SUFFIX}`,
-    label: `${modelId} (Start Plan)`,
+function startPlanAliasCatalogEntries(models) {
+  return models.filter((model) => model.provider_id === START_PLAN_PROVIDER_ID).map((model) => ({ model, base: stripStartPlanAlias(model.model_id) ?? model.model_id })).filter(({ model, base }) => Boolean(base) && !models.some((candidate) => candidate.provider_id === model.provider_id && candidate.model_id === `${base}${START_PLAN_ALIAS_SUFFIX}`)).map(({ model, base }) => ({
+    provider_id: model.provider_id,
+    model_id: `${base}${START_PLAN_ALIAS_SUFFIX}`,
+    label: `${base} (Start Plan)`,
     provider_label: "Start Plan"
   }));
 }
-var FALLBACK_VERDICTS = /* @__PURE__ */ new Set(["no_entitlement", "quota_exhausted", "model_unavailable"]);
 function resolvePreferStartPlan(env) {
   const raw = env["ZCODE_BRIDGE_PREFER_STARTPLAN"]?.trim();
   if (!raw) return true;
@@ -10007,9 +9995,8 @@ function createTaskModelRouter(options) {
     const identity = normalizedRawRequestIdentity(raw);
     const cached2 = accepted.get(task.task_id);
     if (cached2 && cached2.identity === identity) return { ...task, model: cached2.resolved };
-    const settings = options.settings();
-    const registry2 = await options.registry();
-    const routed = routeTaskModel(raw, settings, registry2, options.journal);
+    const catalog = await options.catalog(task.worktree_path ?? task.workspace);
+    const routed = routeTaskModel(raw, options.settings(), catalog);
     const entry = { identity, resolved: routed.resolved };
     const routedTask = { ...task, model: routed.resolved };
     if (!accepted.has(task.task_id)) pending.set(routedTask, entry);
@@ -10030,83 +10017,66 @@ function createTaskModelRouter(options) {
     }
   };
 }
-function routeTaskModel(raw, settings, registry2, journal) {
-  const reasoning = raw.reasoning_level?.trim();
-  const withReasoning = (modelId) => ({
-    provider_id: "",
-    model_id: modelId,
-    ...reasoning ? { reasoning_level: reasoning } : {}
+function routeTaskModel(raw, settings, catalog) {
+  const requestedReasoning = raw.reasoning_level?.trim();
+  const withReasoning = (entry) => ({
+    provider_id: entry.providerId,
+    model_id: entry.modelId,
+    ...reasoningFor(entry, requestedReasoning)
   });
+  if (raw.provider_id === START_PLAN_PROVIDER_ID) {
+    const entry = findStartPlanEntry(catalog, raw.model_id);
+    if (!entry) throw startPlanNotAvailable(raw, catalog);
+    return { mode: "explicit-start-plan", requested: raw, resolved: withReasoning(entry) };
+  }
   if (raw.provider_id) {
-    if (raw.provider_id === START_PLAN_PROVIDER_ID) {
-      const base = stripStartPlanAlias(raw.model_id) ?? raw.model_id;
-      if (registry2 && registry2.startPlanModelIds.length > 0 && !registry2.startPlanModelIds.includes(base)) {
-        throw new BridgeError("provider_config_invalid", `the requested Start Plan model is not present in the official provider registry: ${base}`);
-      }
-      return { mode: "explicit-start-plan", requested: raw, resolved: { ...withReasoning(base), provider_id: START_PLAN_PROVIDER_ID } };
-    }
-    return { mode: "explicit-provider", requested: raw, resolved: { ...withReasoning(raw.model_id), provider_id: raw.provider_id } };
+    const entry = catalog.entries.find((candidate) => candidate.providerId === raw.provider_id && candidate.modelId === raw.model_id);
+    if (!entry) throw modelNotAvailable(raw);
+    return { mode: "explicit-provider", requested: raw, resolved: withReasoning(entry) };
   }
-  const aliasBase = stripStartPlanAlias(raw.model_id);
-  if (aliasBase) {
-    if (!registry2 || registry2.startPlanModelIds.length === 0 || !registry2.startPlanModelIds.includes(aliasBase)) {
-      throw new BridgeError("provider_config_invalid", `unknown Start Plan model alias: ${raw.model_id}`);
-    }
-    return {
-      mode: "explicit-start-plan",
-      requested: raw,
-      resolved: { ...withReasoning(aliasBase), provider_id: START_PLAN_PROVIDER_ID }
-    };
+  if (stripStartPlanAlias(raw.model_id)) {
+    const entry = findStartPlanEntry(catalog, raw.model_id);
+    if (!entry) throw startPlanNotAvailable(raw, catalog);
+    return { mode: "explicit-start-plan", requested: raw, resolved: withReasoning(entry) };
   }
-  if (settings.preferStartPlan) {
-    const verdict2 = journal.latest(raw.model_id);
-    if (verdict2 && FALLBACK_VERDICTS.has(verdict2)) {
-      const providerId2 = resolveCodingPlanProvider(raw.model_id, settings, registry2);
-      if (providerId2) {
-        return {
-          mode: "fallback-coding-plan",
-          requested: raw,
-          resolved: { ...withReasoning(raw.model_id), provider_id: providerId2 },
-          reason: `start plan verdict ${verdict2} for this model; routing to the coding plan provider`
-        };
-      }
-      return {
-        mode: "auto-start-plan",
-        requested: raw,
-        resolved: { ...withReasoning(raw.model_id), provider_id: START_PLAN_PROVIDER_ID },
-        reason: `start plan verdict ${verdict2} but no coding plan provider supports this model; deferring to the live preflight`
-      };
-    }
-    return { mode: "auto-start-plan", requested: raw, resolved: { ...withReasoning(raw.model_id), provider_id: START_PLAN_PROVIDER_ID } };
+  const startMatches = catalog.entries.filter((entry) => entry.providerId === START_PLAN_PROVIDER_ID && sameModelFamily(entry.modelId, raw.model_id));
+  const codingMatches = catalog.entries.filter((entry) => isOfficialCodingPlanProvider(entry.providerId) && entry.modelId === raw.model_id);
+  if (!startMatches.length && !codingMatches.length) throw modelNotAvailable(raw);
+  if ((settings.preferStartPlan || !codingMatches.length) && startMatches.length) {
+    return { mode: "auto-start-plan", requested: raw, resolved: withReasoning(startMatches[0]) };
   }
-  const providerId = resolveCodingPlanProvider(raw.model_id, settings, registry2);
-  if (!providerId) {
-    throw new BridgeError("provider_config_invalid", `no coding plan provider supports the model: ${raw.model_id}`);
-  }
-  return { mode: "prefer-off-coding-plan", requested: raw, resolved: { ...withReasoning(raw.model_id), provider_id: providerId } };
+  return { mode: "prefer-off-coding-plan", requested: raw, resolved: withReasoning(codingMatches[0]) };
 }
-function resolveCodingPlanProvider(modelId, settings, registry2) {
-  if (settings.defaultProviderId && settings.defaultProviderId !== START_PLAN_PROVIDER_ID && (!registry2 || registry2.codingPlanProviders.some((provider) => provider.providerId === settings.defaultProviderId && provider.modelIds.includes(modelId)))) {
-    return settings.defaultProviderId;
+function findStartPlanEntry(catalog, requestedModelId) {
+  return catalog.entries.find((entry) => entry.providerId === START_PLAN_PROVIDER_ID && sameModelFamily(entry.modelId, requestedModelId)) ?? null;
+}
+function sameModelFamily(catalogModelId, requestedModelId) {
+  if (catalogModelId === requestedModelId) return true;
+  const catalogBase = stripStartPlanAlias(catalogModelId);
+  const requestedBase = stripStartPlanAlias(requestedModelId);
+  return (catalogBase ?? catalogModelId) === (requestedBase ?? requestedModelId);
+}
+function reasoningFor(entry, requestedLevel) {
+  if (!requestedLevel) {
+    return entry.reasoningDefaultLevel ? { reasoning_level: entry.reasoningDefaultLevel } : {};
   }
-  return registry2?.codingPlanProviders.find((provider) => provider.modelIds.includes(modelId))?.providerId ?? null;
-}
-function readJson(filePath) {
-  try {
-    if (!existsSync4(filePath)) return null;
-    const value = JSON.parse(readFileSync4(filePath, "utf8"));
-    return isRecord(value) ? value : null;
-  } catch {
-    return null;
+  if (!entry.reasoningLevels.includes(requestedLevel)) {
+    throw new BridgeError("provider_config_invalid", `reasoning level ${requestedLevel} is not available for ${entry.providerId}/${entry.modelId}`);
   }
+  return { reasoning_level: requestedLevel };
 }
-function readProviderRules(table) {
-  const providerConfigRules = isRecord(table?.config) ? table.config : {};
-  const rules = isRecord(providerConfigRules.providerConfigRules) ? providerConfigRules.providerConfigRules.providerRules : void 0;
-  return Array.isArray(rules) ? rules : [];
+function modelNotAvailable(raw) {
+  return new BridgeError(
+    "provider_config_invalid",
+    `the live ZCode AppServer model catalog does not contain ${raw.provider_id ? `${raw.provider_id}/` : ""}${raw.model_id}`
+  );
 }
-function isRecord(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+function startPlanNotAvailable(raw, catalog) {
+  const reason = catalog.startPlanUnavailableReason;
+  return new BridgeError(
+    "provider_config_invalid",
+    `the live Start Plan model catalog does not contain ${raw.model_id}${reason ? `: ${reason}` : ""}`
+  );
 }
 
 // src/runtime/model-settings.ts
@@ -10117,9 +10087,9 @@ import path11 from "node:path";
 init_desktop_host_launch();
 
 // src/runtime/account-provider.ts
-import { createHash as createHash2 } from "node:crypto";
-import { existsSync as existsSync5, readFileSync as readFileSync5 } from "node:fs";
-import path7 from "node:path";
+import { createHash as createHash4 } from "node:crypto";
+import { existsSync as existsSync4, readFileSync as readFileSync4 } from "node:fs";
+import path8 from "node:path";
 var BIGMODEL_START_PLAN_PROVIDER_ID = "account:bigmodel-start-plan";
 function buildAccountProviderPayload(config2, verifiedSelection, homeDir, taskProviderId) {
   const source = readAccountProviderSource(config2, verifiedSelection, homeDir, taskProviderId);
@@ -10145,13 +10115,13 @@ function buildAccountProviderPayload(config2, verifiedSelection, homeDir, taskPr
   };
 }
 function accountSettingFile(homeDir) {
-  return path7.join(homeDir, ".zcode", "v2", "setting.json");
+  return path8.join(homeDir, ".zcode", "v2", "setting.json");
 }
 function accountProviderRuleFacts(providerId, config2) {
   if (!providerId?.startsWith("account:")) return null;
-  const table = readJson2(config2.providerBuiltinConfigFile);
-  const rule = readProviderRules2(table).find(
-    (candidate) => isRecord3(candidate) && candidate.providerId === providerId
+  const table = readJson(config2.providerBuiltinConfigFile);
+  const rule = readProviderRules(table).find(
+    (candidate) => isRecord2(candidate) && candidate.providerId === providerId
   );
   if (!rule) return null;
   const access = rule.config?.access;
@@ -10165,35 +10135,35 @@ function accountProviderRuleFacts(providerId, config2) {
 }
 function zcodeDataBaseDir(personalProviderConfigFile) {
   const dataDir = zcodeV2DataDir(personalProviderConfigFile);
-  return dataDir ? path7.dirname(path7.dirname(dataDir)) : null;
+  return dataDir ? path8.dirname(path8.dirname(dataDir)) : null;
 }
 function zcodeV2DataDir(personalProviderConfigFile) {
-  const absolute = path7.resolve(personalProviderConfigFile);
-  if (path7.basename(absolute).toLowerCase() !== "provider_config.json") return null;
-  const v2Dir = path7.dirname(absolute);
-  if (path7.basename(v2Dir).toLowerCase() !== "v2") return null;
-  const zcodeDir = path7.dirname(v2Dir);
-  if (path7.basename(zcodeDir).toLowerCase() !== ".zcode") return null;
+  const absolute = path8.resolve(personalProviderConfigFile);
+  if (path8.basename(absolute).toLowerCase() !== "provider_config.json") return null;
+  const v2Dir = path8.dirname(absolute);
+  if (path8.basename(v2Dir).toLowerCase() !== "v2") return null;
+  const zcodeDir = path8.dirname(v2Dir);
+  if (path8.basename(zcodeDir).toLowerCase() !== ".zcode") return null;
   return v2Dir;
 }
 function readAccountProviderSource(config2, verifiedSelection, homeDir, taskProviderId) {
-  const table = readJson2(config2.providerBuiltinConfigFile);
-  const providerRules = readProviderRules2(table).filter(isRecord3).map((rule) => rule).filter((rule) => rule.config?.access?.type === "zhipu-account" && typeof rule.providerId === "string").sort((left, right) => left.providerId.localeCompare(right.providerId));
+  const table = readJson(config2.providerBuiltinConfigFile);
+  const providerRules = readProviderRules(table).filter(isRecord2).map((rule) => rule).filter((rule) => rule.config?.access?.type === "zhipu-account" && typeof rule.providerId === "string").sort((left, right) => left.providerId.localeCompare(right.providerId));
   if (!providerRules.length) return null;
   const officialV2Dir = zcodeV2DataDir(config2.providerPersonalConfigFile);
   if (!officialV2Dir) return null;
-  const officialDataRoot = path7.dirname(officialV2Dir);
-  const credentials = readJson2(path7.join(officialV2Dir, "config.json"));
+  const officialDataRoot = path8.dirname(officialV2Dir);
+  const credentials = readJson(path8.join(officialV2Dir, "config.json"));
   const credentialProviders = asRecord(credentials?.provider);
-  const cache = readJson2(path7.join(officialV2Dir, "coding-plan-cache.json"));
+  const cache = readJson(path8.join(officialV2Dir, "coding-plan-cache.json"));
   const cacheItems = asRecord(asRecord(cache?.entryStatus).items);
-  const settingFile = homeDir ? accountSettingFile(homeDir) : path7.join(officialV2Dir, "setting.json");
-  const settings = readJson2(settingFile);
+  const settingFile = homeDir ? accountSettingFile(homeDir) : path8.join(officialV2Dir, "setting.json");
+  const settings = readJson(settingFile);
   const selectedKeys = asRecord(settings?.modelProviderFamilySelectedKeys);
   const rawConnectionSelections = settings?.providerFamilyConnectionSelections;
   const connectionSelectionsPresent = settings !== null && Object.prototype.hasOwnProperty.call(settings, "providerFamilyConnectionSelections");
   const connectionSelections = asRecord(rawConnectionSelections);
-  const connectionSelectionsInvalid = connectionSelectionsPresent && !isRecord3(rawConnectionSelections);
+  const connectionSelectionsInvalid = connectionSelectionsPresent && !isRecord2(rawConnectionSelections);
   const taskAccountProviderId = taskProviderId && providerRules.some((rule) => rule.providerId === taskProviderId) ? taskProviderId : null;
   const entries = providerRules.map((rule) => {
     const providerId = rule.providerId;
@@ -10203,10 +10173,7 @@ function readAccountProviderSource(config2, verifiedSelection, homeDir, taskProv
     const legacyConfig = asRecord(credentialProviders[legacyId]);
     const options = asRecord(legacyConfig.options);
     const apiKey = typeof options.apiKey === "string" ? options.apiKey.trim() : "";
-    const selectedEntitled = verifiedSelection?.providerId === providerId && Array.isArray(rule.config?.builtinModelIds) && rule.config.builtinModelIds.includes(verifiedSelection.modelId);
-    if (verifiedSelection?.providerId === providerId && !selectedEntitled) {
-      throw new Error("start_plan_model_not_registered");
-    }
+    const selectedEntitled = verifiedSelection?.providerId === providerId;
     const entitled = planKind === "start-plan" ? selectedEntitled : cacheStatus === "available" || legacyConfig.enabled === true && apiKey.length > 0;
     const desktopCurrent = isCurrentProvider(
       rule,
@@ -10233,7 +10200,7 @@ function readAccountProviderSource(config2, verifiedSelection, homeDir, taskProv
 }
 function zcodeBuiltinRevision(table, sourceFile) {
   const revision = typeof table?.revision === "number" ? table.revision : 0;
-  const sourceDigest = createHash2("sha256").update(path7.resolve(sourceFile)).digest("hex");
+  const sourceDigest = createHash4("sha256").update(path8.resolve(sourceFile)).digest("hex");
   return `zcode-builtin:${revision}:${sourceDigest}`;
 }
 function accountProviderRevision(builtinRevision, providers, states) {
@@ -10270,23 +10237,23 @@ function configProviderId(providerId, rule) {
   const plan = access.mode === "individual-coding-plan" ? "coding-plan" : access.mode;
   return `builtin:${access.accountType}-${plan}`;
 }
-function readProviderRules2(table) {
+function readProviderRules(table) {
   const providerConfigRules = asRecord(asRecord(table?.config).providerConfigRules);
   return Array.isArray(providerConfigRules.providerRules) ? providerConfigRules.providerRules : [];
 }
-function readJson2(filePath) {
+function readJson(filePath) {
   try {
-    if (!existsSync5(filePath)) return null;
-    const value = JSON.parse(readFileSync5(filePath, "utf8"));
-    return isRecord3(value) ? value : null;
+    if (!existsSync4(filePath)) return null;
+    const value = JSON.parse(readFileSync4(filePath, "utf8"));
+    return isRecord2(value) ? value : null;
   } catch {
     return null;
   }
 }
 function asRecord(value) {
-  return isRecord3(value) ? value : {};
+  return isRecord2(value) ? value : {};
 }
-function isRecord3(value) {
+function isRecord2(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
@@ -11497,7 +11464,7 @@ function asRecord3(value) {
 init_host_profile();
 
 // src/store/process-lock.ts
-import { existsSync as existsSync6, mkdirSync, readFileSync as readFileSync6, renameSync, rmdirSync, statSync as statSync2, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync as existsSync5, mkdirSync, readFileSync as readFileSync5, renameSync, rmdirSync, statSync as statSync2, unlinkSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import path10 from "node:path";
@@ -11517,7 +11484,7 @@ function processStartEvidence(pid) {
   try {
     if (process.platform === "linux") {
       try {
-        const stat2 = readFileSync6(`/proc/${pid}/stat`, "utf8");
+        const stat2 = readFileSync5(`/proc/${pid}/stat`, "utf8");
         const fingerprint = stat2.slice(stat2.lastIndexOf(")") + 2).split(" ")[19]?.trim();
         evidence = fingerprint ? { state: "live", fingerprint } : { state: "unknown" };
       } catch (error2) {
@@ -11608,7 +11575,7 @@ async function withProcessLock(directory, operation, timeoutMs = 3e4) {
 }
 function describeLockOwner(directory) {
   try {
-    const owner = JSON.parse(readFileSync6(path10.join(directory, "owner.json"), "utf8"));
+    const owner = JSON.parse(readFileSync5(path10.join(directory, "owner.json"), "utf8"));
     if (!Number.isSafeInteger(owner.pid)) return null;
     return `pid ${String(owner.pid)}${owner.started_at ? `, started ${owner.started_at}` : ""}`;
   } catch {
@@ -11620,7 +11587,7 @@ function tryAcquireProcessLock(directory) {
 }
 function tryAcquireProcessLockWithRetry(directory, deadline) {
   const token = randomUUID();
-  if (existsSync6(directory)) return acquireExistingLock(directory);
+  if (existsSync5(directory)) return acquireExistingLock(directory);
   const staging = `${directory}.${process.pid}.${token}.pending`;
   const ownerRecord = {
     pid: process.pid,
@@ -11637,7 +11604,7 @@ function tryAcquireProcessLockWithRetry(directory, deadline) {
       removeStagedLock(staging);
       const code = error2.code;
       if (!isTransientLockFsError(error2)) throw error2;
-      if (DESTINATION_PRESENT_CONTENTION_CODES.has(code ?? "") || existsSync6(directory)) {
+      if (DESTINATION_PRESENT_CONTENTION_CODES.has(code ?? "") || existsSync5(directory)) {
         return acquireExistingLock(directory);
       }
       if (Date.now() < deadline) {
@@ -11651,7 +11618,7 @@ function tryAcquireProcessLockWithRetry(directory, deadline) {
     throw error2;
   }
   return () => {
-    const owner = JSON.parse(readFileSync6(path10.join(directory, "owner.json"), "utf8"));
+    const owner = JSON.parse(readFileSync5(path10.join(directory, "owner.json"), "utf8"));
     if (owner.token !== token) throw new Error("process lock ownership changed");
     const retired = `${directory}.${token}.retired`;
     renameWithTransientRetry(directory, retired);
@@ -11673,7 +11640,7 @@ function renameWithTransientRetry(source, target) {
 function acquireExistingLock(directory) {
   let owner;
   try {
-    owner = parseLockOwner(readFileSync6(path10.join(directory, "owner.json"), "utf8"));
+    owner = parseLockOwner(readFileSync5(path10.join(directory, "owner.json"), "utf8"));
   } catch {
     try {
       if (Date.now() - statSync2(directory).mtimeMs > 3e4) throw new Error(`unreadable lock owner: ${directory}`);
@@ -11732,7 +11699,7 @@ function reclaimDeadOwner(directory) {
   }
   let outcome;
   try {
-    const owner = parseLockOwner(readFileSync6(path10.join(directory, "owner.json"), "utf8"));
+    const owner = parseLockOwner(readFileSync5(path10.join(directory, "owner.json"), "utf8"));
     if (!owner) {
       outcome = { kind: "busy" };
     } else {
@@ -11799,7 +11766,6 @@ async function atomicRename(source, target) {
 
 // src/runtime/model-settings.ts
 var RPC_TIMEOUT_MS = 3e4;
-var MODEL_CATALOG_TTL_MS = 24 * 60 * 60 * 1e3;
 var ZCodeModelSettings = class {
   #sourceEnv;
   #homeDir;
@@ -11845,21 +11811,6 @@ var ZCodeModelSettings = class {
         throw new BridgeError(code2, `Could not load the ZCode runtime/provider configuration after retrying: ${reason2}. Run zcode_doctor for the failing path, correct it, then call zcode_model_catalog again.`, { cause: error2 });
       }
     }
-    const cached2 = await readModelCatalogCache(source.cachePath);
-    const cacheAge = cached2 ? Date.now() - cached2.cached_at_ms : null;
-    if (cached2 && cached2.source_fingerprint === source.fingerprint && cacheAge !== null && cacheAge >= 0 && cacheAge < MODEL_CATALOG_TTL_MS) {
-      const cachedModels = withStartPlanAliasEntries(cached2.models, source.config);
-      const warning = startPlanCatalogWarning(buildAccountProviderPayload(source.config, void 0, this.#homeDir), cachedModels);
-      return {
-        workspace: workspacePath,
-        current_model: null,
-        models: cachedModels,
-        account_provider_sync: "not_needed",
-        cache_status: "fresh",
-        cached_at: new Date(cached2.cached_at_ms).toISOString(),
-        ...warning ? { warning } : {}
-      };
-    }
     let lastError;
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
@@ -11880,7 +11831,33 @@ var ZCodeModelSettings = class {
     const fingerprint = await modelCatalogSourceFingerprint(config2, runtimeEnv, this.#homeDir);
     return { config: config2, runtimeEnv, cachePath, fingerprint };
   }
-  async #readLiveCatalog(workspacePath, source) {
+  /** Live catalog for plan routing. The default snapshot exposes the account
+   * selected by ZCode; a second zero-model read exposes the Start Plan catalog
+   * when that Provider is configured. No model or Billing request is sent.
+   * A Start read failure is preserved for explicit Start selections and does
+   * not erase Coding models. */
+  async listRoutingCatalog(workspace) {
+    const currentCatalog = await this.listModels(workspace);
+    let startModels = [];
+    let startPlanUnavailableReason = null;
+    try {
+      const workspacePath = await realpath3(workspace.trim());
+      const source = await this.#resolveCatalogSource(workspacePath);
+      const startCatalog = await this.#readLiveCatalog(workspacePath, source, "start_plan");
+      startModels = startCatalog.models;
+    } catch (error2) {
+      startPlanUnavailableReason = error2 instanceof Error ? error2.message : String(error2);
+    }
+    const seen = new Set(currentCatalog.models.map((model) => `${model.provider_id}
+${model.model_id}`));
+    const additions = startModels.filter((model) => !seen.has(`${model.provider_id}
+${model.model_id}`));
+    return {
+      models: [...currentCatalog.models, ...additions],
+      startPlanUnavailableReason
+    };
+  }
+  async #readLiveCatalog(workspacePath, source, catalogPlan = "current") {
     const { config: config2, runtimeEnv, cachePath, fingerprint } = source;
     const childEnv = buildRuntimeChildEnv(config2, runtimeEnv);
     const launch = buildZCodeAppServerLaunch(config2.zcodeEntrypoint, childEnv);
@@ -11917,7 +11894,10 @@ var ZCodeModelSettings = class {
     let warning;
     let primaryError;
     try {
-      const accountPayload = buildAccountProviderPayload(config2, void 0, this.#homeDir);
+      const accountPayload = prepareCatalogAccountPayload(
+        buildAccountProviderPayload(config2, void 0, this.#homeDir),
+        catalogPlan
+      );
       if (accountPayload) {
         try {
           await client.request("provider/updateAccountConfig", accountPayload);
@@ -11938,11 +11918,11 @@ var ZCodeModelSettings = class {
       const settings = asRecord4(snapshot.settings);
       const modelSettings = asRecord4(settings.model);
       const rawAvailable = Array.isArray(modelSettings.available) ? modelSettings.available : [];
-      const models = withStartPlanAliasEntries(rawAvailable.map(toCatalogEntry).filter((entry) => entry !== null), config2);
+      const models = withStartPlanAliasEntries(rawAvailable.map(toCatalogEntry).filter((entry) => entry !== null));
       const current = toModelRef(modelSettings.current);
       if (models.length === 0) throw new BridgeError("zcode_nonzero_exit", "ZCode app-server returned an empty model catalog for this workspace");
       const cachedAt = Date.now();
-      await writeModelCatalogCache(cachePath, { cached_at_ms: cachedAt, source_fingerprint: fingerprint, models }).catch(() => void 0);
+      await writeModelCatalogCache(cachePath, models).catch(() => void 0);
       warning = startPlanCatalogWarning(accountPayload, models);
       return {
         workspace: workspacePath,
@@ -12025,7 +12005,7 @@ var ZCodeModelSettings = class {
             throw new BridgeError("provider_config_invalid", "Bridge runtime config is not a small regular JSON file");
           }
           const parsed = JSON.parse(await readFile2(configPath, "utf8"));
-          if (!isRecord4(parsed)) throw new BridgeError("provider_config_invalid", "Bridge runtime config must contain a JSON object");
+          if (!isRecord3(parsed)) throw new BridgeError("provider_config_invalid", "Bridge runtime config must contain a JSON object");
           config2 = parsed;
         } catch (error2) {
           if (isMissingFile2(error2)) {
@@ -12035,7 +12015,7 @@ var ZCodeModelSettings = class {
               try {
                 if ((await stat(legacyPath)).size > 64 * 1024) throw new Error("legacy settings exceed size limit");
                 const legacy = JSON.parse(await readFile2(legacyPath, "utf8"));
-                if (!isRecord4(legacy)) throw new Error("invalid legacy settings");
+                if (!isRecord3(legacy)) throw new Error("invalid legacy settings");
                 loadPersistedRuntimeEnvironment(this.#sourceEnv, this.#homeDir, this.#host);
                 config2 = legacy;
                 break;
@@ -12109,6 +12089,38 @@ function buildRuntimeChildEnv(config2, source) {
   if (dataBaseDir) env.ZCODE_DATA_BASE_DIR = dataBaseDir;
   return env;
 }
+function prepareCatalogAccountPayload(payload, catalogPlan) {
+  if (!payload || catalogPlan !== "start_plan") return payload;
+  const startProviderId = "account:bigmodel-start-plan";
+  const codingProviderId = "account:bigmodel-individual-coding-plan";
+  if (!payload.providers[startProviderId] || !payload.states[startProviderId] || !payload.states[codingProviderId]) return payload;
+  const result = {
+    ...payload,
+    providers: {
+      ...payload.providers,
+      [startProviderId]: {
+        ...payload.providers[startProviderId],
+        access: {
+          ...payload.providers[startProviderId].access,
+          entitled: true
+        }
+      }
+    },
+    states: {
+      ...payload.states,
+      [startProviderId]: {
+        ...payload.states[startProviderId],
+        entitled: true,
+        current: true
+      },
+      [codingProviderId]: {
+        ...payload.states[codingProviderId],
+        current: false
+      }
+    }
+  };
+  return result;
+}
 function toCatalogEntry(value) {
   const entry = asRecord4(value);
   const ref = toModelRef(entry.ref);
@@ -12142,9 +12154,9 @@ function nestedString(record5, keys) {
   return typeof value === "string" ? value : null;
 }
 function asRecord4(value) {
-  return isRecord4(value) ? value : {};
+  return isRecord3(value) ? value : {};
 }
-function isRecord4(value) {
+function isRecord3(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function isMissingFile2(error2) {
@@ -12180,13 +12192,8 @@ function startPlanCatalogWarning(account, models) {
   if (!account?.providers[providerId] || account.states[providerId]?.entitled === true || models.some((model) => model.provider_id === providerId)) return void 0;
   return "Start Plan models are checked for a selected task; this catalog read does not send Billing requests.";
 }
-function withStartPlanAliasEntries(models, config2) {
-  let aliases;
-  try {
-    aliases = startPlanAliasCatalogEntries(readStartPlanRoutingRegistry(config2));
-  } catch {
-    return models;
-  }
+function withStartPlanAliasEntries(models) {
+  const aliases = startPlanAliasCatalogEntries(models);
   if (!aliases.length) return models;
   const seen = new Set(models.map((model) => `${model.provider_id}
 ${model.model_id}`));
@@ -12194,34 +12201,15 @@ ${model.model_id}`));
 ${alias.model_id}`)).map((alias) => ({ ...alias }));
   return [...models, ...additions];
 }
-async function readModelCatalogCache(cachePath) {
-  try {
-    const info = await stat(cachePath);
-    if (!info.isFile() || info.size > 2 * 1024 * 1024) return null;
-    const value = JSON.parse(await readFile2(cachePath, "utf8"));
-    if (!isRecord4(value) || !Number.isFinite(value.cached_at_ms) || typeof value.source_fingerprint !== "string" || !Array.isArray(value.models)) return null;
-    const models = value.models.map(toCachedCatalogEntry).filter((entry) => entry !== null);
-    if (models.length !== value.models.length || models.length === 0) return null;
-    return { cached_at_ms: value.cached_at_ms, source_fingerprint: value.source_fingerprint, models };
-  } catch {
-    return null;
-  }
-}
-function toCachedCatalogEntry(value) {
-  if (!isRecord4(value) || typeof value.provider_id !== "string" || !value.provider_id || typeof value.model_id !== "string" || !value.model_id || typeof value.label !== "string") return null;
-  if (value.reasoning_levels !== void 0 && (!Array.isArray(value.reasoning_levels) || !value.reasoning_levels.every((level) => isRecord4(level) && typeof level.value === "string" && typeof level.label === "string"))) return null;
-  for (const key of ["provider_label", "reasoning_default_level", "disabled_reason"]) if (value[key] !== void 0 && typeof value[key] !== "string") return null;
-  for (const key of ["context_window", "max_output_tokens"]) if (value[key] !== void 0 && (typeof value[key] !== "number" || !Number.isFinite(value[key]) || value[key] < 0)) return null;
-  const result = {};
-  for (const key of ["provider_id", "model_id", "label", "provider_label", "context_window", "max_output_tokens", "reasoning_default_level", "disabled_reason"]) if (value[key] !== void 0) result[key] = value[key];
-  if (Array.isArray(value.reasoning_levels)) result.reasoning_levels = value.reasoning_levels.map((level) => ({ value: level.value, label: level.label }));
-  return result;
-}
-async function writeModelCatalogCache(cachePath, cache) {
+async function writeModelCatalogCache(cachePath, models) {
   await mkdir(path11.dirname(cachePath), { recursive: true });
   const tempPath = `${cachePath}.${process.pid}.${randomUUID2()}.tmp`;
   try {
-    await writeFile(tempPath, `${JSON.stringify(cache)}
+    await writeFile(tempPath, `${JSON.stringify({
+      cached_at_ms: Date.now(),
+      source: "live_app_server_snapshot",
+      models
+    })}
 `, { encoding: "utf8", flag: "wx", mode: 384 });
     await atomicRename(tempPath, cachePath);
   } catch (error2) {
@@ -12423,7 +12411,7 @@ function isTrustedLocalStdioContext(value) {
 
 // src/runtime/doctor.ts
 init_errors();
-import { accessSync as accessSync2, constants, existsSync as existsSync7, statSync as statSync4 } from "node:fs";
+import { accessSync as accessSync2, constants, existsSync as existsSync6, statSync as statSync4 } from "node:fs";
 import { execFileSync } from "node:child_process";
 import path13 from "node:path";
 init_paths();
@@ -12642,7 +12630,7 @@ async function runBridgeDoctor(options = {}) {
       if (browserExecutable) {
         if (!path13.isAbsolute(browserExecutable)) {
           checks.push({ name: "browser_host", status: "error", summary: `ZCODE_BRIDGE_BROWSER_EXECUTABLE must be an absolute path: ${browserExecutable}` });
-        } else if (existsSync7(browserExecutable)) {
+        } else if (existsSync6(browserExecutable)) {
           checks.push({ name: "browser_host", status: "ok", summary: `Headless browser host is enabled with the configured executable (${path13.basename(browserExecutable)})` });
         } else {
           checks.push({ name: "browser_host", status: "error", summary: `Configured browser executable does not exist: ${browserExecutable}` });
@@ -12654,7 +12642,7 @@ async function runBridgeDoctor(options = {}) {
       checks.push({ name: "browser_host", status: "warning", summary: `ZCODE_BRIDGE_BROWSER_USE must be "off" or "headless"; got "${browserUse}" \u2014 the browser host stays disabled` });
     }
     const dataRoot = options.dataRoot ?? env["ZCODE_BRIDGE_DATA_DIR"]?.trim() ?? null;
-    if (dataRoot && existsSync7(dataRoot)) {
+    if (dataRoot && existsSync6(dataRoot)) {
       try {
         const info = statSync4(dataRoot);
         accessSync2(dataRoot, constants.W_OK);
@@ -12691,7 +12679,7 @@ async function runBridgeDoctor(options = {}) {
       checks.push({ name: "active_tasks", status: "unknown", summary: `SQLite lifecycle diagnostics unavailable: ${safeError(error2)}` });
       checks.push({ name: "recovery_lock", status: "unknown", summary: "SQLite Recovery state is unknown; the bound Authority could not be read" });
     }
-  } else if (observedRoot && existsSync7(path13.join(observedRoot, "bridge.sqlite"))) {
+  } else if (observedRoot && existsSync6(path13.join(observedRoot, "bridge.sqlite"))) {
     checks.push({ name: "active_tasks", status: "unknown", summary: "SQLite data root is present but no lifecycle Authority diagnostics are bound" });
     checks.push({ name: "recovery_lock", status: "unknown", summary: "SQLite Recovery state is unknown; JSON recovery locks are not authoritative" });
   } else {
@@ -12709,7 +12697,7 @@ function safeError(error2) {
 init_result_contract();
 
 // src/executor/lease.ts
-import { closeSync as closeSync3, existsSync as existsSync8, lstatSync, openSync as openSync3, readdirSync, readFileSync as readFileSync8, renameSync as renameSync2, unlinkSync as unlinkSync2, writeSync } from "node:fs";
+import { closeSync as closeSync3, existsSync as existsSync7, lstatSync, openSync as openSync3, readdirSync, readFileSync as readFileSync7, renameSync as renameSync2, unlinkSync as unlinkSync2, writeSync } from "node:fs";
 import path14 from "node:path";
 import { createHash as createHash8, randomUUID as randomUUID3 } from "node:crypto";
 var EXECUTOR_LEASE_PROTOCOL_VERSION = 1;
@@ -12728,9 +12716,9 @@ var ExecutorLeaseError = class extends Error {
 };
 function assertExecutorLeaseTransition(input) {
   const root = ensurePlainRoot(input.authorityRoot);
-  if (existsSync8(path14.join(root, EXECUTOR_LEASE_FILE))) return;
+  if (existsSync7(path14.join(root, EXECUTOR_LEASE_FILE))) return;
   const leaseHistory = hasValidLeaseHistory(root);
-  if (leaseHistory || !existsSync8(path14.join(root, input.databaseFileName))) return;
+  if (leaseHistory || !existsSync7(path14.join(root, input.databaseFileName))) return;
   if (input.acceptUnleasedExistingRoot) return;
   throw new ExecutorLeaseError(
     "EXECUTOR_LEASE_TRANSITION_REQUIRED",
@@ -12793,7 +12781,7 @@ function readLease(file) {
   try {
     const stat2 = lstatSync(file);
     if (!stat2.isFile() || stat2.isSymbolicLink() || stat2.size > LEASE_LIMIT_BYTES) throw new Error("unsafe_lease_file");
-    parsed = JSON.parse(readFileSync8(file, "utf8"));
+    parsed = JSON.parse(readFileSync7(file, "utf8"));
   } catch {
     throw new ExecutorLeaseError("EXECUTOR_LEASE_MALFORMED");
   }
@@ -12838,7 +12826,7 @@ function writeLeaseFile(file, record5) {
   } catch (error2) {
     if (fd !== void 0) closeSync3(fd);
     try {
-      if (existsSync8(temporary)) unlinkSync2(temporary);
+      if (existsSync7(temporary)) unlinkSync2(temporary);
     } catch {
     }
     throw new ExecutorLeaseError("EXECUTOR_LEASE_RELEASE_UNKNOWN", error2 instanceof Error ? error2.message : String(error2));
@@ -12877,7 +12865,7 @@ async function acquireExecutorLease(input) {
   if (identity.fingerprint === null || identity.fingerprint_precision !== "exact") {
     throw new ExecutorLeaseError("EXECUTOR_LEASE_OWNER_UNKNOWN", "executor owner requires an exact process identity");
   }
-  if (existsSync8(file)) {
+  if (existsSync7(file)) {
     const existing = readLease(file);
     const ownerState = await probeOwner(existing.owner, input.processProbe);
     if (existing.state === "active" && ownerState === "alive") {
@@ -12958,7 +12946,7 @@ async function acquireExecutorLease(input) {
 // src/store/lifecycle-gate.ts
 init_resolver();
 import { createHash as createHash17, randomUUID as randomUUID5 } from "node:crypto";
-import { closeSync as closeSync5, existsSync as existsSync10, fsyncSync as fsyncSync2, linkSync, lstatSync as lstatSync3, openSync as openSync5, readFileSync as readFileSync10, readdirSync as readdirSync2, realpathSync as realpathSync4, unlinkSync as unlinkSync4, writeFileSync as writeFileSync3 } from "node:fs";
+import { closeSync as closeSync5, existsSync as existsSync9, fsyncSync as fsyncSync2, linkSync, lstatSync as lstatSync3, openSync as openSync5, readFileSync as readFileSync9, readdirSync as readdirSync2, realpathSync as realpathSync4, unlinkSync as unlinkSync4, writeFileSync as writeFileSync3 } from "node:fs";
 import { spawn as spawn5 } from "node:child_process";
 import path17 from "node:path";
 import { homedir as homedir5 } from "node:os";
@@ -13757,7 +13745,7 @@ async function tryAcquireWindowsBootstrapLock(root, lockPath, databaseFileName, 
 `;
   const systemRoot = process.env["SystemRoot"];
   const absolutePowerShell = systemRoot ? path17.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe") : "powershell.exe";
-  const executable = existsSync10(absolutePowerShell) ? absolutePowerShell : "powershell.exe";
+  const executable = existsSync9(absolutePowerShell) ? absolutePowerShell : "powershell.exe";
   const child = spawn5(executable, [
     "-NoLogo",
     "-NoProfile",
@@ -14068,15 +14056,15 @@ async function ensureFreshSqliteAuthority(root, databaseFileName, modules, proce
     for (; ; ) {
       assertFreshBootstrapRootPath(resolvedRoot);
       lock.assertHeld();
-      if (existsSync10(markerTempPath)) {
+      if (existsSync9(markerTempPath)) {
         const tempStat = lstatSync3(markerTempPath);
-        if (!tempStat.isFile() || tempStat.isSymbolicLink() || existsSync10(databasePath) && !existsSync10(pendingPath)) {
+        if (!tempStat.isFile() || tempStat.isSymbolicLink() || existsSync9(databasePath) && !existsSync9(pendingPath)) {
           throw new LifecycleGateError("sqlite_bootstrap_marker_temp_unexpected");
         }
       }
-      if (existsSync10(pendingPath)) {
+      if (existsSync9(pendingPath)) {
         const marker2 = readFreshBootstrapMarker(pendingPath, databaseFileName);
-        if (existsSync10(databasePath)) {
+        if (existsSync9(databasePath)) {
           const published = tryReadReadySqliteAuthority(modules, resolvedRoot, databaseFileName, true);
           if (published?.kind === "fresh_install" && published.receipt_id === `fresh-install-${marker2.token}`) {
             const stagePath2 = path17.join(resolvedRoot, marker2.stage_file);
@@ -14101,17 +14089,17 @@ async function ensureFreshSqliteAuthority(root, databaseFileName, modules, proce
         removeOwnedBootstrapFile(markerTempPath);
         continue;
       }
-      if (existsSync10(markerTempPath)) {
+      if (existsSync9(markerTempPath)) {
         removeOwnedBootstrapFile(markerTempPath);
       }
-      if (existsSync10(databasePath)) {
+      if (existsSync9(databasePath)) {
         const existing = tryReadReadySqliteAuthority(modules, resolvedRoot, databaseFileName, false);
         if (!existing) throw new LifecycleGateError("sqlite_existing_database_unverified", "existing SQLite database is not a valid production Authority");
         emitFreshBootstrapStage(options, "ready");
         result = normalizeReadySqliteAuthority(existing);
         break;
       }
-      if (existsSync10(databasePath + ".v13-v14-pending.json")) {
+      if (existsSync9(databasePath + ".v13-v14-pending.json")) {
         throw new LifecycleGateError(
           "unsupported_sqlite_schema",
           "SQLite v14 ONLY: an interrupted v13 upgrade marker is present; the marker and root were not modified"
@@ -14189,7 +14177,7 @@ async function constructAndPublishFreshSqlite(root, databaseFileName, marker, mo
     }
     lock.assertHeld();
     assertFreshBootstrapRootPath(root);
-    if (existsSync10(databasePath)) throw new LifecycleGateError("sqlite_database_appeared_during_bootstrap");
+    if (existsSync9(databasePath)) throw new LifecycleGateError("sqlite_database_appeared_during_bootstrap");
     linkSync(stagePath, databasePath);
     published = true;
     unlinkSync4(stagePath);
@@ -14271,7 +14259,7 @@ function readFreshBootstrapMarker(file, databaseFileName) {
   try {
     const stat2 = lstatSync3(file);
     if (!stat2.isFile() || stat2.isSymbolicLink() || stat2.size > 16 * 1024) throw new Error("unsafe_marker");
-    const value = JSON.parse(readFileSync10(file, "utf8"));
+    const value = JSON.parse(readFileSync9(file, "utf8"));
     const expectedStagePrefix = `${databaseFileName}.bootstrap-`;
     if (value.schema_version !== 1 || value.state !== "sqlite_bootstrap_pending" || value.database_file !== databaseFileName || typeof value.token !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(value.token) || value.stage_file !== `${expectedStagePrefix}${value.token}.stage` || !value.owner_identity || value.owner_identity.pid < 1 || !Number.isSafeInteger(value.owner_identity.pid) || value.owner_identity.fingerprint_precision !== "exact" || !value.owner_identity.fingerprint || value.owner_identity.identity_version !== PROCESS_IDENTITY_VERSION || !value.owner_identity.platform || !value.owner_identity.captured_at || Number.isNaN(Date.parse(value.owner_identity.captured_at))) throw new Error("invalid_marker");
     return value;
@@ -14407,7 +14395,7 @@ async function openClaimOnlyDriver(options) {
   const modules = await (options.loadModules?.() ?? loadLifecycleCandidateModules());
   let raw;
   try {
-    if (!existsSync10(options.dataRoot)) throw new LifecycleGateError("sqlite_database_missing", "candidate database must be initialized explicitly");
+    if (!existsSync9(options.dataRoot)) throw new LifecycleGateError("sqlite_database_missing", "candidate database must be initialized explicitly");
     raw = modules.Store.open(options.dataRoot, {
       ...options.databaseFileName ? { databaseFileName: options.databaseFileName } : {},
       ...options.managedDataDirectory ? { managedDataDirectory: true } : {}
@@ -16877,7 +16865,7 @@ var TASK_STATUSES = /* @__PURE__ */ new Set([
   "waiting_for_master"
 ]);
 function parseTaskAttentionSnapshot(value, expectedTaskId) {
-  if (!isRecord6(value)) throw new TaskManagerError("TASK_STATE", "SQLite attention projection is invalid");
+  if (!isRecord5(value)) throw new TaskManagerError("TASK_STATE", "SQLite attention projection is invalid");
   const taskId = value.task_id;
   const attempt = value.attempt;
   const status = value.status;
@@ -16895,7 +16883,7 @@ function parseTaskAttentionSnapshot(value, expectedTaskId) {
 function isAttentionTerminalStatus(status) {
   return status === "completed" || status === "failed" || status === "cancelled" || status === "waiting_for_master";
 }
-function isRecord6(value) {
+function isRecord5(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
@@ -25289,7 +25277,7 @@ import { createHash as createHash19 } from "node:crypto";
 import {
   spawn as spawn6
 } from "node:child_process";
-import { existsSync as existsSync11 } from "node:fs";
+import { existsSync as existsSync10 } from "node:fs";
 import { homedir as homedir6 } from "node:os";
 import path19 from "node:path";
 var WAKE_CONTROL_FRAME_MAX_BYTES = 1024 * 1024;
@@ -25616,7 +25604,7 @@ function boundedDuration(value, fallback, min, max) {
 function isIdentifier(value) {
   return typeof value === "string" && value.length > 0 && value.length <= 128 && /^[A-Za-z0-9._:-]+$/u.test(value) && value === value.normalize("NFC");
 }
-function isRecord7(value) {
+function isRecord6(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function wakeDigest(value) {
@@ -25629,13 +25617,13 @@ function canonicalJson5(value) {
     return JSON.stringify(value);
   }
   if (Array.isArray(value)) return `[${value.map(canonicalJson5).join(",")}]`;
-  if (isRecord7(value)) {
+  if (isRecord6(value)) {
     return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson5(value[key])}`).join(",")}}`;
   }
   throw new Error("wake_digest_value_invalid");
 }
 function errorCode3(error2) {
-  return isRecord7(error2) && typeof error2.code === "string" ? error2.code : null;
+  return isRecord6(error2) && typeof error2.code === "string" ? error2.code : null;
 }
 function delay3(ms) {
   return new Promise((resolve) => {
@@ -25651,7 +25639,7 @@ var AppServerProxyConnector = class {
     this.#clientVersion = options.clientVersion ?? "2.0.0-preview.11";
   }
   async connect(input) {
-    if (!existsSync11(input.socketPath)) throw new Error("app_server_control_socket_unavailable");
+    if (!existsSync10(input.socketPath)) throw new Error("app_server_control_socket_unavailable");
     const child = this.#spawnImpl(
       input.executable,
       ["app-server", "proxy", "--sock", input.socketPath],
@@ -25712,7 +25700,7 @@ var AppServerProxySession = class {
     }
     const read = await this.#request("thread/read", { threadId, includeTurns: false }, timeoutMs);
     const thread = read.thread;
-    if (!isRecord7(thread) || thread.id !== threadId || !isRecord7(thread.status)) {
+    if (!isRecord6(thread) || thread.id !== threadId || !isRecord6(thread.status)) {
       throw new Error("app_server_thread_read_invalid");
     }
     const status = typeof thread.status.type === "string" ? thread.status.type : "unknown";
@@ -25753,7 +25741,7 @@ var AppServerProxySession = class {
     }, timeoutMs);
     if (!Array.isArray(value.data)) throw new Error("app_server_turn_list_invalid");
     return value.data.flatMap((item) => {
-      if (!isRecord7(item) || typeof item.id !== "string" || !["completed", "interrupted", "failed", "inProgress"].includes(String(item.status))) return [];
+      if (!isRecord6(item) || typeof item.id !== "string" || !["completed", "interrupted", "failed", "inProgress"].includes(String(item.status))) return [];
       return [{ id: item.id, status: item.status }];
     });
   }
@@ -25806,7 +25794,7 @@ var AppServerProxySession = class {
       this.#fail(new Error("app_server_proxy_frame_invalid"));
       return;
     }
-    if (!isRecord7(value)) {
+    if (!isRecord6(value)) {
       this.#fail(new Error("app_server_proxy_message_invalid"));
       return;
     }
@@ -25819,13 +25807,13 @@ var AppServerProxySession = class {
     if (!pending) return;
     this.#pending.delete(value.id);
     clearTimeout(pending.timer);
-    if (isRecord7(value.error)) {
+    if (isRecord6(value.error)) {
       pending.reject(new Error(
         `app_server_proxy_request_failed:${pending.method}:${String(value.error.code ?? "unknown")}`
       ));
       return;
     }
-    if (!isRecord7(value.result)) {
+    if (!isRecord6(value.result)) {
       pending.reject(new Error(`app_server_proxy_result_invalid:${pending.method}`));
       return;
     }
@@ -25986,6 +25974,11 @@ async function createProductionAuthorityComposition(options) {
     throw new Error(`SQLite Authority startup refused: Trusted Local policy is ${trustedLocalContext.status}`);
   }
   const startPlanAuthAbort = new AbortController();
+  const modelSettings = new ZCodeModelSettings(env, {
+    homeDir,
+    host: options.host,
+    workerModuleUrl: pathToFileURL2(options.workerEntryPath)
+  });
   const modelRoutingJournal = new StartPlanEntitlementJournal();
   const routeTaskModel2 = createTaskModelRouter({
     settings: () => {
@@ -25995,22 +25988,12 @@ async function createProductionAuthorityComposition(options) {
         defaultProviderId: persistedEnv["ZCODE_BRIDGE_DEFAULT_PROVIDER_ID"]?.trim() ?? ""
       };
     },
-    journal: modelRoutingJournal,
-    registry: async () => {
-      try {
-        const persistedEnv = loadPersistedRuntimeEnvironment(env, homeDir, options.host);
-        const config2 = await new NodeRuntimeResolver({
-          env: persistedEnv,
-          homeDir,
-          host: options.host
-        }).resolve();
-        return readStartPlanRoutingRegistry(config2);
-      } catch (error2) {
-        throw new BridgeError(
-          "provider_config_invalid",
-          `ZCode runtime configuration could not be resolved for model routing: ${error2 instanceof Error ? error2.message : String(error2)}`
-        );
-      }
+    catalog: async (workspace) => {
+      const routingCatalog = await modelSettings.listRoutingCatalog(workspace);
+      return {
+        ...buildModelRoutingCatalog(routingCatalog.models),
+        startPlanUnavailableReason: routingCatalog.startPlanUnavailableReason
+      };
     }
   });
   const wakeCoordinator = createExecutorWakeCoordinator({
@@ -26054,11 +26037,6 @@ async function createProductionAuthorityComposition(options) {
     ...options.testBeforeDispatch ? { testBeforeDispatch: options.testBeforeDispatch } : {},
     ...options.testOnScheduler ? { testOnScheduler: options.testOnScheduler } : {},
     ...options.dispatchFence ? { dispatchFence: options.dispatchFence } : {}
-  });
-  const modelSettings = new ZCodeModelSettings(env, {
-    homeDir,
-    host: options.host,
-    workerModuleUrl: pathToFileURL2(options.workerEntryPath)
   });
   const lifecycleChecks = () => authority.getDoctorChecks();
   return {

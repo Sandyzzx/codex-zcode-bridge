@@ -2,7 +2,7 @@
 
 把有明确边界的开发任务从 Codex 交给本机官方 ZCode Agent Runtime，在 Codex 中跟进进度，并独立审查实际改动后再决定是否接受。
 
-本插件属于 `2.0.0-preview.18`。Stable 通过独立的 Marketplace 渠道发布。
+本插件属于 `2.0.0-preview.19`。Stable 通过独立的 Marketplace 渠道发布。
 
 ## 支持范围
 
@@ -79,7 +79,7 @@ Codex 作为 Master 定义目标、约束、允许范围和验收条件，并选
 
 `completed` 只表示 Worker 执行结束并规范化了报告，不表示 Codex 已接受代码。必须检查实际 Diff、测试和 Result。`zcode_continue` 仅用于验收返工、必要决定、受控恢复或报告修复，不用于普通的分步调度。
 
-遇到安装或启动问题时，可调用只读诊断工具 `zcode_doctor`；它不会启动 ZCode Session。模型目录可通过 `zcode_model_catalog` 查询；Start Plan 条目使用 `<ModelId>-StartPlan` 别名，并在任务执行时进行实时权益检查。
+遇到安装或启动问题时，可调用只读诊断工具 `zcode_doctor`；它不会启动 ZCode Session。`zcode_model_catalog` 实时读取当前 AppServer 目录；Start Plan 条目使用 `<ModelId>-StartPlan` 别名，并在任务执行时进行实时权益检查。
 
 ## 安全边界
 
