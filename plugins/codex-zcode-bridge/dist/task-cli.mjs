@@ -22,6 +22,20 @@ import { accessSync, existsSync, readFileSync, statSync } from "node:fs";
 import path2 from "node:path";
 import { fileURLToPath } from "node:url";
 
+// src/runtime/desktop-host-launch.ts
+var MAX_ASAR_HEADER_BYTES = 32 * 1024 * 1024;
+var MAX_METADATA_BYTES = 64 * 1024;
+
+// src/runtime/official-builtin-registry.ts
+var OFFICIAL_ENDPOINT_ENV_KEYS = Object.freeze([
+  "ZCODE_ENV",
+  "ZCODE_BASE_URL",
+  "ZCODE_ENDPOINT_ORIGIN",
+  "ZCODE_PRODUCTION_BASE_URL",
+  "ZCODE_TEST_BASE_URL"
+]);
+var MAX_REGISTRY_BYTES = 8 * 1024 * 1024;
+
 // src/runtime/host-profile.ts
 import { homedir } from "node:os";
 import path from "node:path";

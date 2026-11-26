@@ -86,8 +86,15 @@ function prepareWorkerResultFrameParts(frame) {
   try {
     resultJson = canonicalTaskResult(frame.result, { task_id: frame.task_id, attempt: frame.attempt, result_status: frame.result?.status });
   } catch (error62) {
-    const result = submissionFailure({ task_id: frame.task_id, attempt: frame.attempt }, error62);
-    resultJson = canonicalTaskResult(result, { task_id: frame.task_id, attempt: frame.attempt, result_status: "failed" });
+    const { rpc_diagnostics, ...withoutDiagnostics } = frame.result ?? {};
+    const keepReport = Object.hasOwn(frame.result ?? {}, "rpc_diagnostics");
+    try {
+      if (!keepReport) throw error62;
+      resultJson = canonicalTaskResult(withoutDiagnostics, { task_id: frame.task_id, attempt: frame.attempt, result_status: frame.result?.status });
+    } catch {
+      const failed = submissionFailure({ task_id: frame.task_id, attempt: frame.attempt }, error62);
+      resultJson = canonicalTaskResult(failed, { task_id: frame.task_id, attempt: frame.attempt, result_status: "failed" });
+    }
   }
   const parts = ["{"];
   for (const key of Object.keys(frame).sort()) {
@@ -136,6 +143,19 @@ function validateTiming(value) {
   if (["queued_ms", "execution_ms", "turn_ms", "finalize_ms", "wall_ms"].some((k) => value[k] !== null && (!Number.isSafeInteger(value[k]) || value[k] < 0)) || typeof value.derived !== "boolean") fail("invalid_result_payload");
   validateStringArray(value.notes, 64);
 }
+function validateRpcDiagnostics(value, status) {
+  if (status !== "failed" || !Array.isArray(value) || value.length < 1 || value.length > MAX_RPC_DIAGNOSTICS) fail("invalid_result_payload");
+  const seen = /* @__PURE__ */ new Set();
+  for (const entry of value) {
+    validateResultObject(entry, /* @__PURE__ */ new Set(["method", "code", "message", "data_name", "data_code", "stack"]), ["method", "code", "message", "data_name", "data_code"]);
+    const stack = Object.hasOwn(entry, "stack") ? entry.stack : "";
+    const stackLines = typeof stack === "string" ? stack.split("\n") : [];
+    const identity = `${String(entry.method)}|${String(entry.code)}|${String(entry.data_code)}`;
+    if (typeof entry.method !== "string" || !RPC_METHOD.test(entry.method) || !(entry.code === null || typeof entry.code === "number" && Number.isSafeInteger(entry.code)) || typeof entry.message !== "string" || !CLEAN_DIAGNOSTIC_TEXT(entry.message) || /[\r\n\t]/u.test(entry.message) || [...entry.message].length > 500 || !(entry.data_name === null || typeof entry.data_name === "string" && CLEAN_DIAGNOSTIC_TEXT(entry.data_name) && entry.data_name.length <= 64 && RPC_DATA_NAME.test(entry.data_name)) || !(entry.data_code === null || typeof entry.data_code === "string" && CLEAN_DIAGNOSTIC_TEXT(entry.data_code) && entry.data_code.length <= 128 && RPC_DATA_CODE.test(entry.data_code)) || Object.hasOwn(entry, "stack") && (typeof entry.stack !== "string" || entry.stack.length > 1200 || stackLines.length > 12 || stackLines.some((line) => !CLEAN_DIAGNOSTIC_TEXT(line) || !RPC_STACK_LINE.test(line))) || seen.has(identity)) fail("invalid_result_payload");
+    seen.add(identity);
+  }
+  if (Buffer.byteLength(canonical(value), "utf8") > MAX_RPC_DIAGNOSTICS_BYTES) fail("invalid_result_payload");
+}
 function canonicalTaskResult(result, input2) {
   validateResultObject(result, RESULT_FIELDS, REQUIRED_RESULT_FIELDS);
   if (result.task_id !== input2.task_id || result.attempt !== input2.attempt || result.status !== input2.result_status || !RESULT_STATUSES.has(result.status) || typeof result.summary !== "string" || typeof result.zcode_output !== "string" || typeof result.needs_master_decision !== "boolean" || result.exit_code !== null && !Number.isSafeInteger(result.exit_code) || !isNullableText(result.session_id) || !isNullableText(result.started_at, 64) || !isNullableText(result.finished_at, 64)) fail("invalid_result_payload");
@@ -148,12 +168,13 @@ function canonicalTaskResult(result, input2) {
   if (Object.hasOwn(result, "usage") && result.usage !== null) validateUsage(result.usage);
   if (Object.hasOwn(result, "model") && result.model !== null) validateModel(result.model);
   if (Object.hasOwn(result, "timing") && result.timing !== null) validateTiming(result.timing);
+  if (Object.hasOwn(result, "rpc_diagnostics")) validateRpcDiagnostics(result.rpc_diagnostics, result.status);
   const json2 = canonical(result);
   const bytes = Buffer.byteLength(json2, "utf8");
   if (bytes > MAX_TASK_RESULT_BYTES) throw new ResultContractError("result_too_large", `canonical TaskResult ${bytes} bytes exceeds ${MAX_TASK_RESULT_BYTES}; original report not committed`);
   return json2;
 }
-var MAX_TASK_RESULT_BYTES, MAX_RESULT_ENVELOPE_BYTES, MAX_WORKER_RESULT_FRAME_BYTES, ResultContractError, fail, RESULT_STATUSES, RESULT_FIELDS, REQUIRED_RESULT_FIELDS;
+var MAX_TASK_RESULT_BYTES, MAX_RESULT_ENVELOPE_BYTES, MAX_WORKER_RESULT_FRAME_BYTES, ResultContractError, fail, RESULT_STATUSES, RESULT_FIELDS, REQUIRED_RESULT_FIELDS, MAX_RPC_DIAGNOSTICS, MAX_RPC_DIAGNOSTICS_BYTES, RPC_METHOD, RPC_STACK_LINE, RPC_DATA_NAME, RPC_DATA_CODE, CLEAN_DIAGNOSTIC_TEXT;
 var init_result_contract = __esm({
   "src/result-contract.mjs"() {
     "use strict";
@@ -170,8 +191,15 @@ var init_result_contract = __esm({
       throw new ResultContractError(code, message);
     };
     RESULT_STATUSES = /* @__PURE__ */ new Set(["completed", "failed", "cancelled", "waiting_for_master"]);
-    RESULT_FIELDS = /* @__PURE__ */ new Set(["task_id", "attempt", "status", "summary", "files_changed", "tests", "issues", "needs_master_decision", "zcode_output", "exit_code", "session_id", "started_at", "finished_at", "error_code", "report_candidate", "usage", "model", "timing"]);
+    RESULT_FIELDS = /* @__PURE__ */ new Set(["task_id", "attempt", "status", "summary", "files_changed", "tests", "issues", "needs_master_decision", "zcode_output", "exit_code", "session_id", "started_at", "finished_at", "error_code", "report_candidate", "usage", "model", "timing", "rpc_diagnostics"]);
     REQUIRED_RESULT_FIELDS = ["task_id", "attempt", "status", "summary", "files_changed", "tests", "issues", "needs_master_decision", "zcode_output", "exit_code", "session_id", "started_at", "finished_at"];
+    MAX_RPC_DIAGNOSTICS = 4;
+    MAX_RPC_DIAGNOSTICS_BYTES = 8192;
+    RPC_METHOD = /^[a-z]+(?:\/[A-Za-z0-9_]+){1,2}$/u;
+    RPC_STACK_LINE = /^at (?:(?:[^\s()\\/:]+)? ?(?:\((?:node:[^\s()\\]*|[^\s()\\/]*)\)|node:[^\s()\\]*|[^\s()\\/]*))$/u;
+    RPC_DATA_NAME = /^[A-Za-z][A-Za-z0-9_]*$/u;
+    RPC_DATA_CODE = /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/u;
+    CLEAN_DIAGNOSTIC_TEXT = (text) => typeof text === "string" && !/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/u.test(text);
   }
 });
 
@@ -219,7 +247,6 @@ function buildAccountProviderPayload(config2, verifiedSelection, homeDir, taskPr
   const states = {};
   for (const entry of source.entries) {
     providers[entry.providerId] = {
-      ...entry.builtinModelIds.length ? { builtinModelIds: [...entry.builtinModelIds] } : {},
       access: { type: entry.accessType, entitled: entry.entitled }
     };
     states[entry.providerId] = {
@@ -367,7 +394,6 @@ function readAccountProviderSource(config2, verifiedSelection, homeDir, taskProv
       legacyId,
       planKind,
       accessType: rule.config?.access?.type ?? "zhipu-account",
-      builtinModelIds: [...rule.config?.builtinModelIds ?? []],
       entitled,
       availability: entitled ? "available" : "unavailable",
       current,
@@ -381,6 +407,10 @@ function zcodeBuiltinRevision(table, sourceFile) {
   const revision = typeof table?.revision === "number" ? table.revision : 0;
   const sourceDigest = createHash3("sha256").update(path3.resolve(sourceFile)).digest("hex");
   return `zcode-builtin:${revision}:${sourceDigest}`;
+}
+function currentBuiltinRegistryRevision(config2) {
+  const table = readJson(config2.providerBuiltinConfigFile);
+  return table ? zcodeBuiltinRevision(table, config2.providerBuiltinConfigFile) : null;
 }
 function accountProviderRevision(builtinRevision, providers, states) {
   return `account:${JSON.stringify([builtinRevision, providers, states])}`;
@@ -444,18 +474,25 @@ var init_account_provider = __esm({
 });
 
 // src/runtime/errors.ts
-var BridgeError;
+var SESSION_NOT_RESUMABLE, BridgeError;
 var init_errors = __esm({
   "src/runtime/errors.ts"() {
     "use strict";
+    SESSION_NOT_RESUMABLE = "session_not_resumable";
     BridgeError = class extends Error {
       code;
       memberPids;
+      /** ADR-066: redacted official RPC rejections observed before this failure. */
+      rpcDiagnostics;
+      /** ADR-066: the Session bound to the rejected RPC, kept as execution evidence. */
+      sessionId;
       constructor(code, message, options) {
         super(message, options);
         this.name = "BridgeError";
         this.code = code;
         if (options?.memberPids?.length) this.memberPids = [...new Set(options.memberPids.filter((pid) => Number.isSafeInteger(pid) && pid > 0))];
+        if (options?.rpcDiagnostics?.length) this.rpcDiagnostics = options.rpcDiagnostics;
+        if (typeof options?.sessionId === "string" && options.sessionId) this.sessionId = options.sessionId;
       }
     };
   }
@@ -814,8 +851,199 @@ var init_paths = __esm({
   }
 });
 
-// src/runtime/official-runtime-authorization.ts
+// src/runtime/official-builtin-registry.ts
 import { createHash as createHash4 } from "node:crypto";
+import { lstat as nodeLstat, readFile as nodeReadFile } from "node:fs/promises";
+import { realpath as nodeRealpath } from "node:fs/promises";
+import path6 from "node:path";
+function forwardOfficialEndpointEnv(target, source) {
+  for (const key of OFFICIAL_ENDPOINT_ENV_KEYS) {
+    const value = source[key];
+    if (value !== void 0) target[key] = value;
+  }
+  return target;
+}
+async function isOfficialBuiltinRegistryPin(explicitBuiltin, bundledPath) {
+  const explicit = explicitBuiltin?.trim() || null;
+  if (!explicit || !bundledPath) return false;
+  const [explicitCanonical, bundledCanonical] = await Promise.all([canonicalPath(explicit), canonicalPath(bundledPath)]);
+  return !sameFileSystemPath(explicitCanonical, bundledCanonical);
+}
+async function canonicalPath(filePath) {
+  try {
+    return await nodeRealpath(filePath);
+  } catch {
+    return path6.resolve(filePath);
+  }
+}
+function officialEndpointOrigin(env = process.env) {
+  const configured = (key) => {
+    const value = env[key]?.trim();
+    return value || void 0;
+  };
+  const test = env["ZCODE_ENV"]?.trim().toLowerCase() === "test";
+  const base = configured("ZCODE_BASE_URL") ?? configured("ZCODE_ENDPOINT_ORIGIN") ?? (test ? configured("ZCODE_TEST_BASE_URL") : configured("ZCODE_PRODUCTION_BASE_URL"));
+  if (!base) return test ? OFFICIAL_TEST_ENDPOINT_ORIGIN : OFFICIAL_PRODUCTION_ENDPOINT_ORIGIN;
+  const url2 = new URL(base);
+  if (url2.protocol !== "http:" && url2.protocol !== "https:") {
+    throw new Error("ZCode endpoint origin must use http or https");
+  }
+  return url2.origin;
+}
+function officialClientPlatform(platform = process.platform, architecture = process.arch) {
+  const operatingSystem = platform === "win32" ? "windows" : platform;
+  const arch = architecture === "arm64" ? "aarch64" : architecture === "x64" ? "x86_64" : architecture;
+  return `${operatingSystem}-${arch}`;
+}
+function officialDesktopAppVersion(zcodeEntrypoint) {
+  try {
+    return buildZCodeAppServerLaunch(zcodeEntrypoint, {}).env["ZCODE_APP_VERSION"] ?? null;
+  } catch {
+    return null;
+  }
+}
+function officialRuntimeRegistryPath(input2) {
+  const appVersion = input2.appVersion?.trim() || null;
+  if (!appVersion || !path6.isAbsolute(input2.dataBaseDir)) return null;
+  try {
+    registrySegment(appVersion, "appVersion");
+    const platform = registrySegment(
+      officialClientPlatform(input2.platform, input2.architecture),
+      "platform"
+    );
+    const origin = officialEndpointOrigin(input2.env);
+    const endpointKey = `endpoint-${createHash4("sha256").update(origin).digest("hex").slice(0, 32)}`;
+    return path6.join(
+      input2.dataBaseDir,
+      ".zcode",
+      "v2",
+      "runtime",
+      "provider",
+      platform,
+      appVersion,
+      endpointKey,
+      "zcode-builtin.json"
+    );
+  } catch {
+    return null;
+  }
+}
+async function selectOfficialBuiltinRegistry(input2) {
+  const readFile2 = input2.readFile ?? ((filePath) => nodeReadFile(filePath, "utf8"));
+  const lstat3 = input2.lstat ?? ((filePath) => nodeLstat(filePath));
+  const bundled = (status, revision = null) => ({
+    path: input2.bundledPath,
+    source: "bundled",
+    bundledPath: input2.bundledPath,
+    revision,
+    runtimePath: input2.runtimePath,
+    runtimeStatus: status
+  });
+  if (!input2.runtimePath) return bundled("unresolved");
+  let stat;
+  try {
+    stat = await lstat3(input2.runtimePath);
+  } catch {
+    return bundled("not_found");
+  }
+  if (!stat.isFile() || stat.isSymbolicLink()) return bundled("invalid");
+  let runtime;
+  try {
+    runtime = decodeRegistry(await readFile2(input2.runtimePath));
+  } catch {
+    runtime = null;
+  }
+  if (!runtime) return bundled("invalid");
+  let bundledCandidate;
+  try {
+    bundledCandidate = decodeRegistry(await readFile2(input2.bundledPath));
+  } catch {
+    bundledCandidate = null;
+  }
+  if (!bundledCandidate) {
+    return runtimeSelected();
+  }
+  if (bundledCandidate.revision === runtime.revision) {
+    runtime.canonical ??= canonicalJson(runtime.value);
+    bundledCandidate.canonical ??= canonicalJson(bundledCandidate.value);
+    return runtime.canonical === bundledCandidate.canonical ? runtimeSelected() : bundled("same_revision_conflict", bundledCandidate.revision);
+  }
+  return runtime.revision > bundledCandidate.revision ? runtimeSelected() : bundled("lower_revision", bundledCandidate.revision);
+  function runtimeSelected() {
+    return {
+      path: input2.runtimePath,
+      source: "runtime",
+      bundledPath: input2.bundledPath,
+      revision: runtime.revision,
+      runtimePath: input2.runtimePath,
+      runtimeStatus: "selected"
+    };
+  }
+}
+function registrySegment(value, label) {
+  if (!value || value === "." || value === ".." || /[\\/]/u.test(value)) {
+    throw new Error(`ZCode Built-in ${label} is not a valid path segment`);
+  }
+  return value;
+}
+function decodeRegistry(text) {
+  if (Buffer.byteLength(text, "utf8") > MAX_REGISTRY_BYTES) throw new Error("registry too large");
+  const value = JSON.parse(text);
+  if (!isRecord4(value) || !hasExactKeys2(value, ["schemaVersion", "revision", "config"]) || value.schemaVersion !== 1) {
+    throw new Error("unsupported registry schema");
+  }
+  const revision = value.revision;
+  if (typeof revision !== "number" || !Number.isSafeInteger(revision) || revision < 0) {
+    throw new Error("invalid registry revision");
+  }
+  const config2 = value.config;
+  if (!isRecord4(config2) || !hasExactKeys2(config2, ["providerConfigRules", "modelConfigRules"]) || !isRecord4(config2.providerConfigRules) || !isRecord4(config2.modelConfigRules)) {
+    throw new Error("invalid registry config");
+  }
+  const providerRules = config2.providerConfigRules.providerRules;
+  if (Array.isArray(providerRules) && providerRules.some((rule) => isRecord4(rule) && rule.providerId === OBSERVED_RETIRED_PROVIDER_ID)) {
+    throw new Error("registry contains a retired provider");
+  }
+  if (isRecord4(providerRules) && Object.hasOwn(providerRules, OBSERVED_RETIRED_PROVIDER_ID)) {
+    throw new Error("registry contains a retired provider");
+  }
+  return { revision, value, canonical: null };
+}
+function hasExactKeys2(value, expected) {
+  const keys = Object.keys(value);
+  return keys.length === expected.length && expected.every((key) => Object.hasOwn(value, key));
+}
+function canonicalJson(value) {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  const record3 = value;
+  return `{${Object.keys(record3).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(record3[key])}`).join(",")}}`;
+}
+function isRecord4(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+var OFFICIAL_PRODUCTION_ENDPOINT_ORIGIN, OFFICIAL_TEST_ENDPOINT_ORIGIN, OFFICIAL_ENDPOINT_ENV_KEYS, MAX_REGISTRY_BYTES, OBSERVED_RETIRED_PROVIDER_ID;
+var init_official_builtin_registry = __esm({
+  "src/runtime/official-builtin-registry.ts"() {
+    "use strict";
+    init_desktop_host_launch();
+    init_paths();
+    OFFICIAL_PRODUCTION_ENDPOINT_ORIGIN = "https://zcode.z.ai";
+    OFFICIAL_TEST_ENDPOINT_ORIGIN = "https://zcode.chatglm.site";
+    OFFICIAL_ENDPOINT_ENV_KEYS = Object.freeze([
+      "ZCODE_ENV",
+      "ZCODE_BASE_URL",
+      "ZCODE_ENDPOINT_ORIGIN",
+      "ZCODE_PRODUCTION_BASE_URL",
+      "ZCODE_TEST_BASE_URL"
+    ]);
+    MAX_REGISTRY_BYTES = 8 * 1024 * 1024;
+    OBSERVED_RETIRED_PROVIDER_ID = "builtin:zapi";
+  }
+});
+
+// src/runtime/official-runtime-authorization.ts
+import { createHash as createHash5 } from "node:crypto";
 function computeOfficialInstallationFingerprint(input2) {
   const normalized = {
     schema_version: 1,
@@ -848,7 +1076,7 @@ function computeOfficialInstallationFingerprint(input2) {
     },
     node_version: input2.node_version
   };
-  return createHash4("sha256").update(JSON.stringify(normalized), "utf8").digest("hex");
+  return createHash5("sha256").update(JSON.stringify(normalized), "utf8").digest("hex");
 }
 var init_official_runtime_authorization = __esm({
   "src/runtime/official-runtime-authorization.ts"() {
@@ -865,19 +1093,19 @@ __export(resolver_exports, {
 });
 import { accessSync, existsSync as existsSync3, readFileSync as readFileSync4, statSync } from "node:fs";
 import { homedir as homedir2 } from "node:os";
-import path6 from "node:path";
+import path7 from "node:path";
 import { fileURLToPath } from "node:url";
 function loadPersistedRuntimeEnvironment(source, homeDir = homedir2(), host = codexHostProfile(homeDir)) {
   validateHostProfile(host);
-  const settingsPaths = [host.settingsDirectory, ...host.legacySettingsDirectories ?? []].map((directory) => path6.join(directory, "runtime-config.json"));
+  const settingsPaths = [host.settingsDirectory, ...host.legacySettingsDirectories ?? []].map((directory) => path7.join(directory, "runtime-config.json"));
   const legacyDataRoot = source["ZCODE_BRIDGE_DATA_DIR"]?.trim();
-  if (legacyDataRoot && path6.isAbsolute(legacyDataRoot)) {
-    settingsPaths.push(path6.join(legacyDataRoot, "runtime-config.json"));
+  if (legacyDataRoot && path7.isAbsolute(legacyDataRoot)) {
+    settingsPaths.push(path7.join(legacyDataRoot, "runtime-config.json"));
   }
   let parsed = null;
   const seenPaths = /* @__PURE__ */ new Set();
   for (const settingsPath of settingsPaths) {
-    const normalized = path6.resolve(settingsPath);
+    const normalized = path7.resolve(settingsPath);
     const identity = process.platform === "win32" ? normalized.toLocaleLowerCase("en-US") : normalized;
     if (seenPaths.has(identity)) continue;
     seenPaths.add(identity);
@@ -911,8 +1139,8 @@ function resolveZcodeHome(env) {
   if (!isAbsolutePathForPlatform(configured)) {
     throw new BridgeError("provider_config_invalid", "ZCODE_HOME must be an absolute path");
   }
-  const resolved = path6.normalize(configured);
-  if (path6.basename(resolved).toLowerCase() !== ".zcode") {
+  const resolved = path7.normalize(configured);
+  if (path7.basename(resolved).toLowerCase() !== ".zcode") {
     throw new BridgeError(
       "provider_config_invalid",
       "ZCODE_HOME must name a .zcode directory so app-server can use the same data root"
@@ -929,8 +1157,8 @@ function resolveZcodeHome(env) {
   return resolved;
 }
 function samePath(left, right) {
-  const resolvedLeft = path6.resolve(left);
-  const resolvedRight = path6.resolve(right);
+  const resolvedLeft = path7.resolve(left);
+  const resolvedRight = path7.resolve(right);
   return process.platform === "win32" ? resolvedLeft.toLowerCase() === resolvedRight.toLowerCase() : resolvedLeft === resolvedRight;
 }
 function isReadableFile(filePath) {
@@ -943,12 +1171,12 @@ function isReadableFile(filePath) {
   }
 }
 function findPackageRoot(startDir) {
-  let current = startDir ?? path6.dirname(fileURLToPath(import.meta.url));
+  let current = startDir ?? path7.dirname(fileURLToPath(import.meta.url));
   for (let depth = 0; depth < 10; depth++) {
-    if (existsSync3(path6.join(current, "package.json")) || existsSync3(path6.join(current, "plugin.json")) && existsSync3(path6.join(current, "dist")) && existsSync3(path6.join(current, "worker"))) {
+    if (existsSync3(path7.join(current, "package.json")) || existsSync3(path7.join(current, "plugin.json")) && existsSync3(path7.join(current, "dist")) && existsSync3(path7.join(current, "worker"))) {
       return current;
     }
-    const parent = path6.dirname(current);
+    const parent = path7.dirname(current);
     if (parent === current) break;
     current = parent;
   }
@@ -972,7 +1200,9 @@ var PERSISTED_RUNTIME_KEYS, NodeRuntimeResolver;
 var init_resolver = __esm({
   "src/runtime/resolver.ts"() {
     "use strict";
+    init_account_provider();
     init_errors();
+    init_official_builtin_registry();
     init_paths();
     init_host_profile();
     PERSISTED_RUNTIME_KEYS = [
@@ -1001,11 +1231,13 @@ var init_resolver = __esm({
       #homeDir;
       #packageRoot;
       #host;
+      #onBuiltinRegistrySelection;
       constructor(options = {}) {
         this.#env = options.env ?? process.env;
         this.#homeDir = options.homeDir ?? homedir2();
         this.#packageRoot = options.packageRoot ?? null;
         this.#host = validateHostProfile(options.host ?? codexHostProfile(this.#homeDir));
+        this.#onBuiltinRegistrySelection = options.onBuiltinRegistrySelection;
       }
       async resolve() {
         const env = loadPersistedRuntimeEnvironment(this.#env, this.#homeDir, this.#host);
@@ -1015,7 +1247,7 @@ var init_resolver = __esm({
         if (explicitDataBaseDir && !isAbsolutePathForPlatform(explicitDataBaseDir)) {
           throw new BridgeError("provider_config_invalid", "ZCODE_DATA_BASE_DIR must be an absolute path");
         }
-        if (zcodeHome && explicitDataBaseDir && !sameFileSystemPath(path6.dirname(zcodeHome), explicitDataBaseDir)) {
+        if (zcodeHome && explicitDataBaseDir && !sameFileSystemPath(path7.dirname(zcodeHome), explicitDataBaseDir)) {
           throw new BridgeError(
             "provider_config_invalid",
             `ZCODE_HOME (${zcodeHome}) and ZCODE_DATA_BASE_DIR (${explicitDataBaseDir}) conflict; ZCODE_HOME must name <ZCODE_DATA_BASE_DIR>/.zcode. Fix one of them instead of relying on silent selection.`
@@ -1088,11 +1320,11 @@ var init_resolver = __esm({
             this.#validatePersonalConfig(personalEnv);
             personalConfigFile = personalEnv;
           } else {
-            const candidates = zcodeHome ? [path6.join(zcodeHome, "v2", "provider_config.json")] : [
+            const candidates = zcodeHome ? [path7.join(zcodeHome, "v2", "provider_config.json")] : [
               explicitDataBaseDir,
               data.configuredDataBaseDir,
               data.userHome
-            ].filter((base) => Boolean(base)).filter((base, index, values) => values.indexOf(base) === index).map((base) => path6.join(base, ".zcode", "v2", "provider_config.json"));
+            ].filter((base) => Boolean(base)).filter((base, index, values) => values.indexOf(base) === index).map((base) => path7.join(base, ".zcode", "v2", "provider_config.json"));
             const existing = candidates.filter((candidate) => existsSync3(candidate));
             if (existing.length === 0) {
               throw new BridgeError(
@@ -1120,21 +1352,27 @@ var init_resolver = __esm({
             personalConfigFile = accepted;
           }
         }
-        if (zcodeHome && !samePath(personalConfigFile, path6.join(zcodeHome, "v2", "provider_config.json"))) {
+        if (zcodeHome && !samePath(personalConfigFile, path7.join(zcodeHome, "v2", "provider_config.json"))) {
           throw new BridgeError(
             "provider_config_invalid",
             `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE must be ZCODE_HOME/v2/provider_config.json (${zcodeHome})`
           );
         }
+        builtinConfigFile = await this.#selectBuiltinRegistry(
+          builtinConfigFile,
+          zcodeEntrypoint,
+          personalConfigFile,
+          env
+        );
         const dataOverride = env["ZCODE_BRIDGE_DATA_DIR"]?.trim();
         let dataRoot;
         if (dataOverride) {
-          if (!path6.isAbsolute(dataOverride)) {
+          if (!path7.isAbsolute(dataOverride)) {
             throw new Error(
               `ZCODE_BRIDGE_DATA_DIR must be an absolute path when set, got: ${dataOverride}`
             );
           }
-          dataRoot = path6.normalize(dataOverride);
+          dataRoot = path7.normalize(dataOverride);
         } else {
           dataRoot = this.#packageRoot ?? findPackageRoot();
         }
@@ -1151,6 +1389,27 @@ var init_resolver = __esm({
         if (!isReadableFile(filePath)) {
           throw new BridgeError("runtime_not_found", `${label}: ${filePath}`);
         }
+      }
+      /**
+       * ADR-066: the installation's own bundled file is the default, not a pin.
+       * Values left by older installers therefore follow the official runtime
+       * registry; any other explicit path stays untouched.
+       */
+      async #selectBuiltinRegistry(builtinConfigFile, zcodeEntrypoint, personalConfigFile, env) {
+        if (await isOfficialBuiltinRegistryPin(builtinConfigFile, builtinConfigForRuntime(zcodeEntrypoint))) {
+          return builtinConfigFile;
+        }
+        const dataBaseDir = zcodeDataBaseDir(personalConfigFile);
+        const appVersion = dataBaseDir ? officialDesktopAppVersion(zcodeEntrypoint) : null;
+        const runtimePath = dataBaseDir && appVersion ? officialRuntimeRegistryPath({ dataBaseDir, appVersion, env }) : null;
+        const selection = await selectOfficialBuiltinRegistry({ bundledPath: builtinConfigFile, runtimePath });
+        try {
+          this.#onBuiltinRegistrySelection?.(selection);
+        } catch {
+        }
+        if (selection.source !== "runtime") return builtinConfigFile;
+        this.#validateBuiltinConfig(selection.path);
+        return selection.path;
       }
       /**
        * Structure validation only. The verified differential signal for the
@@ -1223,12 +1482,12 @@ __export(official_app_server_runtime_exports, {
   OfficialAppServerRuntimeResolver: () => OfficialAppServerRuntimeResolver,
   isOfficialCodingPlanProvider: () => isOfficialCodingPlanProvider
 });
-import { createHash as createHash5 } from "node:crypto";
+import { createHash as createHash6 } from "node:crypto";
 import { execFile } from "node:child_process";
 import { closeSync as closeSync2, createReadStream, openSync as openSync2, readSync as readSync2 } from "node:fs";
 import { lstat, realpath } from "node:fs/promises";
 import { homedir as homedir3 } from "node:os";
-import path7 from "node:path";
+import path8 from "node:path";
 import { promisify } from "node:util";
 function isOfficialCodingPlanProvider(providerId) {
   return providerId === OFFICIAL_CODING_PLAN_PROVIDER_ID || providerId === "bigmodel-individual-coding-plan" || providerId === "builtin:bigmodel-coding-plan";
@@ -1252,6 +1511,9 @@ function unverified(reason, nodeExecutable, details = {}) {
     builtin_provider_config_path: details.builtin_provider_config_path ?? null,
     builtin_provider_config_bytes: details.builtin_provider_config_bytes ?? null,
     builtin_provider_config_sha256: details.builtin_provider_config_sha256 ?? null,
+    active_builtin_provider_config_path: details.active_builtin_provider_config_path ?? null,
+    active_builtin_provider_config_source: details.active_builtin_provider_config_source ?? null,
+    active_builtin_provider_config_revision: details.active_builtin_provider_config_revision ?? null,
     runtime_host_path: details.runtime_host_path ?? null,
     runtime_host_bytes: details.runtime_host_bytes ?? null,
     runtime_host_sha256: details.runtime_host_sha256 ?? null,
@@ -1291,7 +1553,7 @@ async function inspectWindowsExecutable(filePath) {
   let signerThumbprint = null;
   if (systemRoot) {
     try {
-      const powershell = path7.join(
+      const powershell = path8.join(
         systemRoot,
         "System32",
         "WindowsPowerShell",
@@ -1373,14 +1635,14 @@ async function canonicalFileInside(root, candidate, label) {
   const stat = await lstat(candidate);
   if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`${label} is not a regular file`);
   const resolved = await realpath(candidate);
-  const relative = path7.relative(root, resolved);
-  if (!relative || relative === ".." || relative.startsWith(`..${path7.sep}`) || path7.isAbsolute(relative)) {
+  const relative = path8.relative(root, resolved);
+  if (!relative || relative === ".." || relative.startsWith(`..${path8.sep}`) || path8.isAbsolute(relative)) {
     throw new Error(`${label} resolves outside the installed ZCode root`);
   }
   return resolved;
 }
 async function sha256File(filePath) {
-  const hash2 = createHash5("sha256");
+  const hash2 = createHash6("sha256");
   await new Promise((resolve, reject) => {
     const stream = createReadStream(filePath);
     stream.on("data", (chunk) => hash2.update(chunk));
@@ -1426,7 +1688,7 @@ async function probeWindowsFileVersion(executable) {
   const encoded = Buffer.from(script, "utf16le").toString("base64");
   const systemRoot = process.env["SystemRoot"]?.trim();
   if (!systemRoot) throw new Error("SystemRoot is unavailable for the Windows version probe");
-  const powershell = path7.join(
+  const powershell = path8.join(
     systemRoot,
     "System32",
     "WindowsPowerShell",
@@ -1457,10 +1719,12 @@ var execFileAsync, OFFICIAL_CODING_PLAN_PROVIDER_ID, OFFICIAL_APPSERVER_COMPATIB
 var init_official_app_server_runtime = __esm({
   "src/runtime/official-app-server-runtime.ts"() {
     "use strict";
+    init_account_provider();
     init_host_profile();
     init_desktop_host_launch();
     init_errors();
     init_node_runtime();
+    init_official_builtin_registry();
     init_paths();
     init_official_runtime_authorization();
     init_resolver();
@@ -1584,17 +1848,17 @@ var init_official_app_server_runtime = __esm({
           );
           runtimeHostPath = await canonicalFileInside(
             installDir,
-            path7.join(installDir, "resources", "tools", "runtime-host", "zcode-runtime-host.exe"),
+            path8.join(installDir, "resources", "tools", "runtime-host", "zcode-runtime-host.exe"),
             "installed runtime-host"
           );
           desktopExecutablePath = await canonicalFileInside(
             installDir,
-            path7.join(installDir, "ZCode.exe"),
+            path8.join(installDir, "ZCode.exe"),
             "installed Desktop executable"
           );
           desktopArchivePath = await canonicalFileInside(
             installDir,
-            path7.join(installDir, "resources", "app.asar"),
+            path8.join(installDir, "resources", "app.asar"),
             "installed Desktop archive"
           );
         } catch (error62) {
@@ -1714,6 +1978,17 @@ var init_official_app_server_runtime = __esm({
         const observedDesktopVersion = desktopVersion ?? "unavailable";
         const observedAppVersion = launchEnv.ZCODE_APP_VERSION ?? "unavailable";
         const observedBuildCommitId = launchEnv.ZCODE_BUILD_COMMIT_ID ?? "unavailable";
+        const registryPinned = await this.#builtinRegistryPinned(builtinPath);
+        let registry2 = null;
+        if (!registryPinned) {
+          const dataBaseDir = await this.#personalDataBaseDir();
+          const runtimePath = dataBaseDir && launchEnv.ZCODE_APP_VERSION ? officialRuntimeRegistryPath({
+            dataBaseDir,
+            appVersion: launchEnv.ZCODE_APP_VERSION,
+            env
+          }) : null;
+          registry2 = await selectOfficialBuiltinRegistry({ bundledPath: builtinPath, runtimePath });
+        }
         const installationFingerprint = computeOfficialInstallationFingerprint({
           desktop_version: observedDesktopVersion,
           desktop_app_version: observedAppVersion,
@@ -1771,6 +2046,9 @@ var init_official_app_server_runtime = __esm({
           builtin_provider_config_path: builtinPath,
           builtin_provider_config_bytes: builtinBytes,
           builtin_provider_config_sha256: builtinSha256,
+          active_builtin_provider_config_path: registry2?.path ?? builtinPath,
+          active_builtin_provider_config_source: registry2?.source ?? "bundled",
+          active_builtin_provider_config_revision: registry2?.revision ?? null,
           runtime_host_path: runtimeHostPath,
           runtime_host_bytes: runtimeHostBytes,
           runtime_host_sha256: runtimeHostSha256,
@@ -1820,12 +2098,13 @@ var init_official_app_server_runtime = __esm({
       }
       async resolve() {
         const descriptor = await this.inspect();
-        if (descriptor.installation_safety !== "OFFICIAL_INSTALLATION_SAFE" || !descriptor.bundle_path || !descriptor.builtin_provider_config_path || !descriptor.runtime_host_path) {
+        if (descriptor.installation_safety !== "OFFICIAL_INSTALLATION_SAFE" || !descriptor.bundle_path || !descriptor.builtin_provider_config_path || !descriptor.active_builtin_provider_config_path || !descriptor.runtime_host_path) {
           throw new BridgeError(
             "provider_config_invalid",
             `OFFICIAL_INSTALLATION_UNSAFE: ${descriptor.reason ?? "installed Official AppServer is unavailable"}; OFFICIAL_DISCOUNT_NOT_VERIFIED`
           );
         }
+        const registryPinned = await this.#builtinRegistryPinned(descriptor.builtin_provider_config_path);
         const base = this.#baseResolver ?? new NodeRuntimeResolver({
           env: this.#env,
           ...this.#homeDir ? { homeDir: this.#homeDir } : {},
@@ -1836,18 +2115,45 @@ var init_official_app_server_runtime = __esm({
           ...configured,
           nodeExecutable: descriptor.node_executable,
           zcodeEntrypoint: descriptor.bundle_path,
-          providerBuiltinConfigFile: descriptor.builtin_provider_config_path
+          providerBuiltinConfigFile: registryPinned ? configured.providerBuiltinConfigFile : descriptor.active_builtin_provider_config_path
         };
+      }
+      /** True only for an explicit builtin file that is not this installation's bundled file. */
+      async #builtinRegistryPinned(bundledPath) {
+        return isOfficialBuiltinRegistryPin(
+          this.#persistedEnv()["ZCODE_BUILTIN_PROVIDER_CONFIG_FILE"],
+          bundledPath
+        );
+      }
+      #persistedEnv() {
+        return loadPersistedRuntimeEnvironment(
+          this.#env,
+          this.#homeDir,
+          this.#host ?? codexHostProfile(this.#homeDir)
+        );
+      }
+      /** Data base directory of the personal provider config the base resolver selects; null when unavailable. */
+      async #personalDataBaseDir() {
+        try {
+          const base = this.#baseResolver ?? new NodeRuntimeResolver({
+            env: this.#env,
+            ...this.#homeDir ? { homeDir: this.#homeDir } : {},
+            ...this.#host ? { host: this.#host } : {}
+          });
+          return zcodeDataBaseDir((await base.resolve()).providerPersonalConfigFile);
+        } catch {
+          return null;
+        }
       }
     };
   }
 });
 
 // src/adapters/official-host-adapter.ts
-import { createHash as createHash6 } from "node:crypto";
+import { createHash as createHash7 } from "node:crypto";
 import { createReadStream as createReadStream2 } from "node:fs";
 import { lstat as lstat2, realpath as realpath2 } from "node:fs/promises";
-import path8 from "node:path";
+import path9 from "node:path";
 import { fileURLToPath as fileURLToPath2, pathToFileURL } from "node:url";
 function createInstalledOfficialHostSessionFactory(options = {}) {
   const providerCapability = options.providerCapability ?? "installed_runtime";
@@ -1863,7 +2169,7 @@ function createInstalledOfficialHostSessionFactory(options = {}) {
   const inspect = () => resolver.inspect();
   const resolveAssets = () => {
     resolved ??= Promise.all([resolver.inspect(), packagedAssets()]).then(([descriptor, packaged]) => {
-      const missingRuntimeAsset = descriptor.installation_safety !== "OFFICIAL_INSTALLATION_SAFE" || !descriptor.bundle_path || !descriptor.builtin_provider_config_path || !descriptor.runtime_host_path;
+      const missingRuntimeAsset = descriptor.installation_safety !== "OFFICIAL_INSTALLATION_SAFE" || !descriptor.bundle_path || !descriptor.builtin_provider_config_path || !descriptor.active_builtin_provider_config_path || !descriptor.runtime_host_path;
       if (missingRuntimeAsset) {
         const failure2 = descriptor.installation_safety === "OFFICIAL_INSTALLATION_UNSAFE" ? `OFFICIAL_INSTALLATION_UNSAFE: ${descriptor.reason ?? "installed runtime failed safety validation"}` : "OFFICIAL_RUNTIME_UNVERIFIED: installed runtime descriptor is incomplete";
         try {
@@ -1885,7 +2191,7 @@ function createInstalledOfficialHostSessionFactory(options = {}) {
           root: descriptor.install_dir,
           hostModulePath: packaged.hostModulePath,
           appServerEntryPath: descriptor.bundle_path,
-          builtinProviderConfigPath: descriptor.builtin_provider_config_path,
+          builtinProviderConfigPath: descriptor.active_builtin_provider_config_path,
           runtimeHostPath: descriptor.runtime_host_path,
           manifestDigest: descriptor.installation_fingerprint ?? descriptor.bundle_sha256 ?? "unavailable"
         }
@@ -1926,7 +2232,7 @@ function createOfficialHostClientFactory(input2) {
     if (process.platform !== "win32" || process.arch !== "x64") {
       throw new BridgeError("runtime_not_found", "The fixed Official Host bundle is available only for Windows x64.");
     }
-    if (path8.resolve(context.config.zcodeEntrypoint) !== path8.resolve(assets.appServerEntryPath)) {
+    if (path9.resolve(context.config.zcodeEntrypoint) !== path9.resolve(assets.appServerEntryPath)) {
       throw new BridgeError("provider_config_invalid", "Official Host runtime entrypoint must be the verified installed bundle.");
     }
     const module = await resolveOfficialHostModule(input2.moduleSource);
@@ -1948,7 +2254,10 @@ function createOfficialHostClientFactory(input2) {
         cwd: workspacePath,
         env: {
           ...launchEnv,
-          ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: assets.builtinProviderConfigPath,
+          // ADR-066: the AppServer registry and the Account Overlay must come
+          // from the same resolved config. `context.config` is what the
+          // overlay reads; the memoized asset descriptor may be older.
+          ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: context.config.providerBuiltinConfigFile,
           ZCODE_PERSONAL_PROVIDER_CONFIG_FILE: context.config.providerPersonalConfigFile,
           ZCODE_RUNTIME_HOST_PATH: assets.runtimeHostPath
         }
@@ -2055,7 +2364,7 @@ function createOfficialHostClientFactory(input2) {
                 recordedTreeScan = {
                   rootPid: root.pid,
                   rootFingerprint: root.fingerprint,
-                  evidenceDigest: createHash6("sha256").update(JSON.stringify({
+                  evidenceDigest: createHash7("sha256").update(JSON.stringify({
                     rootPid: root.pid,
                     rootFingerprint: root.fingerprint,
                     memberPids
@@ -2193,7 +2502,7 @@ async function verifyOfficialHostAssets(workerModuleUrl = import.meta.url) {
   }
   const verified = /* @__PURE__ */ new Map();
   for (const [name, definition] of Object.entries(OFFICIAL_HOST_ASSETS)) {
-    const candidate = path8.resolve(rootReal, definition.relativePath);
+    const candidate = path9.resolve(rootReal, definition.relativePath);
     try {
       const candidateStat = await lstat2(candidate);
       if (!candidateStat.isFile() || candidateStat.isSymbolicLink()) throw new Error("not a regular file");
@@ -2209,7 +2518,7 @@ async function verifyOfficialHostAssets(workerModuleUrl = import.meta.url) {
       });
     }
   }
-  const manifestDigest = createHash6("sha256").update(JSON.stringify(
+  const manifestDigest = createHash7("sha256").update(JSON.stringify(
     Object.entries(OFFICIAL_HOST_ASSETS).sort(([left], [right]) => left.localeCompare(right)).map(([name, definition]) => ({
       name,
       relativePath: definition.relativePath,
@@ -2248,7 +2557,7 @@ function normalizeOfficialHostProductVersion(value) {
   return version2;
 }
 function sameWorkspace(left, right) {
-  const normalize = (value) => path8.normalize(path8.resolve(value));
+  const normalize = (value) => path9.normalize(path9.resolve(value));
   return process.platform === "win32" ? normalize(left).toLocaleLowerCase("en-US") === normalize(right).toLocaleLowerCase("en-US") : normalize(left) === normalize(right);
 }
 async function withOfficialRuntimeHostEnvironment(runtimeHostPath, operation) {
@@ -2270,11 +2579,11 @@ async function withOfficialRuntimeHostEnvironment(runtimeHostPath, operation) {
   }
 }
 function isPathInside(root, candidate) {
-  const relative = path8.relative(root, candidate);
-  return relative !== "" && !relative.startsWith(`..${path8.sep}`) && relative !== ".." && !path8.isAbsolute(relative);
+  const relative = path9.relative(root, candidate);
+  return relative !== "" && !relative.startsWith(`..${path9.sep}`) && relative !== ".." && !path9.isAbsolute(relative);
 }
 async function sha256File2(filePath) {
-  const hash2 = createHash6("sha256");
+  const hash2 = createHash7("sha256");
   await new Promise((resolve, reject) => {
     const stream = createReadStream2(filePath);
     stream.on("data", (chunk) => hash2.update(chunk));
@@ -2338,7 +2647,7 @@ __export(launch_bootstrap_exports, {
   spawnAndBootstrapOnce: () => spawnAndBootstrapOnce,
   writeLaunchBootstrap: () => writeLaunchBootstrap
 });
-import { createHash as createHash7 } from "node:crypto";
+import { createHash as createHash8 } from "node:crypto";
 function createLaunchBootstrap(source) {
   const snapshot = source.policy_snapshot;
   const bootstrap = {
@@ -2435,14 +2744,14 @@ function deriveAdmissionPolicySnapshotDigest(value) {
     policy_digest: value.policy_digest,
     execution_profile_id: value.execution_profile_id
   };
-  return createHash7("sha256").update(canonicalJson(envelope), "utf8").digest("hex");
+  return createHash8("sha256").update(canonicalJson2(envelope), "utf8").digest("hex");
 }
-function canonicalJson(value) {
+function canonicalJson2(value) {
   if (value === null || typeof value === "string" || typeof value === "boolean") return JSON.stringify(value);
   if (typeof value === "number" && Number.isSafeInteger(value)) return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (Array.isArray(value)) return `[${value.map(canonicalJson2).join(",")}]`;
   if (value && Object.getPrototypeOf(value) === Object.prototype) {
-    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson2(value[key])}`).join(",")}}`;
   }
   throw new TypeError("invalid admission policy snapshot");
 }
@@ -2753,7 +3062,7 @@ __export(runtime_event_channel_exports, {
   createCandidateWorkerRuntimeEventChannel: () => createCandidateWorkerRuntimeEventChannel,
   isCandidateRuntimeEventChannel: () => isCandidateRuntimeEventChannel
 });
-import { createHash as createHash8 } from "node:crypto";
+import { createHash as createHash9 } from "node:crypto";
 async function createCandidateRuntimeEventChannel(child, operation, verifyProcessIdentity) {
   if (!child || !Number.isSafeInteger(child.pid) || !Array.isArray(child.stdio) || child.stdio.length < 15 || !operation || operation.operation_kind !== "attempt_lifecycle" || operation.phase !== "running" || !Number.isSafeInteger(operation.generation) || operation.generation < 1 || !operation.claim_id || operation.claim_generation !== operation.generation || !operation.claim_worker_identity_json || !operation.launch_identity_json || !operation.claim_worker_identity_digest || typeof verifyProcessIdentity !== "function") {
     throw coded("runtime_event_channel_unavailable");
@@ -3000,7 +3309,7 @@ function stableJson(value, depth = 0) {
   throw coded("runtime_event_json_invalid");
 }
 function sha256(value) {
-  return createHash8("sha256").update(value).digest("hex");
+  return createHash9("sha256").update(value).digest("hex");
 }
 function coded(code) {
   return Object.assign(new Error(code), { code });
@@ -3120,7 +3429,7 @@ __export(interaction_channel_exports, {
   isCandidateInteractionChannel: () => isCandidateInteractionChannel,
   isCandidateInteractionPreparedAcknowledgement: () => isCandidateInteractionPreparedAcknowledgement
 });
-import { createHash as createHash9 } from "node:crypto";
+import { createHash as createHash10 } from "node:crypto";
 async function createCandidateInteractionChannel(child, operation, verifyProcessIdentity) {
   if (!child || !Number.isSafeInteger(child.pid) || !Array.isArray(child.stdio) || child.stdio.length < 10 || !operation || operation.operation_kind !== "attempt_lifecycle" || operation.phase !== "running" || !Number.isSafeInteger(operation.generation) || operation.generation < 1 || !operation.claim_id || operation.claim_generation !== operation.generation || !operation.claim_worker_identity_json || !operation.launch_identity_json || !operation.claim_worker_identity_digest || typeof verifyProcessIdentity !== "function") throw coded2("interaction_channel_unavailable");
   let worker;
@@ -3446,7 +3755,7 @@ function stableJson2(value, depth = 0) {
   throw coded2("interaction_json_invalid");
 }
 function sha2562(value) {
-  return createHash9("sha256").update(value).digest("hex");
+  return createHash10("sha256").update(value).digest("hex");
 }
 function coded2(code) {
   return Object.assign(new Error(code), { code });
@@ -3653,6 +3962,107 @@ var init_agent_report = __esm({
   "src/adapters/agent-report.ts"() {
     "use strict";
     init_result_contract();
+  }
+});
+
+// src/adapters/rpc-diagnostics.ts
+function extractRpcDiagnostic(method, error62) {
+  if (!RPC_METHOD2.test(method)) return null;
+  const rejection = asRecord4(error62);
+  const rawCode = rejection?.code;
+  const code = typeof rawCode === "number" && Number.isSafeInteger(rawCode) ? rawCode : null;
+  const data = asRecord4(rejection?.data);
+  const dataName = token(data?.name, DATA_NAME_TOKEN, MAX_DATA_NAME_CHARS);
+  const dataCode = token(data?.code, DATA_CODE_TOKEN, MAX_DATA_CODE_CHARS);
+  const message = singleLine(rejection?.message, MAX_RPC_MESSAGE_CHARS);
+  const stack = sanitizeStack(data?.stack);
+  if (code === null && message === "" && dataName === null && dataCode === null && stack === void 0) return null;
+  return { method, code, message, data_name: dataName, data_code: dataCode, ...stack === void 0 ? {} : { stack } };
+}
+function appendRpcDiagnostic(list, diagnostic) {
+  if (list.some((entry) => sameRejection(entry, diagnostic))) return list;
+  if (list.length >= MAX_RPC_DIAGNOSTICS2) return list;
+  const withStack = [...list, diagnostic];
+  if (diagnosticsBytes(withStack) <= MAX_RPC_DIAGNOSTICS_BYTES2) return withStack;
+  const { stack: _omitted, ...withoutStack } = diagnostic;
+  return diagnosticsBytes([...list, withoutStack]) <= MAX_RPC_DIAGNOSTICS_BYTES2 ? [...list, withoutStack] : list;
+}
+function sameRejection(left, right) {
+  return left.method === right.method && left.code === right.code && left.data_code === right.data_code;
+}
+function diagnosticsBytes(list) {
+  return Buffer.byteLength(String(canonical(list)), "utf8");
+}
+function token(value, pattern, maxChars) {
+  return typeof value === "string" && value.length <= maxChars && pattern.test(value) ? value : null;
+}
+function singleLine(value, maxChars) {
+  if (typeof value !== "string") return "";
+  return limit(redactDiagnosticText(value).replace(/\s+/gu, " ").trim(), maxChars);
+}
+function sanitizeStack(value) {
+  if (typeof value !== "string") return void 0;
+  const frames = [];
+  for (const line of value.slice(0, MAX_RAW_STACK_CHARS).split(/\r?\n/u)) {
+    const frame = /^at\s+(.+)$/u.exec(line.trim());
+    if (!frame) continue;
+    const rendered = sanitizeFrame(frame[1]);
+    if (rendered === null) continue;
+    if (frames.length >= MAX_RPC_STACK_FRAMES || frames.join("\n").length + rendered.length + 1 > MAX_RPC_STACK_CHARS) break;
+    frames.push(rendered);
+  }
+  return frames.length ? frames.join("\n") : void 0;
+}
+function sanitizeFrame(frame) {
+  const group = /^(.*?)\s*\(([^()]*)\)$/u.exec(frame);
+  const rawFunction = (group?.[1] ?? "").trim();
+  const rawLocation = (group?.[2] ?? frame).trim();
+  const location = sanitizeLocation(rawLocation);
+  if (location === null) return null;
+  if (!group) return `at ${location}`;
+  return `at ${rawFunction && FUNCTION_NAME.test(rawFunction) ? rawFunction : "<anonymous>"} (${location})`;
+}
+function sanitizeLocation(raw) {
+  const wrapped = /\(([^()]+)\)$/u.exec(raw);
+  const location = (wrapped && /^(?:eval|function)\b/iu.test(raw) ? wrapped[1] : raw).trim();
+  if (/^(?:node:|native$|<anonymous>$)/u.test(location)) return location.length <= 160 ? location : null;
+  const baseName = location.slice(Math.max(location.lastIndexOf("\\"), location.lastIndexOf("/")) + 1);
+  const match = /^([^\s:()[\]]{1,120})(?::(\d{1,9})(?::(\d{1,9}))?)?\)?$/u.exec(baseName);
+  if (!match) return null;
+  return `${match[1]}${match[2] ? `:${match[2]}${match[3] ? `:${match[3]}` : ""}` : ""}`;
+}
+function redactDiagnosticText(text) {
+  return text.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/gu, "").replace(/\bBearer\s+[A-Za-z0-9\-._~+/]+=*/giu, "Bearer [REDACTED]").replace(/\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}/gu, "[REDACTED_JWT]").replace(/\b[0-9a-f]{32}\.[A-Za-z0-9]{16}\b/giu, "[REDACTED_KEY]").replace(/\bsk-[A-Za-z0-9_-]{8,}/gu, "[REDACTED_KEY]").replace(
+    /\b(api[_-]?keys?|access[_-]?tokens?|refresh[_-]?tokens?|keys?|tokens?|secrets?|passwords?|passwd|authorizations?|cookies?|credentials?)\s*[:=]\s*["']?[^\s,"';&)}\]]{4,}/giu,
+    "$1=[REDACTED]"
+  ).replace(/\b[0-9a-f]{32,}\b/giu, "[REDACTED_HEX]").replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/gu, "");
+}
+function limit(text, maxChars) {
+  if (text.length <= maxChars) return text;
+  const head = text.slice(0, maxChars - TRUNCATED_MARKER.length);
+  return `${/[\uD800-\uDBFF]$/u.test(head) ? head.slice(0, -1) : head}${TRUNCATED_MARKER}`;
+}
+function asRecord4(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value : null;
+}
+var MAX_RPC_DIAGNOSTICS2, MAX_RPC_DIAGNOSTICS_BYTES2, MAX_RPC_MESSAGE_CHARS, MAX_RPC_STACK_FRAMES, MAX_RPC_STACK_CHARS, MAX_DATA_NAME_CHARS, MAX_DATA_CODE_CHARS, MAX_RAW_STACK_CHARS, TRUNCATED_MARKER, RPC_METHOD2, DATA_NAME_TOKEN, DATA_CODE_TOKEN, FUNCTION_NAME;
+var init_rpc_diagnostics = __esm({
+  "src/adapters/rpc-diagnostics.ts"() {
+    "use strict";
+    init_result_contract();
+    MAX_RPC_DIAGNOSTICS2 = 4;
+    MAX_RPC_DIAGNOSTICS_BYTES2 = 8 * 1024;
+    MAX_RPC_MESSAGE_CHARS = 500;
+    MAX_RPC_STACK_FRAMES = 12;
+    MAX_RPC_STACK_CHARS = 1200;
+    MAX_DATA_NAME_CHARS = 64;
+    MAX_DATA_CODE_CHARS = 128;
+    MAX_RAW_STACK_CHARS = 64e3;
+    TRUNCATED_MARKER = "\u2026[truncated]";
+    RPC_METHOD2 = /^[a-z]+(?:\/[A-Za-z0-9_]+){1,2}$/u;
+    DATA_NAME_TOKEN = /^[A-Za-z][A-Za-z0-9_]*$/u;
+    DATA_CODE_TOKEN = /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/u;
+    FUNCTION_NAME = /^(?:(?:new |async )*[A-Za-z0-9_$.[\]<> ]{1,100})?$/u;
   }
 });
 
@@ -5444,6 +5854,7 @@ var init_child_env = __esm({
   "src/runtime/child-env.ts"() {
     "use strict";
     init_paths();
+    init_official_builtin_registry();
     WINDOWS_OS_ENV = /* @__PURE__ */ new Set([
       "PATH",
       "SYSTEMROOT",
@@ -5797,10 +6208,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path12) {
-  if (!path12)
+function getElementAtPath(obj, path13) {
+  if (!path13)
     return obj;
-  return path12.reduce((acc, key) => acc?.[key], obj);
+  return path13.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -6059,11 +6470,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path12, issues) {
+function prefixIssues(path13, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path12);
+    iss.path.unshift(path13);
     return iss;
   });
 }
@@ -6584,16 +6995,16 @@ function flattenError(error62, mapper = (issue2) => issue2.message) {
 }
 function formatError(error62, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error63, path12 = []) => {
+  const processError = (error63, path13 = []) => {
     for (const issue2 of error63.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path12, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path13, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path12, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path13, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path12, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path13, ...issue2.path]);
       } else {
-        const fullpath = [...path12, ...issue2.path];
+        const fullpath = [...path13, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -6632,17 +7043,17 @@ function formatError(error62, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error62, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error63, path12 = []) => {
+  const processError = (error63, path13 = []) => {
     var _a3;
     for (const issue2 of error63.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path12, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path13, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path12, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path13, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path12, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path13, ...issue2.path]);
       } else {
-        const fullpath = [...path12, ...issue2.path];
+        const fullpath = [...path13, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -6681,8 +7092,8 @@ function treeifyError(error62, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path12 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path12) {
+  const path13 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path13) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -7775,9 +8186,9 @@ function isValidIBAN(input2) {
     return false;
   return isIso7064Mod97(input2);
 }
-function isValidJWT(token, algorithm = null) {
+function isValidJWT(token2, algorithm = null) {
   try {
-    const tokensParts = token.split(".");
+    const tokensParts = token2.split(".");
     if (tokensParts.length !== 3)
       return false;
     const [header] = tokensParts;
@@ -24678,13 +25089,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path12 = ref.slice(1).split("/").filter(Boolean);
-  if (path12.length === 0) {
+  const path13 = ref.slice(1).split("/").filter(Boolean);
+  if (path13.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path12[0] === defsKey) {
-    const key = path12[1] === void 0 ? void 0 : decodeJSONPointerSegment(path12[1]);
+  if (path13[0] === defsKey) {
+    const key = path13[1] === void 0 ? void 0 : decodeJSONPointerSegment(path13[1]);
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -26884,7 +27295,7 @@ var init_host = __esm({
 
 // src/browser/load-backend.ts
 import { existsSync as existsSync4 } from "node:fs";
-import path9 from "node:path";
+import path10 from "node:path";
 import { fileURLToPath as fileURLToPath3, pathToFileURL as pathToFileURL2 } from "node:url";
 function devRuntimeSpecifier() {
   return ["./runtime", "js"].join(".");
@@ -26901,8 +27312,8 @@ function asBackendModule(imported, label) {
   throw new Error(`${label} does not export createManagedCdpBrowserRuntime`);
 }
 async function loadBackendModule() {
-  const moduleDir = path9.dirname(fileURLToPath3(import.meta.url));
-  const vendorEntry = path9.join(moduleDir, "vendor", "pkg", "browser-host.cjs");
+  const moduleDir = path10.dirname(fileURLToPath3(import.meta.url));
+  const vendorEntry = path10.join(moduleDir, "vendor", "pkg", "browser-host.cjs");
   if (existsSync4(vendorEntry)) {
     return asBackendModule(
       await import(pathToFileURL2(vendorEntry).href),
@@ -26938,10 +27349,10 @@ __export(zcode_app_server_adapter_exports, {
 });
 import { spawn as spawn3 } from "node:child_process";
 import { homedir as homedir4 } from "node:os";
-import path10 from "node:path";
-import { createHash as createHash10, randomUUID } from "node:crypto";
+import path11 from "node:path";
+import { createHash as createHash11, randomUUID } from "node:crypto";
 function publicUsage(value) {
-  if (!isRecord4(value)) return null;
+  if (!isRecord5(value)) return null;
   const result = {};
   for (const key of [
     "inputTokens",
@@ -26983,6 +27394,16 @@ function readFactsCandidate(error62) {
   if (!(error62 instanceof Error)) return null;
   return error62[FACTS_CANDIDATE] ?? null;
 }
+function recordRpcDiagnostic(entry, method, error62) {
+  try {
+    const diagnostic = extractRpcDiagnostic(method, error62);
+    if (diagnostic) entry.rpcDiagnostics = appendRpcDiagnostic(entry.rpcDiagnostics, diagnostic);
+  } catch {
+  }
+}
+function failedRpcDiagnostics(entry) {
+  return entry.timedOut || entry.cancelRequested || entry.rpcDiagnostics.length === 0 ? void 0 : entry.rpcDiagnostics;
+}
 function registrationFailure(error62) {
   const candidate = readFactsCandidate(error62);
   const rpcRejected = candidate?.kind === "rpc" && candidate.rejected;
@@ -27014,7 +27435,7 @@ function closeDiagnostic(stage, error62, treeScanStatus) {
   };
 }
 function sanitizedRuntimeLifecycleReason(event) {
-  const value = asRecord4(event);
+  const value = asRecord5(event);
   if (typeof value.reason === "string" && /^[A-Za-z][A-Za-z0-9_.:-]{0,127}$/u.test(value.reason)) {
     return value.reason;
   }
@@ -27043,7 +27464,7 @@ function browserHostClosedResult() {
   };
 }
 function sameWorkspacePath(left, right) {
-  const normalize = (value) => path10.normalize(value).replace(/[/\\]+/gu, (match) => match.includes("\\") || process.platform === "win32" ? "\\" : "/");
+  const normalize = (value) => path11.normalize(value).replace(/[/\\]+/gu, (match) => match.includes("\\") || process.platform === "win32" ? "\\" : "/");
   const resolvedLeft = normalize(left);
   const resolvedRight = normalize(right);
   return process.platform === "win32" ? resolvedLeft.toLocaleLowerCase("en-US") === resolvedRight.toLocaleLowerCase("en-US") : resolvedLeft === resolvedRight;
@@ -27057,34 +27478,34 @@ function paramsHasCommand(params) {
   return params.command !== void 0;
 }
 function readSelectedModel(snapshot) {
-  const settings = asRecord4(snapshot.settings);
-  const modelSettings = asRecord4(settings.model);
-  const current = asRecord4(modelSettings.current);
+  const settings = asRecord5(snapshot.settings);
+  const modelSettings = asRecord5(settings.model);
+  const current = asRecord5(modelSettings.current);
   const modelId = typeof current.modelId === "string" ? current.modelId : null;
   const providerId = typeof current.providerId === "string" ? current.providerId : null;
   if (!modelId) return null;
   const available = Array.isArray(modelSettings.available) ? modelSettings.available : [];
   const match = available.find((entry) => {
-    const ref = asRecord4(asRecord4(entry).ref);
+    const ref = asRecord5(asRecord5(entry).ref);
     return ref.modelId === modelId && (providerId === null || ref.providerId === providerId);
   });
-  const label = match && typeof asRecord4(match).label === "string" ? asRecord4(match).label : modelId;
+  const label = match && typeof asRecord5(match).label === "string" ? asRecord5(match).label : modelId;
   return providerId ? `${label} (${providerId}/${modelId})` : label;
 }
 function readSelectedModelSelection(snapshot) {
-  const settings = asRecord4(snapshot.settings);
-  const modelSettings = asRecord4(settings.model);
-  const current = asRecord4(modelSettings.current);
+  const settings = asRecord5(snapshot.settings);
+  const modelSettings = asRecord5(settings.model);
+  const current = asRecord5(modelSettings.current);
   if (typeof current.providerId !== "string" || typeof current.modelId !== "string") return null;
   return { providerId: current.providerId, modelId: current.modelId };
 }
 function readAvailableModels(snapshot) {
-  const settings = asRecord4(snapshot.settings);
-  const modelSettings = asRecord4(settings.model);
+  const settings = asRecord5(snapshot.settings);
+  const modelSettings = asRecord5(settings.model);
   const available = Array.isArray(modelSettings.available) ? modelSettings.available : [];
   const refs = /* @__PURE__ */ new Map();
   for (const entry of available) {
-    const ref = asRecord4(asRecord4(entry).ref);
+    const ref = asRecord5(asRecord5(entry).ref);
     if (typeof ref.providerId !== "string" || typeof ref.modelId !== "string") continue;
     const key = `${ref.providerId}\0${ref.modelId}`;
     refs.set(key, { providerId: ref.providerId, modelId: ref.modelId });
@@ -27092,55 +27513,55 @@ function readAvailableModels(snapshot) {
   return [...refs.values()];
 }
 function readModelReasoningDefault(snapshot, providerId, modelId) {
-  const settings = asRecord4(snapshot.settings);
-  const modelSettings = asRecord4(settings.model);
+  const settings = asRecord5(snapshot.settings);
+  const modelSettings = asRecord5(settings.model);
   const available = Array.isArray(modelSettings.available) ? modelSettings.available : [];
   for (const item of available) {
-    const entry = asRecord4(item);
-    const ref = asRecord4(entry.ref);
+    const entry = asRecord5(item);
+    const ref = asRecord5(entry.ref);
     if (ref.providerId !== providerId || ref.modelId !== modelId) continue;
-    const reasoning = asRecord4(entry.reasoning);
+    const reasoning = asRecord5(entry.reasoning);
     if (typeof reasoning.defaultLevel === "string" && reasoning.defaultLevel.trim()) {
       return reasoning.defaultLevel;
     }
     const levels = Array.isArray(reasoning.levels) ? reasoning.levels : [];
     if (levels.length === 1) {
-      const value = asRecord4(levels[0]).value;
+      const value = asRecord5(levels[0]).value;
       if (typeof value === "string" && value.trim()) return value;
     }
   }
   return null;
 }
 function readEffectiveReasoningLevel(snapshot) {
-  const settings = asRecord4(snapshot.settings);
-  const modelSettings = asRecord4(settings.model);
-  const current = asRecord4(modelSettings.current);
-  const options = asRecord4(current.options);
+  const settings = asRecord5(snapshot.settings);
+  const modelSettings = asRecord5(settings.model);
+  const current = asRecord5(modelSettings.current);
+  const options = asRecord5(current.options);
   const currentOption = options.reasoningLevel;
   if (typeof currentOption === "string" && currentOption.trim()) return currentOption.trim();
-  const thoughtLevel = asRecord4(settings.thoughtLevel);
+  const thoughtLevel = asRecord5(settings.thoughtLevel);
   const level = thoughtLevel.current;
   return typeof level === "string" && level.trim() ? level.trim() : null;
 }
-function nestedString(record3, path12) {
+function nestedString(record3, path13) {
   let value = record3;
-  for (const part of path12) value = asRecord4(value)[part];
+  for (const part of path13) value = asRecord5(value)[part];
   return typeof value === "string" ? value : null;
 }
-function nestedNumber(record3, path12) {
+function nestedNumber(record3, path13) {
   let value = record3;
-  for (const part of path12) value = asRecord4(value)[part];
+  for (const part of path13) value = asRecord5(value)[part];
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
-function asRecord4(value) {
-  return isRecord4(value) ? value : {};
+function asRecord5(value) {
+  return isRecord5(value) ? value : {};
 }
 function extractTurnFailureEvidence(value) {
   if (typeof value === "string") {
     return { providerCode: null, errorCode: null, errorType: null, reviewedReason: null, httpStatus: null, retryableBooleans: [], quotaText: matchesExplicitQuotaText(value) };
   }
-  const error62 = asRecord4(value);
-  const attribution = asRecord4(error62.attribution);
+  const error62 = asRecord5(value);
+  const attribution = asRecord5(error62.attribution);
   const retryableBooleans = [];
   if (typeof attribution.retryable === "boolean") retryableBooleans.push(attribution.retryable);
   if (typeof error62.retryable === "boolean") retryableBooleans.push(error62.retryable);
@@ -27155,12 +27576,12 @@ function extractTurnFailureEvidence(value) {
     quotaText: matchesExplicitQuotaText(error62)
   };
 }
-function isRecord4(value) {
+function isRecord5(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function stableSerialize(value) {
   if (Array.isArray(value)) return `[${value.map(stableSerialize).join(",")}]`;
-  if (isRecord4(value)) {
+  if (isRecord5(value)) {
     return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableSerialize(value[key])}`).join(",")}}`;
   }
   return JSON.stringify(value) ?? "undefined";
@@ -27170,6 +27591,7 @@ var init_zcode_app_server_adapter = __esm({
   "src/adapters/zcode-app-server-adapter.ts"() {
     "use strict";
     init_agent_report();
+    init_rpc_diagnostics();
     init_task_prompt();
     init_errors();
     init_resolver();
@@ -27179,6 +27601,7 @@ var init_zcode_app_server_adapter = __esm({
     init_failure_facts();
     init_child_env();
     init_desktop_host_launch();
+    init_official_builtin_registry();
     init_account_provider();
     init_session_preferences();
     init_task_timeout();
@@ -27350,6 +27773,7 @@ var init_zcode_app_server_adapter = __esm({
           outcome: null,
           error: null,
           runPromise: Promise.resolve(null),
+          rpcDiagnostics: [],
           resolveTurn,
           rejectTurn,
           onEvent: this.#onEvent,
@@ -27466,8 +27890,9 @@ var init_zcode_app_server_adapter = __esm({
           entry.child = client.child;
           entry.onEvent({ type: "app_server_started", summary: "ZCode app-server process started", details: { pid: client.child.pid } });
           if (accountProviderPayload) {
+            this.#assertRegistryUnchanged(config2, accountProviderPayload.basedOnZCodeBuiltinRevision);
             try {
-              const syncResult = asRecord4(await client.request(
+              const syncResult = asRecord5(await client.request(
                 "provider/updateAccountConfig",
                 accountProviderPayload
               ));
@@ -27499,10 +27924,20 @@ var init_zcode_app_server_adapter = __esm({
           }
           let snapshot;
           if (resumeSessionId) {
-            snapshot = asRecord4(await client.request("session/resume", {
-              sessionId: resumeSessionId,
-              workspace: { workspacePath: workspace.canonicalPath, workspaceKey: projectPath }
-            }));
+            try {
+              snapshot = asRecord5(await client.request("session/resume", {
+                sessionId: resumeSessionId,
+                workspace: { workspacePath: workspace.canonicalPath, workspaceKey: projectPath }
+              }));
+            } catch (error62) {
+              const candidate = readFactsCandidate(error62);
+              if (candidate?.kind !== "rpc" || !candidate.rejected) throw error62;
+              throw withFactsCandidate(new BridgeError(
+                SESSION_NOT_RESUMABLE,
+                `ZCode rejected resuming session ${resumeSessionId} (session/resume, code ${candidate.code}); its context was not restored and no new Session was created`,
+                { cause: error62 }
+              ), candidate);
+            }
             const returnedId = nestedString(snapshot, ["session", "sessionId"]);
             if (!returnedId) {
               throw new Error("ZCode app-server resume snapshot did not contain session.sessionId");
@@ -27512,7 +27947,7 @@ var init_zcode_app_server_adapter = __esm({
             }
             await client.request("session/setMode", { sessionId: resumeSessionId, mode: preferences.mode });
           } else {
-            snapshot = asRecord4(await client.request("session/create", {
+            snapshot = asRecord5(await client.request("session/create", {
               workspace: { workspacePath: workspace.canonicalPath, workspaceKey: projectPath },
               mode: preferences.mode,
               persistence: "immediate"
@@ -27521,7 +27956,7 @@ var init_zcode_app_server_adapter = __esm({
           const sessionId = nestedString(snapshot, ["session", "sessionId"]);
           if (!sessionId) throw new Error("ZCode app-server session snapshot did not contain session.sessionId");
           entry.sessionId = sessionId;
-          const snapshotWorkspace = asRecord4(asRecord4(snapshot).workspace);
+          const snapshotWorkspace = asRecord5(asRecord5(snapshot).workspace);
           const reportedIdentity = typeof snapshotWorkspace.workspaceIdentity === "string" && snapshotWorkspace.workspaceIdentity.trim() ? snapshotWorkspace.workspaceIdentity.trim() : null;
           entry.browserScope = {
             workspacePath: workspace.canonicalPath,
@@ -27556,7 +27991,7 @@ var init_zcode_app_server_adapter = __esm({
               modelState = snapshot;
             } else {
               try {
-                modelState = asRecord4(await client.request("session/setModel", {
+                modelState = asRecord5(await client.request("session/setModel", {
                   sessionId,
                   model: {
                     providerId: requestedProviderId,
@@ -27568,7 +28003,7 @@ var init_zcode_app_server_adapter = __esm({
                   persistAsWorkspaceLastUsed: false
                 }));
               } catch (error62) {
-                const reason = error62 instanceof Error ? error62.message : String(error62);
+                const reason = redactDiagnosticText(error62 instanceof Error ? error62.message : String(error62)).replace(/\s+/gu, " ").trim().slice(0, 500);
                 entry.onEvent({
                   type: "model_setup_failed",
                   summary: `ZCode rejected ${requestedProviderId}/${preferences.model.model_id}; the Attempt was stopped before Worker dispatch.`,
@@ -27709,7 +28144,7 @@ var init_zcode_app_server_adapter = __esm({
             replayInFlight = true;
             void client.request("session/events", { sessionId, afterSeq: entry.lastEventSeq, limit: 500 }).then((value) => {
               entry.replayConsecutiveFailures = 0;
-              const events = asRecord4(value).events;
+              const events = asRecord5(value).events;
               if (Array.isArray(events)) client.replayEvents(events);
             }).catch((error62) => {
               const message = error62 instanceof Error ? error62.message : String(error62);
@@ -27881,7 +28316,9 @@ var init_zcode_app_server_adapter = __esm({
           } catch (error62) {
             entry.onEvent({ type: "outcome_checkpoint_failed", summary: error62 instanceof Error ? error62.message : String(error62) });
           }
-          return await this.#completeCleanup(entry, outcome);
+          const completed = await this.#completeCleanup(entry, outcome);
+          const diagnostics = completed.cleanupVerified ? void 0 : failedRpcDiagnostics(entry);
+          return diagnostics ? { ...completed, rpcDiagnostics: diagnostics } : completed;
         } catch (error62) {
           if (timer) {
             clearTimeout(timer);
@@ -27943,7 +28380,8 @@ var init_zcode_app_server_adapter = __esm({
               });
               throw new BridgeError("cleanup_failed", `ZCode process termination could not be verified; workspace remains occupied.${browserSuffix}`, {
                 cause: cleanupFailure,
-                memberPids
+                memberPids,
+                ...failedRpcDiagnostics(entry) ? { rpcDiagnostics: failedRpcDiagnostics(entry) } : {}
               });
             }
           }
@@ -27951,7 +28389,7 @@ var init_zcode_app_server_adapter = __esm({
             throw new BridgeError(
               "cleanup_failed",
               `ZCode process termination was verified, but the managed browser cleanup could not be verified: ${entry.browserCleanupError}`,
-              { cause: error62 }
+              { cause: error62, ...failedRpcDiagnostics(entry) ? { rpcDiagnostics: failedRpcDiagnostics(entry) } : {} }
             );
           }
           if (failureCleanupReceipt && !cleanupFailure) {
@@ -27985,14 +28423,30 @@ var init_zcode_app_server_adapter = __esm({
             reportCandidate: null,
             reportError: message,
             errorCode: code,
-            cleanupVerified: false
+            cleanupVerified: false,
+            ...failedRpcDiagnostics(entry) ? { rpcDiagnostics: failedRpcDiagnostics(entry) } : {}
           };
           const cleaned = await this.#completeCleanup(entry, failedOutcome);
-          if (!cleaned.cleanupVerified) throw new BridgeError("cleanup_failed", `${message}; cleanup: ${cleaned.cleanupError ?? "unverified"}`, { cause: error62, memberPids: cleaned.cleanupMemberPids });
+          if (!cleaned.cleanupVerified) throw new BridgeError("cleanup_failed", `${message}; cleanup: ${cleaned.cleanupError ?? "unverified"}`, {
+            cause: error62,
+            memberPids: cleaned.cleanupMemberPids,
+            ...failedRpcDiagnostics(entry) ? { rpcDiagnostics: failedRpcDiagnostics(entry) } : {}
+          });
           entry.onEvent({ type: "error", summary: message.slice(0, 1500), details: { error_code: code } });
           if (spawnRecovery) throw new BridgeError("spawn_failed", message);
-          if (error62 instanceof BridgeError) throw error62;
-          throw new BridgeError(code, message);
+          const diagnostics = error62 instanceof BridgeError ? error62.rpcDiagnostics ?? failedRpcDiagnostics(entry) : failedRpcDiagnostics(entry);
+          const sessionId = (error62 instanceof BridgeError ? error62.sessionId : void 0) ?? entry.sessionId ?? void 0;
+          if (error62 instanceof BridgeError && diagnostics === error62.rpcDiagnostics && sessionId === error62.sessionId) throw error62;
+          throw new BridgeError(
+            error62 instanceof BridgeError ? error62.code : code,
+            error62 instanceof BridgeError ? error62.message : message,
+            {
+              cause: error62,
+              ...error62 instanceof BridgeError && error62.memberPids ? { memberPids: error62.memberPids } : {},
+              ...diagnostics ? { rpcDiagnostics: diagnostics } : {},
+              ...sessionId ? { sessionId } : {}
+            }
+          );
         } finally {
           if (timer) clearTimeout(timer);
           if (warningTimer) clearTimeout(warningTimer);
@@ -28044,7 +28498,7 @@ var init_zcode_app_server_adapter = __esm({
           const cleanupTreeScan = officialTreeScan ?? (scan?.clean && cleanupVerified && scanRootPid && scanRootFingerprint ? {
             rootPid: scanRootPid,
             rootFingerprint: scanRootFingerprint,
-            evidenceDigest: createHash10("sha256").update(JSON.stringify({
+            evidenceDigest: createHash11("sha256").update(JSON.stringify({
               rootPid: scanRootPid,
               rootFingerprint: scanRootFingerprint,
               memberPids: [...scan.memberPids].sort((left, right) => left - right)
@@ -28151,7 +28605,7 @@ var init_zcode_app_server_adapter = __esm({
           });
         };
         const dispatch = (message) => {
-          if (transportClosed || !isRecord4(message)) return;
+          if (transportClosed || !isRecord5(message)) return;
           const sanitized = this.#sanitizeStartPlanFrame ? this.#sanitizeStartPlanFrame(message) : message;
           try {
             this.#handleMessage(sanitized, entry, pending, config2, reply);
@@ -28197,8 +28651,9 @@ var init_zcode_app_server_adapter = __esm({
               });
             }
             const code = typeof error62?.code === "number" ? error62.code : null;
-            const data = asRecord4(error62?.data);
+            const data = asRecord5(error62?.data);
             const dataCode = registeredCode(data.code, RPC_DATA_CODE_REGISTRY);
+            recordRpcDiagnostic(entry, method, error62);
             throw withFactsCandidate(
               new Error(`ZCode official runtime request failed for ${method}${code === null ? "" : ` (code ${code})`}`),
               { kind: "rpc", method, code, dataCode, rejected: code !== null }
@@ -28332,7 +28787,7 @@ var init_zcode_app_server_adapter = __esm({
               failProtocol("invalid_frame", frameBytes);
               return;
             }
-            if (!isRecord4(parsed)) {
+            if (!isRecord5(parsed)) {
               failProtocol("invalid_frame", frameBytes, "the top-level frame value must be a JSON object");
               return;
             }
@@ -28424,7 +28879,7 @@ var init_zcode_app_server_adapter = __esm({
         };
         const replayEvents = (events) => {
           for (const event of events) {
-            const params = asRecord4(event);
+            const params = asRecord5(event);
             if (typeof params.type !== "string") continue;
             this.#handleMessage({ method: "session/event", params }, entry, pending, config2, (reply) => {
               child.stdin.write(`${JSON.stringify(reply)}
@@ -28587,8 +29042,8 @@ var init_zcode_app_server_adapter = __esm({
         if (message.method === "interaction/requestProviderRuntimeHeaders") {
           const id = message.id;
           if (typeof id === "string" || typeof id === "number") {
-            const params = asRecord4(message.params);
-            const selection = asRecord4(params.modelSelection);
+            const params = asRecord5(message.params);
+            const selection = asRecord5(params.modelSelection);
             const providerId = typeof selection.providerId === "string" ? selection.providerId : typeof params.providerId === "string" ? params.providerId : void 0;
             if (providerId === BIGMODEL_START_PLAN_PROVIDER_ID && this.#resolveStartPlanRuntimeAuth) {
               const replySafely = (result) => {
@@ -28629,7 +29084,7 @@ var init_zcode_app_server_adapter = __esm({
               const turnId = typeof params.turnId === "string" ? params.turnId : null;
               const modelId = typeof selection.modelId === "string" ? selection.modelId : "";
               const selected = entry.selectedModelSelection;
-              const accountAccess = asRecord4(params.accountAccess);
+              const accountAccess = asRecord5(params.accountAccess);
               this.#reportRuntimeAuthDiagnostic({
                 stage: "request_received",
                 provider_id: providerId,
@@ -28690,9 +29145,10 @@ var init_zcode_app_server_adapter = __esm({
           pending.delete(id);
           if (message.error && typeof message.error === "object") {
             const error62 = message.error;
-            const data = asRecord4(error62.data);
+            const data = asRecord5(error62.data);
             const rpcCode = typeof error62.code === "number" && Number.isSafeInteger(error62.code) ? error62.code : null;
             const dataCode = registeredCode(data.code, RPC_DATA_CODE_REGISTRY);
+            recordRpcDiagnostic(entry, call.method, error62);
             call.reject(withFactsCandidate(
               new Error(`ZCode app-server request failed for ${call.method}${typeof error62.code === "number" ? ` (code ${error62.code})` : ""}`),
               { kind: "rpc", method: call.method, code: rpcCode, dataCode, rejected: true }
@@ -28707,10 +29163,10 @@ var init_zcode_app_server_adapter = __esm({
           return;
         }
         if (message.method === "session/event") {
-          const params = asRecord4(message.params);
+          const params = asRecord5(message.params);
           if (params.sessionId !== void 0 && params.sessionId !== entry.sessionId) return;
           const type = typeof params.type === "string" ? params.type : "";
-          const payload = asRecord4(params.payload);
+          const payload = asRecord5(params.payload);
           const turnId = typeof params.turnId === "string" ? params.turnId : typeof payload.turnId === "string" ? payload.turnId : null;
           if (this.#nativeSendCorrelationVerified && typeof params.seq === "number" && params.seq > entry.lastEventSeq && (!entry.turnId || turnId === entry.turnId) && entry.sendAttempted && !entry.sendAcknowledged && entry.acceptedEvidence === "unknown") {
             const upgrade = evaluateAcceptedUpgrade({
@@ -28775,7 +29231,7 @@ var init_zcode_app_server_adapter = __esm({
             }
             entry.turnCompletedAt = this.#now().toISOString();
             const extraction = extractTurnFailureEvidence(payload.error);
-            const upstreamPhase = typeof asRecord4(payload.error).turnPhase === "string" ? asRecord4(payload.error).turnPhase : typeof payload.turnPhase === "string" ? payload.turnPhase : null;
+            const upstreamPhase = typeof asRecord5(payload.error).turnPhase === "string" ? asRecord5(payload.error).turnPhase : typeof payload.turnPhase === "string" ? payload.turnPhase : null;
             const classification = classifyFailureEvidence({
               source: "turn_event",
               phase: upstreamPhase === null ? "turn_terminal" : registeredPhase(upstreamPhase),
@@ -28789,7 +29245,7 @@ var init_zcode_app_server_adapter = __esm({
               ...extraction
             };
             const quotaExhausted = classification.category === "quota_exhausted";
-            const retryDelayMs = quotaExhausted ? null : this.#preTurnProviderRetryDelayMs(entry, asRecord4(payload.error), extraction, classification.category);
+            const retryDelayMs = quotaExhausted ? null : this.#preTurnProviderRetryDelayMs(entry, asRecord5(payload.error), extraction, classification.category);
             if (retryDelayMs !== null) {
               this.#schedulePreTurnProviderRetry(entry, retryDelayMs);
               return;
@@ -28808,8 +29264,8 @@ var init_zcode_app_server_adapter = __esm({
           }
         }
         if (message.method === "state.updated") {
-          const params = asRecord4(message.params);
-          const patch = asRecord4(params.patch);
+          const params = asRecord5(message.params);
+          const patch = asRecord5(params.patch);
           const state = typeof patch.status === "string" ? patch.status : void 0;
           if (state) entry.onEvent({ type: "runtime_state", summary: `ZCode runtime state: ${state}` });
           return;
@@ -28833,7 +29289,7 @@ var init_zcode_app_server_adapter = __esm({
       #handleInteractionRequest(message, entry, write) {
         const rpcId = message.id;
         const method = message.method;
-        const params = asRecord4(message.params);
+        const params = asRecord5(message.params);
         if (entry.abort.signal.aborted || params.sessionId !== void 0 && params.sessionId !== entry.sessionId) {
           write({ id: rpcId, result: interactionDecline(method, "Interaction does not belong to the active task session") });
           return;
@@ -28945,7 +29401,7 @@ var init_zcode_app_server_adapter = __esm({
             }
             return;
           }
-          const parsed = method === "interaction/browserList" ? browserListParamsSchema.safeParse(asRecord4(message.params)) : browserExecuteParamsSchema.safeParse(asRecord4(message.params));
+          const parsed = method === "interaction/browserList" ? browserListParamsSchema.safeParse(asRecord5(message.params)) : browserExecuteParamsSchema.safeParse(asRecord5(message.params));
           if (!parsed.success) {
             write({ id: rpcId, error: { code: -32602, message: `Invalid ${method} params: ${zodIssueSummary(parsed.error)}` } });
             return;
@@ -29099,7 +29555,7 @@ var init_zcode_app_server_adapter = __esm({
         if (extraction.retryableBooleans.includes(false)) return null;
         const explicitRateLimitRejection = category === "rate_limited" && extraction.httpStatus === 429;
         if (!explicitRateLimitRejection) return null;
-        const attribution = asRecord4(error62.attribution);
+        const attribution = asRecord5(error62.attribution);
         const retryAfterMs = typeof error62.retryAfterMs === "number" && Number.isFinite(error62.retryAfterMs) ? error62.retryAfterMs : typeof attribution.retryAfterMs === "number" && Number.isFinite(attribution.retryAfterMs) ? attribution.retryAfterMs : retryAfterMilliseconds(error62.retryAfter ?? attribution.retryAfter);
         if (retryAfterMs !== null && (retryAfterMs < 0 || retryAfterMs > MAX_PROVIDER_RETRY_AFTER_MS)) return null;
         return retryAfterMs ?? 1e3;
@@ -29199,7 +29655,7 @@ var init_zcode_app_server_adapter = __esm({
        * runtimes whose native correlation ability has been verified.
        */
       #extractSubmitCorrelationEcho(payload) {
-        const correlation = asRecord4(payload.correlation);
+        const correlation = asRecord5(payload.correlation);
         return typeof correlation.submit_id === "string" ? correlation.submit_id : null;
       }
       /**
@@ -29348,7 +29804,20 @@ var init_zcode_app_server_adapter = __esm({
         if (source.ZCODE_HOME) env.ZCODE_HOME = source.ZCODE_HOME;
         const dataBaseDir = zcodeDataBaseDir(config2.providerPersonalConfigFile);
         if (dataBaseDir) env.ZCODE_DATA_BASE_DIR = dataBaseDir;
+        forwardOfficialEndpointEnv(env, source);
         return env;
+      }
+      /**
+       * ADR-066: the Overlay and the started AppServer must have read the same
+       * official registry. A Desktop refresh between the two reads would leave
+       * the account providers unregistered, so stop before registration.
+       */
+      #assertRegistryUnchanged(config2, basedOnZCodeBuiltinRevision) {
+        if (currentBuiltinRegistryRevision(config2) === basedOnZCodeBuiltinRevision) return;
+        throw new BridgeError(
+          "provider_config_invalid",
+          "The official Built-in Provider registry changed while the ZCode AppServer was starting; the Attempt was stopped before account provider registration and no model request was sent"
+        );
       }
       #require(handle, method) {
         const entry = this.#runs.get(handle);
@@ -29494,6 +29963,11 @@ __export(normalize_exports, {
 });
 function buildTaskResult(input2) {
   const { task, attempt, startedAt, finishedAt, outcome } = input2;
+  const rpcDiagnostics = [
+    ...input2.failure?.rpcDiagnostics ?? [],
+    ...input2.rpcDiagnostics ?? []
+  ].filter((diagnostic, index, all) => all.findIndex((candidate) => candidate.method === diagnostic.method && candidate.code === diagnostic.code && candidate.data_code === diagnostic.data_code) === index);
+  const diagnostics = rpcDiagnostics.length ? { rpc_diagnostics: rpcDiagnostics.slice(0, 4).map((diagnostic) => ({ ...diagnostic })) } : {};
   const base = {
     task_id: task.task_id,
     attempt,
@@ -29529,7 +30003,8 @@ function buildTaskResult(input2) {
       issues: [truncate(resolved.message, 2e3)],
       needs_master_decision: true,
       error_code: resolved.code,
-      ...resolved.code === "cleanup_failed" && outcome?.reportCandidate ? { report_candidate: outcome.reportCandidate } : {}
+      ...resolved.code === "cleanup_failed" && outcome?.reportCandidate ? { report_candidate: outcome.reportCandidate } : {},
+      ...diagnostics
     };
   }
   if (outcome.errorCode || outcome.reportError) {
@@ -29544,7 +30019,8 @@ function buildTaskResult(input2) {
       issues: [truncate(message, 2e3)],
       needs_master_decision: true,
       error_code: code,
-      ...outcome.reportCandidate ? { report_candidate: outcome.reportCandidate } : {}
+      ...outcome.reportCandidate ? { report_candidate: outcome.reportCandidate } : {},
+      ...diagnostics
     };
   }
   const report = outcome.agentReport;
@@ -29931,10 +30407,10 @@ var init_start_plan_private_channel = __esm({
 
 // src/worker/worker-main.ts
 init_result_contract();
-import { createHash as createHash11, randomUUID as randomUUID3 } from "node:crypto";
+import { createHash as createHash12, randomUUID as randomUUID3 } from "node:crypto";
 import { closeSync as closeSync3, createWriteStream, readFileSync as readFileSync5, writeFileSync, writeSync } from "node:fs";
 import { Socket } from "node:net";
-import path11 from "node:path";
+import path12 from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 
 // src/runtime/build-provenance.ts
@@ -30228,6 +30704,32 @@ function selectProductionAdapter(platform = process.platform, architecture = pro
   throw error62;
 }
 
+// src/manager/session-history.ts
+init_errors();
+var SESSION_HISTORY_SCAN_LIMIT = 32;
+function continuationSessionId(history, previousResultSessionId) {
+  if (!history) return previousResultSessionId;
+  return history.resumable ? history.session_id : null;
+}
+function validateSessionHistoryEnvelope(value, context) {
+  const history = typeof value === "object" && value !== null && !Array.isArray(value) ? value : null;
+  const sessionId = history?.session_id;
+  const resumable = history?.resumable;
+  const reason = history?.reason;
+  const evidenceAttempt = history?.evidence_attempt;
+  const scannedAttempts = history?.scanned_attempts;
+  const isEvidenceAttempt = typeof evidenceAttempt === "number" && Number.isSafeInteger(evidenceAttempt) && evidenceAttempt >= 1 && evidenceAttempt < context.attempt;
+  const bound = history !== null && Object.keys(history).sort().join("|") === "evidence_attempt|reason|resumable|scanned_attempts|session_id" && context.continuation !== null && typeof sessionId === "string" && sessionId !== "" && context.previousResultSessionId === sessionId && typeof resumable === "boolean" && (resumable ? reason === "turn_history" && isEvidenceAttempt : reason === "no_turn_history" && evidenceAttempt === null || reason === "session_not_resumable" && isEvidenceAttempt) && typeof scannedAttempts === "number" && Number.isSafeInteger(scannedAttempts) && scannedAttempts >= 1 && scannedAttempts <= SESSION_HISTORY_SCAN_LIMIT;
+  if (!bound) throw new Error("post-Claim session history binding rejected");
+  return {
+    session_id: sessionId,
+    resumable,
+    reason,
+    evidence_attempt: evidenceAttempt,
+    scanned_attempts: scannedAttempts
+  };
+}
+
 // src/worker/worker-main.ts
 var MAX_NODE_TIMER_DELAY_MS = 2147483647;
 async function runWorkerMain(dependencies = {}, workerArgs = process.argv.slice(2)) {
@@ -30461,8 +30963,8 @@ async function runClaimOnlyHandshake(options) {
 function validateExecutionEnvelope(value, bootstrap, profile) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("post-Claim execution envelope is required");
   const envelope = value;
-  const envelopeKeys = Object.keys(envelope).sort().join("|");
-  if (!["adapter_mode|attempt|continuation|execution_profile_id|generation|host_profile|operation_id|policy_snapshot_digest|previous_result|protocol|task|task_id|workspace_ref", "adapter_mode|attempt|continuation|execution_profile_id|generation|host_profile|operation_id|policy_snapshot_digest|previous_result|private_auth|protocol|task|task_id|workspace_ref"].includes(envelopeKeys) || envelope.protocol !== "bridge-sqlite-execution-envelope-v1" || envelope.operation_id !== bootstrap.operation_id || envelope.task_id !== bootstrap.task_id || envelope.attempt !== bootstrap.attempt || envelope.generation !== bootstrap.generation || envelope.workspace_ref !== bootstrap.workspace_ref || envelope.policy_snapshot_digest !== bootstrap.policy_snapshot_digest || envelope.execution_profile_id !== profile.id || !["zcode_app_server", "test_fake"].includes(String(envelope.adapter_mode))) {
+  const envelopeKeys = Object.keys(envelope).filter((key) => key !== "private_auth" && key !== "session_history").sort().join("|");
+  if (envelopeKeys !== "adapter_mode|attempt|continuation|execution_profile_id|generation|host_profile|operation_id|policy_snapshot_digest|previous_result|protocol|task|task_id|workspace_ref" || envelope.protocol !== "bridge-sqlite-execution-envelope-v1" || envelope.operation_id !== bootstrap.operation_id || envelope.task_id !== bootstrap.task_id || envelope.attempt !== bootstrap.attempt || envelope.generation !== bootstrap.generation || envelope.workspace_ref !== bootstrap.workspace_ref || envelope.policy_snapshot_digest !== bootstrap.policy_snapshot_digest || envelope.execution_profile_id !== profile.id || !["zcode_app_server", "test_fake"].includes(String(envelope.adapter_mode))) {
     throw new Error("post-Claim execution envelope binding rejected");
   }
   const task = envelope.task;
@@ -30477,6 +30979,14 @@ function validateExecutionEnvelope(value, bootstrap, profile) {
     if (!auth || typeof auth !== "object" || Array.isArray(auth) || Object.keys(auth).sort().join("|") !== "account|claim|entitled|model|provider" || typeof auth.account !== "string" || !auth.account || typeof auth.claim !== "string" || !auth.claim || auth.provider !== "account:bigmodel-start-plan" || typeof auth.model !== "string" || !auth.model || typeof auth.entitled !== "boolean" || task.model?.provider_id !== auth.provider || task.model.model_id !== auth.model) {
       throw new Error("private auth binding rejected");
     }
+  }
+  if (envelope.session_history !== void 0) {
+    const previousSessionId = envelope.previous_result?.session_id;
+    validateSessionHistoryEnvelope(envelope.session_history, {
+      attempt: bootstrap.attempt,
+      continuation: envelope.continuation,
+      previousResultSessionId: typeof previousSessionId === "string" ? previousSessionId : null
+    });
   }
   validateHostProfile(envelope.host_profile);
   return envelope;
@@ -30853,13 +31363,25 @@ async function runZCodeAdapter(bootstrap, execution, interaction, workerIdentity
       attempt: bootstrap.attempt,
       feedback: requiredString(execution.continuation.feedback, "continuation feedback missing"),
       additionalRequirements: requiredStringArray(execution.continuation.additional_requirements, "continuation requirements invalid"),
-      previousSessionId: nullableString(execution.previous_result?.session_id),
+      // ADR-066: with a Manager verdict only a resumable Session is
+      // resumed; otherwise the continuation starts a new Session. Without
+      // one (older Manager) the previous ID is used as before.
+      previousSessionId: continuationSessionId(
+        execution.session_history,
+        nullableString(execution.previous_result?.session_id)
+      ),
       previousResult: execution.previous_result
     }) : await adapter.startTask({ task: execution.task, workspace, attempt: bootstrap.attempt });
     outcome = await adapter.getResult(handle);
     if (outcome.cleanupError) failure2 = { code: "cleanup_failed", message: outcome.cleanupError };
   } catch (error62) {
-    failure2 = { code: error62 instanceof Error && "code" in error62 && typeof error62.code === "string" ? error62.code : "worker_error", message: error62 instanceof Error ? error62.message : String(error62) };
+    failure2 = {
+      code: error62 instanceof Error && "code" in error62 && typeof error62.code === "string" ? error62.code : "worker_error",
+      message: error62 instanceof Error ? error62.message : String(error62),
+      // ADR-066: an Adapter that throws (unverified cleanup) still hands
+      // over the RPC rejections and Session ID it observed.
+      ...thrownFailureEvidence(error62)
+    };
   } finally {
     writeDiagnostic("[bridge-worker] adapter run settled\n");
     clearCachedAuth();
@@ -30903,7 +31425,9 @@ async function runZCodeAdapter(bootstrap, execution, interaction, workerIdentity
     failure: failure2,
     usage,
     model: modelProfile,
-    timing
+    timing,
+    rpcDiagnostics: outcome?.rpcDiagnostics ?? null,
+    sessionId: failure2?.sessionId ?? null
   });
   const result = {
     task_id: taskResult.task_id,
@@ -30923,6 +31447,7 @@ async function runZCodeAdapter(bootstrap, execution, interaction, workerIdentity
     ...taskResult.model !== void 0 ? { model: taskResult.model } : {},
     ...taskResult.timing !== void 0 ? { timing: taskResult.timing } : {},
     ...taskResult.error_code ? { error_code: taskResult.error_code } : {},
+    ...taskResult.rpc_diagnostics?.length ? { rpc_diagnostics: taskResult.rpc_diagnostics } : {},
     ...taskResult.report_candidate ? { report_candidate: taskResult.report_candidate } : {}
   };
   const executionCleanup = buildExecutionCleanupProof(outcome);
@@ -30942,6 +31467,15 @@ async function runZCodeAdapter(bootstrap, execution, interaction, workerIdentity
     execution_cleanup_verified: executionCleanup !== null,
     execution_cleanup: executionCleanup,
     result
+  };
+}
+function thrownFailureEvidence(error62) {
+  const value = error62;
+  const diagnostics = value?.rpcDiagnostics;
+  const sessionId = value?.sessionId;
+  return {
+    ...Array.isArray(diagnostics) && diagnostics.length ? { rpcDiagnostics: diagnostics } : {},
+    ...typeof sessionId === "string" && sessionId ? { sessionId } : {}
   };
 }
 function buildExecutionCleanupProof(outcome) {
@@ -30987,7 +31521,7 @@ function buildExecutionCleanupProof(outcome) {
     workspace_retained: true,
     adapter_process_id: receipt.rootPid,
     adapter_start_fingerprint: root.fingerprint,
-    process_tree_receipt_digest: createHash11("sha256").update(JSON.stringify(receipt), "utf8").digest("hex"),
+    process_tree_receipt_digest: createHash12("sha256").update(JSON.stringify(receipt), "utf8").digest("hex"),
     process_tree_member_count: receipt.members.length,
     managed_browser_cleanup_verified: true,
     adapter_cleanup: adapterCleanup
@@ -31165,7 +31699,7 @@ function digestProvenance(value) {
     bridge: { path: value.bridge.path, sha256: value.bridge.sha256 },
     worker: { path: value.worker.path, sha256: value.worker.sha256 }
   });
-  return createHash11("sha256").update(canonical2, "utf8").digest("hex");
+  return createHash12("sha256").update(canonical2, "utf8").digest("hex");
 }
 function readPrivateFrame2(fd, maximum2) {
   const frame = readFileSync5(fd);
@@ -31186,8 +31720,8 @@ function writePrivateFrame2(fd, value, encoded = JSON.stringify(value)) {
   writeFileSync(fd, "\n", "utf8");
   closeSync3(fd);
 }
-var invokedWorkerPath = process.argv[1] ? path11.resolve(process.argv[1]) : null;
-var modulePath = path11.resolve(fileURLToPath4(import.meta.url));
+var invokedWorkerPath = process.argv[1] ? path12.resolve(process.argv[1]) : null;
+var modulePath = path12.resolve(fileURLToPath4(import.meta.url));
 if (invokedWorkerPath === modulePath) await runWorkerMain();
 export {
   createBoundedRuntimeEventPublisher,

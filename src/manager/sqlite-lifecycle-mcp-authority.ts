@@ -23,6 +23,7 @@ import type { ClaimOnlyDriverOptions, CandidateTaskPackage, ClaimOnlyRunResult }
 import { openClaimOnlyDriver } from "../store/lifecycle-gate.js";
 import { TaskManagerError } from "./errors.js";
 import { summarizeTaskResult } from "../result-summary.js";
+import { resolveSessionHistory } from "./session-history.js";
 import { waitForAttentionSnapshot } from "../attention/wait.js";
 import { parseTaskAttentionSnapshot } from "../attention/snapshot.js";
 import { createPlatformProbe, PROCESS_IDENTITY_VERSION, type ProcessIdentity, type ProcessProbe } from "../runtime/process-probe.js";
@@ -630,6 +631,11 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     if (!Number.isSafeInteger(releaseRevision) || releaseRevision < 1) {
       throw new TaskManagerError("TASK_STATE", "the prior SQLite Attempt has no durable Release fact");
     }
+    // ADR-066: a continuation keeps the persisted Provider/Model/Reasoning and
+    // is checked against the live catalog before any Attempt exists, so a
+    // selection the catalog no longer offers fails here instead of inside
+    // the Worker. Nothing is re-routed or switched.
+    await this.#routeTaskModel?.validatePersisted(snapshot.task);
     const outcome = asRecord(this.#driver.createNextAttempt({
       ...common,
       previous_attempt: Number(asRecord(snapshot.attempt).attempt),
@@ -1452,6 +1458,18 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
         }
         const dispatchPathKey = normalizeExecutionPath(executionPath);
         this.#dispatchingPaths.add(dispatchPathKey);
+        const previousResult = snapshot.continuation?.previous_operation_id
+          ? this.#driver.readCommittedResult(String(snapshot.continuation.previous_operation_id))?.result ?? null
+          : null;
+        // ADR-066: only a Session with real turn history is a resume handle.
+        // The verdict rides the existing envelope as an optional key.
+        const sessionHistory = typeof previousResult?.session_id === "string" && previousResult.session_id
+          ? resolveSessionHistory({
+              attempt: next.attempt,
+              previousResult,
+              readResult: (attempt) => this.#driver.readCommittedResult(operationIdFor(next.taskId, attempt))?.result ?? null,
+            })
+          : null;
         const runPromise = this.#driver.run({
           task: snapshot.task as CandidateTaskPackage,
           operationId,
@@ -1459,9 +1477,8 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
           launchToken: randomBytes(32).toString("base64url"),
           attempt: next.attempt,
           continuation: snapshot.continuation,
-          previousResult: snapshot.continuation?.previous_operation_id
-            ? this.#driver.readCommittedResult(String(snapshot.continuation.previous_operation_id))?.result ?? null
-            : null,
+          previousResult,
+          ...(sessionHistory ? { sessionHistory } : {}),
         });
         this.#activeRuns.set(nextKey, runPromise);
         let run: ClaimOnlyRunResult;

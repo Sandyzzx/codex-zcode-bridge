@@ -21,6 +21,8 @@ export interface CandidateTaskResult {
   readonly usage?: Readonly<Record<string, unknown>> | null;
   readonly model?: Readonly<Record<string, unknown>> | null;
   readonly timing?: Readonly<Record<string, unknown>> | null;
+  /** ADR-066 additive: bounded redacted RPC rejections; failed Results only. */
+  readonly rpc_diagnostics?: readonly Readonly<Record<string, unknown>>[];
 }
 
 export interface CandidateAdapterCleanupEvidence {

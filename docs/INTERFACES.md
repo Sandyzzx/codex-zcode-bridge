@@ -1,9 +1,9 @@
 # 当前接口与兼容边界
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-26（ADR-064 Executor Operation 隔离、用户授权释放与 Result content digest）
-> Last verified: 2026-11-26，核对 Executor recovery 13/13、writer intent 35/35、forced cleanup Store、Result paging、Web HTTP 清理与 process-lock PID reuse 定向测试。完整 Host/CI 验证在集成/发布阶段更新。
-> Verified against: `57e0a70b` 基线上的候选工作树；提交后由最终报告记录候选 SHA。
+> Last updated: 2026-11-26（Preview.20：ADR-066 Continue Session 分离、`session_not_resumable` 与 `rpc_diagnostics`）
+> Last verified: 2026-11-26，核对 ADR-064 既有定向测试、Continue 无 Turn Session 不再 resume、resume 被拒显式失败且不新建 Session、Continue 持久化模型校验、RPC 诊断提取/脱敏/预算与 Result 合同。真实 Coding Plan E2E 与完整 CI 在发布阶段更新。
+> Verified against: `f77a6176508f20bad73b8605b44a04703bacf231`（Preview.19 基线）与 Preview.20 候选工作树；最终报告记录候选 SHA。
 > ADR-039 Last verified: 2026-11-22，隔离 SQLite/MCP 覆盖 Receipt 保护、live descendant、活动 Worker、终止失败、completed/failed/waiting_for_master/cancelled 终态绑定、并发重复取消与 SQLite 历史校验；生产取消未重试。
 > ADR-047/048: Accepted for Preview；默认 `zcode_result` 保持完整，Summary 仍为显式 opt-in。
 
@@ -18,6 +18,8 @@ TaskPackage 的 requirements、allowed_paths、forbidden_paths、acceptance_crit
 相同 task_id 和相同内容可重放原回执，不同内容返回 TASK_ID_CONFLICT。Continuation 的 operation_id 同样绑定规范化请求；相同 key/内容重放，不同内容冲突。未知执行结果必须查询原 task_id，不能换 ID 重派。
 
 公开状态为 queued/running/completed/failed/cancelled/waiting_for_master；后四者结束当前 Attempt。completed 只表示执行及报告归一化结束，不表示 Owner 验收。Continue 接受完成、失败或待主机决定且已 Release 的前序 Attempt，保持 task ID 并创建新 Attempt；永久 Claim 不重放。Release 事实不会因后续 Wake `intent`/`queued`/`submission_unknown`/`turn_started`/`web_notify` Observation 失效；Continue 仍要求 Cleanup 已验证、没有活动 Worker 且 Workspace 可用，未知 Queue submission 与未核实 Turn 必须先按现有事实核对，不重复投递。
+
+[ADR-066](decisions/ADR-066-official-runtime-registry-session-continuation-rpc-diagnostics.md)：Task 续作与 Session 恢复分离。Manager 从同一 Task 的已提交 Result 有界回溯（≤32 个 Attempt，遇到不同 `session_id` 即停止）；只有同 Session 历史存在非空 `model.turn_id`、token usage、`completed` 或 `waiting_for_master` 时，才通过既有执行 envelope 的可选 `session_history` 声明 `resumable: true`。Worker 仅在可恢复时 `session/resume`，否则新建 Session。有效历史 Session 的 resume 被官方拒绝时，Attempt 以稳定错误码 `session_not_resumable` 失败，不回退新建 Session，不发送模型请求；Result 保留该 `session_id` 作为执行证据，后续 Continue 不再把它当作续作句柄。`session/read` 的 inactive 错误不作为 Session 不存在判据。Continue 在幂等 replay 之后、创建新 Attempt 之前，用当前 AppServer 目录精确校验持久化的 Provider / Model / Reasoning；不满足时 `provider_config_invalid`，不重路由、不切换套餐。
 
 [ADR-059](decisions/ADR-059-owner-binding-and-installed-auto-wake.md)：Owner Thread 只来自 MCP handler 的 `ctx.mcpReq._meta.threadId`，不是 TaskPackage 输入；输入中出现 Owner 身份键返回 `TASK_INVALID`。Task、首个 Attempt 与 `task_owner_bindings` 在同一 SQLite 事务写入；Binding 为 `bound|unavailable`，缺失时 reason 为 `owner_thread_unavailable`，ZCode Runtime Session ID 不得替代。`zcode_task`/`zcode_continue` receipt 以可选 `owner_binding` 与 `console_link` 加性返回；`console_link.available=false` 不影响已受理 Task，`reason_code` 说明安全查询回退。
 
@@ -112,4 +114,4 @@ Provider 的 retryable/statusCode 不足以证明未接受请求；429、5xx、�
 
 单用户 Windows 受信任 profile 使用 yolo。普通任务范围内读取/编辑/构建/测试可以自动执行；Push/Merge/Tag/Release、生产 Authority 切换、范围外删除、凭据或真实生产数据操作仍需相应授权。
 
-公开事件和诊断不转发原始 RPC error、未知 metadata 或隐藏 reasoning。Task prompt、审批输入与可见回答可能含敏感内容，按本地策略管理。Bridge 不再写入或镜像官方 Desktop 私有 task index；Task Authority 始终是 Bridge SQLite，Desktop 独立任务列表可见性不是 Bridge 合同。浏览器默认关闭；独立 CDP profile 和 app-server 的清理共同决定 proof，身份/隐私合同见 [ADR-007](decisions/ADR-007-browser-host-rpc.md) 与 [ADR-009](decisions/ADR-009-windows-identity-bound-tree-termination.md)。
+公开事件和摘要不转发完整 RPC payload、params、headers、未知 metadata 或隐藏 reasoning；完整错误原始字节仍不进入 Result。ADR-066 的例外是有界、脱敏的 `rpc_diagnostics`：仅失败 Result 携带，最多 4 条、总 8 KiB，每条含 method、整数 code、≤500 字符脱敏 message、token 形状的 `data_name` / `data_code`，以及可选的最多 12 帧、≤1200 字符 stack；stack 只保留函数名与 `basename:line:col`。Bearer、JWT、API Key、`key/token/secret` 赋值与长十六进制串在入库前清除。超时与取消不携带诊断；`zcode_result(view="summary")` 永不返回 stack。Task prompt、审批输入与可见回答可能含敏感内容，按本地策略管理。Bridge 不再写入或镜像官方 Desktop 私有 task index；Task Authority 始终是 Bridge SQLite，Desktop 独立任务列表可见性不是 Bridge 合同。浏览器默认关闭；独立 CDP profile 和 app-server 的清理共同决定 proof，身份/隐私合同见 [ADR-007](decisions/ADR-007-browser-host-rpc.md) 与 [ADR-009](decisions/ADR-009-windows-identity-bound-tree-termination.md)。

@@ -216,371 +216,25 @@ var init_paths = __esm({
 });
 
 // src/runtime/errors.ts
-var BridgeError;
+var SESSION_NOT_RESUMABLE, BridgeError;
 var init_errors = __esm({
   "src/runtime/errors.ts"() {
     "use strict";
+    SESSION_NOT_RESUMABLE = "session_not_resumable";
     BridgeError = class extends Error {
       code;
       memberPids;
+      /** ADR-066: redacted official RPC rejections observed before this failure. */
+      rpcDiagnostics;
+      /** ADR-066: the Session bound to the rejected RPC, kept as execution evidence. */
+      sessionId;
       constructor(code, message, options) {
         super(message, options);
         this.name = "BridgeError";
         this.code = code;
         if (options?.memberPids?.length) this.memberPids = [...new Set(options.memberPids.filter((pid) => Number.isSafeInteger(pid) && pid > 0))];
-      }
-    };
-  }
-});
-
-// src/runtime/resolver.ts
-import { accessSync, existsSync as existsSync3, readFileSync as readFileSync3, statSync } from "node:fs";
-import { homedir as homedir2 } from "node:os";
-import path5 from "node:path";
-import { fileURLToPath as fileURLToPath2 } from "node:url";
-function loadPersistedRuntimeEnvironment(source, homeDir = homedir2(), host = codexHostProfile(homeDir)) {
-  validateHostProfile(host);
-  const settingsPaths = [host.settingsDirectory, ...host.legacySettingsDirectories ?? []].map((directory) => path5.join(directory, "runtime-config.json"));
-  const legacyDataRoot = source["ZCODE_BRIDGE_DATA_DIR"]?.trim();
-  if (legacyDataRoot && path5.isAbsolute(legacyDataRoot)) {
-    settingsPaths.push(path5.join(legacyDataRoot, "runtime-config.json"));
-  }
-  let parsed = null;
-  const seenPaths = /* @__PURE__ */ new Set();
-  for (const settingsPath of settingsPaths) {
-    const normalized = path5.resolve(settingsPath);
-    const identity = process.platform === "win32" ? normalized.toLocaleLowerCase("en-US") : normalized;
-    if (seenPaths.has(identity)) continue;
-    seenPaths.add(identity);
-    try {
-      if (statSync(normalized).size > 64 * 1024) throw new Error("runtime settings exceed 64 KB");
-      const candidate = JSON.parse(readFileSync3(normalized, "utf8"));
-      if (isPlainObject(candidate)) {
-        parsed = candidate;
-        break;
-      }
-      throw new Error("runtime settings must be an object");
-    } catch (error2) {
-      if (error2.code === "ENOENT") continue;
-      throw new BridgeError("provider_config_invalid", `invalid Bridge runtime settings: ${normalized}`, { cause: error2 });
-    }
-  }
-  if (!parsed) return { ...source };
-  const env = { ...source };
-  for (const key of PERSISTED_RUNTIME_KEYS) {
-    if (!Object.prototype.hasOwnProperty.call(parsed, key)) continue;
-    const value = parsed[key];
-    if (typeof value === "string") env[key] = value.trim();
-    else if (value === null) env[key] = "";
-    else throw new BridgeError("provider_config_invalid", `Bridge runtime setting ${key} must be a string or null`);
-  }
-  return env;
-}
-function resolveZcodeHome(env) {
-  const configured = env["ZCODE_HOME"]?.trim();
-  if (!configured) return null;
-  if (!isAbsolutePathForPlatform(configured)) {
-    throw new BridgeError("provider_config_invalid", "ZCODE_HOME must be an absolute path");
-  }
-  const resolved = path5.normalize(configured);
-  if (path5.basename(resolved).toLowerCase() !== ".zcode") {
-    throw new BridgeError(
-      "provider_config_invalid",
-      "ZCODE_HOME must name a .zcode directory so app-server can use the same data root"
-    );
-  }
-  try {
-    if (!statSync(resolved).isDirectory()) {
-      throw new BridgeError("provider_config_invalid", `ZCODE_HOME is not a directory: ${resolved}`);
-    }
-  } catch (error2) {
-    if (error2 instanceof BridgeError) throw error2;
-    throw new BridgeError("provider_config_missing", `ZCODE_HOME directory does not exist: ${resolved}`);
-  }
-  return resolved;
-}
-function samePath(left, right) {
-  const resolvedLeft = path5.resolve(left);
-  const resolvedRight = path5.resolve(right);
-  return process.platform === "win32" ? resolvedLeft.toLowerCase() === resolvedRight.toLowerCase() : resolvedLeft === resolvedRight;
-}
-function isReadableFile(filePath) {
-  try {
-    if (!existsSync3(filePath) || !statSync(filePath).isFile()) return false;
-    accessSync(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-function findPackageRoot(startDir) {
-  let current = startDir ?? path5.dirname(fileURLToPath2(import.meta.url));
-  for (let depth = 0; depth < 10; depth++) {
-    if (existsSync3(path5.join(current, "package.json")) || existsSync3(path5.join(current, "plugin.json")) && existsSync3(path5.join(current, "dist")) && existsSync3(path5.join(current, "worker"))) {
-      return current;
-    }
-    const parent = path5.dirname(current);
-    if (parent === current) break;
-    current = parent;
-  }
-  throw new Error(
-    `Cannot locate the Bridge package root (no package.json or installed plugin markers above ${startDir ?? "module directory"})`
-  );
-}
-function isPlainObject(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function isNonEmptyCollection(value) {
-  if (Array.isArray(value)) return value.length > 0;
-  if (isPlainObject(value)) return Object.keys(value).length > 0;
-  return false;
-}
-function errorText(error2) {
-  const message = error2 instanceof Error ? error2.message : String(error2);
-  return message.length > 300 ? `${message.slice(0, 300)}\u2026` : message;
-}
-var PERSISTED_RUNTIME_KEYS, NodeRuntimeResolver;
-var init_resolver = __esm({
-  "src/runtime/resolver.ts"() {
-    "use strict";
-    init_errors();
-    init_paths();
-    init_host_profile();
-    PERSISTED_RUNTIME_KEYS = [
-      "ZCODE_BRIDGE_NODE",
-      "ZCODE_BRIDGE_ZCODE_CJS",
-      "ZCODE_BRIDGE_DATA_DIR",
-      "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE",
-      "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE",
-      "ZCODE_HOME",
-      "ZCODE_DATA_BASE_DIR",
-      "ZCODE_WINDOWS_APP_INSTALL_DIR",
-      "ZCODE_BRIDGE_DEFAULT_PROVIDER_ID",
-      "ZCODE_BRIDGE_DEFAULT_MODEL_ID",
-      "ZCODE_BRIDGE_DEFAULT_REASONING_LEVEL",
-      "ZCODE_BRIDGE_PREFER_STARTPLAN",
-      "ZCODE_BRIDGE_MODE",
-      "ZCODE_BRIDGE_MAX_CONCURRENT_WORKERS",
-      "ZCODE_BRIDGE_TIMEOUT_MS",
-      "ZCODE_BRIDGE_BROWSER_USE",
-      "ZCODE_BRIDGE_BROWSER_EXECUTABLE",
-      "ZCODE_BRIDGE_AUTO_WAKE",
-      "ZCODE_BRIDGE_TASK_CONSOLE"
-    ];
-    NodeRuntimeResolver = class {
-      #env;
-      #homeDir;
-      #packageRoot;
-      #host;
-      constructor(options = {}) {
-        this.#env = options.env ?? process.env;
-        this.#homeDir = options.homeDir ?? homedir2();
-        this.#packageRoot = options.packageRoot ?? null;
-        this.#host = validateHostProfile(options.host ?? codexHostProfile(this.#homeDir));
-      }
-      async resolve() {
-        const env = loadPersistedRuntimeEnvironment(this.#env, this.#homeDir, this.#host);
-        const data = discoverZCodeData(env, { fallbackHomeDir: this.#homeDir });
-        const zcodeHome = resolveZcodeHome(env);
-        const explicitDataBaseDir = env["ZCODE_DATA_BASE_DIR"]?.trim() || null;
-        if (explicitDataBaseDir && !isAbsolutePathForPlatform(explicitDataBaseDir)) {
-          throw new BridgeError("provider_config_invalid", "ZCODE_DATA_BASE_DIR must be an absolute path");
-        }
-        if (zcodeHome && explicitDataBaseDir && !sameFileSystemPath(path5.dirname(zcodeHome), explicitDataBaseDir)) {
-          throw new BridgeError(
-            "provider_config_invalid",
-            `ZCODE_HOME (${zcodeHome}) and ZCODE_DATA_BASE_DIR (${explicitDataBaseDir}) conflict; ZCODE_HOME must name <ZCODE_DATA_BASE_DIR>/.zcode. Fix one of them instead of relying on silent selection.`
-          );
-        }
-        let nodeExecutable = "node";
-        const nodeOverride = env["ZCODE_BRIDGE_NODE"]?.trim();
-        if (nodeOverride) {
-          this.#assertReadableFile(
-            nodeOverride,
-            "ZCODE_BRIDGE_NODE is set but is not a readable file"
-          );
-          nodeExecutable = nodeOverride;
-        }
-        const builtinEnv = env["ZCODE_BUILTIN_PROVIDER_CONFIG_FILE"]?.trim() || null;
-        const personalEnv = env["ZCODE_PERSONAL_PROVIDER_CONFIG_FILE"]?.trim() || null;
-        let zcodeEntrypoint;
-        let explicitRuntime = false;
-        const entryOverride = env["ZCODE_BRIDGE_ZCODE_CJS"]?.trim();
-        if (entryOverride) {
-          this.#assertReadableFile(
-            entryOverride,
-            "ZCODE_BRIDGE_ZCODE_CJS is set but is not a readable file"
-          );
-          zcodeEntrypoint = entryOverride;
-          explicitRuntime = true;
-        } else {
-          const install = discoverZCodeInstall(env, { requireBuiltin: !builtinEnv });
-          if (!install.zcodeEntrypoint) {
-            throw new BridgeError(
-              "runtime_not_found",
-              `zcode.cjs${builtinEnv ? "" : " with a same-install zcode-builtin.json"} was not found; searched: ` + (install.candidates.map((candidate) => `${candidate.root} (runtime: ${candidate.runtimeExists}, builtin: ${candidate.builtinExists})`).join(", ") || "(no installation roots available)")
-            );
-          }
-          zcodeEntrypoint = install.zcodeEntrypoint;
-        }
-        let builtinConfigFile;
-        let personalConfigFile;
-        if (builtinEnv && personalEnv) {
-          this.#validateBuiltinConfig(builtinEnv);
-          this.#validatePersonalConfig(personalEnv);
-          builtinConfigFile = builtinEnv;
-          personalConfigFile = personalEnv;
-        } else {
-          if (builtinEnv) {
-            this.#validateBuiltinConfig(builtinEnv);
-            builtinConfigFile = builtinEnv;
-          } else if (explicitRuntime) {
-            const derived2 = builtinConfigForRuntime(zcodeEntrypoint);
-            if (!isReadableFile(derived2)) {
-              throw new BridgeError(
-                "provider_config_missing",
-                `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE is not set and the builtin config was not found next to the configured runtime; expected: ${derived2}`
-              );
-            }
-            this.#validateBuiltinConfig(derived2);
-            builtinConfigFile = derived2;
-          } else {
-            const install = discoverZCodeInstall(env, { requireBuiltin: true });
-            if (!install.builtinConfigFile) {
-              throw new BridgeError(
-                "provider_config_missing",
-                "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE is not set and no builtin provider config was found in the ZCode installation; searched: " + (install.candidates.map((candidate) => `${candidate.root} (runtime: ${candidate.runtimeExists}, builtin: ${candidate.builtinExists})`).join(", ") || "(no installation roots available)")
-              );
-            }
-            this.#validateBuiltinConfig(install.builtinConfigFile);
-            builtinConfigFile = install.builtinConfigFile;
-          }
-          if (personalEnv) {
-            this.#validatePersonalConfig(personalEnv);
-            personalConfigFile = personalEnv;
-          } else {
-            const candidates = zcodeHome ? [path5.join(zcodeHome, "v2", "provider_config.json")] : [
-              explicitDataBaseDir,
-              data.configuredDataBaseDir,
-              data.userHome
-            ].filter((base) => Boolean(base)).filter((base, index, values) => values.indexOf(base) === index).map((base) => path5.join(base, ".zcode", "v2", "provider_config.json"));
-            const existing = candidates.filter((candidate) => existsSync3(candidate));
-            if (existing.length === 0) {
-              throw new BridgeError(
-                "provider_config_missing",
-                "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE is not set and no personal provider config exists at any of: " + candidates.join(", ")
-              );
-            }
-            let accepted = null;
-            let lastError = null;
-            for (const candidate of existing) {
-              try {
-                this.#validatePersonalConfig(candidate);
-                accepted = candidate;
-                break;
-              } catch (error2) {
-                lastError = error2 instanceof Error ? error2.message : String(error2);
-              }
-            }
-            if (!accepted) {
-              throw new BridgeError(
-                "provider_config_invalid",
-                `No usable personal provider config among: ${existing.join(", ")}; last validation failure: ${lastError ?? "unknown"}`
-              );
-            }
-            personalConfigFile = accepted;
-          }
-        }
-        if (zcodeHome && !samePath(personalConfigFile, path5.join(zcodeHome, "v2", "provider_config.json"))) {
-          throw new BridgeError(
-            "provider_config_invalid",
-            `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE must be ZCODE_HOME/v2/provider_config.json (${zcodeHome})`
-          );
-        }
-        const dataOverride = env["ZCODE_BRIDGE_DATA_DIR"]?.trim();
-        let dataRoot;
-        if (dataOverride) {
-          if (!path5.isAbsolute(dataOverride)) {
-            throw new Error(
-              `ZCODE_BRIDGE_DATA_DIR must be an absolute path when set, got: ${dataOverride}`
-            );
-          }
-          dataRoot = path5.normalize(dataOverride);
-        } else {
-          dataRoot = this.#packageRoot ?? findPackageRoot();
-        }
-        return {
-          nodeExecutable,
-          zcodeEntrypoint,
-          providerBuiltinConfigFile: builtinConfigFile,
-          providerPersonalConfigFile: personalConfigFile,
-          zcodeDataRoot: data.zcodeDataDir,
-          dataRoot
-        };
-      }
-      #assertReadableFile(filePath, label) {
-        if (!isReadableFile(filePath)) {
-          throw new BridgeError("runtime_not_found", `${label}: ${filePath}`);
-        }
-      }
-      /**
-       * Structure validation only. The verified differential signal for the
-       * CLI-created stub is an empty providerRules map (see docs/ZCODE_RUNTIME.md);
-       * rejecting it implements "never silently select a known stub".
-       */
-      #validatePersonalConfig(filePath) {
-        const parsed = this.#readJsonConfig(filePath, "personal provider config");
-        const config2 = parsed["config"];
-        if (!isPlainObject(config2)) {
-          throw new BridgeError(
-            "provider_config_invalid",
-            `Personal provider config has no config object: ${filePath}`
-          );
-        }
-        const providerConfigRules = config2["providerConfigRules"];
-        const rules = isPlainObject(providerConfigRules) ? providerConfigRules["providerRules"] : void 0;
-        if (!isNonEmptyCollection(rules)) {
-          throw new BridgeError(
-            "provider_config_invalid",
-            `Personal provider config contains no provider rules (this matches the known CLI-created stub shape): ${filePath}`
-          );
-        }
-      }
-      #validateBuiltinConfig(filePath) {
-        const parsed = this.#readJsonConfig(filePath, "builtin provider config");
-        if (!isPlainObject(parsed["config"])) {
-          throw new BridgeError(
-            "provider_config_invalid",
-            `Builtin provider config has no config object: ${filePath}`
-          );
-        }
-      }
-      #readJsonConfig(filePath, label) {
-        if (!isReadableFile(filePath)) {
-          throw new BridgeError("provider_config_missing", `${label} not found: ${filePath}`);
-        }
-        let text2;
-        try {
-          text2 = readFileSync3(filePath, "utf8");
-        } catch (error2) {
-          throw new BridgeError(
-            "provider_config_invalid",
-            `${label} is not readable: ${filePath} (${errorText(error2)})`
-          );
-        }
-        let parsed;
-        try {
-          parsed = JSON.parse(text2);
-        } catch (error2) {
-          throw new BridgeError(
-            "provider_config_invalid",
-            `${label} is not valid JSON: ${filePath}`
-          );
-        }
-        if (!isPlainObject(parsed)) {
-          throw new BridgeError("provider_config_invalid", `${label} is not a JSON object: ${filePath}`);
-        }
-        return parsed;
+        if (options?.rpcDiagnostics?.length) this.rpcDiagnostics = options.rpcDiagnostics;
+        if (typeof options?.sessionId === "string" && options.sessionId) this.sessionId = options.sessionId;
       }
     };
   }
@@ -588,7 +242,7 @@ var init_resolver = __esm({
 
 // src/runtime/desktop-host-launch.ts
 import { closeSync, openSync, readSync } from "node:fs";
-import path6 from "node:path";
+import path3 from "node:path";
 function buildZCodeAppServerLaunch(zcodeEntrypoint, baseEnv) {
   const metadata = readDesktopMetadata(zcodeEntrypoint);
   return {
@@ -617,7 +271,7 @@ function withOfficialHostLaunchIdentity(baseEnv, identity) {
   };
 }
 function readDesktopMetadata(zcodeEntrypoint) {
-  const archivePath = path6.resolve(path6.dirname(zcodeEntrypoint), "..", "app.asar");
+  const archivePath = path3.resolve(path3.dirname(zcodeEntrypoint), "..", "app.asar");
   let archive;
   try {
     archive = readAsarMetadataFiles(archivePath);
@@ -753,6 +407,756 @@ var init_desktop_host_launch = __esm({
   }
 });
 
+// src/runtime/official-builtin-registry.ts
+import { createHash } from "node:crypto";
+import { lstat as nodeLstat, readFile as nodeReadFile } from "node:fs/promises";
+import { realpath as nodeRealpath } from "node:fs/promises";
+import path4 from "node:path";
+function forwardOfficialEndpointEnv(target, source) {
+  for (const key of OFFICIAL_ENDPOINT_ENV_KEYS) {
+    const value = source[key];
+    if (value !== void 0) target[key] = value;
+  }
+  return target;
+}
+async function isOfficialBuiltinRegistryPin(explicitBuiltin, bundledPath) {
+  const explicit = explicitBuiltin?.trim() || null;
+  if (!explicit || !bundledPath) return false;
+  const [explicitCanonical, bundledCanonical] = await Promise.all([canonicalPath(explicit), canonicalPath(bundledPath)]);
+  return !sameFileSystemPath(explicitCanonical, bundledCanonical);
+}
+async function canonicalPath(filePath) {
+  try {
+    return await nodeRealpath(filePath);
+  } catch {
+    return path4.resolve(filePath);
+  }
+}
+function officialEndpointOrigin(env = process.env) {
+  const configured = (key) => {
+    const value = env[key]?.trim();
+    return value || void 0;
+  };
+  const test = env["ZCODE_ENV"]?.trim().toLowerCase() === "test";
+  const base = configured("ZCODE_BASE_URL") ?? configured("ZCODE_ENDPOINT_ORIGIN") ?? (test ? configured("ZCODE_TEST_BASE_URL") : configured("ZCODE_PRODUCTION_BASE_URL"));
+  if (!base) return test ? OFFICIAL_TEST_ENDPOINT_ORIGIN : OFFICIAL_PRODUCTION_ENDPOINT_ORIGIN;
+  const url = new URL(base);
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("ZCode endpoint origin must use http or https");
+  }
+  return url.origin;
+}
+function officialClientPlatform(platform = process.platform, architecture = process.arch) {
+  const operatingSystem = platform === "win32" ? "windows" : platform;
+  const arch = architecture === "arm64" ? "aarch64" : architecture === "x64" ? "x86_64" : architecture;
+  return `${operatingSystem}-${arch}`;
+}
+function officialDesktopAppVersion(zcodeEntrypoint) {
+  try {
+    return buildZCodeAppServerLaunch(zcodeEntrypoint, {}).env["ZCODE_APP_VERSION"] ?? null;
+  } catch {
+    return null;
+  }
+}
+function officialRuntimeRegistryPath(input) {
+  const appVersion = input.appVersion?.trim() || null;
+  if (!appVersion || !path4.isAbsolute(input.dataBaseDir)) return null;
+  try {
+    registrySegment(appVersion, "appVersion");
+    const platform = registrySegment(
+      officialClientPlatform(input.platform, input.architecture),
+      "platform"
+    );
+    const origin = officialEndpointOrigin(input.env);
+    const endpointKey = `endpoint-${createHash("sha256").update(origin).digest("hex").slice(0, 32)}`;
+    return path4.join(
+      input.dataBaseDir,
+      ".zcode",
+      "v2",
+      "runtime",
+      "provider",
+      platform,
+      appVersion,
+      endpointKey,
+      "zcode-builtin.json"
+    );
+  } catch {
+    return null;
+  }
+}
+async function selectOfficialBuiltinRegistry(input) {
+  const readFile3 = input.readFile ?? ((filePath) => nodeReadFile(filePath, "utf8"));
+  const lstat3 = input.lstat ?? ((filePath) => nodeLstat(filePath));
+  const bundled = (status, revision = null) => ({
+    path: input.bundledPath,
+    source: "bundled",
+    bundledPath: input.bundledPath,
+    revision,
+    runtimePath: input.runtimePath,
+    runtimeStatus: status
+  });
+  if (!input.runtimePath) return bundled("unresolved");
+  let stat2;
+  try {
+    stat2 = await lstat3(input.runtimePath);
+  } catch {
+    return bundled("not_found");
+  }
+  if (!stat2.isFile() || stat2.isSymbolicLink()) return bundled("invalid");
+  let runtime;
+  try {
+    runtime = decodeRegistry(await readFile3(input.runtimePath));
+  } catch {
+    runtime = null;
+  }
+  if (!runtime) return bundled("invalid");
+  let bundledCandidate;
+  try {
+    bundledCandidate = decodeRegistry(await readFile3(input.bundledPath));
+  } catch {
+    bundledCandidate = null;
+  }
+  if (!bundledCandidate) {
+    return runtimeSelected();
+  }
+  if (bundledCandidate.revision === runtime.revision) {
+    runtime.canonical ??= canonicalJson(runtime.value);
+    bundledCandidate.canonical ??= canonicalJson(bundledCandidate.value);
+    return runtime.canonical === bundledCandidate.canonical ? runtimeSelected() : bundled("same_revision_conflict", bundledCandidate.revision);
+  }
+  return runtime.revision > bundledCandidate.revision ? runtimeSelected() : bundled("lower_revision", bundledCandidate.revision);
+  function runtimeSelected() {
+    return {
+      path: input.runtimePath,
+      source: "runtime",
+      bundledPath: input.bundledPath,
+      revision: runtime.revision,
+      runtimePath: input.runtimePath,
+      runtimeStatus: "selected"
+    };
+  }
+}
+function registrySegment(value, label) {
+  if (!value || value === "." || value === ".." || /[\\/]/u.test(value)) {
+    throw new Error(`ZCode Built-in ${label} is not a valid path segment`);
+  }
+  return value;
+}
+function decodeRegistry(text2) {
+  if (Buffer.byteLength(text2, "utf8") > MAX_REGISTRY_BYTES) throw new Error("registry too large");
+  const value = JSON.parse(text2);
+  if (!isRecord2(value) || !hasExactKeys(value, ["schemaVersion", "revision", "config"]) || value.schemaVersion !== 1) {
+    throw new Error("unsupported registry schema");
+  }
+  const revision = value.revision;
+  if (typeof revision !== "number" || !Number.isSafeInteger(revision) || revision < 0) {
+    throw new Error("invalid registry revision");
+  }
+  const config2 = value.config;
+  if (!isRecord2(config2) || !hasExactKeys(config2, ["providerConfigRules", "modelConfigRules"]) || !isRecord2(config2.providerConfigRules) || !isRecord2(config2.modelConfigRules)) {
+    throw new Error("invalid registry config");
+  }
+  const providerRules = config2.providerConfigRules.providerRules;
+  if (Array.isArray(providerRules) && providerRules.some((rule) => isRecord2(rule) && rule.providerId === OBSERVED_RETIRED_PROVIDER_ID)) {
+    throw new Error("registry contains a retired provider");
+  }
+  if (isRecord2(providerRules) && Object.hasOwn(providerRules, OBSERVED_RETIRED_PROVIDER_ID)) {
+    throw new Error("registry contains a retired provider");
+  }
+  return { revision, value, canonical: null };
+}
+function hasExactKeys(value, expected) {
+  const keys = Object.keys(value);
+  return keys.length === expected.length && expected.every((key) => Object.hasOwn(value, key));
+}
+function canonicalJson(value) {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  const record5 = value;
+  return `{${Object.keys(record5).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(record5[key])}`).join(",")}}`;
+}
+function isRecord2(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+var OFFICIAL_PRODUCTION_ENDPOINT_ORIGIN, OFFICIAL_TEST_ENDPOINT_ORIGIN, OFFICIAL_ENDPOINT_ENV_KEYS, MAX_REGISTRY_BYTES, OBSERVED_RETIRED_PROVIDER_ID;
+var init_official_builtin_registry = __esm({
+  "src/runtime/official-builtin-registry.ts"() {
+    "use strict";
+    init_desktop_host_launch();
+    init_paths();
+    OFFICIAL_PRODUCTION_ENDPOINT_ORIGIN = "https://zcode.z.ai";
+    OFFICIAL_TEST_ENDPOINT_ORIGIN = "https://zcode.chatglm.site";
+    OFFICIAL_ENDPOINT_ENV_KEYS = Object.freeze([
+      "ZCODE_ENV",
+      "ZCODE_BASE_URL",
+      "ZCODE_ENDPOINT_ORIGIN",
+      "ZCODE_PRODUCTION_BASE_URL",
+      "ZCODE_TEST_BASE_URL"
+    ]);
+    MAX_REGISTRY_BYTES = 8 * 1024 * 1024;
+    OBSERVED_RETIRED_PROVIDER_ID = "builtin:zapi";
+  }
+});
+
+// src/runtime/account-provider.ts
+import { createHash as createHash3 } from "node:crypto";
+import { existsSync as existsSync3, readFileSync as readFileSync3 } from "node:fs";
+import path7 from "node:path";
+function buildAccountProviderPayload(config2, verifiedSelection, homeDir, taskProviderId) {
+  const source = readAccountProviderSource(config2, verifiedSelection, homeDir, taskProviderId);
+  if (!source) return null;
+  const providers = {};
+  const states = {};
+  for (const entry of source.entries) {
+    providers[entry.providerId] = {
+      access: { type: entry.accessType, entitled: entry.entitled }
+    };
+    states[entry.providerId] = {
+      availability: entry.availability,
+      entitled: entry.entitled,
+      ...entry.current === void 0 ? {} : { current: entry.current }
+    };
+  }
+  return {
+    revision: accountProviderRevision(source.builtinRevision, providers, states),
+    basedOnZCodeBuiltinRevision: source.builtinRevision,
+    providers,
+    states
+  };
+}
+function accountSettingFile(homeDir) {
+  return path7.join(homeDir, ".zcode", "v2", "setting.json");
+}
+function accountProviderRuleFacts(providerId, config2) {
+  if (!providerId?.startsWith("account:")) return null;
+  const table = readJson(config2.providerBuiltinConfigFile);
+  const rule = readProviderRules(table).find(
+    (candidate) => isRecord3(candidate) && candidate.providerId === providerId
+  );
+  if (!rule) return null;
+  const access = rule.config?.access;
+  if (access?.type !== "zhipu-account") {
+    return { planKind: null, accountType: null };
+  }
+  return {
+    planKind: normalizePlanKind(access.mode),
+    accountType: typeof access.accountType === "string" ? access.accountType : null
+  };
+}
+function zcodeDataBaseDir(personalProviderConfigFile) {
+  const dataDir = zcodeV2DataDir(personalProviderConfigFile);
+  return dataDir ? path7.dirname(path7.dirname(dataDir)) : null;
+}
+function zcodeV2DataDir(personalProviderConfigFile) {
+  const absolute = path7.resolve(personalProviderConfigFile);
+  if (path7.basename(absolute).toLowerCase() !== "provider_config.json") return null;
+  const v2Dir = path7.dirname(absolute);
+  if (path7.basename(v2Dir).toLowerCase() !== "v2") return null;
+  const zcodeDir = path7.dirname(v2Dir);
+  if (path7.basename(zcodeDir).toLowerCase() !== ".zcode") return null;
+  return v2Dir;
+}
+function readAccountProviderSource(config2, verifiedSelection, homeDir, taskProviderId) {
+  const table = readJson(config2.providerBuiltinConfigFile);
+  const providerRules = readProviderRules(table).filter(isRecord3).map((rule) => rule).filter((rule) => rule.config?.access?.type === "zhipu-account" && typeof rule.providerId === "string").sort((left, right) => left.providerId.localeCompare(right.providerId));
+  if (!providerRules.length) return null;
+  const officialV2Dir = zcodeV2DataDir(config2.providerPersonalConfigFile);
+  if (!officialV2Dir) return null;
+  const officialDataRoot = path7.dirname(officialV2Dir);
+  const credentials = readJson(path7.join(officialV2Dir, "config.json"));
+  const credentialProviders = asRecord(credentials?.provider);
+  const cache = readJson(path7.join(officialV2Dir, "coding-plan-cache.json"));
+  const cacheItems = asRecord(asRecord(cache?.entryStatus).items);
+  const settingFile = homeDir ? accountSettingFile(homeDir) : path7.join(officialV2Dir, "setting.json");
+  const settings = readJson(settingFile);
+  const selectedKeys = asRecord(settings?.modelProviderFamilySelectedKeys);
+  const rawConnectionSelections = settings?.providerFamilyConnectionSelections;
+  const connectionSelectionsPresent = settings !== null && Object.prototype.hasOwnProperty.call(settings, "providerFamilyConnectionSelections");
+  const connectionSelections = asRecord(rawConnectionSelections);
+  const connectionSelectionsInvalid = connectionSelectionsPresent && !isRecord3(rawConnectionSelections);
+  const taskAccountProviderId = taskProviderId && providerRules.some((rule) => rule.providerId === taskProviderId) ? taskProviderId : null;
+  const entries = providerRules.map((rule) => {
+    const providerId = rule.providerId;
+    const legacyId = configProviderId(providerId, rule);
+    const planKind = normalizePlanKind(rule.config?.access?.mode);
+    const cacheStatus = asRecord(cacheItems[legacyId]).status;
+    const legacyConfig = asRecord(credentialProviders[legacyId]);
+    const options = asRecord(legacyConfig.options);
+    const apiKey = typeof options.apiKey === "string" ? options.apiKey.trim() : "";
+    const selectedEntitled = verifiedSelection?.providerId === providerId;
+    const entitled = planKind === "start-plan" ? selectedEntitled : cacheStatus === "available" || legacyConfig.enabled === true && apiKey.length > 0;
+    const desktopCurrent = isCurrentProvider(
+      rule,
+      legacyId,
+      selectedKeys,
+      connectionSelectionsInvalid,
+      connectionSelections
+    );
+    const current = taskAccountProviderId ? providerId === taskAccountProviderId : desktopCurrent;
+    return {
+      providerId,
+      legacyId,
+      planKind,
+      accessType: rule.config?.access?.type ?? "zhipu-account",
+      entitled,
+      availability: entitled ? "available" : "unavailable",
+      current,
+      apiKey
+    };
+  });
+  const builtinRevision = zcodeBuiltinRevision(table, config2.providerBuiltinConfigFile);
+  return { officialDataRoot, officialV2Dir, settingFile, builtinRevision, entries };
+}
+function zcodeBuiltinRevision(table, sourceFile) {
+  const revision = typeof table?.revision === "number" ? table.revision : 0;
+  const sourceDigest = createHash3("sha256").update(path7.resolve(sourceFile)).digest("hex");
+  return `zcode-builtin:${revision}:${sourceDigest}`;
+}
+function accountProviderRevision(builtinRevision, providers, states) {
+  return `account:${JSON.stringify([builtinRevision, providers, states])}`;
+}
+function isCurrentProvider(rule, legacyId, selectedKeys, connectionSelectionsInvalid, connectionSelections) {
+  const access = rule.config?.access;
+  if (!access?.accountType) return false;
+  if (access.mode === "off-peak" || access.mode === "highspeed") return void 0;
+  if (connectionSelectionsInvalid) return false;
+  if (Object.prototype.hasOwnProperty.call(connectionSelections, access.accountType)) {
+    const connection = asRecord(connectionSelections[access.accountType]);
+    if (!isConnectionSelectionKind(connection.kind)) return false;
+    if (connection.kind === "team-coding-plan" && (!isNonEmptyString(connection.productId) || !isNonEmptyString(connection.organizationId) || !isNonEmptyString(connection.projectId))) {
+      return false;
+    }
+    return connection.kind === access.mode;
+  }
+  const selected = selectedKeys[access.accountType];
+  return typeof selected === "string" && (selected === legacyId || selected.endsWith(`:${legacyId}`));
+}
+function isConnectionSelectionKind(value) {
+  return value === "start-plan" || value === "individual-coding-plan" || value === "team-coding-plan";
+}
+function isNonEmptyString(value) {
+  return typeof value === "string" && value.trim().length > 0;
+}
+function normalizePlanKind(value) {
+  return value === "start-plan" || value === "individual-coding-plan" || value === "team-coding-plan" || value === "off-peak" || value === "highspeed" ? value : null;
+}
+function configProviderId(providerId, rule) {
+  const access = rule.config?.access;
+  if (!providerId.startsWith("account:") || !access?.accountType || !access.mode) return providerId;
+  const plan = access.mode === "individual-coding-plan" ? "coding-plan" : access.mode;
+  return `builtin:${access.accountType}-${plan}`;
+}
+function readProviderRules(table) {
+  const providerConfigRules = asRecord(asRecord(table?.config).providerConfigRules);
+  return Array.isArray(providerConfigRules.providerRules) ? providerConfigRules.providerRules : [];
+}
+function readJson(filePath) {
+  try {
+    if (!existsSync3(filePath)) return null;
+    const value = JSON.parse(readFileSync3(filePath, "utf8"));
+    return isRecord3(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+function asRecord(value) {
+  return isRecord3(value) ? value : {};
+}
+function isRecord3(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+var BIGMODEL_START_PLAN_PROVIDER_ID;
+var init_account_provider = __esm({
+  "src/runtime/account-provider.ts"() {
+    "use strict";
+    BIGMODEL_START_PLAN_PROVIDER_ID = "account:bigmodel-start-plan";
+  }
+});
+
+// src/runtime/resolver.ts
+import { accessSync, existsSync as existsSync4, readFileSync as readFileSync4, statSync } from "node:fs";
+import { homedir as homedir2 } from "node:os";
+import path8 from "node:path";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
+function loadPersistedRuntimeEnvironment(source, homeDir = homedir2(), host = codexHostProfile(homeDir)) {
+  validateHostProfile(host);
+  const settingsPaths = [host.settingsDirectory, ...host.legacySettingsDirectories ?? []].map((directory) => path8.join(directory, "runtime-config.json"));
+  const legacyDataRoot = source["ZCODE_BRIDGE_DATA_DIR"]?.trim();
+  if (legacyDataRoot && path8.isAbsolute(legacyDataRoot)) {
+    settingsPaths.push(path8.join(legacyDataRoot, "runtime-config.json"));
+  }
+  let parsed = null;
+  const seenPaths = /* @__PURE__ */ new Set();
+  for (const settingsPath of settingsPaths) {
+    const normalized = path8.resolve(settingsPath);
+    const identity = process.platform === "win32" ? normalized.toLocaleLowerCase("en-US") : normalized;
+    if (seenPaths.has(identity)) continue;
+    seenPaths.add(identity);
+    try {
+      if (statSync(normalized).size > 64 * 1024) throw new Error("runtime settings exceed 64 KB");
+      const candidate = JSON.parse(readFileSync4(normalized, "utf8"));
+      if (isPlainObject(candidate)) {
+        parsed = candidate;
+        break;
+      }
+      throw new Error("runtime settings must be an object");
+    } catch (error2) {
+      if (error2.code === "ENOENT") continue;
+      throw new BridgeError("provider_config_invalid", `invalid Bridge runtime settings: ${normalized}`, { cause: error2 });
+    }
+  }
+  if (!parsed) return { ...source };
+  const env = { ...source };
+  for (const key of PERSISTED_RUNTIME_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(parsed, key)) continue;
+    const value = parsed[key];
+    if (typeof value === "string") env[key] = value.trim();
+    else if (value === null) env[key] = "";
+    else throw new BridgeError("provider_config_invalid", `Bridge runtime setting ${key} must be a string or null`);
+  }
+  return env;
+}
+function resolveZcodeHome(env) {
+  const configured = env["ZCODE_HOME"]?.trim();
+  if (!configured) return null;
+  if (!isAbsolutePathForPlatform(configured)) {
+    throw new BridgeError("provider_config_invalid", "ZCODE_HOME must be an absolute path");
+  }
+  const resolved = path8.normalize(configured);
+  if (path8.basename(resolved).toLowerCase() !== ".zcode") {
+    throw new BridgeError(
+      "provider_config_invalid",
+      "ZCODE_HOME must name a .zcode directory so app-server can use the same data root"
+    );
+  }
+  try {
+    if (!statSync(resolved).isDirectory()) {
+      throw new BridgeError("provider_config_invalid", `ZCODE_HOME is not a directory: ${resolved}`);
+    }
+  } catch (error2) {
+    if (error2 instanceof BridgeError) throw error2;
+    throw new BridgeError("provider_config_missing", `ZCODE_HOME directory does not exist: ${resolved}`);
+  }
+  return resolved;
+}
+function samePath(left, right) {
+  const resolvedLeft = path8.resolve(left);
+  const resolvedRight = path8.resolve(right);
+  return process.platform === "win32" ? resolvedLeft.toLowerCase() === resolvedRight.toLowerCase() : resolvedLeft === resolvedRight;
+}
+function isReadableFile(filePath) {
+  try {
+    if (!existsSync4(filePath) || !statSync(filePath).isFile()) return false;
+    accessSync(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function findPackageRoot(startDir) {
+  let current = startDir ?? path8.dirname(fileURLToPath2(import.meta.url));
+  for (let depth = 0; depth < 10; depth++) {
+    if (existsSync4(path8.join(current, "package.json")) || existsSync4(path8.join(current, "plugin.json")) && existsSync4(path8.join(current, "dist")) && existsSync4(path8.join(current, "worker"))) {
+      return current;
+    }
+    const parent = path8.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  throw new Error(
+    `Cannot locate the Bridge package root (no package.json or installed plugin markers above ${startDir ?? "module directory"})`
+  );
+}
+function isPlainObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function isNonEmptyCollection(value) {
+  if (Array.isArray(value)) return value.length > 0;
+  if (isPlainObject(value)) return Object.keys(value).length > 0;
+  return false;
+}
+function errorText(error2) {
+  const message = error2 instanceof Error ? error2.message : String(error2);
+  return message.length > 300 ? `${message.slice(0, 300)}\u2026` : message;
+}
+var PERSISTED_RUNTIME_KEYS, NodeRuntimeResolver;
+var init_resolver = __esm({
+  "src/runtime/resolver.ts"() {
+    "use strict";
+    init_account_provider();
+    init_errors();
+    init_official_builtin_registry();
+    init_paths();
+    init_host_profile();
+    PERSISTED_RUNTIME_KEYS = [
+      "ZCODE_BRIDGE_NODE",
+      "ZCODE_BRIDGE_ZCODE_CJS",
+      "ZCODE_BRIDGE_DATA_DIR",
+      "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE",
+      "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE",
+      "ZCODE_HOME",
+      "ZCODE_DATA_BASE_DIR",
+      "ZCODE_WINDOWS_APP_INSTALL_DIR",
+      "ZCODE_BRIDGE_DEFAULT_PROVIDER_ID",
+      "ZCODE_BRIDGE_DEFAULT_MODEL_ID",
+      "ZCODE_BRIDGE_DEFAULT_REASONING_LEVEL",
+      "ZCODE_BRIDGE_PREFER_STARTPLAN",
+      "ZCODE_BRIDGE_MODE",
+      "ZCODE_BRIDGE_MAX_CONCURRENT_WORKERS",
+      "ZCODE_BRIDGE_TIMEOUT_MS",
+      "ZCODE_BRIDGE_BROWSER_USE",
+      "ZCODE_BRIDGE_BROWSER_EXECUTABLE",
+      "ZCODE_BRIDGE_AUTO_WAKE",
+      "ZCODE_BRIDGE_TASK_CONSOLE"
+    ];
+    NodeRuntimeResolver = class {
+      #env;
+      #homeDir;
+      #packageRoot;
+      #host;
+      #onBuiltinRegistrySelection;
+      constructor(options = {}) {
+        this.#env = options.env ?? process.env;
+        this.#homeDir = options.homeDir ?? homedir2();
+        this.#packageRoot = options.packageRoot ?? null;
+        this.#host = validateHostProfile(options.host ?? codexHostProfile(this.#homeDir));
+        this.#onBuiltinRegistrySelection = options.onBuiltinRegistrySelection;
+      }
+      async resolve() {
+        const env = loadPersistedRuntimeEnvironment(this.#env, this.#homeDir, this.#host);
+        const data = discoverZCodeData(env, { fallbackHomeDir: this.#homeDir });
+        const zcodeHome = resolveZcodeHome(env);
+        const explicitDataBaseDir = env["ZCODE_DATA_BASE_DIR"]?.trim() || null;
+        if (explicitDataBaseDir && !isAbsolutePathForPlatform(explicitDataBaseDir)) {
+          throw new BridgeError("provider_config_invalid", "ZCODE_DATA_BASE_DIR must be an absolute path");
+        }
+        if (zcodeHome && explicitDataBaseDir && !sameFileSystemPath(path8.dirname(zcodeHome), explicitDataBaseDir)) {
+          throw new BridgeError(
+            "provider_config_invalid",
+            `ZCODE_HOME (${zcodeHome}) and ZCODE_DATA_BASE_DIR (${explicitDataBaseDir}) conflict; ZCODE_HOME must name <ZCODE_DATA_BASE_DIR>/.zcode. Fix one of them instead of relying on silent selection.`
+          );
+        }
+        let nodeExecutable = "node";
+        const nodeOverride = env["ZCODE_BRIDGE_NODE"]?.trim();
+        if (nodeOverride) {
+          this.#assertReadableFile(
+            nodeOverride,
+            "ZCODE_BRIDGE_NODE is set but is not a readable file"
+          );
+          nodeExecutable = nodeOverride;
+        }
+        const builtinEnv = env["ZCODE_BUILTIN_PROVIDER_CONFIG_FILE"]?.trim() || null;
+        const personalEnv = env["ZCODE_PERSONAL_PROVIDER_CONFIG_FILE"]?.trim() || null;
+        let zcodeEntrypoint;
+        let explicitRuntime = false;
+        const entryOverride = env["ZCODE_BRIDGE_ZCODE_CJS"]?.trim();
+        if (entryOverride) {
+          this.#assertReadableFile(
+            entryOverride,
+            "ZCODE_BRIDGE_ZCODE_CJS is set but is not a readable file"
+          );
+          zcodeEntrypoint = entryOverride;
+          explicitRuntime = true;
+        } else {
+          const install = discoverZCodeInstall(env, { requireBuiltin: !builtinEnv });
+          if (!install.zcodeEntrypoint) {
+            throw new BridgeError(
+              "runtime_not_found",
+              `zcode.cjs${builtinEnv ? "" : " with a same-install zcode-builtin.json"} was not found; searched: ` + (install.candidates.map((candidate) => `${candidate.root} (runtime: ${candidate.runtimeExists}, builtin: ${candidate.builtinExists})`).join(", ") || "(no installation roots available)")
+            );
+          }
+          zcodeEntrypoint = install.zcodeEntrypoint;
+        }
+        let builtinConfigFile;
+        let personalConfigFile;
+        if (builtinEnv && personalEnv) {
+          this.#validateBuiltinConfig(builtinEnv);
+          this.#validatePersonalConfig(personalEnv);
+          builtinConfigFile = builtinEnv;
+          personalConfigFile = personalEnv;
+        } else {
+          if (builtinEnv) {
+            this.#validateBuiltinConfig(builtinEnv);
+            builtinConfigFile = builtinEnv;
+          } else if (explicitRuntime) {
+            const derived2 = builtinConfigForRuntime(zcodeEntrypoint);
+            if (!isReadableFile(derived2)) {
+              throw new BridgeError(
+                "provider_config_missing",
+                `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE is not set and the builtin config was not found next to the configured runtime; expected: ${derived2}`
+              );
+            }
+            this.#validateBuiltinConfig(derived2);
+            builtinConfigFile = derived2;
+          } else {
+            const install = discoverZCodeInstall(env, { requireBuiltin: true });
+            if (!install.builtinConfigFile) {
+              throw new BridgeError(
+                "provider_config_missing",
+                "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE is not set and no builtin provider config was found in the ZCode installation; searched: " + (install.candidates.map((candidate) => `${candidate.root} (runtime: ${candidate.runtimeExists}, builtin: ${candidate.builtinExists})`).join(", ") || "(no installation roots available)")
+              );
+            }
+            this.#validateBuiltinConfig(install.builtinConfigFile);
+            builtinConfigFile = install.builtinConfigFile;
+          }
+          if (personalEnv) {
+            this.#validatePersonalConfig(personalEnv);
+            personalConfigFile = personalEnv;
+          } else {
+            const candidates = zcodeHome ? [path8.join(zcodeHome, "v2", "provider_config.json")] : [
+              explicitDataBaseDir,
+              data.configuredDataBaseDir,
+              data.userHome
+            ].filter((base) => Boolean(base)).filter((base, index, values) => values.indexOf(base) === index).map((base) => path8.join(base, ".zcode", "v2", "provider_config.json"));
+            const existing = candidates.filter((candidate) => existsSync4(candidate));
+            if (existing.length === 0) {
+              throw new BridgeError(
+                "provider_config_missing",
+                "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE is not set and no personal provider config exists at any of: " + candidates.join(", ")
+              );
+            }
+            let accepted = null;
+            let lastError = null;
+            for (const candidate of existing) {
+              try {
+                this.#validatePersonalConfig(candidate);
+                accepted = candidate;
+                break;
+              } catch (error2) {
+                lastError = error2 instanceof Error ? error2.message : String(error2);
+              }
+            }
+            if (!accepted) {
+              throw new BridgeError(
+                "provider_config_invalid",
+                `No usable personal provider config among: ${existing.join(", ")}; last validation failure: ${lastError ?? "unknown"}`
+              );
+            }
+            personalConfigFile = accepted;
+          }
+        }
+        if (zcodeHome && !samePath(personalConfigFile, path8.join(zcodeHome, "v2", "provider_config.json"))) {
+          throw new BridgeError(
+            "provider_config_invalid",
+            `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE must be ZCODE_HOME/v2/provider_config.json (${zcodeHome})`
+          );
+        }
+        builtinConfigFile = await this.#selectBuiltinRegistry(
+          builtinConfigFile,
+          zcodeEntrypoint,
+          personalConfigFile,
+          env
+        );
+        const dataOverride = env["ZCODE_BRIDGE_DATA_DIR"]?.trim();
+        let dataRoot;
+        if (dataOverride) {
+          if (!path8.isAbsolute(dataOverride)) {
+            throw new Error(
+              `ZCODE_BRIDGE_DATA_DIR must be an absolute path when set, got: ${dataOverride}`
+            );
+          }
+          dataRoot = path8.normalize(dataOverride);
+        } else {
+          dataRoot = this.#packageRoot ?? findPackageRoot();
+        }
+        return {
+          nodeExecutable,
+          zcodeEntrypoint,
+          providerBuiltinConfigFile: builtinConfigFile,
+          providerPersonalConfigFile: personalConfigFile,
+          zcodeDataRoot: data.zcodeDataDir,
+          dataRoot
+        };
+      }
+      #assertReadableFile(filePath, label) {
+        if (!isReadableFile(filePath)) {
+          throw new BridgeError("runtime_not_found", `${label}: ${filePath}`);
+        }
+      }
+      /**
+       * ADR-066: the installation's own bundled file is the default, not a pin.
+       * Values left by older installers therefore follow the official runtime
+       * registry; any other explicit path stays untouched.
+       */
+      async #selectBuiltinRegistry(builtinConfigFile, zcodeEntrypoint, personalConfigFile, env) {
+        if (await isOfficialBuiltinRegistryPin(builtinConfigFile, builtinConfigForRuntime(zcodeEntrypoint))) {
+          return builtinConfigFile;
+        }
+        const dataBaseDir = zcodeDataBaseDir(personalConfigFile);
+        const appVersion = dataBaseDir ? officialDesktopAppVersion(zcodeEntrypoint) : null;
+        const runtimePath = dataBaseDir && appVersion ? officialRuntimeRegistryPath({ dataBaseDir, appVersion, env }) : null;
+        const selection = await selectOfficialBuiltinRegistry({ bundledPath: builtinConfigFile, runtimePath });
+        try {
+          this.#onBuiltinRegistrySelection?.(selection);
+        } catch {
+        }
+        if (selection.source !== "runtime") return builtinConfigFile;
+        this.#validateBuiltinConfig(selection.path);
+        return selection.path;
+      }
+      /**
+       * Structure validation only. The verified differential signal for the
+       * CLI-created stub is an empty providerRules map (see docs/ZCODE_RUNTIME.md);
+       * rejecting it implements "never silently select a known stub".
+       */
+      #validatePersonalConfig(filePath) {
+        const parsed = this.#readJsonConfig(filePath, "personal provider config");
+        const config2 = parsed["config"];
+        if (!isPlainObject(config2)) {
+          throw new BridgeError(
+            "provider_config_invalid",
+            `Personal provider config has no config object: ${filePath}`
+          );
+        }
+        const providerConfigRules = config2["providerConfigRules"];
+        const rules = isPlainObject(providerConfigRules) ? providerConfigRules["providerRules"] : void 0;
+        if (!isNonEmptyCollection(rules)) {
+          throw new BridgeError(
+            "provider_config_invalid",
+            `Personal provider config contains no provider rules (this matches the known CLI-created stub shape): ${filePath}`
+          );
+        }
+      }
+      #validateBuiltinConfig(filePath) {
+        const parsed = this.#readJsonConfig(filePath, "builtin provider config");
+        if (!isPlainObject(parsed["config"])) {
+          throw new BridgeError(
+            "provider_config_invalid",
+            `Builtin provider config has no config object: ${filePath}`
+          );
+        }
+      }
+      #readJsonConfig(filePath, label) {
+        if (!isReadableFile(filePath)) {
+          throw new BridgeError("provider_config_missing", `${label} not found: ${filePath}`);
+        }
+        let text2;
+        try {
+          text2 = readFileSync4(filePath, "utf8");
+        } catch (error2) {
+          throw new BridgeError(
+            "provider_config_invalid",
+            `${label} is not readable: ${filePath} (${errorText(error2)})`
+          );
+        }
+        let parsed;
+        try {
+          parsed = JSON.parse(text2);
+        } catch (error2) {
+          throw new BridgeError(
+            "provider_config_invalid",
+            `${label} is not valid JSON: ${filePath}`
+          );
+        }
+        if (!isPlainObject(parsed)) {
+          throw new BridgeError("provider_config_invalid", `${label} is not a JSON object: ${filePath}`);
+        }
+        return parsed;
+      }
+    };
+  }
+});
+
 // src/runtime/node-runtime.ts
 function isSupportedNodeVersion(version2) {
   const match = /^(\d+)\.(\d+)\.(\d+)$/u.exec(version2);
@@ -771,7 +1175,7 @@ var init_node_runtime = __esm({
 });
 
 // src/runtime/official-runtime-authorization.ts
-import { createHash as createHash2 } from "node:crypto";
+import { createHash as createHash4 } from "node:crypto";
 function computeOfficialInstallationFingerprint(input) {
   const normalized = {
     schema_version: 1,
@@ -804,7 +1208,7 @@ function computeOfficialInstallationFingerprint(input) {
     },
     node_version: input.node_version
   };
-  return createHash2("sha256").update(JSON.stringify(normalized), "utf8").digest("hex");
+  return createHash4("sha256").update(JSON.stringify(normalized), "utf8").digest("hex");
 }
 var init_official_runtime_authorization = __esm({
   "src/runtime/official-runtime-authorization.ts"() {
@@ -813,12 +1217,12 @@ var init_official_runtime_authorization = __esm({
 });
 
 // src/runtime/official-app-server-runtime.ts
-import { createHash as createHash3 } from "node:crypto";
+import { createHash as createHash5 } from "node:crypto";
 import { execFile } from "node:child_process";
 import { closeSync as closeSync2, createReadStream, openSync as openSync2, readSync as readSync2 } from "node:fs";
 import { lstat, realpath } from "node:fs/promises";
 import { homedir as homedir3 } from "node:os";
-import path7 from "node:path";
+import path9 from "node:path";
 import { promisify } from "node:util";
 function isOfficialCodingPlanProvider(providerId) {
   return providerId === OFFICIAL_CODING_PLAN_PROVIDER_ID || providerId === "bigmodel-individual-coding-plan" || providerId === "builtin:bigmodel-coding-plan";
@@ -842,6 +1246,9 @@ function unverified(reason, nodeExecutable, details = {}) {
     builtin_provider_config_path: details.builtin_provider_config_path ?? null,
     builtin_provider_config_bytes: details.builtin_provider_config_bytes ?? null,
     builtin_provider_config_sha256: details.builtin_provider_config_sha256 ?? null,
+    active_builtin_provider_config_path: details.active_builtin_provider_config_path ?? null,
+    active_builtin_provider_config_source: details.active_builtin_provider_config_source ?? null,
+    active_builtin_provider_config_revision: details.active_builtin_provider_config_revision ?? null,
     runtime_host_path: details.runtime_host_path ?? null,
     runtime_host_bytes: details.runtime_host_bytes ?? null,
     runtime_host_sha256: details.runtime_host_sha256 ?? null,
@@ -881,7 +1288,7 @@ async function inspectWindowsExecutable(filePath) {
   let signerThumbprint = null;
   if (systemRoot) {
     try {
-      const powershell = path7.join(
+      const powershell = path9.join(
         systemRoot,
         "System32",
         "WindowsPowerShell",
@@ -963,14 +1370,14 @@ async function canonicalFileInside(root, candidate, label) {
   const stat2 = await lstat(candidate);
   if (!stat2.isFile() || stat2.isSymbolicLink()) throw new Error(`${label} is not a regular file`);
   const resolved = await realpath(candidate);
-  const relative = path7.relative(root, resolved);
-  if (!relative || relative === ".." || relative.startsWith(`..${path7.sep}`) || path7.isAbsolute(relative)) {
+  const relative = path9.relative(root, resolved);
+  if (!relative || relative === ".." || relative.startsWith(`..${path9.sep}`) || path9.isAbsolute(relative)) {
     throw new Error(`${label} resolves outside the installed ZCode root`);
   }
   return resolved;
 }
 async function sha256File(filePath) {
-  const hash = createHash3("sha256");
+  const hash = createHash5("sha256");
   await new Promise((resolve, reject) => {
     const stream = createReadStream(filePath);
     stream.on("data", (chunk) => hash.update(chunk));
@@ -1016,7 +1423,7 @@ async function probeWindowsFileVersion(executable) {
   const encoded = Buffer.from(script, "utf16le").toString("base64");
   const systemRoot = process.env["SystemRoot"]?.trim();
   if (!systemRoot) throw new Error("SystemRoot is unavailable for the Windows version probe");
-  const powershell = path7.join(
+  const powershell = path9.join(
     systemRoot,
     "System32",
     "WindowsPowerShell",
@@ -1047,10 +1454,12 @@ var execFileAsync, OFFICIAL_CODING_PLAN_PROVIDER_ID, OFFICIAL_APPSERVER_COMPATIB
 var init_official_app_server_runtime = __esm({
   "src/runtime/official-app-server-runtime.ts"() {
     "use strict";
+    init_account_provider();
     init_host_profile();
     init_desktop_host_launch();
     init_errors();
     init_node_runtime();
+    init_official_builtin_registry();
     init_paths();
     init_official_runtime_authorization();
     init_resolver();
@@ -1174,17 +1583,17 @@ var init_official_app_server_runtime = __esm({
           );
           runtimeHostPath = await canonicalFileInside(
             installDir,
-            path7.join(installDir, "resources", "tools", "runtime-host", "zcode-runtime-host.exe"),
+            path9.join(installDir, "resources", "tools", "runtime-host", "zcode-runtime-host.exe"),
             "installed runtime-host"
           );
           desktopExecutablePath = await canonicalFileInside(
             installDir,
-            path7.join(installDir, "ZCode.exe"),
+            path9.join(installDir, "ZCode.exe"),
             "installed Desktop executable"
           );
           desktopArchivePath = await canonicalFileInside(
             installDir,
-            path7.join(installDir, "resources", "app.asar"),
+            path9.join(installDir, "resources", "app.asar"),
             "installed Desktop archive"
           );
         } catch (error2) {
@@ -1304,6 +1713,17 @@ var init_official_app_server_runtime = __esm({
         const observedDesktopVersion = desktopVersion ?? "unavailable";
         const observedAppVersion = launchEnv.ZCODE_APP_VERSION ?? "unavailable";
         const observedBuildCommitId = launchEnv.ZCODE_BUILD_COMMIT_ID ?? "unavailable";
+        const registryPinned = await this.#builtinRegistryPinned(builtinPath);
+        let registry2 = null;
+        if (!registryPinned) {
+          const dataBaseDir = await this.#personalDataBaseDir();
+          const runtimePath = dataBaseDir && launchEnv.ZCODE_APP_VERSION ? officialRuntimeRegistryPath({
+            dataBaseDir,
+            appVersion: launchEnv.ZCODE_APP_VERSION,
+            env
+          }) : null;
+          registry2 = await selectOfficialBuiltinRegistry({ bundledPath: builtinPath, runtimePath });
+        }
         const installationFingerprint = computeOfficialInstallationFingerprint({
           desktop_version: observedDesktopVersion,
           desktop_app_version: observedAppVersion,
@@ -1361,6 +1781,9 @@ var init_official_app_server_runtime = __esm({
           builtin_provider_config_path: builtinPath,
           builtin_provider_config_bytes: builtinBytes,
           builtin_provider_config_sha256: builtinSha256,
+          active_builtin_provider_config_path: registry2?.path ?? builtinPath,
+          active_builtin_provider_config_source: registry2?.source ?? "bundled",
+          active_builtin_provider_config_revision: registry2?.revision ?? null,
           runtime_host_path: runtimeHostPath,
           runtime_host_bytes: runtimeHostBytes,
           runtime_host_sha256: runtimeHostSha256,
@@ -1410,12 +1833,13 @@ var init_official_app_server_runtime = __esm({
       }
       async resolve() {
         const descriptor = await this.inspect();
-        if (descriptor.installation_safety !== "OFFICIAL_INSTALLATION_SAFE" || !descriptor.bundle_path || !descriptor.builtin_provider_config_path || !descriptor.runtime_host_path) {
+        if (descriptor.installation_safety !== "OFFICIAL_INSTALLATION_SAFE" || !descriptor.bundle_path || !descriptor.builtin_provider_config_path || !descriptor.active_builtin_provider_config_path || !descriptor.runtime_host_path) {
           throw new BridgeError(
             "provider_config_invalid",
             `OFFICIAL_INSTALLATION_UNSAFE: ${descriptor.reason ?? "installed Official AppServer is unavailable"}; OFFICIAL_DISCOUNT_NOT_VERIFIED`
           );
         }
+        const registryPinned = await this.#builtinRegistryPinned(descriptor.builtin_provider_config_path);
         const base = this.#baseResolver ?? new NodeRuntimeResolver({
           env: this.#env,
           ...this.#homeDir ? { homeDir: this.#homeDir } : {},
@@ -1426,8 +1850,35 @@ var init_official_app_server_runtime = __esm({
           ...configured,
           nodeExecutable: descriptor.node_executable,
           zcodeEntrypoint: descriptor.bundle_path,
-          providerBuiltinConfigFile: descriptor.builtin_provider_config_path
+          providerBuiltinConfigFile: registryPinned ? configured.providerBuiltinConfigFile : descriptor.active_builtin_provider_config_path
         };
+      }
+      /** True only for an explicit builtin file that is not this installation's bundled file. */
+      async #builtinRegistryPinned(bundledPath) {
+        return isOfficialBuiltinRegistryPin(
+          this.#persistedEnv()["ZCODE_BUILTIN_PROVIDER_CONFIG_FILE"],
+          bundledPath
+        );
+      }
+      #persistedEnv() {
+        return loadPersistedRuntimeEnvironment(
+          this.#env,
+          this.#homeDir,
+          this.#host ?? codexHostProfile(this.#homeDir)
+        );
+      }
+      /** Data base directory of the personal provider config the base resolver selects; null when unavailable. */
+      async #personalDataBaseDir() {
+        try {
+          const base = this.#baseResolver ?? new NodeRuntimeResolver({
+            env: this.#env,
+            ...this.#homeDir ? { homeDir: this.#homeDir } : {},
+            ...this.#host ? { host: this.#host } : {}
+          });
+          return zcodeDataBaseDir((await base.resolve()).providerPersonalConfigFile);
+        } catch {
+          return null;
+        }
       }
     };
   }
@@ -1446,10 +1897,10 @@ __export(official_host_adapter_exports, {
   officialProviderCapabilityWarning: () => officialProviderCapabilityWarning,
   verifyOfficialHostAssets: () => verifyOfficialHostAssets
 });
-import { createHash as createHash5 } from "node:crypto";
+import { createHash as createHash6 } from "node:crypto";
 import { createReadStream as createReadStream2 } from "node:fs";
 import { lstat as lstat2, realpath as realpath2 } from "node:fs/promises";
-import path9 from "node:path";
+import path10 from "node:path";
 import { fileURLToPath as fileURLToPath3, pathToFileURL } from "node:url";
 function createInstalledOfficialHostSessionFactory(options = {}) {
   const providerCapability = options.providerCapability ?? "installed_runtime";
@@ -1465,7 +1916,7 @@ function createInstalledOfficialHostSessionFactory(options = {}) {
   const inspect = () => resolver.inspect();
   const resolveAssets = () => {
     resolved ??= Promise.all([resolver.inspect(), packagedAssets()]).then(([descriptor, packaged]) => {
-      const missingRuntimeAsset = descriptor.installation_safety !== "OFFICIAL_INSTALLATION_SAFE" || !descriptor.bundle_path || !descriptor.builtin_provider_config_path || !descriptor.runtime_host_path;
+      const missingRuntimeAsset = descriptor.installation_safety !== "OFFICIAL_INSTALLATION_SAFE" || !descriptor.bundle_path || !descriptor.builtin_provider_config_path || !descriptor.active_builtin_provider_config_path || !descriptor.runtime_host_path;
       if (missingRuntimeAsset) {
         const failure2 = descriptor.installation_safety === "OFFICIAL_INSTALLATION_UNSAFE" ? `OFFICIAL_INSTALLATION_UNSAFE: ${descriptor.reason ?? "installed runtime failed safety validation"}` : "OFFICIAL_RUNTIME_UNVERIFIED: installed runtime descriptor is incomplete";
         try {
@@ -1487,7 +1938,7 @@ function createInstalledOfficialHostSessionFactory(options = {}) {
           root: descriptor.install_dir,
           hostModulePath: packaged.hostModulePath,
           appServerEntryPath: descriptor.bundle_path,
-          builtinProviderConfigPath: descriptor.builtin_provider_config_path,
+          builtinProviderConfigPath: descriptor.active_builtin_provider_config_path,
           runtimeHostPath: descriptor.runtime_host_path,
           manifestDigest: descriptor.installation_fingerprint ?? descriptor.bundle_sha256 ?? "unavailable"
         }
@@ -1528,7 +1979,7 @@ function createOfficialHostClientFactory(input) {
     if (process.platform !== "win32" || process.arch !== "x64") {
       throw new BridgeError("runtime_not_found", "The fixed Official Host bundle is available only for Windows x64.");
     }
-    if (path9.resolve(context.config.zcodeEntrypoint) !== path9.resolve(assets.appServerEntryPath)) {
+    if (path10.resolve(context.config.zcodeEntrypoint) !== path10.resolve(assets.appServerEntryPath)) {
       throw new BridgeError("provider_config_invalid", "Official Host runtime entrypoint must be the verified installed bundle.");
     }
     const module = await resolveOfficialHostModule(input.moduleSource);
@@ -1550,7 +2001,10 @@ function createOfficialHostClientFactory(input) {
         cwd: workspacePath,
         env: {
           ...launchEnv,
-          ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: assets.builtinProviderConfigPath,
+          // ADR-066: the AppServer registry and the Account Overlay must come
+          // from the same resolved config. `context.config` is what the
+          // overlay reads; the memoized asset descriptor may be older.
+          ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: context.config.providerBuiltinConfigFile,
           ZCODE_PERSONAL_PROVIDER_CONFIG_FILE: context.config.providerPersonalConfigFile,
           ZCODE_RUNTIME_HOST_PATH: assets.runtimeHostPath
         }
@@ -1657,7 +2111,7 @@ function createOfficialHostClientFactory(input) {
                 recordedTreeScan = {
                   rootPid: root.pid,
                   rootFingerprint: root.fingerprint,
-                  evidenceDigest: createHash5("sha256").update(JSON.stringify({
+                  evidenceDigest: createHash6("sha256").update(JSON.stringify({
                     rootPid: root.pid,
                     rootFingerprint: root.fingerprint,
                     memberPids
@@ -1818,7 +2272,7 @@ async function verifyOfficialHostAssets(workerModuleUrl = import.meta.url) {
   }
   const verified = /* @__PURE__ */ new Map();
   for (const [name, definition] of Object.entries(OFFICIAL_HOST_ASSETS)) {
-    const candidate = path9.resolve(rootReal, definition.relativePath);
+    const candidate = path10.resolve(rootReal, definition.relativePath);
     try {
       const candidateStat = await lstat2(candidate);
       if (!candidateStat.isFile() || candidateStat.isSymbolicLink()) throw new Error("not a regular file");
@@ -1834,7 +2288,7 @@ async function verifyOfficialHostAssets(workerModuleUrl = import.meta.url) {
       });
     }
   }
-  const manifestDigest = createHash5("sha256").update(JSON.stringify(
+  const manifestDigest = createHash6("sha256").update(JSON.stringify(
     Object.entries(OFFICIAL_HOST_ASSETS).sort(([left], [right]) => left.localeCompare(right)).map(([name, definition]) => ({
       name,
       relativePath: definition.relativePath,
@@ -1873,7 +2327,7 @@ function normalizeOfficialHostProductVersion(value) {
   return version2;
 }
 function sameWorkspace(left, right) {
-  const normalize = (value) => path9.normalize(path9.resolve(value));
+  const normalize = (value) => path10.normalize(path10.resolve(value));
   return process.platform === "win32" ? normalize(left).toLocaleLowerCase("en-US") === normalize(right).toLocaleLowerCase("en-US") : normalize(left) === normalize(right);
 }
 async function withOfficialRuntimeHostEnvironment(runtimeHostPath, operation) {
@@ -1895,11 +2349,11 @@ async function withOfficialRuntimeHostEnvironment(runtimeHostPath, operation) {
   }
 }
 function isPathInside(root, candidate) {
-  const relative = path9.relative(root, candidate);
-  return relative !== "" && !relative.startsWith(`..${path9.sep}`) && relative !== ".." && !path9.isAbsolute(relative);
+  const relative = path10.relative(root, candidate);
+  return relative !== "" && !relative.startsWith(`..${path10.sep}`) && relative !== ".." && !path10.isAbsolute(relative);
 }
 async function sha256File2(filePath) {
-  const hash = createHash5("sha256");
+  const hash = createHash6("sha256");
   await new Promise((resolve, reject) => {
     const stream = createReadStream2(filePath);
     stream.on("data", (chunk) => hash.update(chunk));
@@ -2047,6 +2501,19 @@ function validateTiming(value) {
   if (["queued_ms", "execution_ms", "turn_ms", "finalize_ms", "wall_ms"].some((k) => value[k] !== null && (!Number.isSafeInteger(value[k]) || value[k] < 0)) || typeof value.derived !== "boolean") fail("invalid_result_payload");
   validateStringArray(value.notes, 64);
 }
+function validateRpcDiagnostics(value, status) {
+  if (status !== "failed" || !Array.isArray(value) || value.length < 1 || value.length > MAX_RPC_DIAGNOSTICS) fail("invalid_result_payload");
+  const seen = /* @__PURE__ */ new Set();
+  for (const entry of value) {
+    validateResultObject(entry, /* @__PURE__ */ new Set(["method", "code", "message", "data_name", "data_code", "stack"]), ["method", "code", "message", "data_name", "data_code"]);
+    const stack = Object.hasOwn(entry, "stack") ? entry.stack : "";
+    const stackLines = typeof stack === "string" ? stack.split("\n") : [];
+    const identity = `${String(entry.method)}|${String(entry.code)}|${String(entry.data_code)}`;
+    if (typeof entry.method !== "string" || !RPC_METHOD.test(entry.method) || !(entry.code === null || typeof entry.code === "number" && Number.isSafeInteger(entry.code)) || typeof entry.message !== "string" || !CLEAN_DIAGNOSTIC_TEXT(entry.message) || /[\r\n\t]/u.test(entry.message) || [...entry.message].length > 500 || !(entry.data_name === null || typeof entry.data_name === "string" && CLEAN_DIAGNOSTIC_TEXT(entry.data_name) && entry.data_name.length <= 64 && RPC_DATA_NAME.test(entry.data_name)) || !(entry.data_code === null || typeof entry.data_code === "string" && CLEAN_DIAGNOSTIC_TEXT(entry.data_code) && entry.data_code.length <= 128 && RPC_DATA_CODE.test(entry.data_code)) || Object.hasOwn(entry, "stack") && (typeof entry.stack !== "string" || entry.stack.length > 1200 || stackLines.length > 12 || stackLines.some((line) => !CLEAN_DIAGNOSTIC_TEXT(line) || !RPC_STACK_LINE.test(line))) || seen.has(identity)) fail("invalid_result_payload");
+    seen.add(identity);
+  }
+  if (Buffer.byteLength(canonical(value), "utf8") > MAX_RPC_DIAGNOSTICS_BYTES) fail("invalid_result_payload");
+}
 function canonicalTaskResult(result, input) {
   validateResultObject(result, RESULT_FIELDS, REQUIRED_RESULT_FIELDS);
   if (result.task_id !== input.task_id || result.attempt !== input.attempt || result.status !== input.result_status || !RESULT_STATUSES.has(result.status) || typeof result.summary !== "string" || typeof result.zcode_output !== "string" || typeof result.needs_master_decision !== "boolean" || result.exit_code !== null && !Number.isSafeInteger(result.exit_code) || !isNullableText(result.session_id) || !isNullableText(result.started_at, 64) || !isNullableText(result.finished_at, 64)) fail("invalid_result_payload");
@@ -2059,12 +2526,13 @@ function canonicalTaskResult(result, input) {
   if (Object.hasOwn(result, "usage") && result.usage !== null) validateUsage(result.usage);
   if (Object.hasOwn(result, "model") && result.model !== null) validateModel(result.model);
   if (Object.hasOwn(result, "timing") && result.timing !== null) validateTiming(result.timing);
+  if (Object.hasOwn(result, "rpc_diagnostics")) validateRpcDiagnostics(result.rpc_diagnostics, result.status);
   const json = canonical(result);
   const bytes = Buffer.byteLength(json, "utf8");
   if (bytes > MAX_TASK_RESULT_BYTES) throw new ResultContractError("result_too_large", `canonical TaskResult ${bytes} bytes exceeds ${MAX_TASK_RESULT_BYTES}; original report not committed`);
   return json;
 }
-var MAX_TASK_RESULT_BYTES, MAX_RESULT_ENVELOPE_BYTES, MAX_WORKER_RESULT_FRAME_BYTES, ResultContractError, fail, RESULT_STATUSES, RESULT_FIELDS, REQUIRED_RESULT_FIELDS;
+var MAX_TASK_RESULT_BYTES, MAX_RESULT_ENVELOPE_BYTES, MAX_WORKER_RESULT_FRAME_BYTES, ResultContractError, fail, RESULT_STATUSES, RESULT_FIELDS, REQUIRED_RESULT_FIELDS, MAX_RPC_DIAGNOSTICS, MAX_RPC_DIAGNOSTICS_BYTES, RPC_METHOD, RPC_STACK_LINE, RPC_DATA_NAME, RPC_DATA_CODE, CLEAN_DIAGNOSTIC_TEXT;
 var init_result_contract = __esm({
   "src/result-contract.mjs"() {
     "use strict";
@@ -2081,8 +2549,15 @@ var init_result_contract = __esm({
       throw new ResultContractError(code, message);
     };
     RESULT_STATUSES = /* @__PURE__ */ new Set(["completed", "failed", "cancelled", "waiting_for_master"]);
-    RESULT_FIELDS = /* @__PURE__ */ new Set(["task_id", "attempt", "status", "summary", "files_changed", "tests", "issues", "needs_master_decision", "zcode_output", "exit_code", "session_id", "started_at", "finished_at", "error_code", "report_candidate", "usage", "model", "timing"]);
+    RESULT_FIELDS = /* @__PURE__ */ new Set(["task_id", "attempt", "status", "summary", "files_changed", "tests", "issues", "needs_master_decision", "zcode_output", "exit_code", "session_id", "started_at", "finished_at", "error_code", "report_candidate", "usage", "model", "timing", "rpc_diagnostics"]);
     REQUIRED_RESULT_FIELDS = ["task_id", "attempt", "status", "summary", "files_changed", "tests", "issues", "needs_master_decision", "zcode_output", "exit_code", "session_id", "started_at", "finished_at"];
+    MAX_RPC_DIAGNOSTICS = 4;
+    MAX_RPC_DIAGNOSTICS_BYTES = 8192;
+    RPC_METHOD = /^[a-z]+(?:\/[A-Za-z0-9_]+){1,2}$/u;
+    RPC_STACK_LINE = /^at (?:(?:[^\s()\\/:]+)? ?(?:\((?:node:[^\s()\\]*|[^\s()\\/]*)\)|node:[^\s()\\]*|[^\s()\\/]*))$/u;
+    RPC_DATA_NAME = /^[A-Za-z][A-Za-z0-9_]*$/u;
+    RPC_DATA_CODE = /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/u;
+    CLEAN_DIAGNOSTIC_TEXT = (text2) => typeof text2 === "string" && !/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/u.test(text2);
   }
 });
 
@@ -2170,14 +2645,14 @@ __export(start_plan_production_auth_exports, {
   readStartPlanEntitlementFailureFacts: () => readStartPlanEntitlementFailureFacts
 });
 import { spawn as spawn4 } from "node:child_process";
-import { createHash as createHash12 } from "node:crypto";
+import { createHash as createHash13 } from "node:crypto";
 import { version as readOsVersion } from "node:os";
-import path15 from "node:path";
-function isRecord4(value) {
+import path16 from "node:path";
+function isRecord5(value) {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 function normalizeOfficialStartPlanAuthentication(value) {
-  if (!isRecord4(value)) return null;
+  if (!isRecord5(value)) return null;
   const accountIdentity = typeof value.accountIdentity === "string" ? value.accountIdentity.trim() : "";
   const requestCredential = typeof value.requestCredential === "string" ? value.requestCredential.trim() : "";
   const deviceMid = typeof value.deviceMid === "string" ? value.deviceMid.trim() : "";
@@ -2193,8 +2668,8 @@ function normalizeOfficialStartPlanAuthentication(value) {
   });
 }
 function asOfficialBillingEnvelope(value) {
-  if (!isRecord4(value)) return null;
-  const data = isRecord4(value.data) ? value.data : void 0;
+  if (!isRecord5(value)) return null;
+  const data = isRecord5(value.data) ? value.data : void 0;
   return {
     success: value.success,
     code: value.code,
@@ -2210,7 +2685,7 @@ function isSuccessfulBusinessEnvelope(envelope) {
   return envelope.success !== false && (envelope.code === void 0 || envelope.code === 0 || envelope.code === 200);
 }
 function stringKeyedArray(value) {
-  return Array.isArray(value) ? value.filter(isRecord4) : [];
+  return Array.isArray(value) ? value.filter(isRecord5) : [];
 }
 function isActiveStartPlan(plan) {
   const status = typeof plan.status === "string" ? plan.status.trim().toLowerCase() : "";
@@ -2314,11 +2789,11 @@ function hasPendingActivation(envelope) {
 }
 function extractProviderCode(value) {
   if (!value) return void 0;
-  const error2 = isRecord4(value.error) ? value.error : void 0;
+  const error2 = isRecord5(value.error) ? value.error : void 0;
   const candidates = [
     value.providerCode,
     error2?.providerCode,
-    error2 && isRecord4(error2) ? error2.code : void 0,
+    error2 && isRecord5(error2) ? error2.code : void 0,
     value.code
   ];
   const raw = candidates.find((candidate) => typeof candidate === "number" || typeof candidate === "string");
@@ -2497,7 +2972,7 @@ async function createProductionStartPlanAuth(options) {
     return new StartPlanEntitlementRejectionError(verdict2.status, failureFacts, providerCode);
   };
   const authoritativeEntitlement = async (credential, provider, model, signal) => {
-    const credentialDigest = createHash12("sha256").update(credential.requestCredential).digest("hex");
+    const credentialDigest = createHash13("sha256").update(credential.requestCredential).digest("hex");
     if (entitlementContext) {
       if (!sameEntitlementContext(entitlementContext, credential, provider, model, credentialDigest)) {
         throw new Error("start_plan_entitlement_identity_invalid");
@@ -2533,7 +3008,7 @@ async function createProductionStartPlanAuth(options) {
       if (provider !== "account:bigmodel-start-plan" || !model || signal.aborted) return false;
       const credential = await resolveAuthentication(signal);
       if (!credential || credential.accountIdentity !== initial.accountIdentity || credential.sessionRevision !== initial.sessionRevision || credential.credentialExpiresAt !== null && credential.credentialExpiresAt <= now()) return false;
-      const credentialDigest = createHash12("sha256").update(credential.requestCredential).digest("hex");
+      const credentialDigest = createHash13("sha256").update(credential.requestCredential).digest("hex");
       if (entitlementContext && !sameEntitlementContext(entitlementContext, credential, provider, model, credentialDigest)) return false;
       const verdict2 = await authoritativeEntitlement(credential, provider, model, signal);
       if (signal.aborted) return false;
@@ -2577,7 +3052,7 @@ async function createProductionStartPlanAuth(options) {
   };
 }
 async function readOfficialCliVersion(zcodeEntrypoint) {
-  const key = path15.resolve(zcodeEntrypoint);
+  const key = path16.resolve(zcodeEntrypoint);
   const cached2 = officialCliVersionCache.get(key);
   if (cached2) return cached2;
   const version2 = await new Promise((resolve) => {
@@ -2667,7 +3142,7 @@ var init_start_plan_production_auth = __esm({
           let providerCode2;
           try {
             const parsed = await response2.json();
-            if (isRecord4(parsed)) {
+            if (isRecord5(parsed)) {
               body2 = parsed;
               providerCode2 = extractProviderCode(parsed);
             }
@@ -2698,7 +3173,7 @@ var init_start_plan_production_auth = __esm({
         let providerCode;
         try {
           const parsed = await response2.json();
-          if (isRecord4(parsed)) {
+          if (isRecord5(parsed)) {
             body = parsed;
             providerCode = extractProviderCode(parsed);
           }
@@ -2731,7 +3206,7 @@ var init_start_plan_production_auth = __esm({
 });
 
 // src/sqlite-candidate/wp6b2b1/interaction-channel.mjs
-import { createHash as createHash13 } from "node:crypto";
+import { createHash as createHash14 } from "node:crypto";
 async function createCandidateInteractionChannel(child, operation, verifyProcessIdentity) {
   if (!child || !Number.isSafeInteger(child.pid) || !Array.isArray(child.stdio) || child.stdio.length < 10 || !operation || operation.operation_kind !== "attempt_lifecycle" || operation.phase !== "running" || !Number.isSafeInteger(operation.generation) || operation.generation < 1 || !operation.claim_id || operation.claim_generation !== operation.generation || !operation.claim_worker_identity_json || !operation.launch_identity_json || !operation.claim_worker_identity_digest || typeof verifyProcessIdentity !== "function") throw coded("interaction_channel_unavailable");
   let worker;
@@ -2909,7 +3384,7 @@ function stableJson(value, depth = 0) {
   throw coded("interaction_json_invalid");
 }
 function sha256(value) {
-  return createHash13("sha256").update(value).digest("hex");
+  return createHash14("sha256").update(value).digest("hex");
 }
 function coded(code) {
   return Object.assign(new Error(code), { code });
@@ -2957,7 +3432,7 @@ var init_interaction_channel = __esm({
 });
 
 // src/store/json-history-result-exceptions.mjs
-import { createHash as createHash14 } from "node:crypto";
+import { createHash as createHash15 } from "node:crypto";
 function freeze(value) {
   if (value && typeof value === "object" && !Object.isFrozen(value)) {
     for (const child of Object.values(value)) freeze(child);
@@ -2971,7 +3446,7 @@ function canonical3(value) {
   return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonical3(value[key])}`).join(",")}}`;
 }
 function historicalResultExceptionArtifactId(relativePath) {
-  const digest3 = createHash14("sha256").update(relativePath).digest("hex");
+  const digest3 = createHash15("sha256").update(relativePath).digest("hex");
   return `artifact-${digest3.slice(0, 40)}`;
 }
 function annotateHistoricalResultException(entry) {
@@ -2988,7 +3463,7 @@ function annotateHistoricalResultException(entry) {
   });
 }
 function historicalResultExceptionSetDigest(entries) {
-  return createHash14("sha256").update(canonical3(entries)).digest("hex");
+  return createHash15("sha256").update(canonical3(entries)).digest("hex");
 }
 function isCanonicalHistoricalResultExceptionSet(entries) {
   if (!Array.isArray(entries) || entries.length !== HISTORICAL_RESULT_EXCEPTIONS.length) return false;
@@ -3154,10 +3629,10 @@ __export(store_exports, {
   validateWorkspace: () => validateWorkspace
 });
 import { DatabaseSync } from "node:sqlite";
-import { createHash as createHash15, randomUUID as randomUUID4 } from "node:crypto";
+import { createHash as createHash16, randomUUID as randomUUID4 } from "node:crypto";
 import { spawnSync as spawnSync2 } from "node:child_process";
 import { existsSync as existsSync8, lstatSync as lstatSync2, realpathSync as realpathSync3, readFileSync as readFileSync8, writeFileSync as writeFileSync2, openSync as openSync4, closeSync as closeSync4, fsyncSync, unlinkSync as unlinkSync3, renameSync as renameSync3, statSync as statSync5, readSync as readSync3 } from "node:fs";
-import path16 from "node:path";
+import path17 from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 function canonical4(value) {
   try {
@@ -3267,7 +3742,7 @@ function normalizeAdminAbandonmentTableSql(sql) {
   return normalized.endsWith(";") ? normalized.slice(0, -1) : normalized;
 }
 function adminAbandonmentRowsDigest(rows) {
-  return createHash15("sha256").update(rows.map(upgradeRowJson).join("\n")).digest("hex");
+  return createHash16("sha256").update(rows.map(upgradeRowJson).join("\n")).digest("hex");
 }
 function withoutSchemaObjects(objects, names) {
   return objects.filter((row) => !names.has(row[1]));
@@ -3956,27 +4431,27 @@ function parseAuthoritySourceManifest(sourceManifestJson, sourceManifestDigest) 
   const parsed = parseHistoricalExceptionManifest(sourceManifestJson, sourceManifestDigest);
   const { manifest } = parsed;
   if (manifest.kind === void 0) return { ...parsed, kind: "historical_projection" };
-  if (manifest.kind !== "raw_json_archive_cutover" || typeof manifest.source_tasks_root !== "string" || !path16.isAbsolute(manifest.source_tasks_root) || typeof manifest.archive_manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(manifest.archive_manifest_digest) || typeof manifest.source_files_digest !== "string" || !/^[0-9a-f]{64}$/u.test(manifest.source_files_digest) || manifest.task_count !== 0 || manifest.result_count !== 0 || manifest.event_count !== 0 || !Number.isSafeInteger(manifest.artifact_count) || manifest.artifact_count < 0 || !Number.isSafeInteger(manifest.artifact_bytes) || manifest.artifact_bytes < 0 || !Number.isSafeInteger(manifest.archive_file_count) || manifest.archive_file_count !== manifest.artifact_count || !Number.isSafeInteger(manifest.archive_byte_count) || manifest.archive_byte_count !== manifest.artifact_bytes || parsed.exceptions.length !== 0 || !Array.isArray(manifest.files) || manifest.files.length !== 0)
+  if (manifest.kind !== "raw_json_archive_cutover" || typeof manifest.source_tasks_root !== "string" || !path17.isAbsolute(manifest.source_tasks_root) || typeof manifest.archive_manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(manifest.archive_manifest_digest) || typeof manifest.source_files_digest !== "string" || !/^[0-9a-f]{64}$/u.test(manifest.source_files_digest) || manifest.task_count !== 0 || manifest.result_count !== 0 || manifest.event_count !== 0 || !Number.isSafeInteger(manifest.artifact_count) || manifest.artifact_count < 0 || !Number.isSafeInteger(manifest.artifact_bytes) || manifest.artifact_bytes < 0 || !Number.isSafeInteger(manifest.archive_file_count) || manifest.archive_file_count !== manifest.artifact_count || !Number.isSafeInteger(manifest.archive_byte_count) || manifest.archive_byte_count !== manifest.artifact_bytes || parsed.exceptions.length !== 0 || !Array.isArray(manifest.files) || manifest.files.length !== 0)
     fail2("invalid_raw_json_archive_cutover_manifest");
   return { ...parsed, kind: "raw_json_archive_cutover" };
 }
 function pathsFor(root, { databaseFileName = "operations.sqlite3", managedDataDirectory = false, allowCutoverPending = false, allowUnpublishedCutover = false, allowFreshBootstrapPending = false } = {}) {
-  if (typeof root !== "string" || !path16.isAbsolute(root) || !existsSync8(root) || !lstatSync2(root).isDirectory() || lstatSync2(root).isSymbolicLink()) fail2("invalid_data_root");
+  if (typeof root !== "string" || !path17.isAbsolute(root) || !existsSync8(root) || !lstatSync2(root).isDirectory() || lstatSync2(root).isSymbolicLink()) fail2("invalid_data_root");
   if (typeof databaseFileName !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/u.test(databaseFileName) || databaseFileName === "." || databaseFileName === "..") fail2("invalid_database_file_name");
   const resolved = realpathSync3.native(root);
   if (!managedDataDirectory) {
-    const relative = path16.relative(HERE, resolved);
-    if (!relative || relative.startsWith("..") || path16.isAbsolute(relative)) fail2("data_root_outside_candidate");
+    const relative = path17.relative(HERE, resolved);
+    if (!relative || relative.startsWith("..") || path17.isAbsolute(relative)) fail2("data_root_outside_candidate");
   }
-  const db = path16.join(resolved, databaseFileName);
+  const db = path17.join(resolved, databaseFileName);
   const files = {
     root: resolved,
     db,
     bootstrapPending: `${db}.bootstrap-pending.json`,
     cutoverPending: `${db}.cutover-pending.json`,
     cutoverPublished: `${db}.cutover-published.json`,
-    poison: path16.join(resolved, "ROOT_POISONED.json"),
-    intent: path16.join(resolved, "WRITER_INTENT.json")
+    poison: path17.join(resolved, "ROOT_POISONED.json"),
+    intent: path17.join(resolved, "WRITER_INTENT.json")
   };
   for (const file of [files.db, `${files.db}-wal`, `${files.db}-shm`, files.bootstrapPending, files.cutoverPending, files.cutoverPublished, files.poison, files.intent]) {
     try {
@@ -3998,7 +4473,7 @@ function readPublishedCutoverReceipt(file) {
   }
   const keys = ["archive", "created_at", "cutover_id", "database_file", "migration_id", "schema_version", "source_manifest_digest", "source_root_digest", "state"];
   const archiveKeys = ["archive_directory", "byte_count", "file_count", "manifest_digest", "source_tasks_root"];
-  if (!value || Object.getPrototypeOf(value) !== Object.prototype || Object.keys(value).sort().join("|") !== keys.join("|") || value.schema_version !== 1 || value.state !== "authority_switch_receipt" || !validText3(value.migration_id, 128) || !validText3(value.cutover_id, 128) || typeof value.source_root_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.source_root_digest) || typeof value.source_manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.source_manifest_digest) || !validText3(value.database_file, 96) || !validText3(value.created_at, 64) || Number.isNaN(Date.parse(value.created_at)) || !value.archive || Object.getPrototypeOf(value.archive) !== Object.prototype || Object.keys(value.archive).sort().join("|") !== archiveKeys.join("|") || !validText3(value.archive.archive_directory, 32767) || !path16.isAbsolute(value.archive.archive_directory) || !validText3(value.archive.source_tasks_root, 32767) || !path16.isAbsolute(value.archive.source_tasks_root) || typeof value.archive.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.archive.manifest_digest) || !Number.isSafeInteger(value.archive.file_count) || value.archive.file_count < 0 || !Number.isSafeInteger(value.archive.byte_count) || value.archive.byte_count < 0) fail2("cutover_publication_receipt_invalid");
+  if (!value || Object.getPrototypeOf(value) !== Object.prototype || Object.keys(value).sort().join("|") !== keys.join("|") || value.schema_version !== 1 || value.state !== "authority_switch_receipt" || !validText3(value.migration_id, 128) || !validText3(value.cutover_id, 128) || typeof value.source_root_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.source_root_digest) || typeof value.source_manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.source_manifest_digest) || !validText3(value.database_file, 96) || !validText3(value.created_at, 64) || Number.isNaN(Date.parse(value.created_at)) || !value.archive || Object.getPrototypeOf(value.archive) !== Object.prototype || Object.keys(value.archive).sort().join("|") !== archiveKeys.join("|") || !validText3(value.archive.archive_directory, 32767) || !path17.isAbsolute(value.archive.archive_directory) || !validText3(value.archive.source_tasks_root, 32767) || !path17.isAbsolute(value.archive.source_tasks_root) || typeof value.archive.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.archive.manifest_digest) || !Number.isSafeInteger(value.archive.file_count) || value.archive.file_count < 0 || !Number.isSafeInteger(value.archive.byte_count) || value.archive.byte_count < 0) fail2("cutover_publication_receipt_invalid");
   return value;
 }
 function assertCutoverPublicationGate(db, paths) {
@@ -4018,7 +4493,7 @@ function assertCutoverPublicationGate(db, paths) {
   }
   const receipt2 = switched[0];
   const publication = readPublishedCutoverReceipt(paths.cutoverPublished);
-  if (publication.database_file !== path16.basename(paths.db) || publication.migration_id !== receipt2.migration_id || publication.cutover_id !== receipt2.cutover_id || publication.source_root_digest !== receipt2.source_root_digest || publication.source_manifest_digest !== receipt2.source_manifest_digest || publication.archive.archive_directory !== receipt2.archive_directory || publication.archive.manifest_digest !== receipt2.archive_manifest_digest || publication.archive.source_tasks_root !== receipt2.archive_source_tasks_root || publication.archive.file_count !== receipt2.archive_file_count || publication.archive.byte_count !== receipt2.archive_byte_count) fail2("cutover_publication_receipt_mismatch");
+  if (publication.database_file !== path17.basename(paths.db) || publication.migration_id !== receipt2.migration_id || publication.cutover_id !== receipt2.cutover_id || publication.source_root_digest !== receipt2.source_root_digest || publication.source_manifest_digest !== receipt2.source_manifest_digest || publication.archive.archive_directory !== receipt2.archive_directory || publication.archive.manifest_digest !== receipt2.archive_manifest_digest || publication.archive.source_tasks_root !== receipt2.archive_source_tasks_root || publication.archive.file_count !== receipt2.archive_file_count || publication.archive.byte_count !== receipt2.archive_byte_count) fail2("cutover_publication_receipt_mismatch");
 }
 function processStartEvidence2(pid) {
   try {
@@ -4127,8 +4602,8 @@ function writePoison(file, value) {
   }
 }
 function workspacePathsOverlap(left, right) {
-  const a = path16.win32.resolve(left).toLowerCase();
-  const b = path16.win32.resolve(right).toLowerCase();
+  const a = path17.win32.resolve(left).toLowerCase();
+  const b = path17.win32.resolve(right).toLowerCase();
   const contains = (parent, child) => child === parent || child.startsWith(parent.endsWith("\\") ? parent : `${parent}\\`);
   return contains(a, b) || contains(b, a);
 }
@@ -4383,12 +4858,12 @@ function validateTaskPackage(task) {
 }
 function validateWorkspace(input, validator) {
   if (typeof input !== "string" || !input.trim()) fail2("workspace_missing");
-  if (!path16.isAbsolute(input)) fail2("workspace_not_absolute");
+  if (!path17.isAbsolute(input)) fail2("workspace_not_absolute");
   if (input.replace(/\//g, "\\").startsWith("\\\\")) fail2("workspace_unsupported_path_form");
-  let st, canonicalPath;
+  let st, canonicalPath2;
   try {
     st = statSync5(input);
-    canonicalPath = realpathSync3(input);
+    canonicalPath2 = realpathSync3(input);
   } catch {
     fail2("workspace_unavailable");
   }
@@ -4396,13 +4871,13 @@ function validateWorkspace(input, validator) {
   if (!validator) fail2("workspace_validator_missing");
   let result;
   try {
-    result = validator({ requestedPath: input, canonicalPath });
+    result = validator({ requestedPath: input, canonicalPath: canonicalPath2 });
   } catch {
     fail2("workspace_validation_unknown");
   }
   if (result === "deny" || result?.state === "deny") fail2("workspace_validation_denied");
   if (result !== "allow" && result?.state !== "allow") fail2("workspace_validation_unknown");
-  return canonicalPath;
+  return canonicalPath2;
 }
 function callDecision(fn, workspace, input) {
   if (typeof fn !== "function") fail2("execution_permission_unknown");
@@ -4424,7 +4899,7 @@ var init_store = __esm({
     init_interaction_channel();
     init_json_history_result_exceptions();
     init_task_feedback_projection();
-    HERE = path16.dirname(fileURLToPath4(import.meta.url));
+    HERE = path17.dirname(fileURLToPath4(import.meta.url));
     SCHEMA = readFileSync8(new URL("./schema.sql", import.meta.url), "utf8");
     RUNTIME_EVENTS_SCHEMA = readFileSync8(new URL("./runtime-events.sql", import.meta.url), "utf8");
     ADMIN_ABANDONMENT_SCHEMA = readFileSync8(new URL("./admin-abandonment.sql", import.meta.url), "utf8");
@@ -4506,12 +4981,12 @@ var init_store = __esm({
     ]);
     RESOLVED_RECOVERY_SET_CONTRACT = "wp6c-resolved-recovery-set-v2";
     RECOVERY_MATERIAL_CONTRACT = "wp6c-recovery-material-v1";
-    digest2 = (value) => createHash15("sha256").update(typeof value === "string" ? value : canonical4(value)).digest("hex");
-    rawDigest = (value) => createHash15("sha256").update(Buffer.from(value)).digest("hex");
+    digest2 = (value) => createHash16("sha256").update(typeof value === "string" ? value : canonical4(value)).digest("hex");
+    rawDigest = (value) => createHash16("sha256").update(Buffer.from(value)).digest("hex");
     sortedDigests = (values) => [...values].sort();
     upgradeRowJson = (row) => canonical4(Object.fromEntries(Object.entries(row).map(([key, value]) => [
       key,
-      value instanceof Uint8Array ? { sqlite_type: "blob", bytes: value.byteLength, sha256: createHash15("sha256").update(value).digest("hex") } : value
+      value instanceof Uint8Array ? { sqlite_type: "blob", bytes: value.byteLength, sha256: createHash16("sha256").update(value).digest("hex") } : value
     ])));
     EVIDENCE_KEYS = Object.freeze({
       capacity_policy_committed: ["capacity_limit", "generation"],
@@ -5160,7 +5635,7 @@ var init_store = __esm({
           return {
             operation_id: operationRow.operation_id,
             result_digest: operationRow.result_digest,
-            result_content_digest: createHash15("sha256").update(bytes).digest("hex"),
+            result_content_digest: createHash16("sha256").update(bytes).digest("hex"),
             result_commit_ref: operationRow.result_commit_ref,
             result_status: operationRow.result_status,
             offset_bytes: offsetBytes,
@@ -8185,7 +8660,7 @@ var init_store = __esm({
             if (migrationRuns.length || migratedResultsCount || migratedEventsCount || this.#db.prepare("SELECT COUNT(*) AS n FROM json_artifacts").get().n) fail2("fresh_install_contains_legacy_data");
           } else if (authoritySwitches.length) {
             const receipt2 = authoritySwitches[0], migration = migrationRuns[0];
-            if (!migration || migration.state !== "verified" || migration.migration_id !== receipt2.migration_id || migration.source_root_digest !== receipt2.source_root_digest || migration.source_manifest_digest !== receipt2.source_manifest_digest || digest2(migration.source_manifest_json) !== migration.source_manifest_digest || !validText3(migration.archive_directory, 32767) || !path16.isAbsolute(migration.archive_directory) || !validText3(receipt2.archive_directory, 32767) || !path16.isAbsolute(receipt2.archive_directory) || migration.archive_directory !== receipt2.archive_directory || typeof migration.archive_manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(migration.archive_manifest_digest) || migration.archive_manifest_digest !== receipt2.archive_manifest_digest || !validText3(migration.archive_source_tasks_root, 32767) || !path16.isAbsolute(migration.archive_source_tasks_root) || migration.archive_source_tasks_root !== receipt2.archive_source_tasks_root || !Number.isSafeInteger(migration.archive_file_count) || migration.archive_file_count < 0 || migration.archive_file_count !== migration.source_artifact_count || migration.archive_file_count !== receipt2.archive_file_count || !Number.isSafeInteger(migration.archive_byte_count) || migration.archive_byte_count < 0 || migration.archive_byte_count !== migration.source_artifact_bytes || migration.archive_byte_count !== receipt2.archive_byte_count || receipt2.schema_version !== SCHEMA_VERSION || !validText3(receipt2.protocol_version, 128) || typeof receipt2.runtime_roster_digest !== "string" || !/^[0-9a-f]{64}$/u.test(receipt2.runtime_roster_digest) || !validText3(receipt2.verifier_version, 128) || !validText3(migration.verifier_version, 128) || receipt2.verifier_version !== migration.verifier_version || !validText3(receipt2.cutover_id, 128) || !validText3(receipt2.created_at, 64) || Number.isNaN(Date.parse(receipt2.created_at)) || !validText3(migration.created_at, 64) || !validText3(migration.verified_at, 64) || Number.isNaN(Date.parse(migration.created_at)) || Number.isNaN(Date.parse(migration.verified_at))) fail2("authority_switch_invalid");
+            if (!migration || migration.state !== "verified" || migration.migration_id !== receipt2.migration_id || migration.source_root_digest !== receipt2.source_root_digest || migration.source_manifest_digest !== receipt2.source_manifest_digest || digest2(migration.source_manifest_json) !== migration.source_manifest_digest || !validText3(migration.archive_directory, 32767) || !path17.isAbsolute(migration.archive_directory) || !validText3(receipt2.archive_directory, 32767) || !path17.isAbsolute(receipt2.archive_directory) || migration.archive_directory !== receipt2.archive_directory || typeof migration.archive_manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(migration.archive_manifest_digest) || migration.archive_manifest_digest !== receipt2.archive_manifest_digest || !validText3(migration.archive_source_tasks_root, 32767) || !path17.isAbsolute(migration.archive_source_tasks_root) || migration.archive_source_tasks_root !== receipt2.archive_source_tasks_root || !Number.isSafeInteger(migration.archive_file_count) || migration.archive_file_count < 0 || migration.archive_file_count !== migration.source_artifact_count || migration.archive_file_count !== receipt2.archive_file_count || !Number.isSafeInteger(migration.archive_byte_count) || migration.archive_byte_count < 0 || migration.archive_byte_count !== migration.source_artifact_bytes || migration.archive_byte_count !== receipt2.archive_byte_count || receipt2.schema_version !== SCHEMA_VERSION || !validText3(receipt2.protocol_version, 128) || typeof receipt2.runtime_roster_digest !== "string" || !/^[0-9a-f]{64}$/u.test(receipt2.runtime_roster_digest) || !validText3(receipt2.verifier_version, 128) || !validText3(migration.verifier_version, 128) || receipt2.verifier_version !== migration.verifier_version || !validText3(receipt2.cutover_id, 128) || !validText3(receipt2.created_at, 64) || Number.isNaN(Date.parse(receipt2.created_at)) || !validText3(migration.created_at, 64) || !validText3(migration.verified_at, 64) || Number.isNaN(Date.parse(migration.created_at)) || Number.isNaN(Date.parse(migration.verified_at))) fail2("authority_switch_invalid");
             const policy = parseAuthoritySourceManifest(migration.source_manifest_json, migration.source_manifest_digest);
             if (policy.manifest.task_count !== migration.source_task_count || policy.manifest.artifact_count !== migration.source_artifact_count || policy.manifest.artifact_bytes !== migration.source_artifact_bytes || policy.manifest.result_count !== migration.source_result_count || policy.manifest.event_count !== migration.source_event_count) fail2("authority_switch_invalid");
           } else if (migrationRuns.length || migratedResultsCount || migratedEventsCount || this.#db.prepare("SELECT COUNT(*) AS n FROM json_artifacts").get().n) {
@@ -8773,7 +9248,7 @@ var init_store = __esm({
 });
 
 // src/sqlite-candidate/wp6b2b1/runtime-event-channel.mjs
-import { createHash as createHash16 } from "node:crypto";
+import { createHash as createHash17 } from "node:crypto";
 async function createCandidateRuntimeEventChannel(child, operation, verifyProcessIdentity) {
   if (!child || !Number.isSafeInteger(child.pid) || !Array.isArray(child.stdio) || child.stdio.length < 15 || !operation || operation.operation_kind !== "attempt_lifecycle" || operation.phase !== "running" || !Number.isSafeInteger(operation.generation) || operation.generation < 1 || !operation.claim_id || operation.claim_generation !== operation.generation || !operation.claim_worker_identity_json || !operation.launch_identity_json || !operation.claim_worker_identity_digest || typeof verifyProcessIdentity !== "function") {
     throw coded2("runtime_event_channel_unavailable");
@@ -8903,7 +9378,7 @@ function stableJson2(value, depth = 0) {
   throw coded2("runtime_event_json_invalid");
 }
 function sha2562(value) {
-  return createHash16("sha256").update(value).digest("hex");
+  return createHash17("sha256").update(value).digest("hex");
 }
 function coded2(code) {
   return Object.assign(new Error(code), { code });
@@ -9243,7 +9718,7 @@ var init_lifecycle_port = __esm({
 // src/executor/main.ts
 init_host_profile();
 import { fileURLToPath as fileURLToPath5 } from "node:url";
-import path20 from "node:path";
+import path21 from "node:path";
 import process2 from "node:process";
 
 // src/executor/service.ts
@@ -9252,11 +9727,12 @@ import { homedir as homedir8 } from "node:os";
 // src/manager/spawn-worker.ts
 import { spawn } from "node:child_process";
 import { existsSync as existsSync2 } from "node:fs";
-import path4 from "node:path";
+import path6 from "node:path";
 import { fileURLToPath } from "node:url";
 
 // src/runtime/child-env.ts
 init_paths();
+init_official_builtin_registry();
 var WINDOWS_OS_ENV = /* @__PURE__ */ new Set([
   "PATH",
   "SYSTEMROOT",
@@ -9328,7 +9804,10 @@ function createWorkerEnv(source, options = {}) {
     "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE",
     "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE",
     "ZCODE_DATA_BASE_DIR",
-    "ZCODE_WINDOWS_APP_INSTALL_DIR"
+    "ZCODE_WINDOWS_APP_INSTALL_DIR",
+    // ADR-066: non-secret Endpoint selectors. Executor and Worker must locate
+    // the same official runtime registry.
+    ...OFFICIAL_ENDPOINT_ENV_KEYS
   ]);
   for (const key of explicitBridgeKeys) {
     const value = source[key];
@@ -9338,9 +9817,9 @@ function createWorkerEnv(source, options = {}) {
 }
 
 // src/runtime/build-provenance.ts
-import { createHash } from "node:crypto";
+import { createHash as createHash2 } from "node:crypto";
 import { readFileSync as readFileSync2, realpathSync } from "node:fs";
-import path3 from "node:path";
+import path5 from "node:path";
 var BRIDGE_WORKER_LAUNCH_MARKER = "--zcode-bridge-launch-v1";
 function fingerprintRuntimeArtifact(filePath) {
   if (!filePath) return { path: null, sha256: null };
@@ -9348,16 +9827,16 @@ function fingerprintRuntimeArtifact(filePath) {
     const resolvedPath = realpathSync(filePath);
     return {
       path: resolvedPath,
-      sha256: createHash("sha256").update(readFileSync2(resolvedPath)).digest("hex").toUpperCase()
+      sha256: createHash2("sha256").update(readFileSync2(resolvedPath)).digest("hex").toUpperCase()
     };
   } catch {
-    return { path: path3.resolve(filePath), sha256: null };
+    return { path: path5.resolve(filePath), sha256: null };
   }
 }
 
 // src/manager/spawn-worker.ts
 function spawnClaimOnlyWorker(workerPath, provenance, options = {}) {
-  if (!path4.isAbsolute(workerPath)) throw new TypeError("claim-only worker path must be absolute");
+  if (!path6.isAbsolute(workerPath)) throw new TypeError("claim-only worker path must be absolute");
   if (options.dropAfterPrepared && !options.interactionChannel) throw new TypeError("interaction channel is required for drop-after-prepared");
   if (options.privateAuthChannel && !options.interactionChannel) throw new TypeError("private auth requires interaction channel allocation");
   if (options.runtimeEventChannel && !options.interactionChannel) throw new TypeError("runtime events require interaction channel allocation");
@@ -9384,7 +9863,7 @@ function spawnClaimOnlyWorker(workerPath, provenance, options = {}) {
     shell: false,
     stdio,
     windowsHide: true,
-    cwd: path4.dirname(workerPath),
+    cwd: path6.dirname(workerPath),
     env
   });
   child.once("error", (error2) => options.onSpawnError?.(error2));
@@ -10021,8 +10500,44 @@ function createTaskModelRouter(options) {
     if (!accepted.has(task.task_id)) pending.set(routedTask, entry);
     return routedTask;
   };
+  const validatePersisted = async (task) => {
+    const selection = task.model;
+    if (!selection) return;
+    const providerId = selection.provider_id.trim();
+    const modelId = selection.model_id.trim();
+    const label = `${providerId}/${modelId}`;
+    let catalog;
+    try {
+      catalog = await options.catalog(
+        task.worktree_path ?? task.workspace,
+        providerId === START_PLAN_PROVIDER_ID ? "start_plan" : "current"
+      );
+    } catch (error2) {
+      throw new BridgeError(
+        "provider_config_invalid",
+        `the live ZCode AppServer model catalog could not be read to validate ${label}: ${error2 instanceof Error ? error2.message : String(error2)}`,
+        { cause: error2 }
+      );
+    }
+    const entry = findCatalogEntry(catalog, providerId, modelId) ?? (!providerId.startsWith("account:") && !providerId.startsWith("builtin:") ? findCatalogEntry(catalog, `account:${providerId}`, modelId) : void 0);
+    if (!entry) {
+      const reason = providerId === START_PLAN_PROVIDER_ID ? catalog.startPlanUnavailableReason : null;
+      throw new BridgeError(
+        "provider_config_invalid",
+        `the live ZCode AppServer model catalog no longer contains ${label}; the Task keeps its persisted model, so correct the runtime catalog before continuing${reason ? `: ${reason}` : ""}`
+      );
+    }
+    const level = selection.reasoning_level?.trim();
+    if (level && !entry.reasoningLevels.includes(level)) {
+      throw new BridgeError(
+        "provider_config_invalid",
+        `reasoning level ${level} is not available for ${entry.providerId}/${entry.modelId} in the live ZCode AppServer model catalog`
+      );
+    }
+  };
   return {
     route,
+    validatePersisted,
     confirmRouting(routedTask) {
       const entry = pending.get(routedTask);
       if (!entry) return;
@@ -10069,6 +10584,9 @@ function routeTaskModel(raw, settings, catalog) {
 function findStartPlanEntry(catalog, requestedModelId) {
   return catalog.entries.find((entry) => entry.providerId === START_PLAN_PROVIDER_ID && sameModelFamily(entry.modelId, requestedModelId)) ?? null;
 }
+function findCatalogEntry(catalog, providerId, modelId) {
+  return catalog.entries.find((candidate) => candidate.providerId === providerId && candidate.modelId === modelId);
+}
 function sameModelFamily(catalogModelId, requestedModelId) {
   if (catalogModelId === requestedModelId) return true;
   const catalogBase = stripStartPlanAlias(catalogModelId);
@@ -10099,185 +10617,14 @@ function startPlanNotAvailable(raw, catalog) {
 }
 
 // src/runtime/model-settings.ts
-import { createHash as createHash6, randomUUID as randomUUID2 } from "node:crypto";
+import { createHash as createHash7, randomUUID as randomUUID2 } from "node:crypto";
 import { mkdir, readFile as readFile2, realpath as realpath3, rm, stat, writeFile } from "node:fs/promises";
 import { homedir as homedir4 } from "node:os";
-import path11 from "node:path";
+import path12 from "node:path";
 init_desktop_host_launch();
-
-// src/runtime/account-provider.ts
-import { createHash as createHash4 } from "node:crypto";
-import { existsSync as existsSync4, readFileSync as readFileSync4 } from "node:fs";
-import path8 from "node:path";
-var BIGMODEL_START_PLAN_PROVIDER_ID = "account:bigmodel-start-plan";
-function buildAccountProviderPayload(config2, verifiedSelection, homeDir, taskProviderId) {
-  const source = readAccountProviderSource(config2, verifiedSelection, homeDir, taskProviderId);
-  if (!source) return null;
-  const providers = {};
-  const states = {};
-  for (const entry of source.entries) {
-    providers[entry.providerId] = {
-      ...entry.builtinModelIds.length ? { builtinModelIds: [...entry.builtinModelIds] } : {},
-      access: { type: entry.accessType, entitled: entry.entitled }
-    };
-    states[entry.providerId] = {
-      availability: entry.availability,
-      entitled: entry.entitled,
-      ...entry.current === void 0 ? {} : { current: entry.current }
-    };
-  }
-  return {
-    revision: accountProviderRevision(source.builtinRevision, providers, states),
-    basedOnZCodeBuiltinRevision: source.builtinRevision,
-    providers,
-    states
-  };
-}
-function accountSettingFile(homeDir) {
-  return path8.join(homeDir, ".zcode", "v2", "setting.json");
-}
-function accountProviderRuleFacts(providerId, config2) {
-  if (!providerId?.startsWith("account:")) return null;
-  const table = readJson(config2.providerBuiltinConfigFile);
-  const rule = readProviderRules(table).find(
-    (candidate) => isRecord2(candidate) && candidate.providerId === providerId
-  );
-  if (!rule) return null;
-  const access = rule.config?.access;
-  if (access?.type !== "zhipu-account") {
-    return { planKind: null, accountType: null };
-  }
-  return {
-    planKind: normalizePlanKind(access.mode),
-    accountType: typeof access.accountType === "string" ? access.accountType : null
-  };
-}
-function zcodeDataBaseDir(personalProviderConfigFile) {
-  const dataDir = zcodeV2DataDir(personalProviderConfigFile);
-  return dataDir ? path8.dirname(path8.dirname(dataDir)) : null;
-}
-function zcodeV2DataDir(personalProviderConfigFile) {
-  const absolute = path8.resolve(personalProviderConfigFile);
-  if (path8.basename(absolute).toLowerCase() !== "provider_config.json") return null;
-  const v2Dir = path8.dirname(absolute);
-  if (path8.basename(v2Dir).toLowerCase() !== "v2") return null;
-  const zcodeDir = path8.dirname(v2Dir);
-  if (path8.basename(zcodeDir).toLowerCase() !== ".zcode") return null;
-  return v2Dir;
-}
-function readAccountProviderSource(config2, verifiedSelection, homeDir, taskProviderId) {
-  const table = readJson(config2.providerBuiltinConfigFile);
-  const providerRules = readProviderRules(table).filter(isRecord2).map((rule) => rule).filter((rule) => rule.config?.access?.type === "zhipu-account" && typeof rule.providerId === "string").sort((left, right) => left.providerId.localeCompare(right.providerId));
-  if (!providerRules.length) return null;
-  const officialV2Dir = zcodeV2DataDir(config2.providerPersonalConfigFile);
-  if (!officialV2Dir) return null;
-  const officialDataRoot = path8.dirname(officialV2Dir);
-  const credentials = readJson(path8.join(officialV2Dir, "config.json"));
-  const credentialProviders = asRecord(credentials?.provider);
-  const cache = readJson(path8.join(officialV2Dir, "coding-plan-cache.json"));
-  const cacheItems = asRecord(asRecord(cache?.entryStatus).items);
-  const settingFile = homeDir ? accountSettingFile(homeDir) : path8.join(officialV2Dir, "setting.json");
-  const settings = readJson(settingFile);
-  const selectedKeys = asRecord(settings?.modelProviderFamilySelectedKeys);
-  const rawConnectionSelections = settings?.providerFamilyConnectionSelections;
-  const connectionSelectionsPresent = settings !== null && Object.prototype.hasOwnProperty.call(settings, "providerFamilyConnectionSelections");
-  const connectionSelections = asRecord(rawConnectionSelections);
-  const connectionSelectionsInvalid = connectionSelectionsPresent && !isRecord2(rawConnectionSelections);
-  const taskAccountProviderId = taskProviderId && providerRules.some((rule) => rule.providerId === taskProviderId) ? taskProviderId : null;
-  const entries = providerRules.map((rule) => {
-    const providerId = rule.providerId;
-    const legacyId = configProviderId(providerId, rule);
-    const planKind = normalizePlanKind(rule.config?.access?.mode);
-    const cacheStatus = asRecord(cacheItems[legacyId]).status;
-    const legacyConfig = asRecord(credentialProviders[legacyId]);
-    const options = asRecord(legacyConfig.options);
-    const apiKey = typeof options.apiKey === "string" ? options.apiKey.trim() : "";
-    const selectedEntitled = verifiedSelection?.providerId === providerId;
-    const entitled = planKind === "start-plan" ? selectedEntitled : cacheStatus === "available" || legacyConfig.enabled === true && apiKey.length > 0;
-    const desktopCurrent = isCurrentProvider(
-      rule,
-      legacyId,
-      selectedKeys,
-      connectionSelectionsInvalid,
-      connectionSelections
-    );
-    const current = taskAccountProviderId ? providerId === taskAccountProviderId : desktopCurrent;
-    return {
-      providerId,
-      legacyId,
-      planKind,
-      accessType: rule.config?.access?.type ?? "zhipu-account",
-      builtinModelIds: [...rule.config?.builtinModelIds ?? []],
-      entitled,
-      availability: entitled ? "available" : "unavailable",
-      current,
-      apiKey
-    };
-  });
-  const builtinRevision = zcodeBuiltinRevision(table, config2.providerBuiltinConfigFile);
-  return { officialDataRoot, officialV2Dir, settingFile, builtinRevision, entries };
-}
-function zcodeBuiltinRevision(table, sourceFile) {
-  const revision = typeof table?.revision === "number" ? table.revision : 0;
-  const sourceDigest = createHash4("sha256").update(path8.resolve(sourceFile)).digest("hex");
-  return `zcode-builtin:${revision}:${sourceDigest}`;
-}
-function accountProviderRevision(builtinRevision, providers, states) {
-  return `account:${JSON.stringify([builtinRevision, providers, states])}`;
-}
-function isCurrentProvider(rule, legacyId, selectedKeys, connectionSelectionsInvalid, connectionSelections) {
-  const access = rule.config?.access;
-  if (!access?.accountType) return false;
-  if (access.mode === "off-peak" || access.mode === "highspeed") return void 0;
-  if (connectionSelectionsInvalid) return false;
-  if (Object.prototype.hasOwnProperty.call(connectionSelections, access.accountType)) {
-    const connection = asRecord(connectionSelections[access.accountType]);
-    if (!isConnectionSelectionKind(connection.kind)) return false;
-    if (connection.kind === "team-coding-plan" && (!isNonEmptyString(connection.productId) || !isNonEmptyString(connection.organizationId) || !isNonEmptyString(connection.projectId))) {
-      return false;
-    }
-    return connection.kind === access.mode;
-  }
-  const selected = selectedKeys[access.accountType];
-  return typeof selected === "string" && (selected === legacyId || selected.endsWith(`:${legacyId}`));
-}
-function isConnectionSelectionKind(value) {
-  return value === "start-plan" || value === "individual-coding-plan" || value === "team-coding-plan";
-}
-function isNonEmptyString(value) {
-  return typeof value === "string" && value.trim().length > 0;
-}
-function normalizePlanKind(value) {
-  return value === "start-plan" || value === "individual-coding-plan" || value === "team-coding-plan" || value === "off-peak" || value === "highspeed" ? value : null;
-}
-function configProviderId(providerId, rule) {
-  const access = rule.config?.access;
-  if (!providerId.startsWith("account:") || !access?.accountType || !access.mode) return providerId;
-  const plan = access.mode === "individual-coding-plan" ? "coding-plan" : access.mode;
-  return `builtin:${access.accountType}-${plan}`;
-}
-function readProviderRules(table) {
-  const providerConfigRules = asRecord(asRecord(table?.config).providerConfigRules);
-  return Array.isArray(providerConfigRules.providerRules) ? providerConfigRules.providerRules : [];
-}
-function readJson(filePath) {
-  try {
-    if (!existsSync4(filePath)) return null;
-    const value = JSON.parse(readFileSync4(filePath, "utf8"));
-    return isRecord2(value) ? value : null;
-  } catch {
-    return null;
-  }
-}
-function asRecord(value) {
-  return isRecord2(value) ? value : {};
-}
-function isRecord2(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-// src/runtime/model-settings.ts
+init_account_provider();
 init_errors();
+init_official_builtin_registry();
 init_resolver();
 
 // src/runtime/session-preferences.ts
@@ -11403,6 +11750,7 @@ init_official_host_adapter();
 
 // src/runtime/official-provider-runtime-auth.ts
 init_official_host_adapter();
+init_account_provider();
 function createOfficialProviderRuntimeAuthResolver(options) {
   let factoryPromise;
   const services = /* @__PURE__ */ new Map();
@@ -11486,7 +11834,7 @@ init_host_profile();
 import { existsSync as existsSync5, mkdirSync, readFileSync as readFileSync5, renameSync, rmdirSync, statSync as statSync2, unlinkSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import path10 from "node:path";
+import path11 from "node:path";
 function parseLockOwner(raw) {
   try {
     const owner = JSON.parse(raw);
@@ -11608,7 +11956,7 @@ async function withProcessLock(directory, operation, timeoutMs = 3e4) {
 }
 function describeLockOwner(directory) {
   try {
-    const owner = JSON.parse(readFileSync5(path10.join(directory, "owner.json"), "utf8"));
+    const owner = JSON.parse(readFileSync5(path11.join(directory, "owner.json"), "utf8"));
     if (!Number.isSafeInteger(owner.pid)) return null;
     return `pid ${String(owner.pid)}${owner.started_at ? `, started ${owner.started_at}` : ""}`;
   } catch {
@@ -11630,7 +11978,7 @@ function tryAcquireProcessLockWithRetry(directory, deadline) {
   };
   try {
     mkdirSync(staging, { mode: 448 });
-    writeFileSync(path10.join(staging, "owner.json"), JSON.stringify(ownerRecord), { mode: 384, flag: "wx" });
+    writeFileSync(path11.join(staging, "owner.json"), JSON.stringify(ownerRecord), { mode: 384, flag: "wx" });
     try {
       renameSync(staging, directory);
     } catch (error2) {
@@ -11651,7 +11999,7 @@ function tryAcquireProcessLockWithRetry(directory, deadline) {
     throw error2;
   }
   return () => {
-    const owner = JSON.parse(readFileSync5(path10.join(directory, "owner.json"), "utf8"));
+    const owner = JSON.parse(readFileSync5(path11.join(directory, "owner.json"), "utf8"));
     if (owner.token !== token) throw new Error("process lock ownership changed");
     const retired = `${directory}.${token}.retired`;
     renameWithTransientRetry(directory, retired);
@@ -11673,7 +12021,7 @@ function renameWithTransientRetry(source, target) {
 function acquireExistingLock(directory) {
   let owner;
   try {
-    owner = parseLockOwner(readFileSync5(path10.join(directory, "owner.json"), "utf8"));
+    owner = parseLockOwner(readFileSync5(path11.join(directory, "owner.json"), "utf8"));
   } catch {
     try {
       if (Date.now() - statSync2(directory).mtimeMs > 3e4) throw new Error(`unreadable lock owner: ${directory}`);
@@ -11693,7 +12041,7 @@ function acquireExistingLock(directory) {
   return null;
 }
 function removeStagedLock(directory) {
-  removePrivateFile(path10.join(directory, "owner.json"));
+  removePrivateFile(path11.join(directory, "owner.json"));
   removePrivateDirectory(directory);
 }
 function removePrivateFile(file) {
@@ -11732,7 +12080,7 @@ function reclaimDeadOwner(directory) {
   }
   let outcome;
   try {
-    const owner = parseLockOwner(readFileSync5(path10.join(directory, "owner.json"), "utf8"));
+    const owner = parseLockOwner(readFileSync5(path11.join(directory, "owner.json"), "utf8"));
     if (!owner) {
       outcome = { kind: "busy" };
     } else {
@@ -11822,7 +12170,7 @@ var ZCodeModelSettings = class {
   }
   async listModels(workspace) {
     const requestedWorkspace = workspace.trim();
-    if (!path11.isAbsolute(requestedWorkspace)) {
+    if (!path12.isAbsolute(requestedWorkspace)) {
       throw new BridgeError("provider_config_invalid", "workspace must be an absolute existing directory");
     }
     let workspacePath;
@@ -11869,14 +12217,17 @@ var ZCodeModelSettings = class {
    * when that Provider is configured. No model or Billing request is sent.
    * A Start read failure is preserved for explicit Start selections and does
    * not erase Coding models. */
-  async listRoutingCatalog(workspace) {
+  async listRoutingCatalog(workspace, options = {}) {
+    const plan = options.plan ?? "all";
+    if (plan === "start_plan") {
+      return { models: (await this.#readStartPlanCatalog(workspace)).models, startPlanUnavailableReason: null };
+    }
     const currentCatalog = await this.listModels(workspace);
+    if (plan === "current") return { models: currentCatalog.models, startPlanUnavailableReason: null };
     let startModels = [];
     let startPlanUnavailableReason = null;
     try {
-      const workspacePath = await realpath3(workspace.trim());
-      const source = await this.#resolveCatalogSource(workspacePath);
-      const startCatalog = await this.#readLiveCatalog(workspacePath, source, "start_plan");
+      const startCatalog = await this.#readStartPlanCatalog(workspace);
       startModels = startCatalog.models;
     } catch (error2) {
       startPlanUnavailableReason = error2 instanceof Error ? error2.message : String(error2);
@@ -11889,6 +12240,12 @@ ${model.model_id}`));
       models: [...currentCatalog.models, ...additions],
       startPlanUnavailableReason
     };
+  }
+  /** One zero-model live read of the Start Plan catalog. */
+  async #readStartPlanCatalog(workspace) {
+    const workspacePath = await realpath3(workspace.trim());
+    const source = await this.#resolveCatalogSource(workspacePath);
+    return this.#readLiveCatalog(workspacePath, source, "start_plan");
   }
   async #readLiveCatalog(workspacePath, source, catalogPlan = "current") {
     const { config: config2, runtimeEnv, cachePath, fingerprint } = source;
@@ -12029,8 +12386,8 @@ ${model.model_id}`));
   #updateConfig(update) {
     const operation = this.#writeQueue.then(async () => {
       await mkdir(this.#host.settingsDirectory, { recursive: true });
-      return withProcessLock(path11.join(this.#host.settingsDirectory, ".settings.lock"), async () => {
-        const configPath = path11.join(this.#host.settingsDirectory, "runtime-config.json");
+      return withProcessLock(path12.join(this.#host.settingsDirectory, ".settings.lock"), async () => {
+        const configPath = path12.join(this.#host.settingsDirectory, "runtime-config.json");
         let config2 = {};
         try {
           const info = await stat(configPath);
@@ -12038,17 +12395,17 @@ ${model.model_id}`));
             throw new BridgeError("provider_config_invalid", "Bridge runtime config is not a small regular JSON file");
           }
           const parsed = JSON.parse(await readFile2(configPath, "utf8"));
-          if (!isRecord3(parsed)) throw new BridgeError("provider_config_invalid", "Bridge runtime config must contain a JSON object");
+          if (!isRecord4(parsed)) throw new BridgeError("provider_config_invalid", "Bridge runtime config must contain a JSON object");
           config2 = parsed;
         } catch (error2) {
           if (isMissingFile2(error2)) {
             config2 = {};
             for (const directory of this.#host.legacySettingsDirectories ?? []) {
-              const legacyPath = path11.join(directory, "runtime-config.json");
+              const legacyPath = path12.join(directory, "runtime-config.json");
               try {
                 if ((await stat(legacyPath)).size > 64 * 1024) throw new Error("legacy settings exceed size limit");
                 const legacy = JSON.parse(await readFile2(legacyPath, "utf8"));
-                if (!isRecord3(legacy)) throw new Error("invalid legacy settings");
+                if (!isRecord4(legacy)) throw new Error("invalid legacy settings");
                 loadPersistedRuntimeEnvironment(this.#sourceEnv, this.#homeDir, this.#host);
                 config2 = legacy;
                 break;
@@ -12120,6 +12477,7 @@ function buildRuntimeChildEnv(config2, source) {
   if (source.ZCODE_HOME) env.ZCODE_HOME = source.ZCODE_HOME;
   const dataBaseDir = zcodeDataBaseDir(config2.providerPersonalConfigFile);
   if (dataBaseDir) env.ZCODE_DATA_BASE_DIR = dataBaseDir;
+  forwardOfficialEndpointEnv(env, source);
   return env;
 }
 function prepareCatalogAccountPayload(payload, catalogPlan) {
@@ -12187,9 +12545,9 @@ function nestedString(record5, keys) {
   return typeof value === "string" ? value : null;
 }
 function asRecord4(value) {
-  return isRecord3(value) ? value : {};
+  return isRecord4(value) ? value : {};
 }
-function isRecord3(value) {
+function isRecord4(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function isMissingFile2(error2) {
@@ -12204,11 +12562,11 @@ function modelCatalogCachePath(workspace, config2, env, settingsDirectory) {
     personal: config2.providerPersonalConfigFile,
     zcodeHome: env.ZCODE_HOME ?? ""
   });
-  const key = createHash6("sha256").update(identity).digest("hex");
-  return path11.join(settingsDirectory, "model-catalog", `${key}.json`);
+  const key = createHash7("sha256").update(identity).digest("hex");
+  return path12.join(settingsDirectory, "model-catalog", `${key}.json`);
 }
 async function modelCatalogSourceFingerprint(config2, env, homeDir) {
-  const digest3 = createHash6("sha256");
+  const digest3 = createHash7("sha256");
   digest3.update("start-plan-task-scoped-live-billing-v1");
   for (const file of [config2.providerBuiltinConfigFile, config2.providerPersonalConfigFile]) {
     digest3.update(file);
@@ -12235,7 +12593,7 @@ ${alias.model_id}`)).map((alias) => ({ ...alias }));
   return [...models, ...additions];
 }
 async function writeModelCatalogCache(cachePath, models) {
-  await mkdir(path11.dirname(cachePath), { recursive: true });
+  await mkdir(path12.dirname(cachePath), { recursive: true });
   const tempPath = `${cachePath}.${process.pid}.${randomUUID2()}.tmp`;
   try {
     await writeFile(tempPath, `${JSON.stringify({
@@ -12267,9 +12625,9 @@ function autoWakeEnabledFromEnvironment(env) {
 init_host_profile();
 
 // src/sqlite-candidate/wp6b2b1/trusted-local-policy.ts
-import { createHash as createHash7 } from "node:crypto";
+import { createHash as createHash8 } from "node:crypto";
 import { realpathSync as realpathSync2, statSync as statSync3 } from "node:fs";
-import path12 from "node:path";
+import path13 from "node:path";
 var ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u;
 function createTrustedLocalPolicyProvider(config2) {
   let enabled = false;
@@ -12294,7 +12652,7 @@ function createTrustedLocalPolicyProvider(config2) {
         allowed_operation_kinds: ["attempt_lifecycle"],
         unrestricted: false
       };
-      policyDigest = createHash7("sha256").update(JSON.stringify(policyEnvelope), "utf8").digest("hex");
+      policyDigest = createHash8("sha256").update(JSON.stringify(policyEnvelope), "utf8").digest("hex");
       enabled = true;
     } catch (error2) {
       invalid = true;
@@ -12305,14 +12663,14 @@ function createTrustedLocalPolicyProvider(config2) {
     state: "unknown",
     reason: failure2 ?? "trusted_local_mode_disabled"
   });
-  const allowed = (canonicalPath) => ({
+  const allowed = (canonicalPath2) => ({
     state: "allow",
     source: "trusted_local_policy",
     policy_revision: policyRevision,
     policy_digest: policyDigest,
     execution_profile_id: executionProfileId,
     execution_mode: executionMode,
-    canonical_path: canonicalPath
+    canonical_path: canonicalPath2
   });
   const validateWorkspaceForUse = (pathValue) => {
     if (!enabled) return disabledOrInvalid();
@@ -12397,13 +12755,13 @@ function resolveLocalDirectory(input) {
   if (!stat2.isDirectory()) throw new Error("workspace_not_directory");
   const canonical5 = realpathSync2(input);
   if (!isLocalAbsolute(canonical5)) throw new Error("workspace_path_form_denied");
-  return path12.win32.normalize(canonical5);
+  return path13.win32.normalize(canonical5);
 }
 function isLocalAbsolute(value) {
-  return process.platform === "win32" && path12.win32.isAbsolute(value) && /^[A-Za-z]:[\\/]/u.test(value) && !value.startsWith("\\\\");
+  return process.platform === "win32" && path13.win32.isAbsolute(value) && /^[A-Za-z]:[\\/]/u.test(value) && !value.startsWith("\\\\");
 }
 function sameWindowsPath(left, right) {
-  return windowsKey(path12.win32.normalize(left)) === windowsKey(path12.win32.normalize(right));
+  return windowsKey(path13.win32.normalize(left)) === windowsKey(path13.win32.normalize(right));
 }
 function windowsKey(value) {
   return value.replace(/[\\/]+$/u, "").toLocaleLowerCase("en-US");
@@ -12446,7 +12804,7 @@ function isTrustedLocalStdioContext(value) {
 init_errors();
 import { accessSync as accessSync2, constants, existsSync as existsSync6, statSync as statSync4 } from "node:fs";
 import { execFileSync } from "node:child_process";
-import path13 from "node:path";
+import path14 from "node:path";
 init_paths();
 init_resolver();
 async function runBridgeDoctor(options = {}) {
@@ -12523,13 +12881,13 @@ async function runBridgeDoctor(options = {}) {
     let effectiveBase = setting.dataBaseDir;
     let baseSource;
     if (explicitHome && homeValid) {
-      effectiveBase = path13.dirname(path13.resolve(explicitHome));
+      effectiveBase = path14.dirname(path14.resolve(explicitHome));
       baseSource = explicitBase ? "explicit ZCODE_HOME and ZCODE_DATA_BASE_DIR (consistent)" : "explicit ZCODE_HOME (parent directory)";
     } else if (explicitBase && baseValid) {
-      effectiveBase = path13.resolve(explicitBase);
+      effectiveBase = path14.resolve(explicitBase);
       baseSource = "explicit ZCODE_DATA_BASE_DIR";
     } else if (explicitHome || explicitBase) {
-      effectiveBase = path13.resolve(explicitHome ?? explicitBase);
+      effectiveBase = path14.resolve(explicitHome ?? explicitBase);
       baseSource = `explicit ${explicitHome ? "ZCODE_HOME" : "ZCODE_DATA_BASE_DIR"} (invalid absolute path)`;
     } else {
       baseSource = setting.migrated ? "setting.json dataBaseDir" : "default (user directory)";
@@ -12537,7 +12895,7 @@ async function runBridgeDoctor(options = {}) {
     let dataDirStatus = "ok";
     let dataDirSummary = `ZCode data base directory: ${effectiveBase} (from ${baseSource})`;
     if (explicitHome && explicitBase) {
-      if (!sameFileSystemPath(path13.dirname(path13.resolve(explicitHome)), path13.resolve(explicitBase))) {
+      if (!sameFileSystemPath(path14.dirname(path14.resolve(explicitHome)), path14.resolve(explicitBase))) {
         dataDirStatus = "error";
         dataDirSummary = `ZCODE_HOME (${explicitHome}) and ZCODE_DATA_BASE_DIR (${explicitBase}) conflict; ZCODE_HOME must be <ZCODE_DATA_BASE_DIR>/.zcode`;
       }
@@ -12574,7 +12932,7 @@ async function runBridgeDoctor(options = {}) {
   if (explicitRuntime) {
     let explicitRuntimeStatus = "ok";
     const automaticDiscovery = install.installDir ? `; auto-discovery would choose ${install.installDir} (${install.source})` : "; auto-discovery found no complete installation";
-    let explicitRuntimeSummary = `Runtime is explicitly configured (ZCODE_BRIDGE_ZCODE_CJS); the builtin provider config is derived from the same installation: ${path13.dirname(path13.dirname(explicitRuntime))}${automaticDiscovery}`;
+    let explicitRuntimeSummary = `Runtime is explicitly configured (ZCODE_BRIDGE_ZCODE_CJS); the builtin provider config is derived from the same installation: ${path14.dirname(path14.dirname(explicitRuntime))}${automaticDiscovery}`;
     try {
       if (!isAbsolutePathForPlatform(explicitRuntime)) throw new Error("not a full absolute path");
       const runtimeStat = statSync4(explicitRuntime);
@@ -12616,9 +12974,17 @@ async function runBridgeDoctor(options = {}) {
     checks.push({ name: "worker_env_consistency", status: "unknown", summary: `Worker environment consistency could not be determined: ${safeError(error2)}` });
   }
   try {
-    config2 = await new NodeRuntimeResolver({ ...options.resolver, env }).resolve();
+    let registrySelection = null;
+    config2 = await new NodeRuntimeResolver({
+      ...options.resolver,
+      env,
+      onBuiltinRegistrySelection: (selection) => {
+        registrySelection = selection;
+      }
+    }).resolve();
     checks.push({ name: "zcode_runtime", status: "ok", summary: "ZCode runtime was found and its configured path is readable" });
     checks.push({ name: "provider_config", status: "ok", summary: "Builtin and personal provider configs passed validation" });
+    checks.push(builtinRegistryCheck(config2, registrySelection));
   } catch (error2) {
     const code = error2 instanceof BridgeError ? error2.code : null;
     if (code === "runtime_not_found") {
@@ -12661,10 +13027,10 @@ async function runBridgeDoctor(options = {}) {
       });
     } else if (browserUse === "headless") {
       if (browserExecutable) {
-        if (!path13.isAbsolute(browserExecutable)) {
+        if (!path14.isAbsolute(browserExecutable)) {
           checks.push({ name: "browser_host", status: "error", summary: `ZCODE_BRIDGE_BROWSER_EXECUTABLE must be an absolute path: ${browserExecutable}` });
         } else if (existsSync6(browserExecutable)) {
-          checks.push({ name: "browser_host", status: "ok", summary: `Headless browser host is enabled with the configured executable (${path13.basename(browserExecutable)})` });
+          checks.push({ name: "browser_host", status: "ok", summary: `Headless browser host is enabled with the configured executable (${path14.basename(browserExecutable)})` });
         } else {
           checks.push({ name: "browser_host", status: "error", summary: `Configured browser executable does not exist: ${browserExecutable}` });
         }
@@ -12712,7 +13078,7 @@ async function runBridgeDoctor(options = {}) {
       checks.push({ name: "active_tasks", status: "unknown", summary: `SQLite lifecycle diagnostics unavailable: ${safeError(error2)}` });
       checks.push({ name: "recovery_lock", status: "unknown", summary: "SQLite Recovery state is unknown; the bound Authority could not be read" });
     }
-  } else if (observedRoot && existsSync6(path13.join(observedRoot, "bridge.sqlite"))) {
+  } else if (observedRoot && existsSync6(path14.join(observedRoot, "bridge.sqlite"))) {
     checks.push({ name: "active_tasks", status: "unknown", summary: "SQLite data root is present but no lifecycle Authority diagnostics are bound" });
     checks.push({ name: "recovery_lock", status: "unknown", summary: "SQLite Recovery state is unknown; JSON recovery locks are not authoritative" });
   } else {
@@ -12720,6 +13086,42 @@ async function runBridgeDoctor(options = {}) {
     checks.push({ name: "recovery_lock", status: "unknown", summary: "Recovery state requires the bound SQLite Authority" });
   }
   return { checked_at: (/* @__PURE__ */ new Date()).toISOString(), execution_mode: mode, checks };
+}
+function builtinRegistryCheck(config2, selection) {
+  const name = "builtin_registry";
+  if (!selection) {
+    return {
+      name,
+      status: "ok",
+      summary: `Built-in registry is explicitly configured: ${config2.providerBuiltinConfigFile}; the official runtime registry is not used`
+    };
+  }
+  if (selection.source === "runtime") {
+    return {
+      name,
+      status: "ok",
+      summary: `Built-in registry: official runtime registry${selection.revision === null ? "" : ` (revision ${selection.revision})`} at ${selection.path}; installation fallback ${selection.bundledPath}`
+    };
+  }
+  const summary = `Built-in registry: installation fallback ${selection.path}`;
+  switch (selection.runtimeStatus) {
+    case "unresolved":
+      return { name, status: "ok", summary: `${summary}; the official runtime registry was not located (no Desktop version or data base directory)` };
+    case "not_found":
+      return { name, status: "ok", summary: `${summary}; ZCode Desktop has not written an official runtime registry at ${selection.runtimePath}` };
+    case "invalid":
+      return { name, status: "warning", summary: `${summary}; the official runtime registry at ${selection.runtimePath} is not a usable release` };
+    case "lower_revision":
+      return { name, status: "ok", summary: `${summary}${selection.revision === null ? "" : ` (revision ${selection.revision})`}; the official runtime registry at ${selection.runtimePath} is not newer` };
+    case "same_revision_conflict":
+      return {
+        name,
+        status: "warning",
+        summary: `${summary}${selection.revision === null ? "" : ` (revision ${selection.revision})`}; the official runtime registry at ${selection.runtimePath} has the same revision but different content`
+      };
+    case "selected":
+      return { name, status: "ok", summary: `${summary}; the official runtime registry at ${selection.runtimePath} was not selected` };
+  }
 }
 function safeError(error2) {
   const message = error2 instanceof Error ? error2.message : String(error2);
@@ -12731,8 +13133,8 @@ init_result_contract();
 
 // src/executor/lease.ts
 import { closeSync as closeSync3, existsSync as existsSync7, lstatSync, openSync as openSync3, readdirSync, readFileSync as readFileSync7, renameSync as renameSync2, unlinkSync as unlinkSync2, writeSync } from "node:fs";
-import path14 from "node:path";
-import { createHash as createHash8, randomUUID as randomUUID3 } from "node:crypto";
+import path15 from "node:path";
+import { createHash as createHash9, randomUUID as randomUUID3 } from "node:crypto";
 var EXECUTOR_LEASE_PROTOCOL_VERSION = 1;
 var EXECUTOR_LEASE_FILE = "executor-lease.json";
 var EXECUTOR_LEASE_RELEASED_FILE = "executor-lease.released.json";
@@ -12749,9 +13151,9 @@ var ExecutorLeaseError = class extends Error {
 };
 function assertExecutorLeaseTransition(input) {
   const root = ensurePlainRoot(input.authorityRoot);
-  if (existsSync7(path14.join(root, EXECUTOR_LEASE_FILE))) return;
+  if (existsSync7(path15.join(root, EXECUTOR_LEASE_FILE))) return;
   const leaseHistory = hasValidLeaseHistory(root);
-  if (leaseHistory || !existsSync7(path14.join(root, input.databaseFileName))) return;
+  if (leaseHistory || !existsSync7(path15.join(root, input.databaseFileName))) return;
   if (input.acceptUnleasedExistingRoot) return;
   throw new ExecutorLeaseError(
     "EXECUTOR_LEASE_TRANSITION_REQUIRED",
@@ -12765,14 +13167,14 @@ function hasValidLeaseHistory(root) {
   ];
   return candidates.some((name) => {
     try {
-      const record5 = readLease(path14.join(root, name));
+      const record5 = readLease(path15.join(root, name));
       return record5.state === "released" || record5.state === "stale_unknown";
     } catch {
       return false;
     }
   });
 }
-function canonicalJson(value) {
+function canonicalJson2(value) {
   return JSON.stringify(sortObject(value)) ?? "null";
 }
 function sortObject(value) {
@@ -12782,7 +13184,7 @@ function sortObject(value) {
   return Object.fromEntries(Object.entries(value).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0).map(([key, item]) => [key, sortObject(item)]));
 }
 function authorityRootDigest(root) {
-  return createHash8("sha256").update(path14.resolve(root).toLowerCase(), "utf8").digest("hex");
+  return createHash9("sha256").update(path15.resolve(root).toLowerCase(), "utf8").digest("hex");
 }
 function ownerFromIdentity(ownerKind, identity) {
   return {
@@ -12796,12 +13198,12 @@ function ownerFromIdentity(ownerKind, identity) {
   };
 }
 function leaseDigest(record5) {
-  return createHash8("sha256").update(canonicalJson(record5), "utf8").digest("hex");
+  return createHash9("sha256").update(canonicalJson2(record5), "utf8").digest("hex");
 }
 function ensurePlainRoot(root) {
   let current;
   try {
-    current = path14.resolve(root);
+    current = path15.resolve(root);
     const stat2 = lstatSync(current);
     if (!stat2.isDirectory() || stat2.isSymbolicLink()) throw new Error("not_plain_directory");
   } catch {
@@ -12819,7 +13221,7 @@ function readLease(file) {
     throw new ExecutorLeaseError("EXECUTOR_LEASE_MALFORMED");
   }
   const record5 = parsed;
-  if (!record5 || typeof record5 !== "object" || record5.lease_id === void 0 || record5.authority_root_digest !== authorityRootDigest(path14.dirname(file)) || record5.protocol_version !== EXECUTOR_LEASE_PROTOCOL_VERSION || !record5.owner || typeof record5.owner !== "object" || !["executor", "legacy_mcp"].includes(record5.owner.owner_kind ?? "") || !Number.isInteger(record5.owner.process_id) || record5.owner.process_id <= 0 || typeof record5.owner.start_fingerprint !== "string" || record5.owner.fingerprint_precision !== "exact" || record5.owner.identity_version !== PROCESS_IDENTITY_VERSION || typeof record5.owner.platform !== "string" || typeof record5.owner.captured_at !== "string" || !/^[0-9a-f]{64}$/iu.test(record5.bridge_sha256 ?? "") || !/^[0-9a-f]{64}$/iu.test(record5.worker_sha256 ?? "") || typeof record5.started_at !== "string" || typeof record5.heartbeat_at !== "string" || !["active", "stale_unknown", "released"].includes(record5.state ?? "") || typeof record5.lease_digest !== "string" || !/^[0-9a-f]{64}$/u.test(record5.lease_digest)) {
+  if (!record5 || typeof record5 !== "object" || record5.lease_id === void 0 || record5.authority_root_digest !== authorityRootDigest(path15.dirname(file)) || record5.protocol_version !== EXECUTOR_LEASE_PROTOCOL_VERSION || !record5.owner || typeof record5.owner !== "object" || !["executor", "legacy_mcp"].includes(record5.owner.owner_kind ?? "") || !Number.isInteger(record5.owner.process_id) || record5.owner.process_id <= 0 || typeof record5.owner.start_fingerprint !== "string" || record5.owner.fingerprint_precision !== "exact" || record5.owner.identity_version !== PROCESS_IDENTITY_VERSION || typeof record5.owner.platform !== "string" || typeof record5.owner.captured_at !== "string" || !/^[0-9a-f]{64}$/iu.test(record5.bridge_sha256 ?? "") || !/^[0-9a-f]{64}$/iu.test(record5.worker_sha256 ?? "") || typeof record5.started_at !== "string" || typeof record5.heartbeat_at !== "string" || !["active", "stale_unknown", "released"].includes(record5.state ?? "") || typeof record5.lease_digest !== "string" || !/^[0-9a-f]{64}$/u.test(record5.lease_digest)) {
     throw new ExecutorLeaseError("EXECUTOR_LEASE_MALFORMED");
   }
   const { lease_digest: recordedDigest, ...body } = record5;
@@ -12844,7 +13246,7 @@ async function probeOwner(owner, processProbe) {
 }
 function writeLeaseFile(file, record5) {
   const temporary = `${file}.new-${randomUUID3()}`;
-  const payload = canonicalJson(record5);
+  const payload = canonicalJson2(record5);
   let fd;
   try {
     fd = openSync3(temporary, "wx", 384);
@@ -12874,7 +13276,7 @@ function updateState(file, lease, state, now) {
 }
 function releaseLeaseFile(file, lease, now) {
   const released = updateState(file, lease, "released", now);
-  const archive = path14.join(path14.dirname(file), EXECUTOR_LEASE_RELEASED_FILE);
+  const archive = path15.join(path15.dirname(file), EXECUTOR_LEASE_RELEASED_FILE);
   try {
     renameSync2(file, archive);
     return;
@@ -12892,7 +13294,7 @@ function releaseLeaseFile(file, lease, now) {
 }
 async function acquireExecutorLease(input) {
   const root = ensurePlainRoot(input.authorityRoot);
-  const file = path14.join(root, EXECUTOR_LEASE_FILE);
+  const file = path15.join(root, EXECUTOR_LEASE_FILE);
   const now = input.now ?? Date.now;
   const identity = input.identity ?? await input.processProbe.selfIdentity();
   if (identity.fingerprint === null || identity.fingerprint_precision !== "exact") {
@@ -12928,7 +13330,7 @@ async function acquireExecutorLease(input) {
   try {
     const fd = openSync3(file, "wx", 384);
     try {
-      writeSync(fd, canonicalJson(lease), void 0, "utf8");
+      writeSync(fd, canonicalJson2(lease), void 0, "utf8");
     } finally {
       closeSync3(fd);
     }
@@ -12978,10 +13380,10 @@ async function acquireExecutorLease(input) {
 
 // src/store/lifecycle-gate.ts
 init_resolver();
-import { createHash as createHash17, randomUUID as randomUUID5 } from "node:crypto";
+import { createHash as createHash18, randomUUID as randomUUID5 } from "node:crypto";
 import { closeSync as closeSync5, existsSync as existsSync9, fsyncSync as fsyncSync2, linkSync, lstatSync as lstatSync3, openSync as openSync5, readFileSync as readFileSync9, readdirSync as readdirSync2, realpathSync as realpathSync4, unlinkSync as unlinkSync4, writeFileSync as writeFileSync3 } from "node:fs";
 import { spawn as spawn5 } from "node:child_process";
-import path17 from "node:path";
+import path18 from "node:path";
 import { homedir as homedir5 } from "node:os";
 
 // src/runtime/task-timeout.ts
@@ -13013,7 +13415,7 @@ function validateTaskTimeout(value) {
 }
 
 // src/sqlite-candidate/wp6b2b1/launch-bootstrap.ts
-import { createHash as createHash9 } from "node:crypto";
+import { createHash as createHash10 } from "node:crypto";
 var KEYS = ["attempt", "authorization_source", "execution_profile_id", "generation", "launch_epoch", "launch_id", "launch_token", "operation_id", "policy_digest", "policy_revision", "policy_snapshot_digest", "protocol", "task_id", "workspace_ref"];
 var MAX_FRAME_BYTES = 8192;
 function createLaunchBootstrap(source) {
@@ -13102,14 +13504,14 @@ function deriveAdmissionPolicySnapshotDigest(value) {
     policy_digest: value.policy_digest,
     execution_profile_id: value.execution_profile_id
   };
-  return createHash9("sha256").update(canonicalJson2(envelope), "utf8").digest("hex");
+  return createHash10("sha256").update(canonicalJson3(envelope), "utf8").digest("hex");
 }
-function canonicalJson2(value) {
+function canonicalJson3(value) {
   if (value === null || typeof value === "string" || typeof value === "boolean") return JSON.stringify(value);
   if (typeof value === "number" && Number.isSafeInteger(value)) return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(canonicalJson2).join(",")}]`;
+  if (Array.isArray(value)) return `[${value.map(canonicalJson3).join(",")}]`;
   if (value && Object.getPrototypeOf(value) === Object.prototype) {
-    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson2(value[key])}`).join(",")}}`;
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson3(value[key])}`).join(",")}}`;
   }
   throw new TypeError("invalid admission policy snapshot");
 }
@@ -13130,7 +13532,7 @@ function validWorkspace(value) {
 }
 
 // src/sqlite-candidate/wp6b2b1/launch-identity.ts
-import { createHash as createHash10 } from "node:crypto";
+import { createHash as createHash11 } from "node:crypto";
 async function observeTrustedLaunchIdentity(child, probe, launchId, generation) {
   if (probe.platform !== "win32" || !validText2(launchId) || !positive2(generation)) return null;
   const captured = await captureSpawnGenerationIdentity(child, probe);
@@ -13201,7 +13603,7 @@ function validText2(value) {
   return value.length > 0 && value.length <= 128 && !/[\x00-\x1f]/u.test(value);
 }
 function digest(value) {
-  return createHash10("sha256").update(canonical2(value), "utf8").digest("hex");
+  return createHash11("sha256").update(canonical2(value), "utf8").digest("hex");
 }
 function canonical2(value) {
   if (value === null || typeof value === "string" || typeof value === "boolean") return JSON.stringify(value);
@@ -13277,7 +13679,7 @@ async function verifyHandshakeAndCommitClaim(store, operation, report, launchTok
 init_host_profile();
 
 // src/runtime/sqlite-runtime-roster.ts
-import { createHash as createHash11 } from "node:crypto";
+import { createHash as createHash12 } from "node:crypto";
 var SQLITE_CUTOVER_PROTOCOL_VERSION = "wp6-stop-world-json-sqlite-v1";
 var SQLITE_CUTOVER_VERIFIER_VERSION = "wp6-json-cutover-v1";
 var SQLITE_CANDIDATE_SCHEMA_VERSION = 14;
@@ -13293,7 +13695,7 @@ function currentSqliteRuntimeRoster() {
 }
 function currentSqliteRuntimeRosterDigest() {
   const roster = currentSqliteRuntimeRoster();
-  return createHash11("sha256").update(JSON.stringify(roster)).digest("hex");
+  return createHash12("sha256").update(JSON.stringify(roster)).digest("hex");
 }
 
 // src/store/lifecycle-gate.ts
@@ -13551,7 +13953,7 @@ var DEFAULT_PROCESS_PROBE_TIMEOUT_MS = 5e3;
 var DEFAULT_PROCESS_TREE_PROBE_TIMEOUT_MS = 9e4;
 var verifiedRecoveryStops = /* @__PURE__ */ new Map();
 function recoveryStopKey(dataRoot, databaseFileName, operationId) {
-  return `${path17.resolve(dataRoot)}\0${databaseFileName ?? "operations.sqlite3"}\0${operationId}`;
+  return `${path18.resolve(dataRoot)}\0${databaseFileName ?? "operations.sqlite3"}\0${operationId}`;
 }
 function readAllLifecycleEventsForRecovery(port, operationId) {
   const pageSize = 200;
@@ -13587,7 +13989,7 @@ function resolvedRecoveryEventSet(evidence, eligibleDigests, errorCode4) {
   }
   const count = evidence.resolved_recovery_event_count;
   const root = evidence.resolved_recovery_event_root;
-  const expectedRoot = sha2563(canonicalJson3({
+  const expectedRoot = sha2563(canonicalJson4({
     contract: RESOLVED_RECOVERY_SET_CONTRACT2,
     event_digests: ordered
   }));
@@ -13715,7 +14117,7 @@ async function initializeFreshInstallSqliteRoot(root, databaseFileName, version2
     throw new LifecycleGateError("sqlite_bootstrap_database_name_invalid");
   }
   const modules = await loadLifecycleCandidateModules(version2);
-  const key = path17.join(path17.resolve(root), databaseFileName);
+  const key = path18.join(path18.resolve(root), databaseFileName);
   const pending = freshBootstrapPromises.get(key);
   if (pending) return pending;
   const operation = ensureFreshSqliteAuthority(root, databaseFileName, modules, processProbe, options);
@@ -13733,7 +14135,7 @@ async function acquireFreshBootstrapLock(root, databaseFileName, timeoutMs, owne
       "Fresh SQLite bootstrap requires the Windows exclusive-file-handle lock"
     );
   }
-  const lockPath = path17.join(root, `${databaseFileName}.bootstrap.lock`);
+  const lockPath = path18.join(root, `${databaseFileName}.bootstrap.lock`);
   const deadline = Date.now() + timeoutMs;
   for (; ; ) {
     assertFreshBootstrapRootPath(root);
@@ -13777,7 +14179,7 @@ async function tryAcquireWindowsBootstrapLock(root, lockPath, databaseFileName, 
   })}
 `;
   const systemRoot = process.env["SystemRoot"];
-  const absolutePowerShell = systemRoot ? path17.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe") : "powershell.exe";
+  const absolutePowerShell = systemRoot ? path18.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe") : "powershell.exe";
   const executable = existsSync9(absolutePowerShell) ? absolutePowerShell : "powershell.exe";
   const child = spawn5(executable, [
     "-NoLogo",
@@ -14061,9 +14463,9 @@ try {
 }
 `;
 async function ensureFreshSqliteAuthority(root, databaseFileName, modules, processProbe, options) {
-  const resolvedRoot = path17.resolve(root);
+  const resolvedRoot = path18.resolve(root);
   assertFreshBootstrapRootPath(resolvedRoot);
-  const databasePath = path17.join(resolvedRoot, databaseFileName);
+  const databasePath = path18.join(resolvedRoot, databaseFileName);
   const pendingPath = `${databasePath}.bootstrap-pending.json`;
   const markerTempPath = `${databasePath}.bootstrap-marker.tmp`;
   const lockTimeoutMs = options.lockTimeoutMs ?? DEFAULT_FRESH_BOOTSTRAP_LOCK_TIMEOUT_MS;
@@ -14100,7 +14502,7 @@ async function ensureFreshSqliteAuthority(root, databaseFileName, modules, proce
         if (existsSync9(databasePath)) {
           const published = tryReadReadySqliteAuthority(modules, resolvedRoot, databaseFileName, true);
           if (published?.kind === "fresh_install" && published.receipt_id === `fresh-install-${marker2.token}`) {
-            const stagePath2 = path17.join(resolvedRoot, marker2.stage_file);
+            const stagePath2 = path18.join(resolvedRoot, marker2.stage_file);
             removeOwnedBootstrapFile(stagePath2);
             removeOwnedBootstrapFile(`${stagePath2}-wal`);
             removeOwnedBootstrapFile(`${stagePath2}-shm`);
@@ -14113,7 +14515,7 @@ async function ensureFreshSqliteAuthority(root, databaseFileName, modules, proce
           }
           throw new LifecycleGateError("sqlite_bootstrap_published_database_unverified");
         }
-        const stagePath = path17.join(resolvedRoot, marker2.stage_file);
+        const stagePath = path18.join(resolvedRoot, marker2.stage_file);
         removeOwnedBootstrapFile(stagePath);
         removeOwnedBootstrapFile(`${stagePath}-wal`);
         removeOwnedBootstrapFile(`${stagePath}-shm`);
@@ -14181,9 +14583,9 @@ async function ensureFreshSqliteAuthority(root, databaseFileName, modules, proce
   return result;
 }
 async function constructAndPublishFreshSqlite(root, databaseFileName, marker, modules, lock, options) {
-  const databasePath = path17.join(root, databaseFileName);
+  const databasePath = path18.join(root, databaseFileName);
   const pendingPath = `${databasePath}.bootstrap-pending.json`;
-  const stagePath = path17.join(root, marker.stage_file);
+  const stagePath = path18.join(root, marker.stage_file);
   let published = false;
   try {
     lock.assertHeld();
@@ -14279,7 +14681,7 @@ function assertFreshBootstrapRootPath(root) {
   try {
     const stat2 = lstatSync3(root);
     const real = realpathSync4.native(root);
-    const normalize = (value) => process.platform === "win32" ? path17.win32.normalize(value).replace(/[\\/]+$/u, "").toLocaleLowerCase("en-US") : path17.resolve(value);
+    const normalize = (value) => process.platform === "win32" ? path18.win32.normalize(value).replace(/[\\/]+$/u, "").toLocaleLowerCase("en-US") : path18.resolve(value);
     if (!stat2.isDirectory() || stat2.isSymbolicLink() || normalize(real) !== normalize(root)) {
       throw new LifecycleGateError("sqlite_data_root_redirected");
     }
@@ -14449,7 +14851,7 @@ async function openClaimOnlyDriver(options) {
     const fingerprint = text(worker_identity.start_fingerprint, "cancellation_worker_fingerprint_missing");
     const state = evidence.identity_state;
     if (worker_identity.source !== "manager_verified_process_probe" || worker_identity.fixture !== false || evidence.source !== "manager_process_probe" || evidence.worker_identity_digest !== operationDigest || evidence.process_id !== processId || evidence.start_fingerprint !== fingerprint || state !== "alive" && state !== "exited" || typeof evidence.probe_reason !== "string" || typeof evidence.observed_at !== "string") return false;
-    return { state, worker_identity_digest: operationDigest, evidence_digest: sha2563(canonicalJson3(evidence)) };
+    return { state, worker_identity_digest: operationDigest, evidence_digest: sha2563(canonicalJson4(evidence)) };
   };
   const cancellationVerifier = ({ operation, cancel_intent, worker_identity, evidence }) => {
     const operationDigest = text(operation.claim_worker_identity_digest, "cancellation_claim_identity_missing");
@@ -14465,13 +14867,13 @@ async function openClaimOnlyDriver(options) {
       root_process_id: processId,
       root_start_fingerprint: fingerprint,
       worker_tree_complete: true,
-      evidence_digest: sha2563(canonicalJson3(evidence))
+      evidence_digest: sha2563(canonicalJson4(evidence))
     };
   };
   const recoveryEvidenceBindings = /* @__PURE__ */ new Map();
   const recoveryEvidenceVerifier = (context) => {
     const binding = recoveryEvidenceBindings.get(String(context.observation.evidence_digest));
-    if (!binding || binding.evidence_json !== canonicalJson3(context.evidence) || binding.operation_id !== context.operation.operation_id || binding.task_id !== context.operation.task_id || binding.attempt !== context.operation.attempt || binding.generation !== context.operation.generation || binding.claim_id !== context.operation.claim_id || binding.worker_identity_digest !== context.operation.worker_identity_digest || Object.entries(binding).some(([key, value]) => key !== "evidence_json" && context.observation[key] !== value)) return false;
+    if (!binding || binding.evidence_json !== canonicalJson4(context.evidence) || binding.operation_id !== context.operation.operation_id || binding.task_id !== context.operation.task_id || binding.attempt !== context.operation.attempt || binding.generation !== context.operation.generation || binding.claim_id !== context.operation.claim_id || binding.worker_identity_digest !== context.operation.worker_identity_digest || Object.entries(binding).some(([key, value]) => key !== "evidence_json" && context.observation[key] !== value)) return false;
     recoveryEvidenceBindings.delete(String(context.observation.evidence_digest));
     return {
       classification: binding.classification,
@@ -14802,8 +15204,8 @@ async function openClaimOnlyDriver(options) {
           close: { stage: "direct_close", status: "resolved", treeScanStatus: "verified" },
           treeScanStatus: "verified"
         };
-        const processTreeDigest = sha2563(canonicalJson3(processTreeFacts));
-        const resourcesDigest = sha2563(canonicalJson3(resourceFacts));
+        const processTreeDigest = sha2563(canonicalJson4(processTreeFacts));
+        const resourcesDigest = sha2563(canonicalJson4(resourceFacts));
         const interruptionReason = recoveryOptions.interruptionReason ?? (initialIdentityState === "alive" ? "worker_terminated_without_result" : "worker_exited_without_result");
         const interruptionEvidence = {
           contract: "sqlite-candidate-recovery-interruption-v1",
@@ -15053,8 +15455,8 @@ async function openClaimOnlyDriver(options) {
             worker_identity_digest: workerDigest,
             launch_receipt_digest: text(operation.launch_receipt_digest, "recovery_receipt_digest_missing"),
             result_commit_ref: text(committedResult.result_commit_ref, "recovery_result_ref_missing"),
-            process_tree_digest: sha2563(canonicalJson3(processTreeFacts)),
-            resources_digest: sha2563(canonicalJson3(resourceFacts)),
+            process_tree_digest: sha2563(canonicalJson4(processTreeFacts)),
+            resources_digest: sha2563(canonicalJson4(resourceFacts)),
             root_process_id: processId,
             root_start_fingerprint: fingerprint,
             worker_tree_complete: true,
@@ -15088,7 +15490,7 @@ async function openClaimOnlyDriver(options) {
       const disposition = phase === "running" && identityState === "exited" ? cancellationRequested ? "cancel_interrupted_without_committed_result" : "worker_exited_without_committed_result" : phase === "cleanup_unverified" ? identityState === "alive" ? "worker_still_alive" : identityState === "unknown" ? "cleanup_identity_unknown" : treeReason ?? "cleanup_evidence_incomplete" : identityState === "alive" ? "worker_still_alive" : identityState === "exited" && cleanupPhase ? treeReason ?? "cleanup_evidence_incomplete" : "worker_identity_unknown";
       const reasonCode = identityState === "unknown" ? cleanupPhase ? "cleanup_identity_unknown" : "worker_identity_unknown" : "cleanup_incomplete";
       const releaseTreeProbe = treeOutcome?.status === "resolved" && treeOutcome.result.clean === true && treeOutcome.result.livePids.length === 0 && treeOutcome.result.observedPids.includes(processId) && disposition === "complete_cleanup_closure_unavailable";
-      const processTreeScanDigest = releaseTreeProbe && treeOutcome?.status === "resolved" ? sha2563(canonicalJson3({
+      const processTreeScanDigest = releaseTreeProbe && treeOutcome?.status === "resolved" ? sha2563(canonicalJson4({
         contract: "sqlite-candidate-recovery-release-tree-v1",
         operation_id: operationId,
         task_id: operation.task_id,
@@ -15128,7 +15530,7 @@ async function openClaimOnlyDriver(options) {
         } : {},
         observed_at: typeof verdict2?.observed_at === "string" ? verdict2.observed_at : (/* @__PURE__ */ new Date()).toISOString()
       };
-      const evidenceDigest = sha2563(canonicalJson3(evidence));
+      const evidenceDigest = sha2563(canonicalJson4(evidence));
       const input = {
         operation_id: operationId,
         task_id: text(operation.task_id, "recovery_task_id_missing"),
@@ -15148,7 +15550,7 @@ async function openClaimOnlyDriver(options) {
           recovery_disposition: disposition
         } : {}
       };
-      recoveryEvidenceBindings.set(evidenceDigest, { ...input, evidence_json: canonicalJson3(evidence) });
+      recoveryEvidenceBindings.set(evidenceDigest, { ...input, evidence_json: canonicalJson4(evidence) });
       try {
         const recorded = asRecord5(port.recordRecoveryObservation(input, evidence));
         const latestActive = recorded.duplicate === true ? activeRecovery.at(-1) : void 0;
@@ -15382,7 +15784,7 @@ async function openClaimOnlyDriver(options) {
         termination_signal: terminationSignal,
         live_pids: [],
         termination_state: terminationState,
-        process_tree_digest: sha2563(canonicalJson3(processTreeFacts))
+        process_tree_digest: sha2563(canonicalJson4(processTreeFacts))
       };
       const current = asRecord5(port.readOperation(operationId));
       const verification = asRecord5(port.recordCancellationVerification({ ...fence, revision: Number(current.revision) }, treeEvidence));
@@ -15483,7 +15885,7 @@ async function openClaimOnlyDriver(options) {
         launch_receipt_digest: text(operation.launch_receipt_digest, "cancellation_receipt_digest_missing"),
         result_commit_ref: text(operation.result_commit_ref, "cancellation_result_ref_missing"),
         process_tree_digest: proof.processTreeDigest,
-        resources_digest: sha2563(canonicalJson3(resourceFacts)),
+        resources_digest: sha2563(canonicalJson4(resourceFacts)),
         root_process_id: Number(worker.process_id),
         root_start_fingerprint: String(worker.start_fingerprint),
         worker_tree_complete: true,
@@ -15823,6 +16225,7 @@ async function openClaimOnlyDriver(options) {
               host_profile: workerHostProfile,
               continuation: input.continuation ?? null,
               previous_result: input.previousResult ?? null,
+              ...input.sessionHistory ? { session_history: input.sessionHistory } : {},
               ...usePrivateAuth ? { private_auth: {
                 account: startPlanPrivateAuth.account,
                 claim: claimId,
@@ -16299,7 +16702,7 @@ async function finalizeClaimedWorkerCleanup(port, input, generation, claimId, pr
             scan_clean: true,
             live_pids: [],
             observed_pids: observedPids,
-            execution_cleanup_proof_digest: sha2563(canonicalJson3(executionCleanup))
+            execution_cleanup_proof_digest: sha2563(canonicalJson4(executionCleanup))
           };
           const resourceFacts = {
             contract: executionCleanup.source === "zcode_app_server_adapter" ? "real-zcode-adapter-resources-v1" : "synthetic-claimed-worker-resources-v1",
@@ -16323,8 +16726,8 @@ async function finalizeClaimedWorkerCleanup(port, input, generation, claimId, pr
             worker_identity_digest: claimIdentityDigest,
             launch_receipt_digest: launchReceiptDigest,
             result_commit_ref: resultCommitRef,
-            process_tree_digest: sha2563(canonicalJson3(processTreeFacts)),
-            resources_digest: sha2563(canonicalJson3(resourceFacts)),
+            process_tree_digest: sha2563(canonicalJson4(processTreeFacts)),
+            resources_digest: sha2563(canonicalJson4(resourceFacts)),
             root_process_id: rootProcessId,
             root_start_fingerprint: rootFingerprint,
             worker_tree_complete: true,
@@ -16529,7 +16932,7 @@ function asRecord5(value) {
   return value;
 }
 function sha2563(value) {
-  return createHash17("sha256").update(value, "utf8").digest("hex");
+  return createHash18("sha256").update(value, "utf8").digest("hex");
 }
 function positive3(value, code) {
   if (!Number.isSafeInteger(value) || Number(value) < 1) throw new LifecycleGateError(code);
@@ -16666,7 +17069,7 @@ function readSafeReservedAdmission(port, input, operation) {
   const lifecycle = asRecord5(port.readTaskLifecycle(input.task.task_id));
   const projection = asRecord5(lifecycle.projection);
   const attempt = asRecord5(lifecycle.attempt);
-  if (canonicalJson3(lifecycle.task) !== canonicalJson3(input.task) || projection.status !== "queued" || Number(projection.current_attempt) !== input.attempt || attempt.status !== "queued" || Number(attempt.attempt) !== input.attempt || Number(attempt.generation) !== generation) {
+  if (canonicalJson4(lifecycle.task) !== canonicalJson4(input.task) || projection.status !== "queued" || Number(projection.current_attempt) !== input.attempt || attempt.status !== "queued" || Number(attempt.attempt) !== input.attempt || Number(attempt.generation) !== generation) {
     throw new LifecycleGateError("launch_outcome_unknown", "reserved Operation no longer matches the current queued Attempt");
   }
   const events = port.readLifecycleEvents(input.operationId, { afterSequence: 0, limit: 200 });
@@ -16818,13 +17221,13 @@ function validSnapshotText(value) {
 function validSnapshotDigest(value) {
   return typeof value === "string" && /^[0-9a-f]{64}$/u.test(value);
 }
-function canonicalJson3(value) {
+function canonicalJson4(value) {
   if (value === null || typeof value === "string" || typeof value === "boolean") return JSON.stringify(value);
   if (typeof value === "number" && Number.isSafeInteger(value)) return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(canonicalJson3).join(",")}]`;
+  if (Array.isArray(value)) return `[${value.map(canonicalJson4).join(",")}]`;
   if (value && Object.getPrototypeOf(value) === Object.prototype) {
     const record5 = value;
-    return `{${Object.keys(record5).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson3(record5[key])}`).join(",")}}`;
+    return `{${Object.keys(record5).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson4(record5[key])}`).join(",")}}`;
   }
   throw new LifecycleGateError("cleanup_evidence_not_canonicalizable");
 }
@@ -16840,8 +17243,8 @@ function interactionKey(taskId, requestId) {
 }
 
 // src/manager/sqlite-lifecycle-mcp-authority.ts
-import { createHash as createHash18, randomBytes } from "node:crypto";
-import path18 from "node:path";
+import { createHash as createHash19, randomBytes } from "node:crypto";
+import path19 from "node:path";
 
 // src/task-errors.ts
 var TaskManagerError = class extends Error {
@@ -16853,14 +17256,26 @@ var TaskManagerError = class extends Error {
   }
 };
 
+// src/adapters/rpc-diagnostics.ts
+init_result_contract();
+var MAX_RPC_DIAGNOSTICS_BYTES2 = 8 * 1024;
+function withoutRpcStack(diagnostic) {
+  if (diagnostic.stack === void 0) return diagnostic;
+  const { stack: _omitted, ...rest } = diagnostic;
+  return rest;
+}
+
 // src/result-summary.ts
 var INLINE_RESULT_BYTES = 2048;
 var MAX_ITEM_CHARS = 256;
+var MAX_RPC_MESSAGE_PREVIEW_CHARS = 240;
 function summarizeTaskResult(result) {
-  if (result.zcode_output.length <= INLINE_RESULT_BYTES && Buffer.byteLength(JSON.stringify(result)) <= INLINE_RESULT_BYTES) {
-    return result;
+  const diagnostics = result.rpc_diagnostics?.map(withoutRpcStack);
+  const source = diagnostics ? { ...result, rpc_diagnostics: diagnostics } : result;
+  if (source.zcode_output.length <= INLINE_RESULT_BYTES && Buffer.byteLength(JSON.stringify(source)) <= INLINE_RESULT_BYTES) {
+    return source;
   }
-  const { summary, files_changed, tests, issues, zcode_output, report_candidate, model, usage, timing, ...identity } = result;
+  const { summary, files_changed, tests, issues, zcode_output, report_candidate, model, usage, timing, rpc_diagnostics, ...identity } = source;
   const omittedFields = ["zcode_output"];
   const summaryPreview = summary.slice(0, 768).replace(/[\uD800-\uDBFF]$/u, "");
   if (summaryPreview !== summary) omittedFields.push("summary");
@@ -16878,14 +17293,63 @@ function summarizeTaskResult(result) {
   if (model !== void 0) omittedFields.push("model");
   if (usage !== void 0) omittedFields.push("usage");
   if (timing !== void 0) omittedFields.push("timing");
+  if (result.rpc_diagnostics?.some((diagnostic) => diagnostic.stack !== void 0)) omittedFields.push("rpc_diagnostics.stack");
   return {
     ...identity,
     summary: summaryPreview,
     files_changed: filesPreview,
     tests: testPreview,
     issues: issuesPreview,
+    ...rpc_diagnostics ? {
+      rpc_diagnostics: rpc_diagnostics.map((diagnostic) => ({
+        ...diagnostic,
+        message: diagnostic.message.length <= MAX_RPC_MESSAGE_PREVIEW_CHARS ? diagnostic.message : diagnostic.message.slice(0, MAX_RPC_MESSAGE_PREVIEW_CHARS).replace(/[\uD800-\uDBFF]$/u, "")
+      }))
+    } : {},
     projection: { omitted_fields: omittedFields, test_counts: testCounts }
   };
+}
+
+// src/manager/session-history.ts
+init_errors();
+var SESSION_HISTORY_SCAN_LIMIT = 32;
+function resolveSessionHistory(input) {
+  const sessionId = sessionHandle(input.previousResult);
+  if (sessionId === null) return null;
+  let scannedAttempts = 0;
+  for (let attempt = input.attempt - 1; attempt >= 1 && scannedAttempts < SESSION_HISTORY_SCAN_LIMIT; attempt -= 1) {
+    let result;
+    try {
+      result = input.readResult(attempt);
+    } catch {
+      result = null;
+    }
+    scannedAttempts += 1;
+    if (!result) continue;
+    const resultSessionId = sessionHandle(result);
+    if (resultSessionId === null) continue;
+    if (resultSessionId !== sessionId) break;
+    if (result.error_code === SESSION_NOT_RESUMABLE) {
+      return { session_id: sessionId, resumable: false, reason: SESSION_NOT_RESUMABLE, evidence_attempt: attempt, scanned_attempts: scannedAttempts };
+    }
+    if (hasTurnHistory(result)) {
+      return { session_id: sessionId, resumable: true, reason: "turn_history", evidence_attempt: attempt, scanned_attempts: scannedAttempts };
+    }
+  }
+  return { session_id: sessionId, resumable: false, reason: "no_turn_history", evidence_attempt: null, scanned_attempts: scannedAttempts };
+}
+function sessionHandle(result) {
+  return typeof result?.session_id === "string" && result.session_id ? result.session_id : null;
+}
+function hasTurnHistory(result) {
+  if (result.status === "completed" || result.status === "waiting_for_master") return true;
+  const turnId = asRecord6(result.model)?.turn_id;
+  if (typeof turnId === "string" && turnId) return true;
+  const usage = asRecord6(result.usage);
+  return usage !== null && ["input_tokens", "output_tokens", "total_tokens"].some((key) => typeof usage[key] === "number");
+}
+function asRecord6(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value : null;
 }
 
 // src/attention/snapshot.ts
@@ -16898,7 +17362,7 @@ var TASK_STATUSES = /* @__PURE__ */ new Set([
   "waiting_for_master"
 ]);
 function parseTaskAttentionSnapshot(value, expectedTaskId) {
-  if (!isRecord5(value)) throw new TaskManagerError("TASK_STATE", "SQLite attention projection is invalid");
+  if (!isRecord6(value)) throw new TaskManagerError("TASK_STATE", "SQLite attention projection is invalid");
   const taskId = value.task_id;
   const attempt = value.attempt;
   const status = value.status;
@@ -16916,7 +17380,7 @@ function parseTaskAttentionSnapshot(value, expectedTaskId) {
 function isAttentionTerminalStatus(status) {
   return status === "completed" || status === "failed" || status === "cancelled" || status === "waiting_for_master";
 }
-function isRecord5(value) {
+function isRecord6(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
@@ -17244,10 +17708,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path21) {
-  if (!path21)
+function getElementAtPath(obj, path22) {
+  if (!path22)
     return obj;
-  return path21.reduce((acc, key) => acc?.[key], obj);
+  return path22.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -17587,11 +18051,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path21, issues) {
+function prefixIssues(path22, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path21);
+    iss.path.unshift(path22);
     return iss;
   });
 }
@@ -18037,16 +18501,16 @@ function flattenError(error2, mapper = (issue2) => issue2.message) {
 }
 function formatError(error2, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error3, path21 = []) => {
+  const processError = (error3, path22 = []) => {
     for (const issue2 of error3.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path21, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path22, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path21, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path22, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path21, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path22, ...issue2.path]);
       } else {
-        const fullpath = [...path21, ...issue2.path];
+        const fullpath = [...path22, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -23283,6 +23747,7 @@ function resolveConsoleActionCapabilities(current) {
 }
 
 // src/manager/sqlite-lifecycle-mcp-authority.ts
+init_account_provider();
 init_official_app_server_runtime();
 var EXECUTION_OBSERVATION_PROBE_BUDGET_MS = 5e3;
 var DEFAULT_HOST_SHUTDOWN_WAIT_MS = 6e4;
@@ -23369,8 +23834,8 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
     if (permission.state !== "allow") throw new TaskManagerError("TASK_INVALID", `SQLite admission rejected: ${permission.state === "unknown" ? permission.reason : permission.reason}`);
     const existingValue = this.#driver.readTaskLifecycle(task.task_id);
     if (existingValue) {
-      const existing = asRecord6(existingValue);
-      if (canonicalJson4(existing.task) !== canonicalJson4(normalizedTask)) {
+      const existing = asRecord7(existingValue);
+      if (canonicalJson5(existing.task) !== canonicalJson5(normalizedTask)) {
         throw new TaskManagerError("TASK_ID_CONFLICT", `task_id already belongs to a different SQLite request: ${task.task_id}`);
       }
       const existingBinding = taskOwnerBinding(existing.owner_binding);
@@ -23380,7 +23845,7 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
           `task_id is already bound to a different Codex Thread: ${task.task_id}`
         );
       }
-      const projection2 = asRecord6(existing.projection);
+      const projection2 = asRecord7(existing.projection);
       this.#routeTaskModel?.confirmRouting(task);
       return receipt(task.task_id, projection2.status, projection2.created_at, existingBinding);
     }
@@ -23394,15 +23859,15 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
     try {
       this.#driver.createTask(normalizedTask, admission);
     } catch (error2) {
-      const raced = asRecord6(this.#driver.readTaskLifecycle(task.task_id));
-      if (!raced || canonicalJson4(raced.task) !== canonicalJson4(normalizedTask)) {
+      const raced = asRecord7(this.#driver.readTaskLifecycle(task.task_id));
+      if (!raced || canonicalJson5(raced.task) !== canonicalJson5(normalizedTask)) {
         if (errorCode2(error2) === "task_already_exists") throw new TaskManagerError("TASK_ID_CONFLICT", `task_id already exists with different SQLite input: ${task.task_id}`);
         throw error2;
       }
     }
     this.#routeTaskModel?.confirmRouting(task);
-    const snapshot = asRecord6(this.#driver.readTaskLifecycle(task.task_id));
-    const projection = asRecord6(snapshot.projection);
+    const snapshot = asRecord7(this.#driver.readTaskLifecycle(task.task_id));
+    const projection = asRecord7(snapshot.projection);
     const ownerBinding = taskOwnerBinding(snapshot.owner_binding);
     this.#enqueue(task.task_id, Number(projection.current_attempt));
     return {
@@ -23414,16 +23879,16 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
   }
   async getStatus(taskId) {
     const snapshot = this.#readSnapshot(taskId);
-    const projection = asRecord6(snapshot.projection);
+    const projection = asRecord7(snapshot.projection);
     if (this.#pumpFailure && projection.status === "queued") {
       throw new TaskManagerError("TASK_STATE", `SQLite dispatch is blocked after ${this.#pumpFailure.reason}; ${this.#queue.length} queued attempt(s) remain persisted while automatic Recovery retry is pending or exhausted; resolve the dispatch cause and restart the Executor to clear the latch`);
     }
-    const attempt = asRecord6(snapshot.attempt);
-    const operation = snapshot.operation ? asRecord6(snapshot.operation) : null;
-    const result = snapshot.result ? asRecord6(snapshot.result) : null;
+    const attempt = asRecord7(snapshot.attempt);
+    const operation = snapshot.operation ? asRecord7(snapshot.operation) : null;
+    const result = snapshot.result ? asRecord7(snapshot.result) : null;
     let lastAt;
     try {
-      const latest = asRecord6(this.#driver.readTaskLatestEventAt(taskId));
+      const latest = asRecord7(this.#driver.readTaskLatestEventAt(taskId));
       lastAt = latest?.at;
     } catch {
       const events = this.#driver.readTaskEvents(taskId, { afterCursor: 0, limit: 200 });
@@ -23461,7 +23926,7 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
   }
   async listTasks(input = {}) {
     this.#assertOpen();
-    const page = asRecord6(this.#driver.readTaskProjections({
+    const page = asRecord7(this.#driver.readTaskProjections({
       afterTaskId: input.after_task_id ?? null,
       limit: input.limit ?? DEFAULT_TASK_LIST_LIMIT,
       status: input.status ?? null
@@ -23470,7 +23935,7 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
       throw new TaskManagerError("TASK_STATE", "invalid SQLite task list projection");
     }
     const tasks = page.tasks.map((value) => {
-      const item = asRecord6(value);
+      const item = asRecord7(value);
       return {
         task_id: string3(item.task_id, "task_list_id_missing"),
         status: taskStatus(item.status),
@@ -23493,13 +23958,13 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
     const limit = input.limit ?? DEFAULT_TASK_LIST_LIMIT;
     const bucket = input.bucket;
     if (bucket === void 0) {
-      const page = asRecord6(this.#driver.readTaskProjections({
+      const page = asRecord7(this.#driver.readTaskProjections({
         afterTaskId: input.after_task_id ?? null,
         limit,
         status: null
       }));
       const tasks2 = (Array.isArray(page.tasks) ? page.tasks : []).map((value) => {
-        const taskId = string3(asRecord6(value).task_id, "task_list_id_missing");
+        const taskId = string3(asRecord7(value).task_id, "task_list_id_missing");
         const raw = this.#driver.readTaskConsoleProjection(taskId, { includeAttempts: false });
         if (!raw) throw new TaskManagerError("TASK_NOT_FOUND", `Task disappeared during projection: ${taskId}`);
         return consoleTaskListItem(raw);
@@ -23515,10 +23980,10 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
     let lastScanned = null;
     let sourceHasMore = false;
     for (let scannedPages = 0; scannedPages < 100; scannedPages += 1) {
-      const page = asRecord6(this.#driver.readTaskProjections({ afterTaskId: cursor, limit: 100, status: null }));
+      const page = asRecord7(this.#driver.readTaskProjections({ afterTaskId: cursor, limit: 100, status: null }));
       const rows = Array.isArray(page.tasks) ? page.tasks : [];
       for (const value of rows) {
-        const taskId = string3(asRecord6(value).task_id, "task_list_id_missing");
+        const taskId = string3(asRecord7(value).task_id, "task_list_id_missing");
         lastScanned = taskId;
         const raw = this.#driver.readTaskConsoleProjection(taskId, { includeAttempts: false });
         if (!raw) continue;
@@ -23660,7 +24125,7 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
         if (event.type !== "interaction_requested" || !event.details || typeof event.details.request_id !== "string") return event;
         const persisted = this.#driver.readInteractionRequest(input.task_id, event.details.request_id);
         if (!persisted) return event;
-        const request = asRecord6(persisted.request);
+        const request = asRecord7(persisted.request);
         return { ...event, details: { ...event.details, method: request.method, params: request.params } };
       });
       const bounded2 = applyEventByteBudget(projectedEvents, page.nextCursor, eventBudget.maxBytes, cursor, {
@@ -23668,7 +24133,7 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
       });
       const { events, nextCursor, scanIncomplete } = bounded2;
       const omittedEvents = visiblePage.omittedEventsByRow.slice(0, events.length).reduce((total, count) => total + count, 0);
-      const status = taskStatus(asRecord6(snapshot.projection).status);
+      const status = taskStatus(asRecord7(snapshot.projection).status);
       if (events.length || scanIncomplete || isTerminal(status) || Date.now() >= deadline) {
         return {
           task_id: input.task_id,
@@ -23700,7 +24165,7 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
     };
     if (input.operation_id) {
       try {
-        const replay = asRecord6(this.#driver.createNextAttempt(common));
+        const replay = asRecord7(this.#driver.createNextAttempt(common));
         this.#enqueue(input.task_id, Number(replay.attempt));
         return {
           task_id: input.task_id,
@@ -23714,18 +24179,19 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
     }
     const snapshot = this.#readSnapshot(input.task_id);
     if (!snapshot.operation) throw new TaskManagerError("TASK_STATE", "the prior SQLite Attempt has no released Operation");
-    const operation = asRecord6(snapshot.operation);
+    const operation = asRecord7(snapshot.operation);
     const result = snapshot.result;
     const releaseEvent = this.#driver.readAllLifecycleEvents(
       string3(operation.operation_id, "continue_operation_missing")
-    ).map(asRecord6).reverse().find((event) => event.event_type === "released");
+    ).map(asRecord7).reverse().find((event) => event.event_type === "released");
     const releaseRevision = Number(releaseEvent?.sequence);
     if (!Number.isSafeInteger(releaseRevision) || releaseRevision < 1) {
       throw new TaskManagerError("TASK_STATE", "the prior SQLite Attempt has no durable Release fact");
     }
-    const outcome = asRecord6(this.#driver.createNextAttempt({
+    await this.#routeTaskModel?.validatePersisted(snapshot.task);
+    const outcome = asRecord7(this.#driver.createNextAttempt({
       ...common,
-      previous_attempt: Number(asRecord6(snapshot.attempt).attempt),
+      previous_attempt: Number(asRecord7(snapshot.attempt).attempt),
       previous_operation_id: string3(operation.operation_id, "continue_operation_missing"),
       expected_generation: Number(operation.generation),
       // Wake observations append Operation revisions after Release. The
@@ -23759,8 +24225,8 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
     this.#assertOpen();
     this.#assertRecoveryReady();
     const snapshot = this.#readSnapshot(taskId);
-    const projection = asRecord6(snapshot.projection);
-    const attempt = asRecord6(snapshot.attempt);
+    const projection = asRecord7(snapshot.projection);
+    const attempt = asRecord7(snapshot.attempt);
     if (projection.status === "queued") {
       try {
         this.#driver.cancelQueuedAttempt({ task_id: taskId, expected_attempt: Number(attempt.attempt) });
@@ -23783,7 +24249,7 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
       const key = queueKey(taskId, attemptNumber);
       let cancellation;
       try {
-        cancellation = asRecord6(await this.#driver.cancelRunning(taskId, attemptNumber));
+        cancellation = asRecord7(await this.#driver.cancelRunning(taskId, attemptNumber));
       } catch (error2) {
         throw new TaskManagerError("CANCEL_FAILED", `SQLite Worker cancellation could not be verified: ${error2 instanceof Error ? error2.message : String(error2)}`);
       }
@@ -23792,7 +24258,7 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
       if (cancellation.result_won === true) return this.getStatus(taskId);
       let completion;
       try {
-        completion = asRecord6(await this.#driver.completeRunningCancellation(taskId, attemptNumber));
+        completion = asRecord7(await this.#driver.completeRunningCancellation(taskId, attemptNumber));
       } catch (error2) {
         throw new TaskManagerError("CANCEL_FAILED", `SQLite cancellation Result/Cleanup could not be committed: ${error2 instanceof Error ? error2.message : String(error2)}`);
       }
@@ -23802,7 +24268,7 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
       this.#schedulePump();
       return this.getStatus(taskId);
     }
-    const operation = snapshot.operation ? asRecord6(snapshot.operation) : null;
+    const operation = snapshot.operation ? asRecord7(snapshot.operation) : null;
     if (projection.status === "cancelled" && operation?.phase === "launch_intent" && operation.claim_id === null) {
       return await this.#userAuthorizedRelease(taskId, snapshot, {}, options.acceptWorkerRisk === true);
     }
@@ -23814,13 +24280,13 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
       const recovery = Promise.resolve().then(async () => {
         const readReleased = async () => {
           const latest = this.#readSnapshot(taskId);
-          const latestProjection = asRecord6(latest.projection);
-          const latestOperation = latest.operation ? asRecord6(latest.operation) : null;
+          const latestProjection = asRecord7(latest.projection);
+          const latestOperation = latest.operation ? asRecord7(latest.operation) : null;
           return isTerminal(latestProjection.status) && latestOperation?.phase === "released" ? this.getStatus(taskId) : null;
         };
         let outcome;
         try {
-          outcome = asRecord6(await this.#driver.recoverOperation(
+          outcome = asRecord7(await this.#driver.recoverOperation(
             string3(operation.operation_id, "operation_id_missing"),
             { stopAliveWorker: true }
           ));
@@ -23833,7 +24299,7 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
           const released = await readReleased();
           if (released) return released;
           const reason = typeof outcome.reason === "string" ? outcome.reason : "worker_cleanup_unverified";
-          const latestProjection = asRecord6(this.#readSnapshot(taskId).projection);
+          const latestProjection = asRecord7(this.#readSnapshot(taskId).projection);
           if (String(operation.phase) === "cleanup_unverified" && canUserAuthorizeUnverifiedRelease(outcome)) {
             return await this.#userAuthorizedRelease(taskId, this.#readSnapshot(taskId), outcome);
           }
@@ -23847,8 +24313,8 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
     throw new TaskManagerError("TASK_STATE", `zcode_cancel is not allowed from SQLite status ${String(projection.status)}`);
   }
   async #userAuthorizedRelease(taskId, snapshot, authorizationEvidence = {}, acceptWorkerRisk = false) {
-    const operation = snapshot.operation ? asRecord6(snapshot.operation) : null;
-    const projection = asRecord6(snapshot.projection);
+    const operation = snapshot.operation ? asRecord7(snapshot.operation) : null;
+    const projection = asRecord7(snapshot.projection);
     const terminalStatuses = ["completed", "failed", "waiting_for_master", "cancelled"];
     const statusMatches = operation?.phase === "launch_intent" ? projection.status === "cancelled" : projection.status === operation?.result_status;
     if (!terminalStatuses.includes(String(projection.status)) || !statusMatches) {
@@ -23863,7 +24329,7 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
         "launch_intent has durable spawn evidence; user-authorized unverified release is not allowed"
       );
     }
-    const attempt = asRecord6(snapshot.attempt);
+    const attempt = asRecord7(snapshot.attempt);
     const recoveryEvidenceDigest = operation.phase === "cleanup_unverified" ? typeof authorizationEvidence.evidence_digest === "string" ? authorizationEvidence.evidence_digest : null : null;
     let releaseBinding = {};
     let cancelId = null;
@@ -23901,7 +24367,7 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
       releaseRequest.accept_worker_risk = true;
       releaseRequest.launch_receipt_digest = operation.launch_receipt_digest;
     }
-    const outcome = asRecord6(this.#driver.userAuthorizedReleaseUnverifiedOperation(releaseRequest));
+    const outcome = asRecord7(this.#driver.userAuthorizedReleaseUnverifiedOperation(releaseRequest));
     if (outcome.phase !== "released" || outcome.cleanup_verified !== false) {
       throw new TaskManagerError("CANCEL_FAILED", "SQLite user-authorized unverified release did not persist a distinct Release fact");
     }
@@ -23932,12 +24398,12 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
     return { task_id: input.task_id, request_id: input.request_id, state: "answered" };
   }
   async #dispatchBlocker(taskId, snapshot) {
-    const attempt = asRecord6(snapshot.attempt);
+    const attempt = asRecord7(snapshot.attempt);
     if (snapshot.operation || Number(attempt.generation ?? 0) !== 0) return void 0;
     const recoverySnapshot = this.#validateRecoverySnapshot(this.#driver.readRecoverySnapshot());
     const task = snapshot.task;
     const executionPath = taskExecutionPath(task);
-    const operations = recoverySnapshot.operations.map(asRecord6).filter((operation) => operation.capacity_occupied === true);
+    const operations = recoverySnapshot.operations.map(asRecord7).filter((operation) => operation.capacity_occupied === true);
     const workspaceOccupied = operations.find((operation) => {
       if (operation.task_id === taskId) return false;
       const workspace = typeof operation.workspace_ref === "string" ? operation.workspace_ref : null;
@@ -23993,7 +24459,7 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
       let alreadyTerminal = false;
       try {
         const snapshot = this.#readSnapshot(taskId);
-        const projection = asRecord6(snapshot.projection);
+        const projection = asRecord7(snapshot.projection);
         alreadyTerminal = Number(snapshot.attempt.attempt) === attempt && isTerminal(taskStatus(projection.status));
       } catch {
       }
@@ -24026,8 +24492,8 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
       const attempt = Number(key.slice(separator + 1));
       try {
         const snapshot = this.#readSnapshot(taskId);
-        const projection = asRecord6(snapshot.projection);
-        const operation = snapshot.operation ? asRecord6(snapshot.operation) : null;
+        const projection = asRecord7(snapshot.projection);
+        const operation = snapshot.operation ? asRecord7(snapshot.operation) : null;
         const released = Number(snapshot.attempt.attempt) === attempt && isTerminal(taskStatus(projection.status)) && operation?.phase === "released";
         if (!released) failures.push(`${taskId}:shutdown_release_unverified`);
       } catch {
@@ -24062,7 +24528,7 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
       const rootBlockers = Array.isArray(snapshot.root_blockers) ? snapshot.root_blockers : [];
       blockers.push(...rootBlockers.map((blocker) => `root:${String(blocker)}`));
       for (const value of snapshot.operations) {
-        const operation = asRecord6(value);
+        const operation = asRecord7(value);
         const recoveryBlockers = Array.isArray(operation.recovery_blockers) ? operation.recovery_blockers.map(String) : [];
         if (recoveryBlockers.includes("interaction_reply_outcome_unknown")) blockers.push("pending_interaction");
         if (String(operation.operation_kind) !== "capacity_policy_change" && !EXECUTOR_IDLE_OPERATION_PHASES.has(String(operation.phase))) {
@@ -24113,11 +24579,11 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
       this.#recoveryBlocked = null;
       this.#schedulerStage("recovery_snapshot_verified", {
         operation_count: snapshot.operations.length,
-        occupied_count: snapshot.operations.filter((operation) => Boolean(asRecord6(operation).capacity_occupied)).length,
+        occupied_count: snapshot.operations.filter((operation) => Boolean(asRecord7(operation).capacity_occupied)).length,
         writes_allowed: false
       });
       for (const value of snapshot.operations) {
-        const operation = asRecord6(value);
+        const operation = asRecord7(value);
         const operationId = operation.operation_id;
         if (typeof operationId !== "string") throw new TaskManagerError("TASK_STATE", "Recovery snapshot contains an Operation without identity");
         const taskId = typeof operation.task_id === "string" ? operation.task_id : null;
@@ -24140,7 +24606,7 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
           });
           continue;
         }
-        const outcome = asRecord6(await this.#driver.recoverOperation(operationId, {
+        const outcome = asRecord7(await this.#driver.recoverOperation(operationId, {
           stopAliveWorker: true,
           allowInterruptRequeue: true
         }));
@@ -24163,7 +24629,7 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
       snapshot = this.#validateRecoverySnapshot(this.#driver.readRecoverySnapshot());
       const queued = this.#driver.readRecoverableQueuedAttempts();
       for (const value of queued) {
-        const candidate = asRecord6(value);
+        const candidate = asRecord7(value);
         if (candidate.dispatchable === true && typeof candidate.task_id === "string" && Number.isSafeInteger(candidate.attempt) && Number(candidate.attempt) > 0) {
           this.#enqueue(candidate.task_id, Number(candidate.attempt));
         } else {
@@ -24229,7 +24695,7 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
   }
   #makeExecutionObservation(state, taskId, snapshot, reason, observedAt) {
     const operation = snapshot.operation;
-    const reference = createHash18("sha256").update(canonicalJson4({
+    const reference = createHash19("sha256").update(canonicalJson5({
       task_id: taskId,
       attempt: Number(snapshot.projection.current_attempt),
       operation_id: operation?.operation_id ?? null,
@@ -24244,8 +24710,8 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
     return { state, observed_at: observedAt, evidence_ref: reference };
   }
   #validateRecoverySnapshot(value) {
-    const snapshot = asRecord6(value);
-    const capacity = snapshot.capacity ? asRecord6(snapshot.capacity) : null;
+    const snapshot = asRecord7(value);
+    const capacity = snapshot.capacity ? asRecord7(snapshot.capacity) : null;
     if (snapshot.root_status !== "consistent_read_only" || snapshot.writes_allowed !== false || snapshot.cleanup_performed !== false || snapshot.claim_release_performed !== false || snapshot.operation_release_performed !== false || !Array.isArray(snapshot.operations) || !capacity || Number(capacity.policy_version) !== 1 || !Number.isSafeInteger(capacity.policy_generation) || Number(capacity.policy_generation) < 1 || !Number.isSafeInteger(capacity.capacity_limit) || Number(capacity.capacity_limit) < 1 || Number(capacity.capacity_limit) > 8) {
       const blockers = Array.isArray(snapshot.root_blockers) ? snapshot.root_blockers.map(String).join(",") : "recovery_snapshot_invalid";
       throw new TaskManagerError("TASK_STATE", `SQLite Recovery is blocked (${blockers || "root_not_consistent"}); no lifecycle side effect was attempted`);
@@ -24304,15 +24770,15 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
     this.#assertOpen();
     const value = this.#driver.readTaskLifecycle(taskId);
     if (!value) throw new TaskManagerError("TASK_NOT_FOUND", `unknown SQLite task: ${taskId}`);
-    const snapshot = asRecord6(value);
+    const snapshot = asRecord7(value);
     return {
       task: snapshot.task,
-      projection: asRecord6(snapshot.projection),
+      projection: asRecord7(snapshot.projection),
       ...snapshot.owner_binding === void 0 ? {} : { owner_binding: snapshot.owner_binding },
-      attempt: asRecord6(snapshot.attempt),
-      operation: snapshot.operation ? asRecord6(snapshot.operation) : null,
+      attempt: asRecord7(snapshot.attempt),
+      operation: snapshot.operation ? asRecord7(snapshot.operation) : null,
       result: snapshot.result,
-      continuation: snapshot.continuation ? asRecord6(snapshot.continuation) : null,
+      continuation: snapshot.continuation ? asRecord7(snapshot.continuation) : null,
       result_submission_error: typeof snapshot.result_submission_error === "string" ? snapshot.result_submission_error : null
     };
   }
@@ -24415,7 +24881,7 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
   #activeExecutionPaths(excludeOperationId) {
     const snapshot = this.#validateRecoverySnapshot(this.#driver.readRecoverySnapshot());
     return snapshot.operations.flatMap((value) => {
-      const operation = asRecord6(value);
+      const operation = asRecord7(value);
       return operation.operation_id !== excludeOperationId && operation.capacity_occupied === true && typeof operation.workspace_ref === "string" ? [operation.workspace_ref] : [];
     });
   }
@@ -24478,6 +24944,12 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
         }
         const dispatchPathKey = normalizeExecutionPath(executionPath);
         this.#dispatchingPaths.add(dispatchPathKey);
+        const previousResult = snapshot.continuation?.previous_operation_id ? this.#driver.readCommittedResult(String(snapshot.continuation.previous_operation_id))?.result ?? null : null;
+        const sessionHistory = typeof previousResult?.session_id === "string" && previousResult.session_id ? resolveSessionHistory({
+          attempt: next.attempt,
+          previousResult,
+          readResult: (attempt) => this.#driver.readCommittedResult(operationIdFor(next.taskId, attempt))?.result ?? null
+        }) : null;
         const runPromise = this.#driver.run({
           task: snapshot.task,
           operationId,
@@ -24485,7 +24957,8 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
           launchToken: randomBytes(32).toString("base64url"),
           attempt: next.attempt,
           continuation: snapshot.continuation,
-          previousResult: snapshot.continuation?.previous_operation_id ? this.#driver.readCommittedResult(String(snapshot.continuation.previous_operation_id))?.result ?? null : null
+          previousResult,
+          ...sessionHistory ? { sessionHistory } : {}
         });
         this.#activeRuns.set(nextKey, runPromise);
         let run;
@@ -24563,7 +25036,7 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
       return;
     }
     try {
-      const outcome = asRecord6(await this.#driver.recoverOperation(operationId, {
+      const outcome = asRecord7(await this.#driver.recoverOperation(operationId, {
         stopAliveWorker: false,
         allowInterruptRequeue: interruptible,
         ...interruptible ? { interruptionReason: "worker_exited_without_result" } : {}
@@ -24638,7 +25111,7 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
     if (!this.#onOperationReleased) return;
     const wakeNotified = /* @__PURE__ */ new Set();
     for (const value of snapshot.events) {
-      const event = asRecord6(value);
+      const event = asRecord7(value);
       if (String(event.event_type) !== "observation_recorded" || typeof event.operation_id !== "string") continue;
       try {
         const evidence = parseBoundedRecord(event.evidence_json, "SQLite Wake evidence is invalid");
@@ -24648,11 +25121,11 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
     }
     const taskProjectionByTaskId = /* @__PURE__ */ new Map();
     for (const value of snapshot.taskProjections) {
-      const projection = asRecord6(value);
+      const projection = asRecord7(value);
       if (typeof projection.task_id === "string") taskProjectionByTaskId.set(projection.task_id, projection);
     }
     for (const value of snapshot.operations) {
-      const operation = asRecord6(value);
+      const operation = asRecord7(value);
       const operationId = operation.operation_id;
       if (typeof operationId !== "string" || String(operation.phase) !== "released" || wakeNotified.has(operationId)) continue;
       if (typeof operation.result_digest !== "string" || typeof operation.result_commit_ref !== "string") continue;
@@ -24708,9 +25181,9 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
   }
 };
 function consoleTaskListItem(value) {
-  const raw = asRecord6(value);
-  const task = asRecord6(raw.task);
-  const projection = asRecord6(raw.projection);
+  const raw = asRecord7(value);
+  const task = asRecord7(raw.task);
+  const projection = asRecord7(raw.projection);
   const currentAttemptNumber = Number(projection.current_attempt);
   const current = consoleAttemptProjection(raw.current, task, currentAttemptNumber);
   const attentionReasons = consoleAttentionReasons(taskStatus(projection.status), current);
@@ -24739,9 +25212,9 @@ function consoleTaskListItem(value) {
   };
 }
 function consoleTaskDetail(value) {
-  const raw = asRecord6(value);
+  const raw = asRecord7(value);
   const item = consoleTaskListItem(raw);
-  const task = asRecord6(raw.task);
+  const task = asRecord7(raw.task);
   const attempts = Array.isArray(raw.attempts) ? raw.attempts : [];
   const currentAttempt = attempts.map((attempt) => consoleAttemptProjection(attempt, task, item.attempt)).find((attempt) => attempt.current);
   return {
@@ -24756,12 +25229,12 @@ function consoleTaskDetail(value) {
   };
 }
 function consoleAttemptProjection(value, task, currentAttempt) {
-  const raw = asRecord6(value);
+  const raw = asRecord7(value);
   const attempt = Number(raw.attempt);
   const status = taskStatus(raw.status);
-  const operation = raw.operation ? asRecord6(raw.operation) : null;
+  const operation = raw.operation ? asRecord7(raw.operation) : null;
   const operationPhase = operation && typeof operation.phase === "string" ? operation.phase : null;
-  const result = raw.result && typeof raw.result === "object" && !Array.isArray(raw.result) ? asRecord6(raw.result) : null;
+  const result = raw.result && typeof raw.result === "object" && !Array.isArray(raw.result) ? asRecord7(raw.result) : null;
   const model = consoleModelProjection(task, result);
   const plan = consolePlanProjection(model);
   const pendingRequests = stringArray2(raw.pending_requests, 128);
@@ -24787,7 +25260,7 @@ function consoleAttemptProjection(value, task, currentAttempt) {
   };
 }
 function consoleModelProjection(task, result) {
-  const runtimeModel = result?.model && typeof result.model === "object" && !Array.isArray(result.model) ? asRecord6(result.model) : null;
+  const runtimeModel = result?.model && typeof result.model === "object" && !Array.isArray(result.model) ? asRecord7(result.model) : null;
   if (runtimeModel && typeof runtimeModel.provider_id === "string" && runtimeModel.provider_id && typeof runtimeModel.model_id === "string" && runtimeModel.model_id) {
     const runtimeEffort = typeof runtimeModel.effective_reasoning_level === "string" && runtimeModel.effective_reasoning_level ? runtimeModel.effective_reasoning_level : null;
     const requestedEffort = typeof runtimeModel.requested_reasoning_level === "string" && runtimeModel.requested_reasoning_level ? runtimeModel.requested_reasoning_level : null;
@@ -24840,7 +25313,7 @@ function consolePlanProjection(model) {
   return { kind: "not_observed", provider_id: null, source: "none" };
 }
 function consoleUsageProjection(result) {
-  const usage = result?.usage && typeof result.usage === "object" && !Array.isArray(result.usage) ? asRecord6(result.usage) : null;
+  const usage = result?.usage && typeof result.usage === "object" && !Array.isArray(result.usage) ? asRecord7(result.usage) : null;
   if (!usage) {
     return {
       state: "not_observed",
@@ -24912,7 +25385,7 @@ function consoleResultProjection(result) {
     throw new TaskManagerError("TASK_STATE", "SQLite Result has an unknown status");
   }
   const tests = Array.isArray(result.tests) ? result.tests.slice(0, 50).map((value) => {
-    const test = asRecord6(value);
+    const test = asRecord7(value);
     const testStatus = test.status === "passed" || test.status === "failed" || test.status === "not_run" ? test.status : "not_run";
     return {
       command: clipText(typeof test.command === "string" ? test.command : "", 1e3),
@@ -24934,7 +25407,7 @@ function consoleResultProjection(result) {
 }
 function consoleWakeProjection(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const wake = asRecord6(value);
+  const wake = asRecord7(value);
   if (typeof wake.state !== "string" || !["intent", "queued", "submission_unknown", "turn_started", "web_notify"].includes(wake.state) || typeof wake.reason_code !== "string" || typeof wake.at !== "string") return null;
   return {
     state: wake.state,
@@ -24975,7 +25448,7 @@ function consoleReleaseProjection(operation) {
 }
 function consoleHoldProjection(value, operation) {
   if (value && typeof value === "object" && !Array.isArray(value)) {
-    const hold = asRecord6(value);
+    const hold = asRecord7(value);
     if (typeof hold.reason_code === "string") {
       return {
         active: true,
@@ -25017,7 +25490,7 @@ function consoleTaskBucket(task) {
 }
 function resultSubmissionErrorFromRaw(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const raw = asRecord6(value);
+  const raw = asRecord7(value);
   return typeof raw.result_submission_error === "string" ? raw.result_submission_error : null;
 }
 function consoleIsoTime(value, fallback) {
@@ -25054,7 +25527,7 @@ function taskStatus(value) {
 function taskListWakeSummary(evidenceJson, at) {
   if (typeof evidenceJson !== "string" || typeof at !== "string" || !Number.isFinite(Date.parse(at))) return null;
   try {
-    const evidence = asRecord6(JSON.parse(evidenceJson));
+    const evidence = asRecord7(JSON.parse(evidenceJson));
     if (evidence.reason !== "executor_wake" || typeof evidence.state !== "string" || !["intent", "queued", "submission_unknown", "turn_started", "web_notify"].includes(evidence.state) || typeof evidence.reason_code !== "string" || evidence.reason_code.length === 0 || evidence.reason_code.length > 256) return null;
     return {
       wake: {
@@ -25122,7 +25595,7 @@ function mergeAdjacentModelOutputRows(rows, maxBytes, includeAttempt = false) {
       sequence: row.sequence,
       at: row.at
     } : null;
-    const mergeFits = candidate !== null && (maxBytes === void 0 || Buffer.byteLength(canonicalJson4(toProgressEvent(candidate, includeAttempt)), "utf8") <= maxBytes);
+    const mergeFits = candidate !== null && (maxBytes === void 0 || Buffer.byteLength(canonicalJson5(toProgressEvent(candidate, includeAttempt)), "utf8") <= maxBytes);
     if (candidate && mergeFits) {
       merged[merged.length - 1] = candidate;
       omittedEventsByRow[omittedEventsByRow.length - 1] = Number(omittedEventsByRow.at(-1)) + 1;
@@ -25141,7 +25614,7 @@ function applyEventByteBudget(events, pageNextCursor, maxBytes, previousCursor =
   let bytes = 0;
   let kept = 0;
   for (const event of events) {
-    const size = Buffer.byteLength(canonicalJson4(event), "utf8");
+    const size = Buffer.byteLength(canonicalJson5(event), "utf8");
     if (kept > 0 && bytes + size > maxBytes) break;
     if (kept === 0 && size > maxBytes) {
       if (!options.allowOversizedFirstEvent) {
@@ -25184,7 +25657,7 @@ function decodeCursor(value, taskId) {
   if (typeof value !== "string" || value.length > 2048) throw new TaskManagerError("TASK_INVALID", "invalid scan_cursor");
   try {
     const parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8"));
-    const cursor = asRecord6(parsed);
+    const cursor = asRecord7(parsed);
     if (cursor.v !== 1 || cursor.task_id !== taskId || !Number.isSafeInteger(cursor.cursor) || Number(cursor.cursor) < 0) throw new Error("invalid cursor");
     return Number(cursor.cursor);
   } catch {
@@ -25195,7 +25668,7 @@ function encodeCursor(taskId, cursor) {
   return Buffer.from(JSON.stringify({ v: 1, task_id: taskId, cursor }), "utf8").toString("base64url");
 }
 function operationIdFor(taskId, attempt) {
-  const digest3 = createHash18("sha256").update(`${taskId}\0${attempt}`, "utf8").digest("hex").slice(0, 32);
+  const digest3 = createHash19("sha256").update(`${taskId}\0${attempt}`, "utf8").digest("hex").slice(0, 32);
   return `sqlite-${digest3}`;
 }
 function taskExecutionPath(task) {
@@ -25204,10 +25677,10 @@ function taskExecutionPath(task) {
 function executionPathsOverlap(left, right) {
   const leftPath = normalizeExecutionPath(left);
   const rightPath = normalizeExecutionPath(right);
-  return leftPath === rightPath || leftPath.startsWith(rightPath + path18.sep) || rightPath.startsWith(leftPath + path18.sep);
+  return leftPath === rightPath || leftPath.startsWith(rightPath + path19.sep) || rightPath.startsWith(leftPath + path19.sep);
 }
 function normalizeExecutionPath(value) {
-  const resolved = path18.resolve(value).replace(/[\\/]+$/u, "");
+  const resolved = path19.resolve(value).replace(/[\\/]+$/u, "");
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 function nonNegativeDuration2(now, createdAt) {
@@ -25221,7 +25694,7 @@ function isTerminal(status) {
   return ["completed", "failed", "cancelled", "waiting_for_master"].includes(status);
 }
 function projectionCreated(snapshot) {
-  return asRecord6(snapshot.projection).created_at;
+  return asRecord7(snapshot.projection).created_at;
 }
 function canUserAuthorizeUnverifiedRelease(outcome) {
   const reason = typeof outcome.reason === "string" ? outcome.reason : "";
@@ -25264,13 +25737,13 @@ async function boundedObservationProbe(probe, pid, identity) {
     if (timer) clearTimeout(timer);
   }
 }
-function canonicalJson4(value) {
+function canonicalJson5(value) {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(canonicalJson4).join(",")}]`;
+  if (Array.isArray(value)) return `[${value.map(canonicalJson5).join(",")}]`;
   const record5 = value;
-  return `{${Object.keys(record5).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson4(record5[key])}`).join(",")}}`;
+  return `{${Object.keys(record5).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson5(record5[key])}`).join(",")}}`;
 }
-function asRecord6(value) {
+function asRecord7(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new TaskManagerError("TASK_STATE", "invalid SQLite lifecycle projection");
   return value;
 }
@@ -25278,7 +25751,7 @@ function parseRecord(value) {
   const raw = string3(value, "identity_missing");
   if (raw.length > 64 * 1024) throw new TaskManagerError("TASK_STATE", "SQLite Worker identity projection is oversized");
   try {
-    return asRecord6(JSON.parse(raw));
+    return asRecord7(JSON.parse(raw));
   } catch {
     throw new TaskManagerError("TASK_STATE", "SQLite Worker identity projection is corrupt");
   }
@@ -25288,7 +25761,7 @@ function parseBoundedRecord(value, code) {
     throw new TaskManagerError("TASK_STATE", code);
   }
   try {
-    return asRecord6(JSON.parse(value));
+    return asRecord7(JSON.parse(value));
   } catch {
     throw new TaskManagerError("TASK_STATE", code);
   }
@@ -25305,14 +25778,17 @@ function errorCode2(error2) {
   return error2.code;
 }
 
+// src/executor/production-composition.ts
+init_account_provider();
+
 // src/executor/wake.ts
-import { createHash as createHash19 } from "node:crypto";
+import { createHash as createHash20 } from "node:crypto";
 import {
   spawn as spawn6
 } from "node:child_process";
 import { existsSync as existsSync10 } from "node:fs";
 import { homedir as homedir6 } from "node:os";
-import path19 from "node:path";
+import path20 from "node:path";
 var WAKE_CONTROL_FRAME_MAX_BYTES = 1024 * 1024;
 var WAKE_CONTROL_STDERR_MAX_BYTES = 8 * 1024;
 var WAKE_QUEUE_TIMEOUT_MS = 1e4;
@@ -25323,9 +25799,9 @@ var WAKE_LOADED_PAGE_LIMIT = 200;
 var WAKE_LOADED_MAX_PAGES = 50;
 function defaultAppServerControlSocket(env = process.env, homeDir = homedir6()) {
   const override = env.ZCODE_BRIDGE_APP_SERVER_CONTROL_SOCKET?.trim();
-  if (override) return path19.resolve(override);
-  const codexHome = env.CODEX_HOME?.trim() || path19.join(homeDir, ".codex");
-  return path19.join(path19.resolve(codexHome), "app-server-control", "app-server-control.sock");
+  if (override) return path20.resolve(override);
+  const codexHome = env.CODEX_HOME?.trim() || path20.join(homeDir, ".codex");
+  return path20.join(path20.resolve(codexHome), "app-server-control", "app-server-control.sock");
 }
 function defaultCodexExecutable(env = process.env) {
   return env.ZCODE_BRIDGE_CODEX_EXECUTABLE?.trim() || (process.platform === "win32" ? "codex.exe" : "codex");
@@ -25637,26 +26113,26 @@ function boundedDuration(value, fallback, min, max) {
 function isIdentifier(value) {
   return typeof value === "string" && value.length > 0 && value.length <= 128 && /^[A-Za-z0-9._:-]+$/u.test(value) && value === value.normalize("NFC");
 }
-function isRecord6(value) {
+function isRecord7(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function wakeDigest(value) {
-  return createHash19("sha256").update(canonicalJson5(value), "utf8").digest("hex");
+  return createHash20("sha256").update(canonicalJson6(value), "utf8").digest("hex");
 }
-function canonicalJson5(value) {
+function canonicalJson6(value) {
   if (value === null || typeof value === "boolean" || typeof value === "string") return JSON.stringify(value);
   if (typeof value === "number") {
     if (!Number.isFinite(value)) throw new Error("wake_digest_number_invalid");
     return JSON.stringify(value);
   }
-  if (Array.isArray(value)) return `[${value.map(canonicalJson5).join(",")}]`;
-  if (isRecord6(value)) {
-    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson5(value[key])}`).join(",")}}`;
+  if (Array.isArray(value)) return `[${value.map(canonicalJson6).join(",")}]`;
+  if (isRecord7(value)) {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson6(value[key])}`).join(",")}}`;
   }
   throw new Error("wake_digest_value_invalid");
 }
 function errorCode3(error2) {
-  return isRecord6(error2) && typeof error2.code === "string" ? error2.code : null;
+  return isRecord7(error2) && typeof error2.code === "string" ? error2.code : null;
 }
 function delay3(ms) {
   return new Promise((resolve) => {
@@ -25733,7 +26209,7 @@ var AppServerProxySession = class {
     }
     const read = await this.#request("thread/read", { threadId, includeTurns: false }, timeoutMs);
     const thread = read.thread;
-    if (!isRecord6(thread) || thread.id !== threadId || !isRecord6(thread.status)) {
+    if (!isRecord7(thread) || thread.id !== threadId || !isRecord7(thread.status)) {
       throw new Error("app_server_thread_read_invalid");
     }
     const status = typeof thread.status.type === "string" ? thread.status.type : "unknown";
@@ -25774,7 +26250,7 @@ var AppServerProxySession = class {
     }, timeoutMs);
     if (!Array.isArray(value.data)) throw new Error("app_server_turn_list_invalid");
     return value.data.flatMap((item) => {
-      if (!isRecord6(item) || typeof item.id !== "string" || !["completed", "interrupted", "failed", "inProgress"].includes(String(item.status))) return [];
+      if (!isRecord7(item) || typeof item.id !== "string" || !["completed", "interrupted", "failed", "inProgress"].includes(String(item.status))) return [];
       return [{ id: item.id, status: item.status }];
     });
   }
@@ -25827,7 +26303,7 @@ var AppServerProxySession = class {
       this.#fail(new Error("app_server_proxy_frame_invalid"));
       return;
     }
-    if (!isRecord6(value)) {
+    if (!isRecord7(value)) {
       this.#fail(new Error("app_server_proxy_message_invalid"));
       return;
     }
@@ -25840,13 +26316,13 @@ var AppServerProxySession = class {
     if (!pending) return;
     this.#pending.delete(value.id);
     clearTimeout(pending.timer);
-    if (isRecord6(value.error)) {
+    if (isRecord7(value.error)) {
       pending.reject(new Error(
         `app_server_proxy_request_failed:${pending.method}:${String(value.error.code ?? "unknown")}`
       ));
       return;
     }
-    if (!isRecord6(value.result)) {
+    if (!isRecord7(value.result)) {
       pending.reject(new Error(`app_server_proxy_result_invalid:${pending.method}`));
       return;
     }
@@ -26021,8 +26497,8 @@ async function createProductionAuthorityComposition(options) {
         defaultProviderId: persistedEnv["ZCODE_BRIDGE_DEFAULT_PROVIDER_ID"]?.trim() ?? ""
       };
     },
-    catalog: async (workspace) => {
-      const routingCatalog = await modelSettings.listRoutingCatalog(workspace);
+    catalog: async (workspace, plan) => {
+      const routingCatalog = await modelSettings.listRoutingCatalog(workspace, { plan });
       return {
         ...buildModelRoutingCatalog(routingCatalog.models),
         startPlanUnavailableReason: routingCatalog.startPlanUnavailableReason
@@ -26854,9 +27330,9 @@ async function runExecutorMain(argv = process2.argv.slice(2), options = {}) {
     else fail3(`unknown_argument:${argument}`);
     index += 1;
   }
-  if (!parsed.dataRoot || !path20.isAbsolute(parsed.dataRoot)) fail3("data_root_absolute_required");
-  if (parsed.settingsDirectory !== void 0 && !path20.isAbsolute(parsed.settingsDirectory)) fail3("settings_directory_absolute_required");
-  const bridgeEntry = parsed.bridgeEntry ?? path20.resolve("dist/src/executor/main.js");
+  if (!parsed.dataRoot || !path21.isAbsolute(parsed.dataRoot)) fail3("data_root_absolute_required");
+  if (parsed.settingsDirectory !== void 0 && !path21.isAbsolute(parsed.settingsDirectory)) fail3("settings_directory_absolute_required");
+  const bridgeEntry = parsed.bridgeEntry ?? path21.resolve("dist/src/executor/main.js");
   try {
     const service = await startExecutorService({
       dataRoot: parsed.dataRoot,
@@ -26910,7 +27386,7 @@ async function runExecutorMain(argv = process2.argv.slice(2), options = {}) {
     fail3(message);
   }
 }
-if (process2.argv[1] && path20.resolve(process2.argv[1]) === path20.resolve(fileURLToPath5(import.meta.url))) {
+if (process2.argv[1] && path21.resolve(process2.argv[1]) === path21.resolve(fileURLToPath5(import.meta.url))) {
   void runExecutorMain();
 }
 export {

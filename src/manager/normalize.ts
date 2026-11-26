@@ -6,12 +6,14 @@
 // verbatim; when a run fails without a valid report the flag is true (the
 // master must review), and a master-requested cancellation is false. The flag
 // is never silently defaulted to false from missing evidence.
-import type { AttemptTiming, ExecutionProfile, NormalizedUsage, TaskPackage, TaskResult, TestReport } from "../interfaces.js";
+import type { AttemptTiming, ExecutionProfile, NormalizedUsage, RpcDiagnostic, TaskPackage, TaskResult, TestReport } from "../interfaces.js";
 import type { ZCodeRunOutcome } from "../adapters/run-outcome.js";
 
 export interface TaskFailure {
   readonly code: string;
   readonly message: string;
+  /** ADR-066: RPC rejections observed before an Adapter threw instead of returning an outcome. */
+  readonly rpcDiagnostics?: readonly RpcDiagnostic[];
 }
 
 export interface BuildTaskResultInput {
@@ -29,10 +31,22 @@ export interface BuildTaskResultInput {
   readonly model?: ExecutionProfile | null;
   /** B4 additive: bounded phase timings. */
   readonly timing?: AttemptTiming | null;
+  /** ADR-066 additive: bounded, redacted rejections of official RPCs; failed Results only. */
+  readonly rpcDiagnostics?: readonly RpcDiagnostic[] | null;
 }
 
 export function buildTaskResult(input: BuildTaskResultInput): TaskResult {
   const { task, attempt, startedAt, finishedAt, outcome } = input;
+  const rpcDiagnostics = [
+    ...(input.failure?.rpcDiagnostics ?? []),
+    ...(input.rpcDiagnostics ?? []),
+  ].filter((diagnostic, index, all) => all.findIndex((candidate) => candidate.method === diagnostic.method
+    && candidate.code === diagnostic.code && candidate.data_code === diagnostic.data_code) === index);
+  // ADR-066: diagnostics describe the failure, so a Result that is not
+  // failed (or was cancelled, or lost its failure to a report) never carries them.
+  const diagnostics = rpcDiagnostics.length
+    ? { rpc_diagnostics: rpcDiagnostics.slice(0, 4).map((diagnostic) => ({ ...diagnostic })) }
+    : {};
   const base = {
     task_id: task.task_id,
     attempt,
@@ -73,6 +87,7 @@ export function buildTaskResult(input: BuildTaskResultInput): TaskResult {
       ...(resolved.code === "cleanup_failed" && outcome?.reportCandidate
         ? { report_candidate: outcome.reportCandidate }
         : {}),
+      ...diagnostics,
     };
   }
 
@@ -89,6 +104,7 @@ export function buildTaskResult(input: BuildTaskResultInput): TaskResult {
       needs_master_decision: true,
       error_code: code,
       ...(outcome.reportCandidate ? { report_candidate: outcome.reportCandidate } : {}),
+      ...diagnostics,
     };
   }
 

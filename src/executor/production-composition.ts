@@ -187,8 +187,8 @@ export async function createProductionAuthorityComposition(
             defaultProviderId: persistedEnv["ZCODE_BRIDGE_DEFAULT_PROVIDER_ID"]?.trim() ?? "",
           };
         },
-        catalog: async (workspace) => {
-          const routingCatalog = await modelSettings.listRoutingCatalog(workspace);
+        catalog: async (workspace, plan) => {
+          const routingCatalog = await modelSettings.listRoutingCatalog(workspace, { plan });
           return {
             ...buildModelRoutingCatalog(routingCatalog.models),
             startPlanUnavailableReason: routingCatalog.startPlanUnavailableReason,

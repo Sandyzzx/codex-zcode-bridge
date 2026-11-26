@@ -1,4 +1,5 @@
 import { resolveUserHome } from "./paths.js";
+import { OFFICIAL_ENDPOINT_ENV_KEYS } from "./official-builtin-registry.js";
 
 /** Environment variables needed to start Node/ZCode without inheriting secrets. */
 const WINDOWS_OS_ENV = new Set([
@@ -55,6 +56,9 @@ export function createWorkerEnv(source: NodeJS.ProcessEnv, options: MinimalOsEnv
     "ZCODE_HOME",
     "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE", "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE",
     "ZCODE_DATA_BASE_DIR", "ZCODE_WINDOWS_APP_INSTALL_DIR",
+    // ADR-066: non-secret Endpoint selectors. Executor and Worker must locate
+    // the same official runtime registry.
+    ...OFFICIAL_ENDPOINT_ENV_KEYS,
   ]);
   for (const key of explicitBridgeKeys) {
     const value = source[key];

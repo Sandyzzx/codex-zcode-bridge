@@ -47,7 +47,7 @@ import {
 import type { McpDoctorReport, McpModelSettings } from "./contracts.js";
 
 export const SERVER_NAME = "codex-zcode-bridge";
-export const SERVER_VERSION = "2.0.0-preview.19"; // x-release-please-version
+export const SERVER_VERSION = "2.0.0-preview.20"; // x-release-please-version
 
 export interface BridgeServerOptions {
   taskManager: TaskManager & Partial<Pick<ProgressTaskManager, "getEvents" | "getFeedback" | "getAttention" | "replyToInteraction">>;

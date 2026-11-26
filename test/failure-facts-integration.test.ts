@@ -61,6 +61,7 @@ interface FakeRuntimeOptions {
   accountSyncError?: unknown;
   accountSyncExitCode?: number;
   preSendReject?: { method: "session/create" | "session/resume"; code?: number; dataCode?: string | null; dataMessage?: string };
+  setModelReject?: { code?: number; dataCode?: string | null; dataMessage?: string; stack?: string };
   sendAck?: boolean;
   sendRpcError?: { code?: number; dataCode?: string | null };
   sideEffectFile?: string;
@@ -139,6 +140,17 @@ input.on("line", (line) => {
     if (opts.accountSyncExitCode !== undefined) process.exit(opts.accountSyncExitCode);
     else if (opts.accountSyncError) process.stdout.write(JSON.stringify({ id: message.id, error: opts.accountSyncError }) + "\n");
     else process.stdout.write(JSON.stringify({ id: message.id, result: { status: "ok" } }) + "\n");
+  } else if (message.method === "session/setModel" && opts.setModelReject) {
+    process.stdout.write(JSON.stringify({ id: message.id, error: {
+      code: opts.setModelReject.code === undefined ? -32603 : opts.setModelReject.code,
+      message: opts.setModelReject.dataMessage === undefined ? "model rejected" : opts.setModelReject.dataMessage,
+      data: {
+        name: "ModelProtocolError",
+        code: opts.setModelReject.dataCode === undefined ? "model_not_found" : opts.setModelReject.dataCode,
+        message: opts.setModelReject.dataMessage === undefined ? "model rejected" : opts.setModelReject.dataMessage,
+        ...(opts.setModelReject.stack ? { stack: opts.setModelReject.stack } : {}),
+      },
+    } }) + "\n");
   } else if (message.method === "session/setModel" || message.method === "session/setMode" || message.method === "session/subscribe") {
     process.stdout.write(JSON.stringify({ id: message.id, result: message.method === "session/setModel" ? snapshot() : {} }) + "\n");
   } else if (message.method === "session/events") {
@@ -404,6 +416,149 @@ test("A1: a pre-send session/create rejection records accepted=no with the RPC c
     const errorEvent = events.find((event) => event.type === "error");
     assert.ok(errorEvent);
     assertNoSentinel(errorEvent, sentinel);
+  } finally {
+    await runtime.cleanup();
+  }
+});
+
+test("A0a: an early session/setModel rejection persists its RPC evidence and Session ID", { timeout: 30_000 }, async () => {
+  const sentinel = "SENTINEL_A0A_setmodel_secret";
+  const runtime = await makeFakeRuntime({
+    setModelReject: {
+      code: -32603,
+      dataCode: "model_not_found",
+      dataMessage: `Provider Registry 中不存在 Model: account:example/GLM-5.4 (Bearer ${sentinel})`,
+      stack: "Error: Provider Registry 中不存在 Model\n    at ModelRegistry.resolve (C:\\secret\\runtime.js:12:3)",
+    },
+  });
+  const fixture = makeAdapterFixture(runtime.root);
+  fixture.task = {
+    ...fixture.task,
+    model: { provider_id: "provider-default", model_id: "model-rejected", reasoning_level: "max" },
+  };
+  try {
+    const adapter = new ZCodeAppServerTestAdapter({
+      resolver: { resolve: async () => runtime.config },
+      onEvent: (event) => fixture.events.push(event),
+      timeoutMs: 20_000,
+      childEnvBase: { PATH: process.env.PATH },
+      homeDir: runtime.root,
+    });
+    const handle = await adapter.startTask({
+      task: fixture.task,
+      workspace: { requestedPath: runtime.root, canonicalPath: runtime.root, mode: "direct" },
+      attempt: 1,
+    });
+    const error = await adapter.getResult(handle).then(() => null, (value: unknown) => value);
+    assert.ok(error instanceof BridgeError, String(error));
+    assert.equal(error.code, "provider_config_invalid");
+    assert.equal(error.sessionId, SESSION_ID);
+    const diagnostic = error.rpcDiagnostics?.[0];
+    assert.equal(diagnostic?.method, "session/setModel");
+    assert.equal(diagnostic?.code, -32603);
+    assert.equal(diagnostic?.data_name, "ModelProtocolError");
+    assert.equal(diagnostic?.data_code, "model_not_found");
+    assert.match(diagnostic?.message ?? "", /GLM-5\.4/u);
+    assert.match(diagnostic?.stack ?? "", /runtime\.js:12:3/u);
+    assert.ok(!JSON.stringify(diagnostic).includes("secret"));
+    assert.ok(!JSON.stringify(diagnostic).includes(sentinel));
+    assert.ok(!error.message.includes(sentinel));
+    assertNoSentinel(fixture.events, sentinel);
+    const result = buildTaskResult({
+      task: fixture.task,
+      attempt: 1,
+      startedAt: new Date().toISOString(),
+      finishedAt: new Date().toISOString(),
+      outcome: null,
+      sessionId: error.sessionId,
+      failure: {
+        code: error.code,
+        message: error.message,
+        rpcDiagnostics: error.rpcDiagnostics,
+      },
+    });
+    assert.equal(result.status, "failed");
+    assert.equal(result.session_id, SESSION_ID);
+    assert.equal(result.rpc_diagnostics?.[0]?.method, "session/setModel");
+    const requests = await readRequestLog(runtime.requestLog);
+    assert.equal(requests.filter((request) => request["method"] === "session/send").length, 0);
+    assert.equal(requests.filter((request) => request["method"] === "session/setModel").length, 1);
+  } finally {
+    await runtime.cleanup();
+  }
+});
+
+test("A0b: a rejected session/resume is explicit and never creates a replacement Session", { timeout: 30_000 }, async () => {
+  const runtime = await makeFakeRuntime({
+    preSendReject: {
+      method: "session/resume",
+      code: -32603,
+      dataCode: "project.session-lineage-invalid",
+      dataMessage: "session lineage invalid",
+    },
+  });
+  const fixture = makeAdapterFixture(runtime.root);
+  const previousResult = {
+    task_id: fixture.task.task_id,
+    status: "failed" as const,
+    summary: "initialization failed",
+    files_changed: [],
+    tests: [],
+    issues: [],
+    needs_master_decision: false,
+    zcode_output: "",
+    exit_code: null,
+    session_id: "sess_dead_beef",
+    attempt: 1,
+    started_at: null,
+    finished_at: null,
+  };
+  try {
+    const adapter = new ZCodeAppServerTestAdapter({
+      resolver: { resolve: async () => runtime.config },
+      onEvent: (event) => fixture.events.push(event),
+      timeoutMs: 20_000,
+      childEnvBase: { PATH: process.env.PATH },
+      homeDir: runtime.root,
+    });
+    const handle = await adapter.continueTask({
+      task: fixture.task,
+      workspace: { requestedPath: runtime.root, canonicalPath: runtime.root, mode: "direct" },
+      attempt: 2,
+      feedback: "continue the task",
+      additionalRequirements: [],
+      previousSessionId: "sess_dead_beef",
+      previousResult,
+    });
+    const error = await adapter.getResult(handle).then(() => null, (value: unknown) => value);
+    assert.ok(error instanceof BridgeError, String(error));
+    assert.equal(error.code, "session_not_resumable");
+    assert.equal(error.sessionId, "sess_dead_beef");
+    assert.equal(error.rpcDiagnostics?.[0]?.method, "session/resume");
+    assert.equal(error.rpcDiagnostics?.[0]?.code, -32603);
+    assert.equal(error.rpcDiagnostics?.[0]?.data_code, "project.session-lineage-invalid");
+    const result = buildTaskResult({
+      task: fixture.task,
+      attempt: 2,
+      startedAt: new Date().toISOString(),
+      finishedAt: new Date().toISOString(),
+      outcome: null,
+      sessionId: error.sessionId,
+      failure: {
+        code: error.code,
+        message: error.message,
+        rpcDiagnostics: error.rpcDiagnostics,
+      },
+    });
+    assert.equal(result.status, "failed");
+    assert.equal(result.error_code, "session_not_resumable");
+    assert.equal(result.session_id, "sess_dead_beef");
+    assert.equal(result.rpc_diagnostics?.[0]?.method, "session/resume");
+    const requests = await readRequestLog(runtime.requestLog);
+    assert.equal(requests.filter((request) => request["method"] === "session/resume").length, 1);
+    assert.equal(requests.filter((request) => request["method"] === "session/create").length, 0,
+      "a rejected resume must not be replaced by a new Session that drops its context");
+    assert.equal(requests.filter((request) => request["method"] === "session/send").length, 0);
   } finally {
     await runtime.cleanup();
   }

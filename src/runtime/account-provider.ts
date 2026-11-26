@@ -8,10 +8,7 @@ type JsonRecord = Record<string, unknown>;
 
 interface ProviderRule {
   providerId?: string;
-  config?: {
-    builtinModelIds?: string[];
-    access?: { type?: string; mode?: string; accountType?: string };
-  };
+  config?: { access?: { type?: string; mode?: string; accountType?: string } };
 }
 
 type AccountPlanKind =
@@ -26,7 +23,7 @@ export const BIGMODEL_START_PLAN_PROVIDER_ID = "account:bigmodel-start-plan" as 
 interface AccountProviderPayload {
   revision: string;
   basedOnZCodeBuiltinRevision: string;
-  providers: Record<string, { builtinModelIds?: string[]; access: { type: string; entitled: boolean } }>;
+  providers: Record<string, { access: { type: string; entitled: boolean } }>;
   states: Record<string, { availability: "available" | "unavailable"; entitled: boolean; current?: boolean }>;
 }
 
@@ -35,7 +32,6 @@ interface AccountProviderSourceEntry {
   readonly legacyId: string;
   readonly planKind: AccountPlanKind | null;
   readonly accessType: string;
-  readonly builtinModelIds: readonly string[];
   readonly entitled: boolean;
   readonly availability: "available" | "unavailable";
   readonly current?: boolean;
@@ -65,7 +61,13 @@ export interface AccountProviderSelectionCapability {
   readonly failure: string | null;
 }
 
-/** Build the account entitlement snapshot expected by hosted ZCode app-server. */
+/**
+ * Build the account entitlement snapshot expected by hosted ZCode app-server.
+ * ADR-066: `builtinModelIds` is deliberately omitted. Account model membership
+ * comes from the official Built-in registry the AppServer already loaded;
+ * copying the list from a second read of the same file only adds a way for
+ * the overlay and the registry to disagree.
+ */
 export function buildAccountProviderPayload(
   config: ZCodeRuntimeConfig,
   verifiedSelection?: VerifiedAccountProviderSelection,
@@ -79,7 +81,6 @@ export function buildAccountProviderPayload(
 
   for (const entry of source.entries) {
     providers[entry.providerId] = {
-      ...(entry.builtinModelIds.length ? { builtinModelIds: [...entry.builtinModelIds] } : {}),
       access: { type: entry.accessType, entitled: entry.entitled },
     };
     states[entry.providerId] = {
@@ -314,7 +315,6 @@ function readAccountProviderSource(
       legacyId,
       planKind,
       accessType: rule.config?.access?.type ?? "zhipu-account",
-      builtinModelIds: [...(rule.config?.builtinModelIds ?? [])],
       entitled,
       availability: entitled ? "available" : "unavailable",
       current,
@@ -330,6 +330,19 @@ function zcodeBuiltinRevision(table: JsonRecord | null, sourceFile: string): str
   const revision = typeof table?.revision === "number" ? table.revision : 0;
   const sourceDigest = createHash("sha256").update(path.resolve(sourceFile)).digest("hex");
   return `zcode-builtin:${revision}:${sourceDigest}`;
+}
+
+/**
+ * Registry identity the AppServer computes for `config.providerBuiltinConfigFile`
+ * right now: `<revision>:<sha256(path)>`. Used to prove that the file an
+ * Overlay was built from is still the file the started AppServer loaded.
+ * Null when the file can no longer be read.
+ */
+export function currentBuiltinRegistryRevision(
+  config: Pick<ZCodeRuntimeConfig, "providerBuiltinConfigFile">,
+): string | null {
+  const table = readJson(config.providerBuiltinConfigFile);
+  return table ? zcodeBuiltinRevision(table, config.providerBuiltinConfigFile) : null;
 }
 
 function accountProviderRevision(

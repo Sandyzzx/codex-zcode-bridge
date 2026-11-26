@@ -1,4 +1,4 @@
-import type { AgentReport, AgentRunOutcome } from "../interfaces.js";
+import type { AgentReport, AgentRunOutcome, RpcDiagnostic } from "../interfaces.js";
 
 export type AdapterErrorCode =
   | "spawn_failed"
@@ -8,7 +8,8 @@ export type AdapterErrorCode =
   | "invalid_agent_report"
   | "zcode_nonzero_exit"
   | "unknown_turn_terminal"
-  | "provider_config_invalid";
+  | "provider_config_invalid"
+  | "session_not_resumable";
 
 /**
  * Frozen AgentRunOutcome fields plus adapter-normalization evidence. A
@@ -67,4 +68,6 @@ export interface ZCodeRunOutcome extends AgentRunOutcome {
   } | null;
   /** B4 additive: runtime-confirmed model and reasoning-depth evidence. */
   readonly modelProfile?: import("../interfaces.js").ExecutionProfile | null;
+  /** ADR-066 additive: redacted official RPC rejections; a failed outcome only. */
+  readonly rpcDiagnostics?: readonly RpcDiagnostic[];
 }

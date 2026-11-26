@@ -49,9 +49,13 @@ export interface RoutingSettings {
 
 export interface TaskModelRouterOptions {
   readonly settings: () => RoutingSettings;
-  readonly catalog: (workspace: string) => Promise<DynamicModelRoutingCatalog>;
+  /** `plan` lets a caller that only needs one account's catalog avoid the other live read. */
+  readonly catalog: (workspace: string, plan?: RoutingCatalogPlan) => Promise<DynamicModelRoutingCatalog>;
   readonly cacheLimit?: number;
 }
+
+/** Which live catalog a caller reads: the current account's, the Start Plan one, or both (default). */
+export type RoutingCatalogPlan = "current" | "start_plan" | "all";
 
 export function stripStartPlanAlias(modelId: string): string | null {
   if (!modelId.endsWith(START_PLAN_ALIAS_SUFFIX)) return null;
@@ -136,6 +140,13 @@ export type RoutingTaskInput = Omit<TaskPackage, "model"> & { readonly model?: R
 export interface TaskModelRouter {
   route(task: RoutingTaskInput): Promise<TaskPackage>;
   confirmRouting(routedTask: TaskPackage): void;
+  /**
+   * ADR-066: exact check of an already persisted selection against the live
+   * catalog. It never re-routes or rewrites the Task: a selection the catalog
+   * no longer offers fails with `provider_config_invalid` instead of being
+   * swapped for another provider, model or plan.
+   */
+  validatePersisted(task: TaskPackage): Promise<void>;
 }
 
 interface RoutingCacheEntry {
@@ -172,8 +183,41 @@ export function createTaskModelRouter(options: TaskModelRouterOptions): TaskMode
     return routedTask;
   };
 
+  const validatePersisted = async (task: TaskPackage): Promise<void> => {
+    const selection = task.model;
+    if (!selection) return;
+    const providerId = selection.provider_id.trim();
+    const modelId = selection.model_id.trim();
+    const label = `${providerId}/${modelId}`;
+    let catalog: DynamicModelRoutingCatalog;
+    try {
+      catalog = await options.catalog(task.worktree_path ?? task.workspace,
+        providerId === START_PLAN_PROVIDER_ID ? "start_plan" : "current");
+    } catch (error) {
+      throw new BridgeError("provider_config_invalid",
+        `the live ZCode AppServer model catalog could not be read to validate ${label}: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error });
+    }
+    // Same namespace rule as the Adapter: a bare provider id may be advertised as `account:<id>`.
+    const entry = findCatalogEntry(catalog, providerId, modelId)
+      ?? (!providerId.startsWith("account:") && !providerId.startsWith("builtin:")
+        ? findCatalogEntry(catalog, `account:${providerId}`, modelId)
+        : undefined);
+    if (!entry) {
+      const reason = providerId === START_PLAN_PROVIDER_ID ? catalog.startPlanUnavailableReason : null;
+      throw new BridgeError("provider_config_invalid",
+        `the live ZCode AppServer model catalog no longer contains ${label}; the Task keeps its persisted model, so correct the runtime catalog before continuing${reason ? `: ${reason}` : ""}`);
+    }
+    const level = selection.reasoning_level?.trim();
+    if (level && !entry.reasoningLevels.includes(level)) {
+      throw new BridgeError("provider_config_invalid",
+        `reasoning level ${level} is not available for ${entry.providerId}/${entry.modelId} in the live ZCode AppServer model catalog`);
+    }
+  };
+
   return {
     route,
+    validatePersisted,
     confirmRouting(routedTask: TaskPackage): void {
       const entry = pending.get(routedTask);
       if (!entry) return;
@@ -232,6 +276,14 @@ export function routeTaskModel(
 function findStartPlanEntry(catalog: DynamicModelRoutingCatalog, requestedModelId: string): DynamicModelRoutingEntry | null {
   return catalog.entries.find((entry) =>
     entry.providerId === START_PLAN_PROVIDER_ID && sameModelFamily(entry.modelId, requestedModelId)) ?? null;
+}
+
+function findCatalogEntry(
+  catalog: DynamicModelRoutingCatalog,
+  providerId: string,
+  modelId: string,
+): DynamicModelRoutingEntry | undefined {
+  return catalog.entries.find((candidate) => candidate.providerId === providerId && candidate.modelId === modelId);
 }
 
 function sameModelFamily(catalogModelId: string, requestedModelId: string): boolean {
