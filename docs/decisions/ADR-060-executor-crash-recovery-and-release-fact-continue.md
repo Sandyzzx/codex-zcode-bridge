@@ -1,10 +1,14 @@
 # ADR-060：Executor 崩溃恢复与 Continue Release 事实
 
-> Status: DECISION
+> Status: DECISION（Worker 不确定性 fail-closed 段落由 ADR-064 部分替代）
 > Date: 2026-11-25
 > Decision: Accepted（Owner 在 Preview.17 任务中明确批准）
 > Baseline: `origin/preview` `6af69b55d7ecb660c2ad2c923888cf7f1e8886c8`
 > Related: [ADR-045](ADR-045-async-executor-ownership.md)、[ADR-049](ADR-049-task-cli-control-surface.md)、[ADR-051](ADR-051-executor-wake-delivery.md)、[ADR-059](ADR-059-owner-binding-and-installed-auto-wake.md)
+
+> Applicability: Lease/Owner 恢复与 Continue Release 事实继续适用。Preview.18 起，
+> Worker/launch 不确定性按 Operation 保留且不再全局阻断启动；见
+> [ADR-064](ADR-064-executor-startability-and-user-release.md)。
 
 ## Context
 
@@ -33,9 +37,9 @@ Authority、Supervisor、Scheduler 或 Wake 状态机。
   避免破坏 Fresh Authority 的根条目合同。
 - 旧 Lease Owner 必须由 PID、启动指纹、平台与身份版本共同核对。
   `alive` 但控制通道尚未就绪时只等待，不归档、不启动第二个 Executor。
-- 仅当旧 Owner 被证明 `exited` 时，才检查持久 Worker 归属；若存在活动
-  Worker、身份未知或 `launch_intent` 缺少 Receipt，则 Fail Closed，保留
-  Lease、SQLite 与全部历史。
+- 仅当旧 Owner 被证明 `exited` 时，才检查持久 Worker 归属。Preview.17 将
+  活动/未知 Worker 或缺 Receipt 视为全局启动阻断；该行为由 ADR-064 替代为
+  Operation 级保留。历史正文保留原始决策边界。
 - Worker 安全检查只读打开同一 SQLite Authority，检查活动 Operation 的
   Launch/Claim 身份；不创建第二数据库，不重写 Task/Attempt/Operation/
   Result/Event。

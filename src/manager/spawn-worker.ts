@@ -37,7 +37,9 @@ export function spawnClaimOnlyWorker(
     /** Bounded private diagnostics: recognized Worker stderr lines are
      * forwarded for validated handling;
      * every other byte stays discarded. */
-    readonly onWorkerDiagnosticLine?: (line: string) => void } = {},
+    readonly onWorkerDiagnosticLine?: (line: string) => void;
+    readonly onSpawnError?: (error: Error) => void;
+  } = {},
 ): ClaimOnlyWorkerProcess {
   if (!path.isAbsolute(workerPath)) throw new TypeError("claim-only worker path must be absolute");
   if (options.dropAfterPrepared && !options.interactionChannel) throw new TypeError("interaction channel is required for drop-after-prepared");
@@ -72,6 +74,10 @@ export function spawnClaimOnlyWorker(
     cwd: path.dirname(workerPath),
     env,
   }) as ClaimOnlyWorkerProcess;
+  // An OS-level spawn failure is emitted asynchronously. Retain the handle and
+  // let the bounded report/bootstrap paths turn it into a durable unknown;
+  // an unhandled error event must not crash the Manager.
+  child.once("error", (error) => options.onSpawnError?.(error));
   // Workers synchronously write diagnostics to fd 2. Always drain it, including
   // when no diagnostic observer is installed, so a full OS pipe cannot block
   // the Worker before Result/exit. Observers may still subscribe to data;

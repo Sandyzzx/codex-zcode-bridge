@@ -3154,6 +3154,7 @@ __export(store_exports, {
 });
 import { DatabaseSync } from "node:sqlite";
 import { createHash as createHash15, randomUUID as randomUUID4 } from "node:crypto";
+import { spawnSync as spawnSync2 } from "node:child_process";
 import { existsSync as existsSync9, lstatSync as lstatSync2, realpathSync as realpathSync3, readFileSync as readFileSync9, writeFileSync as writeFileSync2, openSync as openSync4, closeSync as closeSync4, fsyncSync, unlinkSync as unlinkSync3, renameSync as renameSync3, statSync as statSync5, readSync as readSync3 } from "node:fs";
 import path16 from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
@@ -3605,7 +3606,7 @@ function validateObservationEventEvidence(value) {
     if (value.reason !== "user_authorized_release_unverified" || ![value.recovery_evidence_digest, value.result_digest, value.worker_identity_digest].every((item) => typeof item === "string" && /^[0-9a-f]{64}$/u.test(item)) || !validId3(value.claim_id) || typeof value.result_commit_ref !== "string" || !/^(?:result-)?[0-9a-f]{64}$/u.test(value.result_commit_ref) || evidence_digest !== digest2(unsigned)) fail2("invalid_user_authorized_release_evidence");
     return;
   }
-  if (own2 === "cancel_id|evidence_digest|reason" || own2 === "cancel_id|cancellation_verification_digest|evidence_digest|reason|recovery_evidence_digest") {
+  if (own2 === "cancel_id|evidence_digest|reason" || own2 === "cancel_id|evidence_digest|launch_receipt_digest|reason|worker_risk_accepted" || own2 === "cancel_id|cancellation_verification_digest|evidence_digest|reason|recovery_evidence_digest") {
     const { evidence_digest, ...unsigned } = value;
     if (value.reason !== "user_authorized_release_unverified" || !validId3(value.cancel_id) || own2.includes("cancellation_verification_digest") && ![value.cancellation_verification_digest, value.recovery_evidence_digest].every((item) => typeof item === "string" && /^[0-9a-f]{64}$/u.test(item)) || evidence_digest !== digest2(unsigned)) fail2("invalid_user_authorized_release_evidence");
     return;
@@ -3884,10 +3885,12 @@ function validateAdminAbandonmentInput(input) {
 }
 function validateUserAuthorizedReleaseInput(input) {
   const fields = input && Object.getPrototypeOf(input) === Object.prototype ? Object.keys(input).sort().join("|") : "";
-  const validShape = fields === USER_AUTHORIZED_RELEASE_INPUT_KEYS || fields === USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS || fields === USER_AUTHORIZED_TERMINAL_RELEASE_INPUT_KEYS;
+  const validShape = fields === USER_AUTHORIZED_RELEASE_INPUT_KEYS || fields === USER_AUTHORIZED_FORCED_RELEASE_INPUT_KEYS || fields === USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS || fields === USER_AUTHORIZED_TERMINAL_RELEASE_INPUT_KEYS;
   const commonValid = input && validShape && validId3(input.operation_id) && validId3(input.task_id) && input.release_reason === "user_authorized_release_unverified" && [input.attempt, input.generation, input.revision].every((value) => Number.isSafeInteger(value) && value >= 1) && (fields !== USER_AUTHORIZED_TERMINAL_RELEASE_INPUT_KEYS || validId3(input.cancel_id) === false);
   if (!commonValid) fail2("invalid_user_authorized_release");
   if (fields === USER_AUTHORIZED_RELEASE_INPUT_KEYS && !validId3(input.cancel_id))
+    fail2("invalid_user_authorized_release");
+  if (fields === USER_AUTHORIZED_FORCED_RELEASE_INPUT_KEYS && (input.accept_worker_risk !== true || !validId3(input.cancel_id) || !/^[0-9a-f]{64}$/u.test(input.launch_receipt_digest)))
     fail2("invalid_user_authorized_release");
   if (fields === USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS && (!validId3(input.cancel_id) || ![input.cancellation_verification_digest, input.recovery_evidence_digest].every((value) => typeof value === "string" && /^[0-9a-f]{64}$/u.test(value))))
     fail2("invalid_user_authorized_release");
@@ -4015,6 +4018,78 @@ function assertCutoverPublicationGate(db, paths) {
   const receipt2 = switched[0];
   const publication = readPublishedCutoverReceipt(paths.cutoverPublished);
   if (publication.database_file !== path16.basename(paths.db) || publication.migration_id !== receipt2.migration_id || publication.cutover_id !== receipt2.cutover_id || publication.source_root_digest !== receipt2.source_root_digest || publication.source_manifest_digest !== receipt2.source_manifest_digest || publication.archive.archive_directory !== receipt2.archive_directory || publication.archive.manifest_digest !== receipt2.archive_manifest_digest || publication.archive.source_tasks_root !== receipt2.archive_source_tasks_root || publication.archive.file_count !== receipt2.archive_file_count || publication.archive.byte_count !== receipt2.archive_byte_count) fail2("cutover_publication_receipt_mismatch");
+}
+function processStartEvidence2(pid) {
+  try {
+    if (process.platform === "linux") {
+      try {
+        const stat2 = readFileSync9(`/proc/${pid}/stat`, "utf8");
+        const fingerprint = stat2.slice(stat2.lastIndexOf(")") + 2).split(" ")[19]?.trim();
+        return fingerprint ? { state: "live", fingerprint } : { state: "unknown" };
+      } catch (e) {
+        return e?.code === "ENOENT" ? { state: "absent" } : { state: "unknown" };
+      }
+    }
+    if (process.platform === "darwin") {
+      const query = spawnSync2("ps", ["-o", "pid=,lstart=", "-p", String(pid)], { encoding: "utf8", timeout: 5e3, windowsHide: true, shell: false });
+      if (query.status !== 0) return { state: "unknown" };
+      const row = query.stdout.split(/\r?\n/u).find((line) => line.trim());
+      return row ? { state: "live", fingerprint: row.trim().split(/\s+/u).slice(1).join(" ") } : { state: "absent" };
+    }
+    if (process.platform === "win32") {
+      const systemRoot = Object.entries(process.env).find(([key]) => key.toLowerCase() === "systemroot")?.[1];
+      const executable = systemRoot ? `${systemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe` : "powershell.exe";
+      const query = spawnSync2(executable, [
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        `$p=$null; try { $p=[System.Diagnostics.Process]::GetProcessById(${pid}); [Console]::Out.Write($p.StartTime.Ticks) } catch [System.ArgumentException] { [Console]::Out.Write('bridge_pid_absent_v1') }`
+      ], {
+        encoding: "utf8",
+        timeout: 5e3,
+        windowsHide: true,
+        shell: false
+      });
+      const output = query.status === 0 ? query.stdout.trim() : "";
+      return output === "bridge_pid_absent_v1" ? { state: "absent" } : /^[0-9]+$/u.test(output) ? { state: "live", fingerprint: output } : { state: "unknown" };
+    }
+  } catch {
+    return { state: "unknown" };
+  }
+  return { state: "unknown" };
+}
+function writerIntentIdentity() {
+  if (selfStartFingerprint === void 0) {
+    const evidence = processStartEvidence2(process.pid);
+    selfStartFingerprint = evidence.state === "live" ? evidence.fingerprint : null;
+  }
+  return selfStartFingerprint;
+}
+function readWriterIntent(file) {
+  try {
+    const stat2 = lstatSync2(file);
+    if (stat2.isFile() && !stat2.isSymbolicLink() && stat2.size <= 65536) return JSON.parse(readFileSync9(file, "utf8"));
+  } catch {
+  }
+  return null;
+}
+function validWriterIntentIdentity(intent) {
+  return intent && intent.version === 2 && typeof intent.token === "string" && intent.token.length > 0 && intent.token.length <= 128 && Number.isSafeInteger(intent.process_id) && intent.process_id > 0 && typeof intent.start_fingerprint === "string" && intent.start_fingerprint.length > 0 && intent.start_fingerprint.length <= 256 && intent.identity_version === 1 && intent.platform === process.platform;
+}
+function retireWriterIntent(paths) {
+  const intent = readWriterIntent(paths.intent);
+  if (!validWriterIntentIdentity(intent)) return false;
+  const evidence = processStartEvidence2(intent.process_id);
+  if (evidence.state !== "absent") return false;
+  const retired = `${paths.intent}.cleared-${intent.token}-${randomUUID4()}.json`;
+  try {
+    renameSync3(paths.intent, retired);
+    return true;
+  } catch {
+    return false;
+  }
 }
 function writePoison(file, value) {
   const tmp = `${file}.${randomUUID4()}.tmp`;
@@ -4325,7 +4400,7 @@ function callDecision(fn, workspace, input) {
     return { state: "unknown" };
   }
 }
-var HERE, SCHEMA, RUNTIME_EVENTS_SCHEMA, ADMIN_ABANDONMENT_SCHEMA, NORMALIZED_ADMIN_ABANDONMENT_SCHEMA, LEGACY_ADMIN_ABANDONMENT_SCHEMA, CONSTRUCT, SCHEMA_VERSION, SCHEMA_OBJECT_QUERY, RUNTIME_EVENT_SCHEMA_OBJECTS, OWNER_BINDING_SCHEMA_OBJECTS, expectedSchemas, expectedRecoveryBindingTriggerSql, ADMIN_ABANDONMENT_TABLE_SQL, LEGACY_ADMIN_ABANDONMENT_TABLE_SQL, NORMALIZED_ADMIN_ABANDONMENT_TABLE_SQL, NORMALIZED_LEGACY_ADMIN_ABANDONMENT_TABLE_SQL, SQLITE_V14_ONLY_MESSAGE, V13_UPGRADE_MARKER_MESSAGE, v13UpgradeMarker, RESULT_CONTRACT_VERSION, RESULT_STATUSES2, RECOVERY_PHASES, RECOVERY_SOURCES, RECOVERY_REASON_CODES, RECOVERY_QUARANTINE_CODES, RECOVERY_EVIDENCE_KEYS, RECOVERY_RELEASE_EVIDENCE_KEYS, EXECUTOR_WAKE_BASE_EVIDENCE_KEYS, EXECUTOR_WAKE_EVIDENCE_KEYS, EXECUTOR_WAKE_STATES, EXECUTOR_WAKE_LIMIT, LATE_WAKE_REASON, LATE_WAKE_STATES, LATE_WAKE_LIMIT, RECOVERY_MATERIAL_BINDING_KEYS, RECOVERY_MATERIAL_DETAIL_KEYS, RESOLVED_RECOVERY_SET_CONTRACT, RECOVERY_MATERIAL_CONTRACT, digest2, rawDigest, sortedDigests, upgradeRowJson, EVIDENCE_KEYS, FUTURE_EVENT_TYPES, FUTURE_EVIDENCE_KEYS, EVENT_PHASE, RECOVERY_INPUT_KEYS, RECOVERY_RELEASE_INPUT_KEYS, ADMIN_ABANDONMENT_INPUT_KEYS, ADMIN_ABANDONMENT_EVIDENCE_KEYS, USER_AUTHORIZED_RELEASE_INPUT_KEYS, USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS, EXECUTOR_WAKE_BASE_INPUT_KEYS, EXECUTOR_WAKE_INPUT_KEYS, USER_AUTHORIZED_TERMINAL_RELEASE_INPUT_KEYS, AdmissionError, fail2, IsolatedAdmissionStore;
+var HERE, SCHEMA, RUNTIME_EVENTS_SCHEMA, ADMIN_ABANDONMENT_SCHEMA, NORMALIZED_ADMIN_ABANDONMENT_SCHEMA, LEGACY_ADMIN_ABANDONMENT_SCHEMA, CONSTRUCT, SCHEMA_VERSION, SCHEMA_OBJECT_QUERY, RUNTIME_EVENT_SCHEMA_OBJECTS, OWNER_BINDING_SCHEMA_OBJECTS, expectedSchemas, expectedRecoveryBindingTriggerSql, ADMIN_ABANDONMENT_TABLE_SQL, LEGACY_ADMIN_ABANDONMENT_TABLE_SQL, NORMALIZED_ADMIN_ABANDONMENT_TABLE_SQL, NORMALIZED_LEGACY_ADMIN_ABANDONMENT_TABLE_SQL, SQLITE_V14_ONLY_MESSAGE, V13_UPGRADE_MARKER_MESSAGE, v13UpgradeMarker, RESULT_CONTRACT_VERSION, RESULT_STATUSES2, RECOVERY_PHASES, RECOVERY_SOURCES, RECOVERY_REASON_CODES, RECOVERY_QUARANTINE_CODES, RECOVERY_EVIDENCE_KEYS, RECOVERY_RELEASE_EVIDENCE_KEYS, EXECUTOR_WAKE_BASE_EVIDENCE_KEYS, EXECUTOR_WAKE_EVIDENCE_KEYS, EXECUTOR_WAKE_STATES, EXECUTOR_WAKE_LIMIT, LATE_WAKE_REASON, LATE_WAKE_STATES, LATE_WAKE_LIMIT, RECOVERY_MATERIAL_BINDING_KEYS, RECOVERY_MATERIAL_DETAIL_KEYS, RESOLVED_RECOVERY_SET_CONTRACT, RECOVERY_MATERIAL_CONTRACT, digest2, rawDigest, sortedDigests, upgradeRowJson, EVIDENCE_KEYS, FUTURE_EVENT_TYPES, FUTURE_EVIDENCE_KEYS, EVENT_PHASE, RECOVERY_INPUT_KEYS, RECOVERY_RELEASE_INPUT_KEYS, ADMIN_ABANDONMENT_INPUT_KEYS, ADMIN_ABANDONMENT_EVIDENCE_KEYS, USER_AUTHORIZED_RELEASE_INPUT_KEYS, USER_AUTHORIZED_FORCED_RELEASE_INPUT_KEYS, USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS, EXECUTOR_WAKE_BASE_INPUT_KEYS, EXECUTOR_WAKE_INPUT_KEYS, USER_AUTHORIZED_TERMINAL_RELEASE_INPUT_KEYS, AdmissionError, fail2, selfStartFingerprint, IsolatedAdmissionStore;
 var init_store = __esm({
   "src/sqlite-candidate/wp6b2b1/store.mjs"() {
     "use strict";
@@ -4465,6 +4540,7 @@ var init_store = __esm({
     ADMIN_ABANDONMENT_INPUT_KEYS = "attempt|claim_id|claim_worker_identity_digest|evidence|generation|operation_id|revision|task_id";
     ADMIN_ABANDONMENT_EVIDENCE_KEYS = "boot_time|claimant_scan_clean|claimant_scan_digest|failed_at|hosts_closed|observed_at|platform_probe_digest|process_inventory_digest|worker_exited|worker_process_id|worker_start_fingerprint|writer_closed";
     USER_AUTHORIZED_RELEASE_INPUT_KEYS = "attempt|cancel_id|generation|operation_id|release_reason|revision|task_id";
+    USER_AUTHORIZED_FORCED_RELEASE_INPUT_KEYS = "accept_worker_risk|attempt|cancel_id|generation|launch_receipt_digest|operation_id|release_reason|revision|task_id";
     USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS = "attempt|cancel_id|cancellation_verification_digest|generation|operation_id|recovery_evidence_digest|release_reason|revision|task_id";
     EXECUTOR_WAKE_BASE_INPUT_KEYS = "attempt|authorization_digest|delivery_id|generation|operation_id|policy_digest|reason_code|state|task_id|thread_id";
     EXECUTOR_WAKE_INPUT_KEYS = "attempt|authorization_digest|delivery_id|generation|operation_id|policy_digest|queue_message_id|reason_code|state|task_id|thread_id";
@@ -4537,6 +4613,7 @@ var init_store = __esm({
         if (existsSync9(p.bootstrapPending) && !p.allowBootstrapPending) fail2("sqlite_bootstrap_pending");
         if (existsSync9(p.cutoverPending)) fail2("cutover_publish_pending");
         if (existsSync9(p.poison)) fail2("root_poisoned");
+        if (existsSync9(p.intent) && !retireWriterIntent(p)) fail2("root_writer_busy");
         rejectV13UpgradeMarker(p.db);
         if (!existsSync9(p.db)) fail2("database_missing");
         preflightSchemaVersion(p.db);
@@ -5064,6 +5141,7 @@ var init_store = __esm({
           return {
             operation_id: operationRow.operation_id,
             result_digest: operationRow.result_digest,
+            result_content_digest: createHash15("sha256").update(bytes).digest("hex"),
             result_commit_ref: operationRow.result_commit_ref,
             result_status: operationRow.result_status,
             offset_bytes: offsetBytes,
@@ -6244,14 +6322,19 @@ var init_store = __esm({
           const o = this.#attemptOperation(input);
           const task = this.#db.prepare("SELECT task_id,status,current_attempt FROM tasks WHERE task_id=?").get(input.task_id);
           const attempt = this.#db.prepare("SELECT task_id,attempt,generation,status,queued_cancel_id,queued_cancel_operation_id,queued_cancel_result_json FROM attempts WHERE task_id=? AND attempt=?").get(input.task_id, input.attempt);
-          const expectedStatus = o.phase === "launch_intent" ? "cancelled" : o.result_status;
+          const expectedStatus = o.phase === "launch_intent" ? "cancelled" : o.phase === "released" ? attempt?.status : o.result_status;
           if (!task || !attempt || task.current_attempt !== input.attempt || task.status !== expectedStatus || attempt.status !== expectedStatus || attempt.generation !== input.generation)
             fail2("user_authorized_release_projection_mismatch");
           const cleanupBinding = input.cancellation_verification_digest !== void 0;
           const terminalBinding = input.result_digest !== void 0;
+          const forcedPreclaim = input.accept_worker_risk === true;
           const unsignedEvidence = {
             reason: "user_authorized_release_unverified",
             ...terminalBinding ? {} : { cancel_id: input.cancel_id },
+            ...forcedPreclaim ? {
+              launch_receipt_digest: input.launch_receipt_digest,
+              worker_risk_accepted: true
+            } : {},
             ...cleanupBinding ? {
               cancellation_verification_digest: input.cancellation_verification_digest,
               recovery_evidence_digest: input.recovery_evidence_digest
@@ -6273,7 +6356,7 @@ var init_store = __esm({
             } catch {
               parsed = null;
             }
-            if (released && parsed?.reason === "user_authorized_release_unverified" && parsed?.cancel_id === input.cancel_id && parsed?.cancellation_verification_digest === input.cancellation_verification_digest && parsed?.recovery_evidence_digest === input.recovery_evidence_digest && parsed?.claim_id === input.claim_id && parsed?.result_commit_ref === input.result_commit_ref && parsed?.result_digest === input.result_digest && parsed?.worker_identity_digest === input.worker_identity_digest && parsed?.evidence_digest === evidence.evidence_digest)
+            if (released && parsed?.reason === "user_authorized_release_unverified" && parsed?.cancel_id === input.cancel_id && parsed?.launch_receipt_digest === input.launch_receipt_digest && parsed?.worker_risk_accepted === input.accept_worker_risk && parsed?.cancellation_verification_digest === input.cancellation_verification_digest && parsed?.recovery_evidence_digest === input.recovery_evidence_digest && parsed?.claim_id === input.claim_id && parsed?.result_commit_ref === input.result_commit_ref && parsed?.result_digest === input.result_digest && parsed?.worker_identity_digest === input.worker_identity_digest && parsed?.evidence_digest === evidence.evidence_digest)
               return {
                 duplicate: true,
                 operation_id: o.operation_id,
@@ -6293,8 +6376,10 @@ var init_store = __esm({
           if (historicalCleanup ? cleanupBinding === terminalBinding : cleanupBinding || terminalBinding)
             fail2("user_authorized_release_phase_mismatch");
           if (preClaim) {
-            if (o.launch_receipt_id !== null || o.launch_receipt_digest !== null || o.launch_identity_json !== null)
+            if ((o.launch_receipt_id !== null || o.launch_receipt_digest !== null || o.launch_identity_json !== null) && !input.accept_worker_risk)
               fail2("user_authorized_release_spawn_evidence_present");
+            if (input.accept_worker_risk && o.launch_receipt_digest !== input.launch_receipt_digest)
+              fail2("user_authorized_release_spawn_evidence_mismatch");
             if (attempt.queued_cancel_operation_id !== input.operation_id || attempt.queued_cancel_id !== input.cancel_id || attempt.queued_cancel_result_json === null)
               fail2("user_authorized_release_projection_mismatch");
             let queuedResult;
@@ -7955,10 +8040,12 @@ var init_store = __esm({
         this.#assertWritable();
         let began = false, commitStarted = false, settled = false;
         const token = randomUUID4();
+        const identity = writerIntentIdentity();
+        if (identity === null) fail2("writer_intent_identity_unavailable");
         try {
           const fd = openSync4(this.#paths.intent, "wx", 384);
           try {
-            writeFileSync2(fd, JSON.stringify({ version: 1, token, started_at: (/* @__PURE__ */ new Date()).toISOString() }));
+            writeFileSync2(fd, JSON.stringify({ version: 2, token, started_at: (/* @__PURE__ */ new Date()).toISOString(), process_id: process.pid, platform: process.platform, identity_version: 1, start_fingerprint: identity }));
             fsyncSync(fd);
           } finally {
             closeSync4(fd);
@@ -9281,6 +9368,7 @@ function spawnClaimOnlyWorker(workerPath, provenance, options = {}) {
     cwd: path4.dirname(workerPath),
     env
   });
+  child.once("error", (error2) => options.onSpawnError?.(error2));
   const diagnosticSink = options.onWorkerDiagnosticLine;
   if (diagnosticSink) {
     child.stderr?.setEncoding("utf8");
@@ -11410,9 +11498,67 @@ init_host_profile();
 
 // src/store/process-lock.ts
 import { existsSync as existsSync6, mkdirSync, readFileSync as readFileSync6, renameSync, rmdirSync, statSync as statSync2, unlinkSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import path10 from "node:path";
+function parseLockOwner(raw) {
+  try {
+    const owner = JSON.parse(raw);
+    return Number.isSafeInteger(owner?.pid) && owner.pid > 0 && typeof owner.identity?.fingerprint === "string" && owner.identity.fingerprint.length > 0 && owner.identity.identity_version === 1 && owner.identity.platform === process.platform ? owner : null;
+  } catch {
+    return null;
+  }
+}
+function processStartEvidence(pid) {
+  if (pid === process.pid && cachedStartFingerprint !== void 0) {
+    return cachedStartFingerprint === null ? { state: "unknown" } : { state: "live", fingerprint: cachedStartFingerprint };
+  }
+  let evidence = { state: "unknown" };
+  try {
+    if (process.platform === "linux") {
+      try {
+        const stat2 = readFileSync6(`/proc/${pid}/stat`, "utf8");
+        const fingerprint = stat2.slice(stat2.lastIndexOf(")") + 2).split(" ")[19]?.trim();
+        evidence = fingerprint ? { state: "live", fingerprint } : { state: "unknown" };
+      } catch (error2) {
+        if (error2.code === "ENOENT") evidence = { state: "absent" };
+      }
+    } else if (process.platform === "darwin") {
+      const query = spawnSync("ps", ["-o", "pid=,lstart=", "-p", String(pid)], {
+        encoding: "utf8",
+        timeout: 5e3,
+        windowsHide: true,
+        shell: false
+      });
+      const row = query.status === 0 ? query.stdout.split(/\r?\n/u).find((line) => line.trim()) : void 0;
+      evidence = query.status !== 0 ? { state: "unknown" } : row ? { state: "live", fingerprint: row.trim().split(/\s+/u).slice(1).join(" ") } : { state: "absent" };
+    } else if (process.platform === "win32") {
+      const systemRoot = Object.entries(process.env).find(([key]) => key.toLowerCase() === "systemroot")?.[1];
+      const executable = systemRoot ? `${systemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe` : "powershell.exe";
+      const query = spawnSync(executable, [
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        `$p=$null; try { $p=[System.Diagnostics.Process]::GetProcessById(${pid}); [Console]::Out.Write($p.StartTime.Ticks) } catch [System.ArgumentException] { [Console]::Out.Write('bridge_pid_absent_v1') }`
+      ], {
+        encoding: "utf8",
+        timeout: 5e3,
+        windowsHide: true,
+        shell: false
+      });
+      const output = query.status === 0 ? query.stdout.trim() : "";
+      evidence = output === "bridge_pid_absent_v1" ? { state: "absent" } : /^[0-9]+$/u.test(output) ? { state: "live", fingerprint: output } : { state: "unknown" };
+    }
+  } catch {
+    evidence = { state: "unknown" };
+  }
+  if (pid === process.pid) cachedStartFingerprint = evidence.state === "live" ? evidence.fingerprint : null;
+  return evidence;
+}
 var selfIdentity = null;
+var cachedStartFingerprint;
 var TRANSIENT_LOCK_FS_CODES = /* @__PURE__ */ new Set(["EEXIST", "EPERM", "EACCES", "EBUSY", "ENOTEMPTY"]);
 var DESTINATION_PRESENT_CONTENTION_CODES = /* @__PURE__ */ new Set(["EEXIST", "ENOTEMPTY"]);
 var PUBLICATION_RETRY_PAUSE_MS = 50;
@@ -11426,6 +11572,23 @@ function isTransientLockFsError(error2) {
 }
 function pauseBriefly(delayMs = RETRY_PAUSE_MS) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
+}
+function currentSelfIdentity() {
+  if (!selfIdentity) {
+    const evidence = processStartEvidence(process.pid);
+    const fingerprint = evidence.state === "live" ? evidence.fingerprint : null;
+    if (fingerprint) {
+      selfIdentity = {
+        pid: process.pid,
+        fingerprint,
+        fingerprint_precision: "exact",
+        identity_version: 1,
+        platform: process.platform,
+        captured_at: (/* @__PURE__ */ new Date()).toISOString()
+      };
+    }
+  }
+  return selfIdentity;
 }
 async function withProcessLock(directory, operation, timeoutMs = 3e4) {
   const deadline = Date.now() + timeoutMs;
@@ -11463,9 +11626,7 @@ function tryAcquireProcessLockWithRetry(directory, deadline) {
     pid: process.pid,
     token,
     started_at: (/* @__PURE__ */ new Date()).toISOString(),
-    // Fingerprint may be null before the async self-identity probe finishes;
-    // null never authorizes binding a recycled PID to a prior owner.
-    identity: selfIdentity ? { fingerprint: selfIdentity.fingerprint, identity_version: selfIdentity.identity_version, platform: selfIdentity.platform } : null
+    identity: currentSelfIdentity() ? { fingerprint: currentSelfIdentity().fingerprint, identity_version: currentSelfIdentity().identity_version, platform: currentSelfIdentity().platform } : null
   };
   try {
     mkdirSync(staging, { mode: 448 });
@@ -11512,8 +11673,7 @@ function renameWithTransientRetry(source, target) {
 function acquireExistingLock(directory) {
   let owner;
   try {
-    owner = JSON.parse(readFileSync6(path10.join(directory, "owner.json"), "utf8"));
-    if (!Number.isSafeInteger(owner.pid) || owner.pid <= 0) throw new Error("invalid lock owner");
+    owner = parseLockOwner(readFileSync6(path10.join(directory, "owner.json"), "utf8"));
   } catch {
     try {
       if (Date.now() - statSync2(directory).mtimeMs > 3e4) throw new Error(`unreadable lock owner: ${directory}`);
@@ -11522,6 +11682,7 @@ function acquireExistingLock(directory) {
     }
     return null;
   }
+  if (!owner) return null;
   try {
     process.kill(owner.pid, 0);
   } catch (failure2) {
@@ -11571,22 +11732,18 @@ function reclaimDeadOwner(directory) {
   }
   let outcome;
   try {
-    const owner = JSON.parse(readFileSync6(path10.join(directory, "owner.json"), "utf8"));
-    if (!Number.isSafeInteger(owner.pid) || owner.pid <= 0) {
+    const owner = parseLockOwner(readFileSync6(path10.join(directory, "owner.json"), "utf8"));
+    if (!owner) {
       outcome = { kind: "busy" };
     } else {
-      try {
-        process.kill(owner.pid, 0);
+      const identityEvidence = processStartEvidence(owner.pid);
+      if (identityEvidence.state !== "absent") {
         outcome = { kind: "busy" };
-      } catch (failure2) {
-        if (failure2.code !== "ESRCH") {
-          outcome = { kind: "busy" };
-        } else {
-          const retired = `${directory}.${randomUUID()}.retired`;
-          renameWithTransientRetry(directory, retired);
-          removeStagedLock(retired);
-          outcome = { kind: "reclaimed" };
-        }
+      } else {
+        const retired = `${directory}.${randomUUID()}.retired`;
+        renameWithTransientRetry(directory, retired);
+        removeStagedLock(retired);
+        outcome = { kind: "reclaimed" };
       }
     }
   } catch (error2) {
@@ -23396,7 +23553,8 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
   /** P1 §3.4A: bounded page over the exact stored canonical Result JSON. The
    * returned next_offset always lands on a UTF-8 codepoint boundary;
    * concatenating every page's data reproduces the stored bytes whose SHA-256
-   * equals the operation's result_digest. */
+   * is `page.content_digest`. This content digest is independent from the
+   * persisted Result-envelope `result_digest`; they are not asserted equal. */
   async getResultPage(taskId, offsetBytes, maxBytes) {
     this.#assertOpen();
     if (!Number.isSafeInteger(offsetBytes) || offsetBytes < 0 || !Number.isSafeInteger(maxBytes) || maxBytes < 1024 || maxBytes > 4194304) {
@@ -23431,6 +23589,7 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
       ...committed.error_code ? { error_code: committed.error_code } : {},
       result_status: page.result_status,
       result_digest: page.result_digest,
+      result_content_digest: page.result_content_digest,
       result_commit_ref: page.result_commit_ref,
       page: {
         offset_bytes: page.offset_bytes,
@@ -23564,10 +23723,10 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
       owner_binding: taskOwnerBinding(outcome.owner_binding)
     };
   }
-  async cancelTask(taskId) {
+  async cancelTask(taskId, options = {}) {
     const existing = this.#recoveryRuns.get(taskId);
     if (existing) return existing;
-    const cancellation = Promise.resolve().then(() => this.#cancelTaskOnce(taskId));
+    const cancellation = Promise.resolve().then(() => this.#cancelTaskOnce(taskId, true, options));
     this.#recoveryRuns.set(taskId, cancellation);
     try {
       return await cancellation;
@@ -23575,7 +23734,7 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
       if (this.#recoveryRuns.get(taskId) === cancellation) this.#recoveryRuns.delete(taskId);
     }
   }
-  async #cancelTaskOnce(taskId, reconcileClaimRace = true) {
+  async #cancelTaskOnce(taskId, reconcileClaimRace = true, options = {}) {
     this.#assertOpen();
     this.#assertRecoveryReady();
     const snapshot = this.#readSnapshot(taskId);
@@ -23586,11 +23745,16 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
         this.#driver.cancelQueuedAttempt({ task_id: taskId, expected_attempt: Number(attempt.attempt) });
       } catch (error2) {
         const current = this.#readSnapshot(taskId);
-        if (reconcileClaimRace && current.projection.status === "running" && Number(current.attempt.attempt) === Number(attempt.attempt)) return this.#cancelTaskOnce(taskId, false);
+        if (reconcileClaimRace && current.projection.status === "running" && Number(current.attempt.attempt) === Number(attempt.attempt)) {
+          return this.#cancelTaskOnce(taskId, false, options);
+        }
         throw error2;
       }
       this.#queued.delete(queueKey(taskId, Number(attempt.attempt)));
       this.#schedulePump();
+      if (options.acceptWorkerRisk === true) {
+        return await this.#userAuthorizedRelease(taskId, this.#readSnapshot(taskId), {}, true);
+      }
       return this.getStatus(taskId);
     }
     if (projection.status === "running") {
@@ -23619,7 +23783,7 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
     }
     const operation = snapshot.operation ? asRecord6(snapshot.operation) : null;
     if (projection.status === "cancelled" && operation?.phase === "launch_intent" && operation.claim_id === null) {
-      return await this.#userAuthorizedRelease(taskId, snapshot);
+      return await this.#userAuthorizedRelease(taskId, snapshot, {}, options.acceptWorkerRisk === true);
     }
     if (projection.status === "cancelled" && (!operation || operation.phase === "cancelled_before_launch")) return this.getStatus(taskId);
     if (isTerminal(projection.status) && operation?.phase === "released") {
@@ -23661,7 +23825,7 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
     }
     throw new TaskManagerError("TASK_STATE", `zcode_cancel is not allowed from SQLite status ${String(projection.status)}`);
   }
-  async #userAuthorizedRelease(taskId, snapshot, authorizationEvidence = {}) {
+  async #userAuthorizedRelease(taskId, snapshot, authorizationEvidence = {}, acceptWorkerRisk = false) {
     const operation = snapshot.operation ? asRecord6(snapshot.operation) : null;
     const projection = asRecord6(snapshot.projection);
     const terminalStatuses = ["completed", "failed", "waiting_for_master", "cancelled"];
@@ -23672,7 +23836,7 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
     if (!operation || operation.phase !== "launch_intent" && operation.phase !== "cleanup_unverified") {
       throw new TaskManagerError("TASK_STATE", "zcode_cancel has no user-authorized unverified release path for this Operation");
     }
-    if (operation.phase === "launch_intent" && (operation.launch_receipt_id !== null || operation.launch_receipt_digest !== null || operation.launch_identity_json !== null)) {
+    if (operation.phase === "launch_intent" && (operation.launch_receipt_id !== null || operation.launch_receipt_digest !== null || operation.launch_identity_json !== null) && !acceptWorkerRisk) {
       throw new TaskManagerError(
         "CANCEL_FAILED",
         "launch_intent has durable spawn evidence; user-authorized unverified release is not allowed"
@@ -23709,6 +23873,13 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
       ...releaseBinding
     };
     if (cancelId !== null) releaseRequest.cancel_id = cancelId;
+    if (operation.phase === "launch_intent" && acceptWorkerRisk) {
+      if (typeof operation.launch_receipt_digest !== "string") {
+        throw new TaskManagerError("CANCEL_FAILED", "forced launch release requires the persisted Receipt digest");
+      }
+      releaseRequest.accept_worker_risk = true;
+      releaseRequest.launch_receipt_digest = operation.launch_receipt_digest;
+    }
     const outcome = asRecord6(this.#driver.userAuthorizedReleaseUnverifiedOperation(releaseRequest));
     if (outcome.phase !== "released" || outcome.cleanup_verified !== false) {
       throw new TaskManagerError("CANCEL_FAILED", "SQLite user-authorized unverified release did not persist a distinct Release fact");
@@ -24449,7 +24620,7 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
       const event = asRecord6(value);
       if (String(event.event_type) !== "observation_recorded" || typeof event.operation_id !== "string") continue;
       try {
-        const evidence = asRecord6(JSON.parse(String(event.evidence_json)));
+        const evidence = parseBoundedRecord(event.evidence_json, "SQLite Wake evidence is invalid");
         if (evidence.reason === "executor_wake") wakeNotified.add(event.operation_id);
       } catch {
       }
@@ -25083,10 +25254,22 @@ function asRecord6(value) {
   return value;
 }
 function parseRecord(value) {
+  const raw = string3(value, "identity_missing");
+  if (raw.length > 64 * 1024) throw new TaskManagerError("TASK_STATE", "SQLite Worker identity projection is oversized");
   try {
-    return asRecord6(JSON.parse(string3(value, "identity_missing")));
+    return asRecord6(JSON.parse(raw));
   } catch {
     throw new TaskManagerError("TASK_STATE", "SQLite Worker identity projection is corrupt");
+  }
+}
+function parseBoundedRecord(value, code) {
+  if (typeof value !== "string" || !value || value.length > 64 * 1024) {
+    throw new TaskManagerError("TASK_STATE", code);
+  }
+  try {
+    return asRecord6(JSON.parse(value));
+  } catch {
+    throw new TaskManagerError("TASK_STATE", code);
   }
 }
 function string3(value, code) {

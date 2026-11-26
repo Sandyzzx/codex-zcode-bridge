@@ -226,12 +226,13 @@ export const taskResultSchema = z.object({
 
 // A union at the root would cause older MCP protocol codecs to wrap the result.
 /** P1 §3.4 / ADR-056: one bounded page of the stored canonical Result JSON.
- * Concatenating every page's data (following next_offset) reproduces the
- * stored bytes whose SHA-256 equals result_digest. */
+ * Concatenating every page's data reproduces bytes whose SHA-256 is
+ * `result_content_digest`; `result_digest` remains the stored Result-envelope digest. */
 const zcodeResultPageSchema = z.object({
   offset_bytes: z.number().int().nonnegative(),
   next_offset: z.number().int().positive().nullable(),
   total_bytes: z.number().int().nonnegative(),
+  result_content_digest: z.string(),
   data: z.string(),
 });
 
@@ -248,6 +249,7 @@ export const zcodeResultOutputSchema = taskResultSchema.extend({
   page: zcodeResultPageSchema.optional(),
   result_status: z.string().optional(),
   result_digest: z.string().optional(),
+  result_content_digest: z.string().optional(),
   result_commit_ref: z.string().optional(),
 }).refine(
   (result) => (result.zcode_output !== undefined ? 1 : 0) + (result.projection !== undefined ? 1 : 0) + (result.page !== undefined ? 1 : 0) === 1,

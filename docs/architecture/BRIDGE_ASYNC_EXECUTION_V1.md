@@ -299,14 +299,14 @@ ControlResponse { protocol_version, request_id, ok, result | error, executor_sta
 - 首版采用 **Idle-only Shutdown**：
   1. 收到 shutdown 请求后先 fence 新的 Create/Continue/Cancel/Interaction Reply；
   2. 读取 SQLite snapshot 与内存 active run；
-  3. 只要存在 queued Attempt、active run、pending interaction、cleanup pending/unverified/hold、`WRITER_INTENT`、poison root、正在提交的 Result，或当前进程不是精确 lease owner，就拒绝退出并返回 `EXECUTOR_SHUTDOWN_NOT_IDLE`；
+  3. 只要存在 queued Attempt、active run、pending interaction、cleanup pending/unverified/hold、未按 ADR-064 安全归档的 `WRITER_INTENT`、poison root、正在提交的 Result，或当前进程不是精确 lease owner，就拒绝退出并返回 `EXECUTOR_SHUTDOWN_NOT_IDLE`；
   4. 全部为空且所有历史 Operation 均 `released` 或 `cancelled_before_launch` 时，允许关闭；
   5. 若拒绝退出，返回 `EXECUTOR_SHUTDOWN_NOT_IDLE` 后撤销 Shutdown fence，恢复 Admission 与 Task/Interaction 控制并继续运行；
   6. 若允许退出，关闭顺序必须是：fence 新请求 → 关闭 named pipe listener → 确认无 active run → 关闭可写 Store → 成功确认 Store closed 后才写 released lease；
   7. Store 关闭失败、released lease 写入或原子 rename 失败时，不释放可写 Authority，状态为 `EXECUTOR_LEASE_RELEASE_UNKNOWN`；下一次启动必须按 stale lease 处理，不得自动夺取；
   8. 现有 60 秒 bounded Host shutdown 仅保留给旧 MCP Host 模式；Async Executor 不把“等待 active Worker 完成”伪装成正常 idle 退出。
 - 空闲前用户可显式 `zcode_cancel` 单个任务；但这属于任务取消合同，不是 Executor 正常退出的自动动作。
-- 强制终止后的遗留 lease、Hold、`WRITER_INTENT` 均保持 fail closed，不得自动清除。
+- 强制终止后的遗留 lease、Hold、legacy/live/未知 `WRITER_INTENT` 保持 fail closed；只有 ADR-064 允许的 exact-absent 身份归档，且归档不删除证据。
 - Executor 未运行时，MCP/CLI/Web 只能读只读 Attention/状态，或提示用户显式启动 Executor。
 - 升级前后必须正常 shutdown；强制结束后的恢复沿用现有 Hold/Recovery 合同。
 - 不用 `detached:true` 推断真实 Host 脱离；真实 Job Object/进程组行为是阶段 1 E2E 项。
@@ -392,7 +392,7 @@ Recovery；真实 Desktop UI acknowledgement 仍是 `UNKNOWN`。
 | Wake 授权 | 无 `wake-policy.json`、Owner Grant、模型/Provider/Effort 匹配、Control Socket 或 loaded/idle 前置门禁；安装并启用插件即接受本机 Auto Wake，默认开启，可在 WebUI Settings 关闭 |
 | Auto Wake | Binding 为 `bound` 时 Result/Cleanup/Release 后写 `intent` 并调用一次官方 `codex queue`；Binding 缺失只写 `web_notify` + `owner_thread_unavailable`，不得使用 Runtime Session ID |
 | Queue / Turn 语义 | `queued` 含 `queue_message_id` 但 ACK 不等于 `turn_started`；观察到新 in-progress Turn 才记 `turn_started`，否则保留 Queue 事实并写 `turn_start_unverified` Web fallback |
-| Late Wake Compensation | 历史仅 `web_notify` 的已释放 Operation 可写独立 `executor_late_wake_compensation` 事实；不重跑 Worker，不改写历史，不批量唤醒 |
+| Release Wake recovery | 启动恢复对没有 `executor_wake` fact 的已发布非取消 Result 复用现有 Wake coordinator；不重跑 Worker，不改写历史，不批量唤醒。ADR-059 Late Wake Compensation 不再有生产创建者，历史事实只读保留 |
 | Web Notify 可发现性 | CLI/Web 从现有 SQLite `executor_wake` Event 投影 state/reason/at，不新增通知权威 |
 | Async Handoff 决策合同 | 授权、Scope、Mechanism、受理、未知回执、Pending、Turn end、Wake 与验收分别判定 |
 | Async Handoff 负例 | 断连/Turn end 不取消；Wake identity mismatch 不验收；静默合同测试不能冒充真实模型遵循 |

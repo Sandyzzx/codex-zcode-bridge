@@ -1,9 +1,9 @@
 # 当前接口与兼容边界
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-25（ADR-060 Continue Release 事实、ADR-061 Master 验收驱动返工与 ADR-062 单页 Task Console）
-> Last verified: 2026-11-25，核对真实 Store 在 3 条 Wake Observation 后用当前 revision Continue、真实 Thin MCP 在 Executor `SIGKILL` 后自动恢复并继续读取，以及真实 Authority + IPC + HTTP + Chromium 的 Console capability/blockers。Preview.17 完整 Host/CI 验证在集成阶段更新。
-> Verified against: `685c9158`（四条 Preview.17 工作线的代码集成快照；最终候选提交与 CI 结果由交付报告记录）。
+> Last updated: 2026-11-26（ADR-064 Executor Operation 隔离、用户授权释放与 Result content digest）
+> Last verified: 2026-11-26，核对 Executor recovery 13/13、writer intent 35/35、forced cleanup Store、Result paging、Web HTTP 清理与 process-lock PID reuse 定向测试。完整 Host/CI 验证在集成/发布阶段更新。
+> Verified against: `57e0a70b` 基线上的候选工作树；提交后由最终报告记录候选 SHA。
 > ADR-039 Last verified: 2026-11-22，隔离 SQLite/MCP 覆盖 Receipt 保护、live descendant、活动 Worker、终止失败、completed/failed/waiting_for_master/cancelled 终态绑定、并发重复取消与 SQLite 历史校验；生产取消未重试。
 > ADR-047/048: Accepted for Preview；默认 `zcode_result` 保持完整，Summary 仍为显式 opt-in。
 
@@ -25,10 +25,12 @@ TaskPackage 的 requirements、allowed_paths、forbidden_paths、acceptance_crit
 
 生产只有 SQLite Authority，支持声明为 `SQLite v14 ONLY`。新装与旧 JSON 安装从相同 Fresh SQLite Bootstrap 开始；旧 `.tasks` 不参与选择、恢复或新任务。已有 v14 的 `json_artifacts`、迁移 Result/Event 行、digest 与 receipt 继续按 Schema 校验并保留原始字节，但旧 JSON 迁移 Task 不再是 Bridge 支持的查询业务对象。已有 v13 数据库或 v13→v14 未完成 Marker 以 `unsupported_sqlite_schema` 非破坏性拒绝，不提供升级、恢复或回滚；损坏/不完整 SQLite 继续明确拒绝，不回退 JSON，不重置数据库。
 
-[ADR-060](decisions/ADR-060-executor-crash-recovery-and-release-fact-continue.md)：Thin MCP 默认在下一次控制请求发现
+[ADR-060](decisions/ADR-060-executor-crash-recovery-and-release-fact-continue.md) 与
+[ADR-064](decisions/ADR-064-executor-startability-and-user-release.md)：Thin MCP 默认在下一次控制请求发现
 Executor 不可用时触发一次自动恢复。已有健康 Executor 直接复用；旧 Owner
-必须精确退出，且同一 Authority 没有活动/不可核实的 Worker 时才归档旧
-Lease、启动并健康检查。恢复使用现有进程锁和 Spawn 入口，不新增 MCP 工具、
+必须精确退出。live/未知 Worker 或缺 Receipt 的 launch uncertainty 保留在
+对应 Operation，不全局阻断启动；SQLite Workspace fence 继续阻止同路径新
+派发，也不自动重派。恢复使用现有进程锁和 Spawn 入口，不新增 MCP 工具、
 第二 Authority 或常驻 Supervisor。`ZCODE_BRIDGE_EXECUTOR_AUTO_RECOVER=0`
 仅用于显式诊断/测试。恢复失败返回稳定诊断，不猜测 Lease 或 Worker 已退出。
 
@@ -52,7 +54,7 @@ parent/child edge。逐 Attempt Usage 在无 Provider settlement 时必须返回
 
 Admission 在事务中检查 Capacity 及执行路径重叠，覆盖跨 Manager 竞争。Worker 精确身份、Launch token/receipt、Claim、Attempt/generation/revision CAS 保持绑定。最终 workspace use 校验先于 Launch Intent；拒绝只留下 untouched reserved，显式 queued Cancel 经原 CAS 终结并释放。Intent 后即可能已 Spawn，缺 Receipt/句柄、timeout 或 Manager 崩溃都不授权重新派发。
 
-[ADR-039](decisions/ADR-039-host-authorized-cancellation.md)：Host 已授权的 queued Cancel 覆盖尚无 Claim 的 Launch Intent。首次取消 Result、投影与 `cancelled_before_claim` 事件原子持久化，后续 Receipt/Claim 被拒绝；原启动证据与未核实占用保留。用户重复调用现有 `zcode_cancel({task_id})` 表示显式行政授权，可把**没有任何持久 Launch Receipt/Identity 证据**的 pre-Claim 历史阻塞 CAS 为 `released`，并追加 `observation_recorded(reason=user_authorized_release_unverified)`。存在 `launch_receipt_id`、digest 或 identity 时 Manager 与 Store 都拒绝该路径。该事件不是 `cleanup_verified`，不新增工具、force 参数或第二 Writer；释放后调用现有 Scheduler 使已有 queued Attempt 继续 Admission。
+[ADR-039](decisions/ADR-039-host-authorized-cancellation.md) 与 [ADR-064](decisions/ADR-064-executor-startability-and-user-release.md)：Host 已授权的 queued Cancel 覆盖尚无 Claim 的 Launch Intent。首次取消 Result、投影与 `cancelled_before_claim` 事件原子持久化，后续 Receipt/Claim 被拒绝；原启动证据与未核实占用保留。无 Receipt 的 pre-Claim 历史阻塞可重复显式行政释放。带持久 Receipt 的异常 preclaim 需要走 WebUI 授权清理，必须显式提供 `user_authorized_unverified_release` 与 `accept_worker_risk=true`；SQLite forced release 绑定 Receipt digest、保留全部历史、写入 worker risk accepted，并严格显示 unverified administrative release。该事件不是 `cleanup_verified`，不新增工具、第二 Writer 或批量释放；释放后调用现有 Scheduler 使无关 queued Attempt 继续 Admission。
 
 Manager 可在启动和 Host 存活期间重复核对 running Operation。ADR-036 的原子 Store 操作只在精确原身份已退出、recorded-tree clean、Adapter Cleanup 证明完整、没有 Runtime 执行事件、无未回答交互且没有另一个 Host 的存活句柄时创建一个同 Task ID 的新 Attempt。该成功链当前只有 `testOnlyFakeAdapter` 合成覆盖；生产 Adapter 没有可消费的独立 Cleanup Proof，因此真实 Result-less Running Attempt 默认保留 Operation/Workspace Hold，`zcode_status.execution_observation.state=interrupted_without_result` 且审计原因为 `adapter_cleanup_unverified`。Runtime 执行事件表示 Workspace、Git、迁移或外部调用副作用不可由 SQLite 重建；unknown、alive、脏树、未解决交互或缺少执行副作用边界同样保留 Hold。显式 zcode_cancel 仍复用持久 Claim、取消 intent 与 CAS；已有 Result 时只恢复 Cleanup，不覆盖 Result。
 
@@ -68,11 +70,11 @@ Running 取消遇到 `cleanup_identity_unknown` / `cleanup_incomplete` Hold 时�
 
 [ADR-047](decisions/ADR-047-compatible-result-summary.md)：`zcode_result({task_id})` 和 `view: "full"` 返回同一完整 Result。`view: "summary"` 对不超过 2 KiB 的 JSON 直接返回原结果。更大的结果包含 `projection.omitted_fields` 和全部测试声明的 `projection.test_counts`。用 `view: "full", expected_attempt: <摘要的 attempt>` 读取缺失字段及原文。`expected_attempt` 只核对当前已提交 Result，其他 Attempt 返回 `TASK_STATE`，未提交返回 `TASK_NOT_FINISHED`。Cleanup、Hold 和 Release 通过 Status/Events 核对。
 
-安装版 Codex Host/AppServer 的 MCP 单行上限为 **16,777,216 bytes**。超过该边界的 Result 仍完整持久化在 SQLite；[ADR-056](decisions/ADR-056-result-readback-contract.md) 起，`zcode_result` 提供可选 `offset_bytes`+`max_bytes`（成对提供，1,024–4,194,304 字节）分页读取存储的 canonical JSON：响应为 `{core identity, result_digest, page:{offset_bytes,next_offset,total_bytes,data}}`，`next_offset` 保证 UTF-8 码点边界，拼接全部 `data` 的 SHA-256 等于 `result_digest`。大 Result 由此可完整恢复；`okResult` 文本通道超过 1 MiB 时改为有界引用，structuredContent 仍为权威载荷。不能把摘要或本地数据库存在误报为已取齐完整证据。
+安装版 Codex Host/AppServer 的 MCP 单行上限为 **16,777,216 bytes**。超过该边界的 Result 仍完整持久化在 SQLite；[ADR-056](decisions/ADR-056-result-readback-contract.md) 与 [ADR-064](decisions/ADR-064-executor-startability-and-user-release.md) 提供 `offset_bytes`+`max_bytes`（成对提供，1,024–4,194,304 字节）分页读取存储的 canonical JSON：响应包含 envelope `result_digest` 和 `result_content_digest`；后者等于拼接全部 `data` 的 SHA-256。`next_offset` 保证 UTF-8 码点边界。两个摘要语义不同，不互相断言相等。大 Result 由此可完整恢复；`okResult` 文本通道超过 1 MiB 时改为有界引用，structuredContent 仍为权威载荷。不能把摘要或本地数据库存在误报为已取齐完整证据。
 
 AgentReport 必须包含布尔 needs_master_decision，不补造缺失字段。非法或超限报告形成明确的基础设施失败 Result（invalid_result_payload/result_too_large），标明原报告未提交，不裁剪为成功，不重派。完整合法帧先落 SQLite，再验证 Worker close/树/资源；已提交 Result 不因晚退出被丢弃。
 
-确定未提交的 Store/管道错误记录 operation-scoped 诊断并保留 running/占用；无法写诊断时输出 SQLITE_RESULT_SUBMISSION_FAILED。COMMIT ACK 不确定保留 poison/WRITER_INTENT，输出只读对账，禁止替代 Result、自动 Cleanup/重试。升级操作与回滚规则见 [运行配置](ZCODE_RUNTIME.md)。
+确定未提交的 Store/管道错误记录 operation-scoped 诊断并保留 running/占用；无法写诊断时输出 SQLITE_RESULT_SUBMISSION_FAILED。COMMIT ACK 不确定保留 poison，输出只读对账，禁止替代 Result、自动 Cleanup/重试。`WRITER_INTENT` v2 带 exact process identity；仅平台证明旧 writer absent 后归档，随后 SQLite 校验事实。legacy/live/复用/未知身份继续 fail closed。升级操作与回滚规则见 [运行配置](ZCODE_RUNTIME.md)。
 
 [ADR-027](decisions/ADR-027-execution-and-cleanup-deadlines.md)：Manager 一次选择 Task override > Host 持久配置/环境 > 1h，范围 60s–4h。私有 Task 副本传同一预算给 Worker/Adapter，不改公开持久 Task。resolver/启动/turn 共用执行期限，终结/错误/取消即撤销 timer；清理独立 300s，迟到确认不自动升级已发布 unverified。
 

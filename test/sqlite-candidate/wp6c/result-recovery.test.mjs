@@ -22,7 +22,7 @@ function child(mode,r,payload={},fault){return new Promise((resolve,reject)=>{
   p.on('close',code=>{try{resolve({code,out:JSON.parse(out),err});}catch(e){reject(new Error(`child output parse failed: ${out}; stderr=${err}; ${e}`));}});
 });}
 function capture(fn,code){assert.throws(fn,e=>e instanceof AdmissionError&&e.code===code);}
-function makeRunning(label='running',{intentOnly=false,reservedOnly=false}={}){
+function makeRunning(label='running',{intentOnly=false,reservedOnly=false,stopAfterReceipt=false}={}){
   const r=root(label);const s=IsolatedAdmissionStore.initialize(r);openStores.add(s);
   const taskPackage={task_id:'task-result',workspace:path.join(TEMP,'workspace'),objective:'synthetic WP6C result fixture',requirements:[],allowed_paths:[],forbidden_paths:[],acceptance_criteria:[],test_commands:[]};
   s.createTask(taskPackage,'2026-10-23T00:00:00.000Z');
@@ -38,6 +38,7 @@ function makeRunning(label='running',{intentOnly=false,reservedOnly=false}={}){
   if(intentOnly)return {root:r,store:s,request:null};
   const receipt={...intent,revision:intent.revision,receipt_id:'receipt-result',launch_identity:{source:'synthetic_fixture',fixture:true,process_id:41001,start_fingerprint:'synthetic-start-result'}};
   s.recordLaunchReceipt(receipt);
+  if(stopAfterReceipt)return {root:r,store:s,request:null,receipt};
   const claim={...intent,revision:intent.revision+1,claim_id:'claim-result',worker_identity:{source:'synthetic_fixture',fixture:true,worker_id:'worker-result',incarnation:'incarnation-result',process_id:41001,start_fingerprint:'synthetic-start-result'}};
   s.commitPermanentClaim(claim);
   const operation=s.readOperation('operation-result');
@@ -404,6 +405,7 @@ test('enriched cleanup Recovery release is idempotent and survives SQLite reopen
   const repeated=recovery.recordRecoveryObservation({...proof.input,evidence_digest:digest(refreshed)},refreshed);
   assert.equal(repeated.duplicate,true);
   const operation=f.store.readOperation('operation-result');
+  assert.equal(operation.phase,'cleanup_unverified');
   const request={operation_id:operation.operation_id,task_id:operation.task_id,attempt:operation.attempt,generation:operation.generation,
     revision:operation.revision,cancel_id:f.intent.cancel_id,cancellation_verification_digest:f.verification.cancellation_verification_digest,
     recovery_evidence_digest:repeated.evidence_digest,release_reason:'user_authorized_release_unverified'};
@@ -423,6 +425,42 @@ test('enriched cleanup Recovery release is idempotent and survives SQLite reopen
     assert.equal(readRows(f.root).events.filter(event=>event.event_type==='result_committed').length,1);
     assert.equal(readRows(f.root).events.filter(event=>event.event_type==='cleanup_unverified').length,1);
     assert.equal(readRows(f.root).events.filter(event=>event.event_type==='cleanup_verified').length,0);
+  }finally{reopened.close();}
+});
+
+test('forced cleanup binds a launch Receipt, accepts workspace risk, and preserves launch history',()=>{
+  const f=makeRunning('forced-launch-release',{stopAfterReceipt:true});
+  const cancelled=f.store.cancelQueuedAttempt({task_id:'task-result',expected_attempt:1});
+  const operation=f.store.readOperation('operation-result');
+  const request={operation_id:operation.operation_id,task_id:operation.task_id,attempt:operation.attempt,
+    generation:operation.generation,revision:operation.revision,cancel_id:cancelled.cancel_id,
+    accept_worker_risk:true,launch_receipt_digest:operation.launch_receipt_digest,
+    release_reason:'user_authorized_release_unverified'};
+  capture(()=>f.store.userAuthorizedReleaseUnverifiedOperation({
+    ...request,launch_receipt_digest:'0'.repeat(64)}),
+    'user_authorized_release_spawn_evidence_mismatch');
+  assert.equal(f.store.readOperation('operation-result').phase,'launch_intent');
+  const first=f.store.userAuthorizedReleaseUnverifiedOperation(request);
+  const duplicate=f.store.userAuthorizedReleaseUnverifiedOperation(request);
+  assert.equal(first.duplicate,false);assert.equal(first.phase,'released');
+  assert.equal(first.cleanup_verified,false);assert.equal(duplicate.duplicate,true);
+  const rows=readRows(f.root);
+  assert.equal(rows.operation.phase,'released');assert.equal(rows.active,0);
+  assert.equal(rows.task.status,'cancelled');assert.equal(rows.attempt.status,'cancelled');
+  assert.equal(rows.events.filter(event=>event.event_type==='launch_receipt').length,1);
+  assert.equal(rows.events.filter(event=>event.event_type==='result_committed').length,0);
+  assert.equal(rows.events.filter(event=>event.event_type==='cleanup_verified').length,0);
+  const release=rows.events.filter(event=>event.event_type==='observation_recorded'
+    &&JSON.parse(event.evidence_json).reason==='user_authorized_release_unverified').at(-1);
+  assert.equal(JSON.parse(release.evidence_json).worker_risk_accepted,true);
+  f.store.close();
+  const reopened=IsolatedAdmissionStore.openForRecovery(f.root);
+  try{
+    const snapshot=reopened.readRecoverySnapshot();
+    const released=snapshot.operations.find(item=>item.operation_id===operation.operation_id);
+    assert.equal(snapshot.root_status,'consistent_read_only');
+    assert.equal(released.phase,'released');assert.equal(released.capacity_occupied,false);
+    assert.equal(released.cleanup_state,'unverified_admin_release');
   }finally{reopened.close();}
 });
 

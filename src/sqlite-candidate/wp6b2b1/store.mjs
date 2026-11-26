@@ -5,6 +5,7 @@ export function canonical(value) {
 }
 import { DatabaseSync } from 'node:sqlite';
 import { createHash, randomUUID } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { existsSync, lstatSync, realpathSync, readFileSync, writeFileSync, openSync, closeSync, fsyncSync, unlinkSync, renameSync, statSync, readSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -573,7 +574,9 @@ function validateObservationEventEvidence(value){
       ||evidence_digest!==digest(unsigned))fail('invalid_user_authorized_release_evidence');
     return;
   }
-  if(own==='cancel_id|evidence_digest|reason'||own==='cancel_id|cancellation_verification_digest|evidence_digest|reason|recovery_evidence_digest'){
+  if(own==='cancel_id|evidence_digest|reason'
+    ||own==='cancel_id|evidence_digest|launch_receipt_digest|reason|worker_risk_accepted'
+    ||own==='cancel_id|cancellation_verification_digest|evidence_digest|reason|recovery_evidence_digest'){
     const {evidence_digest,...unsigned}=value;
     if(value.reason!=='user_authorized_release_unverified'||!validId(value.cancel_id)
       ||(own.includes('cancellation_verification_digest')
@@ -861,6 +864,7 @@ function presentOperation(row,adminAbandonment){
 const ADMIN_ABANDONMENT_INPUT_KEYS='attempt|claim_id|claim_worker_identity_digest|evidence|generation|operation_id|revision|task_id';
 const ADMIN_ABANDONMENT_EVIDENCE_KEYS='boot_time|claimant_scan_clean|claimant_scan_digest|failed_at|hosts_closed|observed_at|platform_probe_digest|process_inventory_digest|worker_exited|worker_process_id|worker_start_fingerprint|writer_closed';
 const USER_AUTHORIZED_RELEASE_INPUT_KEYS='attempt|cancel_id|generation|operation_id|release_reason|revision|task_id';
+const USER_AUTHORIZED_FORCED_RELEASE_INPUT_KEYS='accept_worker_risk|attempt|cancel_id|generation|launch_receipt_digest|operation_id|release_reason|revision|task_id';
 const USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS='attempt|cancel_id|cancellation_verification_digest|generation|operation_id|recovery_evidence_digest|release_reason|revision|task_id';
 const EXECUTOR_WAKE_BASE_INPUT_KEYS='attempt|authorization_digest|delivery_id|generation|operation_id|policy_digest|reason_code|state|task_id|thread_id';
 const EXECUTOR_WAKE_INPUT_KEYS='attempt|authorization_digest|delivery_id|generation|operation_id|policy_digest|queue_message_id|reason_code|state|task_id|thread_id';
@@ -919,6 +923,7 @@ function validateAdminAbandonmentInput(input){
 function validateUserAuthorizedReleaseInput(input){
   const fields=input&&Object.getPrototypeOf(input)===Object.prototype?Object.keys(input).sort().join('|'):'';
   const validShape=fields===USER_AUTHORIZED_RELEASE_INPUT_KEYS
+    ||fields===USER_AUTHORIZED_FORCED_RELEASE_INPUT_KEYS
     ||fields===USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS
     ||fields===USER_AUTHORIZED_TERMINAL_RELEASE_INPUT_KEYS;
   const commonValid=input&&validShape&&validId(input.operation_id)&&validId(input.task_id)
@@ -927,6 +932,10 @@ function validateUserAuthorizedReleaseInput(input){
     &&(fields!==USER_AUTHORIZED_TERMINAL_RELEASE_INPUT_KEYS||validId(input.cancel_id)===false);
   if(!commonValid)fail('invalid_user_authorized_release');
   if(fields===USER_AUTHORIZED_RELEASE_INPUT_KEYS&&!validId(input.cancel_id))
+    fail('invalid_user_authorized_release');
+  if(fields===USER_AUTHORIZED_FORCED_RELEASE_INPUT_KEYS
+    &&(input.accept_worker_risk!==true||!validId(input.cancel_id)
+      ||!/^[0-9a-f]{64}$/u.test(input.launch_receipt_digest)))
     fail('invalid_user_authorized_release');
   if(fields===USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS
     &&(!validId(input.cancel_id)||![input.cancellation_verification_digest,input.recovery_evidence_digest]
@@ -1096,6 +1105,68 @@ function assertCutoverPublicationGate(db, paths) {
     ||publication.archive.file_count!==receipt.archive_file_count
     ||publication.archive.byte_count!==receipt.archive_byte_count)fail('cutover_publication_receipt_mismatch');
 }
+function processStartEvidence(pid) {
+  try {
+    if (process.platform === 'linux') {
+      try {
+        const stat=readFileSync(`/proc/${pid}/stat`,'utf8');
+        const fingerprint=stat.slice(stat.lastIndexOf(')')+2).split(' ')[19]?.trim();
+        return fingerprint?{state:'live',fingerprint}:{state:'unknown'};
+      } catch(e) { return e?.code==='ENOENT'?{state:'absent'}:{state:'unknown'}; }
+    }
+    if (process.platform === 'darwin') {
+      const query=spawnSync('ps',['-o','pid=,lstart=','-p',String(pid)],{encoding:'utf8',timeout:5000,windowsHide:true,shell:false});
+      if(query.status!==0)return {state:'unknown'};
+      const row=query.stdout.split(/\r?\n/u).find(line=>line.trim());
+      return row?{state:'live',fingerprint:row.trim().split(/\s+/u).slice(1).join(' ')}:{state:'absent'};
+    }
+    if (process.platform === 'win32') {
+      const systemRoot=Object.entries(process.env).find(([key])=>key.toLowerCase()==='systemroot')?.[1];
+      const executable=systemRoot?`${systemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`:'powershell.exe';
+      const query=spawnSync(executable,['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-Command',
+        `$p=$null; try { $p=[System.Diagnostics.Process]::GetProcessById(${pid}); [Console]::Out.Write($p.StartTime.Ticks) } catch [System.ArgumentException] { [Console]::Out.Write('bridge_pid_absent_v1') }`],{
+        encoding:'utf8',timeout:5000,windowsHide:true,shell:false});
+      const output=query.status===0?query.stdout.trim():'';
+      return output==='bridge_pid_absent_v1'?{state:'absent'}
+        :/^[0-9]+$/u.test(output)?{state:'live',fingerprint:output}:{state:'unknown'};
+    }
+  } catch { return {state:'unknown'}; }
+  return {state:'unknown'};
+}
+let selfStartFingerprint;
+function writerIntentIdentity() {
+  if(selfStartFingerprint===undefined) {
+    const evidence=processStartEvidence(process.pid);
+    selfStartFingerprint=evidence.state==='live'?evidence.fingerprint:null;
+  }
+  return selfStartFingerprint;
+}
+function readWriterIntent(file) {
+  try {
+    const stat=lstatSync(file);
+    if(stat.isFile()&&!stat.isSymbolicLink()&&stat.size<=65536)return JSON.parse(readFileSync(file,'utf8'));
+  } catch { /* An unreadable or oversized fence remains fail-closed. */ }
+  return null;
+}
+function validWriterIntentIdentity(intent) {
+  return intent&&intent.version===2&&typeof intent.token==='string'&&intent.token.length>0&&intent.token.length<=128
+    &&Number.isSafeInteger(intent.process_id)&&intent.process_id>0
+    &&typeof intent.start_fingerprint==='string'&&intent.start_fingerprint.length>0&&intent.start_fingerprint.length<=256
+    &&intent.identity_version===1&&intent.platform===process.platform;
+}
+/** Retire an interrupted writer fence only after exact platform identity
+ * proves the recorded process is absent. Rename preserves recovery evidence;
+ * malformed, foreign-platform, legacy, live, reused-PID and unknown records
+ * continue to fail closed. */
+function retireWriterIntent(paths) {
+  const intent=readWriterIntent(paths.intent);
+  if(!validWriterIntentIdentity(intent))return false;
+  const evidence=processStartEvidence(intent.process_id);
+  if(evidence.state!=='absent')return false;
+  const retired=`${paths.intent}.cleared-${intent.token}-${randomUUID()}.json`;
+  try { renameSync(paths.intent,retired); return true; }
+  catch { return false; }
+}
 function writePoison(file, value) {
   const tmp = `${file}.${randomUUID()}.tmp`;
   const fd = openSync(tmp, 'wx', 0o600);
@@ -1151,6 +1222,7 @@ export class IsolatedAdmissionStore {
     if(existsSync(p.bootstrapPending)&&!p.allowBootstrapPending) fail('sqlite_bootstrap_pending');
     if(existsSync(p.cutoverPending)) fail('cutover_publish_pending');
     if(existsSync(p.poison)) fail('root_poisoned');
+    if(existsSync(p.intent)&&!retireWriterIntent(p)) fail('root_writer_busy');
     rejectV13UpgradeMarker(p.db);
     if(!existsSync(p.db)) fail('database_missing');
     preflightSchemaVersion(p.db);
@@ -1583,6 +1655,7 @@ export class IsolatedAdmissionStore {
       if(end>=bytes.length)end=bytes.length;
       const nextOffset=end<bytes.length?end:null;
       return {operation_id:operationRow.operation_id,result_digest:operationRow.result_digest,
+        result_content_digest:createHash('sha256').update(bytes).digest('hex'),
         result_commit_ref:operationRow.result_commit_ref,result_status:operationRow.result_status,
         offset_bytes:offsetBytes,next_offset:nextOffset,total_bytes:bytes.length,
         data:bytes.subarray(offsetBytes,end).toString('utf8')};
@@ -2425,14 +2498,18 @@ export class IsolatedAdmissionStore {
       const o=this.#attemptOperation(input);
       const task=this.#db.prepare('SELECT task_id,status,current_attempt FROM tasks WHERE task_id=?').get(input.task_id);
       const attempt=this.#db.prepare('SELECT task_id,attempt,generation,status,queued_cancel_id,queued_cancel_operation_id,queued_cancel_result_json FROM attempts WHERE task_id=? AND attempt=?').get(input.task_id,input.attempt);
-      const expectedStatus=o.phase==='launch_intent'?'cancelled':o.result_status;
+      const expectedStatus=o.phase==='launch_intent'?'cancelled'
+        :o.phase==='released'?attempt?.status:o.result_status;
       if(!task||!attempt||task.current_attempt!==input.attempt
         ||task.status!==expectedStatus||attempt.status!==expectedStatus||attempt.generation!==input.generation)
         fail('user_authorized_release_projection_mismatch');
       const cleanupBinding=input.cancellation_verification_digest!==undefined;
       const terminalBinding=input.result_digest!==undefined;
+      const forcedPreclaim=input.accept_worker_risk===true;
       const unsignedEvidence={reason:'user_authorized_release_unverified',
         ...(terminalBinding?{}:{cancel_id:input.cancel_id}),
+        ...(forcedPreclaim?{launch_receipt_digest:input.launch_receipt_digest,
+          worker_risk_accepted:true}:{}),
         ...(cleanupBinding?{cancellation_verification_digest:input.cancellation_verification_digest,
           recovery_evidence_digest:input.recovery_evidence_digest}:{}),
         ...(terminalBinding?{claim_id:input.claim_id,result_commit_ref:input.result_commit_ref,result_digest:input.result_digest,
@@ -2443,6 +2520,8 @@ export class IsolatedAdmissionStore {
         let parsed;try{parsed=JSON.parse(released?.evidence_json);}catch{parsed=null;}
         if(released&&parsed?.reason==='user_authorized_release_unverified'
           &&parsed?.cancel_id===input.cancel_id
+          &&parsed?.launch_receipt_digest===input.launch_receipt_digest
+          &&parsed?.worker_risk_accepted===input.accept_worker_risk
           &&parsed?.cancellation_verification_digest===input.cancellation_verification_digest
           &&parsed?.recovery_evidence_digest===input.recovery_evidence_digest
           &&parsed?.claim_id===input.claim_id
@@ -2462,8 +2541,11 @@ export class IsolatedAdmissionStore {
       if(historicalCleanup?(cleanupBinding===terminalBinding):(cleanupBinding||terminalBinding))
         fail('user_authorized_release_phase_mismatch');
       if(preClaim){
-        if(o.launch_receipt_id!==null||o.launch_receipt_digest!==null||o.launch_identity_json!==null)
+      if((o.launch_receipt_id!==null||o.launch_receipt_digest!==null||o.launch_identity_json!==null)
+        &&!input.accept_worker_risk)
           fail('user_authorized_release_spawn_evidence_present');
+      if(input.accept_worker_risk&&o.launch_receipt_digest!==input.launch_receipt_digest)
+        fail('user_authorized_release_spawn_evidence_mismatch');
         if(attempt.queued_cancel_operation_id!==input.operation_id
           ||attempt.queued_cancel_id!==input.cancel_id||attempt.queued_cancel_result_json===null)
           fail('user_authorized_release_projection_mismatch');
@@ -3603,7 +3685,9 @@ export class IsolatedAdmissionStore {
   #faultPoint(name){if(this.#fault===name||this.#fault==='rollback_unknown'&&name==='after_projection')fail('injected_failure',`injected ${name}`);}
   #transaction(fn){
     this.#assertWritable(); let began=false,commitStarted=false,settled=false;const token=randomUUID();
-    try {const fd=openSync(this.#paths.intent,'wx',0o600);try{writeFileSync(fd,JSON.stringify({version:1,token,started_at:new Date().toISOString()}));fsyncSync(fd);}finally{closeSync(fd);}}
+    const identity=writerIntentIdentity();
+    if(identity===null)fail('writer_intent_identity_unavailable');
+    try {const fd=openSync(this.#paths.intent,'wx',0o600);try{writeFileSync(fd,JSON.stringify({version:2,token,started_at:new Date().toISOString(),process_id:process.pid,platform:process.platform,identity_version:1,start_fingerprint:identity}));fsyncSync(fd);}finally{closeSync(fd);}}
     catch(e){if(e?.code==='EEXIST')fail('root_writer_busy');throw e;}
     try {this.#db.exec('BEGIN IMMEDIATE');began=true;assertCandidateSchema(this.#db);const v=fn();this.#validate(false);commitStarted=true;this.#db.exec('COMMIT');settled=true;if(this.#fault==='commit_ack_lost')throw new Error('injected lost commit acknowledgment');return v;}
     catch(e){

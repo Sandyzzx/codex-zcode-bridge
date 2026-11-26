@@ -23,12 +23,10 @@ test("production Spawner forwards only recognized credential-free runtime-auth d
   }, {
     onWorkerDiagnosticLine: (line) => forwarded.push(line),
   });
-  const closed = once(child, "close");
   t.after(async () => {
-    if (child.exitCode === null && child.signalCode === null) child.kill();
-    await closed;
     rmSync(root, { recursive: true, force: true });
   });
+  const closed = once(child, "close");
   const frames: Buffer[] = [];
   for await (const chunk of child.resultChannel!) frames.push(Buffer.from(chunk));
   assert.deepEqual(JSON.parse(Buffer.concat(frames).toString("utf8")), { ok: true });
@@ -36,6 +34,35 @@ test("production Spawner forwards only recognized credential-free runtime-auth d
   assert.equal(code, 0);
   assert.equal(signal, null);
   assert.deepEqual(forwarded, ['[bridge-worker] runtime-auth {"stage":"resolved"}']);
+});
+
+test("an asynchronous OS spawn failure does not crash the production Spawner", { timeout: 15_000 }, async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "bridge-spawn-error-"));
+  const worker = path.join(root, "worker.mjs");
+  let resolveSpawnError: ((error: NodeJS.ErrnoException) => void) | undefined;
+  const spawnFailure = new Promise<NodeJS.ErrnoException>((resolve) => {
+    resolveSpawnError = resolve;
+  });
+  const originalExecutable = process.execPath;
+  process.execPath = path.join(root, "missing-node.exe");
+  let child: ReturnType<typeof spawnClaimOnlyWorker>;
+  const observed: { error?: NodeJS.ErrnoException } = {};
+  try {
+    child = spawnClaimOnlyWorker(worker, {
+      bridge: { path: null, sha256: null },
+      worker: { path: worker, sha256: null },
+    }, {
+      onSpawnError: (error) => {
+        observed.error = error as NodeJS.ErrnoException;
+        resolveSpawnError?.(error as NodeJS.ErrnoException);
+      },
+    });
+  } finally {
+    process.execPath = originalExecutable;
+  }
+  const spawnedError = await spawnFailure;
+  assert.equal(spawnedError.code, "ENOENT");
+  assert.equal(observed.error?.code, "ENOENT");
 });
 
 for (const interactionChannel of [false, true]) {

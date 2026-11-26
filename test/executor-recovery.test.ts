@@ -600,10 +600,13 @@ test("a live but temporarily unreachable owner is never archived or duplicated",
   }
 });
 
-test("a live or unknown Worker keeps the old Lease and blocks restart", async () => {
+test("a live or unknown Worker is retained while restart continues", async () => {
   const root = mkdtempSync(path.join(tmpdir(), "executor-recovery-worker-"));
   let cleared = 0;
+  let ready = false;
   let spawns = 0;
+  const leaseFile = path.join(root, EXECUTOR_LEASE_FILE);
+  const archiveFile = path.join(root, `${EXECUTOR_LEASE_CLEARED_FILE}.archived-worker-lease`);
   try {
     await acquireExecutorLease({
       authorityRoot: root,
@@ -617,28 +620,32 @@ test("a live or unknown Worker keeps the old Lease and blocks restart", async ()
     const coordinator = createExecutorRecoveryCoordinator(recoveryOptions(root, {
       processProbe: probeWith(EXITED),
       dependencies: {
-        probeStatus: async () => null,
+        probeStatus: async () => ready ? { lease_id: "retained-worker-executor" } : null,
         inspectWorkerSafety: async () => ({
-          safe: false,
-          blockers: ["worker_still_alive:task-1/1"],
+          safe: true,
+          blockers: [],
+          retained_operations: ["worker_still_alive:task-1/1"],
         }),
         clearLease: async () => {
           cleared += 1;
-          throw new Error("must not clear");
+          const record = JSON.parse(readFileSync(leaseFile, "utf8")) as ExecutorLeaseRecord;
+          renameSync(leaseFile, archiveFile);
+          return { lease_id: "archived-worker-lease" } as never;
         },
         spawnExecutor: () => {
           spawns += 1;
+          ready = true;
           return { pid: 42_003 };
         },
+        sleep: async () => undefined,
       },
     }));
-    await assert.rejects(() => coordinator.ensureRunning(), (error: unknown) =>
-      error instanceof ExecutorRecoveryError
-      && error.code === "EXECUTOR_RECOVERY_WORKER_ACTIVE"
-      && error.blockers.includes("worker_still_alive:task-1/1"));
-    assert.equal(cleared, 0);
-    assert.equal(spawns, 0);
-    assert.equal(existsSync(path.join(root, EXECUTOR_LEASE_FILE)), true);
+    const recovered = await coordinator.ensureRunning();
+    assert.equal(recovered.status, "recovered");
+    assert.equal(cleared, 1);
+    assert.equal(spawns, 1);
+    assert.equal(existsSync(path.join(root, EXECUTOR_LEASE_FILE)), false);
+    assert.equal(existsSync(archiveFile), true);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -826,7 +833,7 @@ async function startProductionWorkerClaim(
   return { child, exit, report, stderr: () => stderr };
 }
 
-test("a launch intent without a receipt blocks automatic restart", async () => {
+test("a launch intent without a receipt is retained and does not block restart", async () => {
   const root = mkdtempSync(path.join(tmpdir(), "executor-recovery-launch-unknown-"));
   try {
     const fixture = initializeAuthority(root, "unknown");
@@ -836,8 +843,11 @@ test("a launch intent without a receipt blocks automatic restart", async () => {
       fixture.store.close();
     }
     const result = await inspectExecutorWorkerSafety(root);
-    assert.equal(result.safe, false);
-    assert.ok(result.blockers.some((blocker) => blocker.startsWith("launch_outcome_unknown:")));
+    assert.deepEqual(result, {
+      safe: true,
+      blockers: [],
+      retained_operations: [`launch_outcome_unknown:task-unknown/1`],
+    });
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -849,7 +859,7 @@ test("Worker safety inspection reads a concurrent open Authority without changin
     const fixture = initializeAuthority(root, "open");
     try {
       const result = await inspectExecutorWorkerSafety(root);
-      assert.deepEqual(result, { safe: true, blockers: [] });
+      assert.deepEqual(result, { safe: true, blockers: [], retained_operations: [] });
       assert.equal(fixture.store.readTaskProjection(fixture.taskId).current_attempt, 1);
       assert.equal(fixture.store.readOperation(fixture.operationId).phase, "reserved");
     } finally {
@@ -919,7 +929,7 @@ test("real Executor normal and crash exits recover the same Authority without a 
   }
 });
 
-test("a persisted exact live Worker blocks automatic restart", { skip: process.platform !== "win32" }, async () => {
+test("a persisted exact live Worker is retained without a startup blocker", { skip: process.platform !== "win32" }, async () => {
   const root = mkdtempSync(path.join(tmpdir(), "executor-recovery-worker-live-"));
   try {
     const fixture = initializeAuthority(root, "live");
@@ -973,14 +983,15 @@ test("a persisted exact live Worker blocks automatic restart", { skip: process.p
       fixture.store.close();
     }
     const result = await inspectExecutorWorkerSafety(root, processProbe);
-    assert.equal(result.safe, false);
-    assert.ok(result.blockers.some((blocker) => blocker.startsWith("worker_still_alive:")));
+    assert.equal(result.safe, true);
+    assert.deepEqual(result.blockers, []);
+    assert.ok(result.retained_operations?.some((item) => item.startsWith("worker_still_alive:")));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("Thin MCP blocks recovery when an Executor crash leaves a real production Worker alive", {
+test("Thin MCP recovers an Executor while retaining a live production Worker operation", {
   skip: process.platform !== "win32",
   timeout: 120_000,
 }, async () => {
@@ -1086,16 +1097,13 @@ test("Thin MCP blocks recovery when an Executor crash leaves a real production W
         structuredContent?: { error?: { code?: string; message?: string } };
       };
     };
-    assert.equal(response.result?.isError, true, session.stderr());
-    assert.equal(response.result?.structuredContent?.error?.code, "EXECUTOR_RECOVERY_WORKER_ACTIVE");
-    assert.match(
-      response.result?.structuredContent?.error?.message ?? "",
-      /worker_still_alive:task-production-worker\/1/u,
-    );
-    assert.doesNotMatch(session.stderr(), /EXECUTOR_START_RECOVERED/u);
+    assert.notEqual(response.result?.isError, true, session.stderr());
+    assert.equal(response.result?.structuredContent?.error, undefined);
+    assert.match(session.stderr(), /EXECUTOR_LEASE_RECOVERED/u);
+    assert.match(session.stderr(), /worker_still_alive:task-production-worker\/1/u);
 
     assert.doesNotThrow(() => process.kill(workerPid, 0), "the original Worker must still be alive");
-    assert.deepEqual(readFileSync(leaseFile), crashedLeaseBytes);
+    assert.notDeepEqual(readFileSync(leaseFile), crashedLeaseBytes);
     assert.equal(existsSync(path.join(settingsDirectory, "executor-recovery.lock")), false);
     assert.deepEqual(
       readFileSync(spawnLog, "utf8").trim().split(/\r?\n/u).filter(Boolean),
@@ -1106,10 +1114,9 @@ test("Thin MCP blocks recovery when an Executor crash leaves a real production W
       connectTimeoutMs: 500,
     });
     try {
-      await assert.rejects(
-        () => controlProbe.connect(),
-        (error: unknown) => (error as { readonly code?: unknown }).code === "EXECUTOR_UNAVAILABLE",
-      );
+      await controlProbe.connect();
+      const liveStatus = await controlProbe.request("executorStatus", {});
+      assert.equal(liveStatus.ok, true);
     } finally {
       controlProbe.close();
     }
@@ -1120,7 +1127,7 @@ test("Thin MCP blocks recovery when an Executor crash leaves a real production W
     const workerExit = await worker.exit;
     assert.equal(workerExit.signal, "SIGKILL");
     const safe = await inspectExecutorWorkerSafety(root);
-    assert.deepEqual(safe, { safe: true, blockers: [] });
+    assert.deepEqual(safe, { safe: true, blockers: [], retained_operations: [] });
     session.child.stdin!.end();
     const hostExit = await session.exit;
     assert.equal(hostExit.code, 0, session.stderr());

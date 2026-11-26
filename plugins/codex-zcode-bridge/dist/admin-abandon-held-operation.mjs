@@ -943,6 +943,7 @@ function canonicalTaskResult(result, input) {
 // src/sqlite-candidate/wp6b2b1/store.mjs
 import { DatabaseSync } from "node:sqlite";
 import { createHash as createHash2, randomUUID } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { existsSync, lstatSync, realpathSync, readFileSync, writeFileSync, openSync, closeSync, fsyncSync, unlinkSync, renameSync, statSync, readSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1711,7 +1712,7 @@ function validateObservationEventEvidence(value) {
     if (value.reason !== "user_authorized_release_unverified" || ![value.recovery_evidence_digest, value.result_digest, value.worker_identity_digest].every((item) => typeof item === "string" && /^[0-9a-f]{64}$/u.test(item)) || !validId(value.claim_id) || typeof value.result_commit_ref !== "string" || !/^(?:result-)?[0-9a-f]{64}$/u.test(value.result_commit_ref) || evidence_digest !== digest(unsigned)) fail2("invalid_user_authorized_release_evidence");
     return;
   }
-  if (own === "cancel_id|evidence_digest|reason" || own === "cancel_id|cancellation_verification_digest|evidence_digest|reason|recovery_evidence_digest") {
+  if (own === "cancel_id|evidence_digest|reason" || own === "cancel_id|evidence_digest|launch_receipt_digest|reason|worker_risk_accepted" || own === "cancel_id|cancellation_verification_digest|evidence_digest|reason|recovery_evidence_digest") {
     const { evidence_digest, ...unsigned } = value;
     if (value.reason !== "user_authorized_release_unverified" || !validId(value.cancel_id) || own.includes("cancellation_verification_digest") && ![value.cancellation_verification_digest, value.recovery_evidence_digest].every((item) => typeof item === "string" && /^[0-9a-f]{64}$/u.test(item)) || evidence_digest !== digest(unsigned)) fail2("invalid_user_authorized_release_evidence");
     return;
@@ -1968,6 +1969,7 @@ function presentOperation(row, adminAbandonment) {
 var ADMIN_ABANDONMENT_INPUT_KEYS = "attempt|claim_id|claim_worker_identity_digest|evidence|generation|operation_id|revision|task_id";
 var ADMIN_ABANDONMENT_EVIDENCE_KEYS = "boot_time|claimant_scan_clean|claimant_scan_digest|failed_at|hosts_closed|observed_at|platform_probe_digest|process_inventory_digest|worker_exited|worker_process_id|worker_start_fingerprint|writer_closed";
 var USER_AUTHORIZED_RELEASE_INPUT_KEYS = "attempt|cancel_id|generation|operation_id|release_reason|revision|task_id";
+var USER_AUTHORIZED_FORCED_RELEASE_INPUT_KEYS = "accept_worker_risk|attempt|cancel_id|generation|launch_receipt_digest|operation_id|release_reason|revision|task_id";
 var USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS = "attempt|cancel_id|cancellation_verification_digest|generation|operation_id|recovery_evidence_digest|release_reason|revision|task_id";
 var EXECUTOR_WAKE_BASE_INPUT_KEYS = "attempt|authorization_digest|delivery_id|generation|operation_id|policy_digest|reason_code|state|task_id|thread_id";
 var EXECUTOR_WAKE_INPUT_KEYS = "attempt|authorization_digest|delivery_id|generation|operation_id|policy_digest|queue_message_id|reason_code|state|task_id|thread_id";
@@ -1999,10 +2001,12 @@ function validateAdminAbandonmentInput(input) {
 }
 function validateUserAuthorizedReleaseInput(input) {
   const fields = input && Object.getPrototypeOf(input) === Object.prototype ? Object.keys(input).sort().join("|") : "";
-  const validShape = fields === USER_AUTHORIZED_RELEASE_INPUT_KEYS || fields === USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS || fields === USER_AUTHORIZED_TERMINAL_RELEASE_INPUT_KEYS;
+  const validShape = fields === USER_AUTHORIZED_RELEASE_INPUT_KEYS || fields === USER_AUTHORIZED_FORCED_RELEASE_INPUT_KEYS || fields === USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS || fields === USER_AUTHORIZED_TERMINAL_RELEASE_INPUT_KEYS;
   const commonValid = input && validShape && validId(input.operation_id) && validId(input.task_id) && input.release_reason === "user_authorized_release_unverified" && [input.attempt, input.generation, input.revision].every((value) => Number.isSafeInteger(value) && value >= 1) && (fields !== USER_AUTHORIZED_TERMINAL_RELEASE_INPUT_KEYS || validId(input.cancel_id) === false);
   if (!commonValid) fail2("invalid_user_authorized_release");
   if (fields === USER_AUTHORIZED_RELEASE_INPUT_KEYS && !validId(input.cancel_id))
+    fail2("invalid_user_authorized_release");
+  if (fields === USER_AUTHORIZED_FORCED_RELEASE_INPUT_KEYS && (input.accept_worker_risk !== true || !validId(input.cancel_id) || !/^[0-9a-f]{64}$/u.test(input.launch_receipt_digest)))
     fail2("invalid_user_authorized_release");
   if (fields === USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS && (!validId(input.cancel_id) || ![input.cancellation_verification_digest, input.recovery_evidence_digest].every((value) => typeof value === "string" && /^[0-9a-f]{64}$/u.test(value))))
     fail2("invalid_user_authorized_release");
@@ -2140,6 +2144,79 @@ function assertCutoverPublicationGate(db, paths) {
   const publication = readPublishedCutoverReceipt(paths.cutoverPublished);
   if (publication.database_file !== path.basename(paths.db) || publication.migration_id !== receipt.migration_id || publication.cutover_id !== receipt.cutover_id || publication.source_root_digest !== receipt.source_root_digest || publication.source_manifest_digest !== receipt.source_manifest_digest || publication.archive.archive_directory !== receipt.archive_directory || publication.archive.manifest_digest !== receipt.archive_manifest_digest || publication.archive.source_tasks_root !== receipt.archive_source_tasks_root || publication.archive.file_count !== receipt.archive_file_count || publication.archive.byte_count !== receipt.archive_byte_count) fail2("cutover_publication_receipt_mismatch");
 }
+function processStartEvidence(pid) {
+  try {
+    if (process.platform === "linux") {
+      try {
+        const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+        const fingerprint = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19]?.trim();
+        return fingerprint ? { state: "live", fingerprint } : { state: "unknown" };
+      } catch (e) {
+        return e?.code === "ENOENT" ? { state: "absent" } : { state: "unknown" };
+      }
+    }
+    if (process.platform === "darwin") {
+      const query = spawnSync("ps", ["-o", "pid=,lstart=", "-p", String(pid)], { encoding: "utf8", timeout: 5e3, windowsHide: true, shell: false });
+      if (query.status !== 0) return { state: "unknown" };
+      const row = query.stdout.split(/\r?\n/u).find((line) => line.trim());
+      return row ? { state: "live", fingerprint: row.trim().split(/\s+/u).slice(1).join(" ") } : { state: "absent" };
+    }
+    if (process.platform === "win32") {
+      const systemRoot = Object.entries(process.env).find(([key]) => key.toLowerCase() === "systemroot")?.[1];
+      const executable = systemRoot ? `${systemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe` : "powershell.exe";
+      const query = spawnSync(executable, [
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        `$p=$null; try { $p=[System.Diagnostics.Process]::GetProcessById(${pid}); [Console]::Out.Write($p.StartTime.Ticks) } catch [System.ArgumentException] { [Console]::Out.Write('bridge_pid_absent_v1') }`
+      ], {
+        encoding: "utf8",
+        timeout: 5e3,
+        windowsHide: true,
+        shell: false
+      });
+      const output = query.status === 0 ? query.stdout.trim() : "";
+      return output === "bridge_pid_absent_v1" ? { state: "absent" } : /^[0-9]+$/u.test(output) ? { state: "live", fingerprint: output } : { state: "unknown" };
+    }
+  } catch {
+    return { state: "unknown" };
+  }
+  return { state: "unknown" };
+}
+var selfStartFingerprint;
+function writerIntentIdentity() {
+  if (selfStartFingerprint === void 0) {
+    const evidence = processStartEvidence(process.pid);
+    selfStartFingerprint = evidence.state === "live" ? evidence.fingerprint : null;
+  }
+  return selfStartFingerprint;
+}
+function readWriterIntent(file) {
+  try {
+    const stat = lstatSync(file);
+    if (stat.isFile() && !stat.isSymbolicLink() && stat.size <= 65536) return JSON.parse(readFileSync(file, "utf8"));
+  } catch {
+  }
+  return null;
+}
+function validWriterIntentIdentity(intent) {
+  return intent && intent.version === 2 && typeof intent.token === "string" && intent.token.length > 0 && intent.token.length <= 128 && Number.isSafeInteger(intent.process_id) && intent.process_id > 0 && typeof intent.start_fingerprint === "string" && intent.start_fingerprint.length > 0 && intent.start_fingerprint.length <= 256 && intent.identity_version === 1 && intent.platform === process.platform;
+}
+function retireWriterIntent(paths) {
+  const intent = readWriterIntent(paths.intent);
+  if (!validWriterIntentIdentity(intent)) return false;
+  const evidence = processStartEvidence(intent.process_id);
+  if (evidence.state !== "absent") return false;
+  const retired = `${paths.intent}.cleared-${intent.token}-${randomUUID()}.json`;
+  try {
+    renameSync(paths.intent, retired);
+    return true;
+  } catch {
+    return false;
+  }
+}
 function writePoison(file, value) {
   const tmp = `${file}.${randomUUID()}.tmp`;
   const fd = openSync(tmp, "wx", 384);
@@ -2218,6 +2295,7 @@ var IsolatedAdmissionStore = class _IsolatedAdmissionStore {
     if (existsSync(p.bootstrapPending) && !p.allowBootstrapPending) fail2("sqlite_bootstrap_pending");
     if (existsSync(p.cutoverPending)) fail2("cutover_publish_pending");
     if (existsSync(p.poison)) fail2("root_poisoned");
+    if (existsSync(p.intent) && !retireWriterIntent(p)) fail2("root_writer_busy");
     rejectV13UpgradeMarker(p.db);
     if (!existsSync(p.db)) fail2("database_missing");
     preflightSchemaVersion(p.db);
@@ -2745,6 +2823,7 @@ var IsolatedAdmissionStore = class _IsolatedAdmissionStore {
       return {
         operation_id: operationRow.operation_id,
         result_digest: operationRow.result_digest,
+        result_content_digest: createHash2("sha256").update(bytes).digest("hex"),
         result_commit_ref: operationRow.result_commit_ref,
         result_status: operationRow.result_status,
         offset_bytes: offsetBytes,
@@ -3925,14 +4004,19 @@ var IsolatedAdmissionStore = class _IsolatedAdmissionStore {
       const o = this.#attemptOperation(input);
       const task = this.#db.prepare("SELECT task_id,status,current_attempt FROM tasks WHERE task_id=?").get(input.task_id);
       const attempt = this.#db.prepare("SELECT task_id,attempt,generation,status,queued_cancel_id,queued_cancel_operation_id,queued_cancel_result_json FROM attempts WHERE task_id=? AND attempt=?").get(input.task_id, input.attempt);
-      const expectedStatus = o.phase === "launch_intent" ? "cancelled" : o.result_status;
+      const expectedStatus = o.phase === "launch_intent" ? "cancelled" : o.phase === "released" ? attempt?.status : o.result_status;
       if (!task || !attempt || task.current_attempt !== input.attempt || task.status !== expectedStatus || attempt.status !== expectedStatus || attempt.generation !== input.generation)
         fail2("user_authorized_release_projection_mismatch");
       const cleanupBinding = input.cancellation_verification_digest !== void 0;
       const terminalBinding = input.result_digest !== void 0;
+      const forcedPreclaim = input.accept_worker_risk === true;
       const unsignedEvidence = {
         reason: "user_authorized_release_unverified",
         ...terminalBinding ? {} : { cancel_id: input.cancel_id },
+        ...forcedPreclaim ? {
+          launch_receipt_digest: input.launch_receipt_digest,
+          worker_risk_accepted: true
+        } : {},
         ...cleanupBinding ? {
           cancellation_verification_digest: input.cancellation_verification_digest,
           recovery_evidence_digest: input.recovery_evidence_digest
@@ -3954,7 +4038,7 @@ var IsolatedAdmissionStore = class _IsolatedAdmissionStore {
         } catch {
           parsed = null;
         }
-        if (released && parsed?.reason === "user_authorized_release_unverified" && parsed?.cancel_id === input.cancel_id && parsed?.cancellation_verification_digest === input.cancellation_verification_digest && parsed?.recovery_evidence_digest === input.recovery_evidence_digest && parsed?.claim_id === input.claim_id && parsed?.result_commit_ref === input.result_commit_ref && parsed?.result_digest === input.result_digest && parsed?.worker_identity_digest === input.worker_identity_digest && parsed?.evidence_digest === evidence.evidence_digest)
+        if (released && parsed?.reason === "user_authorized_release_unverified" && parsed?.cancel_id === input.cancel_id && parsed?.launch_receipt_digest === input.launch_receipt_digest && parsed?.worker_risk_accepted === input.accept_worker_risk && parsed?.cancellation_verification_digest === input.cancellation_verification_digest && parsed?.recovery_evidence_digest === input.recovery_evidence_digest && parsed?.claim_id === input.claim_id && parsed?.result_commit_ref === input.result_commit_ref && parsed?.result_digest === input.result_digest && parsed?.worker_identity_digest === input.worker_identity_digest && parsed?.evidence_digest === evidence.evidence_digest)
           return {
             duplicate: true,
             operation_id: o.operation_id,
@@ -3974,8 +4058,10 @@ var IsolatedAdmissionStore = class _IsolatedAdmissionStore {
       if (historicalCleanup ? cleanupBinding === terminalBinding : cleanupBinding || terminalBinding)
         fail2("user_authorized_release_phase_mismatch");
       if (preClaim) {
-        if (o.launch_receipt_id !== null || o.launch_receipt_digest !== null || o.launch_identity_json !== null)
+        if ((o.launch_receipt_id !== null || o.launch_receipt_digest !== null || o.launch_identity_json !== null) && !input.accept_worker_risk)
           fail2("user_authorized_release_spawn_evidence_present");
+        if (input.accept_worker_risk && o.launch_receipt_digest !== input.launch_receipt_digest)
+          fail2("user_authorized_release_spawn_evidence_mismatch");
         if (attempt.queued_cancel_operation_id !== input.operation_id || attempt.queued_cancel_id !== input.cancel_id || attempt.queued_cancel_result_json === null)
           fail2("user_authorized_release_projection_mismatch");
         let queuedResult;
@@ -5636,10 +5722,12 @@ var IsolatedAdmissionStore = class _IsolatedAdmissionStore {
     this.#assertWritable();
     let began = false, commitStarted = false, settled = false;
     const token = randomUUID();
+    const identity = writerIntentIdentity();
+    if (identity === null) fail2("writer_intent_identity_unavailable");
     try {
       const fd = openSync(this.#paths.intent, "wx", 384);
       try {
-        writeFileSync(fd, JSON.stringify({ version: 1, token, started_at: (/* @__PURE__ */ new Date()).toISOString() }));
+        writeFileSync(fd, JSON.stringify({ version: 2, token, started_at: (/* @__PURE__ */ new Date()).toISOString(), process_id: process.pid, platform: process.platform, identity_version: 1, start_fingerprint: identity }));
         fsyncSync(fd);
       } finally {
         closeSync(fd);
