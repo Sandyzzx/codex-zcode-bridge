@@ -881,9 +881,12 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
           requestedProviderId,
           preferences.model.model_id,
         );
-        const modelState = current?.providerId === requestedProviderId && current.modelId === preferences.model.model_id && !preferences.model.reasoning_level
-          ? snapshot
-          : asRecord(await client.request("session/setModel", {
+        let modelState: JsonRecord;
+        if (current?.providerId === requestedProviderId && current.modelId === preferences.model.model_id && !preferences.model.reasoning_level) {
+          modelState = snapshot;
+        } else {
+          try {
+            modelState = asRecord(await client.request("session/setModel", {
               sessionId,
               model: {
                 providerId: requestedProviderId,
@@ -896,6 +899,24 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
               // user's project-wide last-used model.
               persistAsWorkspaceLastUsed: false,
             }));
+          } catch (error) {
+            const reason = error instanceof Error ? error.message : String(error);
+            entry.onEvent({
+              type: "model_setup_failed",
+              summary: `ZCode rejected ${requestedProviderId}/${preferences.model.model_id}; the Attempt was stopped before Worker dispatch.`,
+              details: {
+                requested_model: { provider_id: requestedProviderId, model_id: preferences.model.model_id },
+                requested_reasoning_level: preferences.model.reasoning_level ?? null,
+                error_message: reason.slice(0, 1000),
+              },
+            });
+            throw new BridgeError(
+              "provider_config_invalid",
+              `ZCode model setup failed for ${requestedProviderId}/${preferences.model.model_id}: ${reason}`,
+              { cause: error },
+            );
+          }
+        }
         const selected = readSelectedModelSelection(modelState);
         if (!selected) {
           throw new Error(`ZCode accepted model override ${requested} but did not report the selected model`);

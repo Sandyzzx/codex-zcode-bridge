@@ -6,7 +6,7 @@ import { createMinimalOsEnv } from "./child-env.js";
 import { buildZCodeAppServerLaunch } from "./desktop-host-launch.js";
 import { buildAccountProviderPayload, zcodeDataBaseDir } from "./account-provider.js";
 import { BridgeError } from "./errors.js";
-import { readStartPlanRoutingRegistry, startPlanAliasCatalogEntries } from "./model-routing.js";
+import { startPlanAliasCatalogEntries } from "./model-routing.js";
 import { loadPersistedRuntimeEnvironment } from "./resolver.js";
 import { ZCODE_SESSION_MODES, type ZCodeSessionMode } from "./session-preferences.js";
 import type { ZCodeRuntimeConfig } from "../interfaces.js";
@@ -62,7 +62,6 @@ interface CatalogSource {
 }
 
 const RPC_TIMEOUT_MS = 30_000;
-const MODEL_CATALOG_TTL_MS = 24 * 60 * 60 * 1_000;
 
 export interface ZCodeModelSettingsOptions {
   readonly homeDir?: string;
@@ -130,22 +129,6 @@ export class ZCodeModelSettings {
         throw new BridgeError(code, `Could not load the ZCode runtime/provider configuration after retrying: ${reason}. Run zcode_doctor for the failing path, correct it, then call zcode_model_catalog again.`, { cause: error });
       }
     }
-    const cached = await readModelCatalogCache(source.cachePath);
-    const cacheAge = cached ? Date.now() - cached.cached_at_ms : null;
-    if (cached && cached.source_fingerprint === source.fingerprint && cacheAge !== null &&
-        cacheAge >= 0 && cacheAge < MODEL_CATALOG_TTL_MS) {
-      const cachedModels = withStartPlanAliasEntries(cached.models, source.config);
-      const warning = startPlanCatalogWarning(buildAccountProviderPayload(source.config, undefined, this.#homeDir), cachedModels);
-      return {
-        workspace: workspacePath,
-        current_model: null,
-        models: cachedModels,
-        account_provider_sync: "not_needed",
-        cache_status: "fresh",
-        cached_at: new Date(cached.cached_at_ms).toISOString(),
-        ...(warning ? { warning } : {}),
-      };
-    }
     let lastError: unknown;
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
@@ -170,7 +153,35 @@ export class ZCodeModelSettings {
     return { config, runtimeEnv, cachePath, fingerprint };
   }
 
-  async #readLiveCatalog(workspacePath: string, source: CatalogSource): Promise<ZCodeModelCatalog> {
+  /** Live catalog for plan routing. The default snapshot exposes the account
+   * selected by ZCode; a second zero-model read exposes the Start Plan catalog
+   * when that Provider is configured. No model or Billing request is sent.
+   * A Start read failure is preserved for explicit Start selections and does
+   * not erase Coding models. */
+  async listRoutingCatalog(workspace: string): Promise<{
+    models: ZCodeModelCatalogEntry[];
+    startPlanUnavailableReason: string | null;
+  }> {
+    const currentCatalog = await this.listModels(workspace);
+    let startModels: ZCodeModelCatalogEntry[] = [];
+    let startPlanUnavailableReason: string | null = null;
+    try {
+      const workspacePath = await realpath(workspace.trim());
+      const source = await this.#resolveCatalogSource(workspacePath);
+      const startCatalog = await this.#readLiveCatalog(workspacePath, source, "start_plan");
+      startModels = startCatalog.models;
+    } catch (error) {
+      startPlanUnavailableReason = error instanceof Error ? error.message : String(error);
+    }
+    const seen = new Set(currentCatalog.models.map((model) => `${model.provider_id}\n${model.model_id}`));
+    const additions = startModels.filter((model) => !seen.has(`${model.provider_id}\n${model.model_id}`));
+    return {
+      models: [...currentCatalog.models, ...additions],
+      startPlanUnavailableReason,
+    };
+  }
+
+  async #readLiveCatalog(workspacePath: string, source: CatalogSource, catalogPlan: "current" | "start_plan" = "current"): Promise<ZCodeModelCatalog> {
     const { config, runtimeEnv, cachePath, fingerprint } = source;
     const childEnv = buildRuntimeChildEnv(config, runtimeEnv);
     const launch = buildZCodeAppServerLaunch(config.zcodeEntrypoint, childEnv);
@@ -210,7 +221,10 @@ export class ZCodeModelSettings {
     let warning: string | undefined;
     let primaryError: unknown;
     try {
-      const accountPayload = buildAccountProviderPayload(config, undefined, this.#homeDir);
+      const accountPayload = prepareCatalogAccountPayload(
+        buildAccountProviderPayload(config, undefined, this.#homeDir),
+        catalogPlan,
+      );
       if (accountPayload) {
         try {
           await client.request("provider/updateAccountConfig", accountPayload as unknown as JsonRecord);
@@ -237,11 +251,11 @@ export class ZCodeModelSettings {
       const rawAvailable = Array.isArray(modelSettings.available) ? modelSettings.available : [];
       // ADR-031: expose the Start Plan aliases next to the runtime catalog so
       // Masters can select `<ModelId>-StartPlan` without knowing provider ids.
-      const models = withStartPlanAliasEntries(rawAvailable.map(toCatalogEntry).filter((entry): entry is ZCodeModelCatalogEntry => entry !== null), config);
+      const models = withStartPlanAliasEntries(rawAvailable.map(toCatalogEntry).filter((entry): entry is ZCodeModelCatalogEntry => entry !== null));
       const current = toModelRef(modelSettings.current);
       if (models.length === 0) throw new BridgeError("zcode_nonzero_exit", "ZCode app-server returned an empty model catalog for this workspace");
       const cachedAt = Date.now();
-      await writeModelCatalogCache(cachePath, { cached_at_ms: cachedAt, source_fingerprint: fingerprint, models }).catch(() => undefined);
+      await writeModelCatalogCache(cachePath, models).catch(() => undefined);
       warning = startPlanCatalogWarning(accountPayload, models);
       return {
         workspace: workspacePath,
@@ -426,6 +440,43 @@ function buildRuntimeChildEnv(config: ZCodeRuntimeConfig, source: NodeJS.Process
   return env;
 }
 
+function prepareCatalogAccountPayload(
+  payload: ReturnType<typeof buildAccountProviderPayload> | null,
+  catalogPlan: "current" | "start_plan",
+): ReturnType<typeof buildAccountProviderPayload> | null {
+  if (!payload || catalogPlan !== "start_plan") return payload;
+  const startProviderId = "account:bigmodel-start-plan";
+  const codingProviderId = "account:bigmodel-individual-coding-plan";
+  if (!payload.providers[startProviderId] || !payload.states[startProviderId]
+      || !payload.states[codingProviderId]) return payload;
+  const result = {
+    ...payload,
+    providers: {
+      ...payload.providers,
+      [startProviderId]: {
+        ...payload.providers[startProviderId]!,
+        access: {
+          ...payload.providers[startProviderId]!.access,
+          entitled: true,
+        },
+      },
+    },
+    states: {
+      ...payload.states,
+      [startProviderId]: {
+        ...payload.states[startProviderId]!,
+        entitled: true,
+        current: true,
+      },
+      [codingProviderId]: {
+        ...payload.states[codingProviderId]!,
+        current: false,
+      },
+    },
+  };
+  return result;
+}
+
 function toCatalogEntry(value: unknown): ZCodeModelCatalogEntry | null {
   const entry = asRecord(value);
   const ref = toModelRef(entry.ref);
@@ -477,12 +528,6 @@ function isMissingFile(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 }
 
-interface CachedModelCatalog {
-  cached_at_ms: number;
-  source_fingerprint: string;
-  models: ZCodeModelCatalogEntry[];
-}
-
 function modelCatalogCachePath(workspace: string, config: ZCodeRuntimeConfig, env: NodeJS.ProcessEnv, settingsDirectory: string): string {
   const identity = JSON.stringify({
     workspace,
@@ -528,13 +573,8 @@ function startPlanCatalogWarning(
 /** Appends `<ModelId>-StartPlan` catalog entries derived from the official
  * provider registry. Presentation only: alias entries carry no entitlement
  * claim and never replace a runtime-advertised entry. */
-function withStartPlanAliasEntries(models: ZCodeModelCatalogEntry[], config: ZCodeRuntimeConfig): ZCodeModelCatalogEntry[] {
-  let aliases: ReturnType<typeof startPlanAliasCatalogEntries>;
-  try {
-    aliases = startPlanAliasCatalogEntries(readStartPlanRoutingRegistry(config));
-  } catch {
-    return models;
-  }
+function withStartPlanAliasEntries(models: ZCodeModelCatalogEntry[]): ZCodeModelCatalogEntry[] {
+  const aliases = startPlanAliasCatalogEntries(models);
   if (!aliases.length) return models;
   const seen = new Set(models.map((model) => `${model.provider_id}\n${model.model_id}`));
   const additions = aliases
@@ -543,38 +583,15 @@ function withStartPlanAliasEntries(models: ZCodeModelCatalogEntry[], config: ZCo
   return [...models, ...additions];
 }
 
-async function readModelCatalogCache(cachePath: string): Promise<CachedModelCatalog | null> {
-  try {
-    const info = await stat(cachePath);
-    if (!info.isFile() || info.size > 2 * 1024 * 1024) return null;
-    const value: unknown = JSON.parse(await readFile(cachePath, "utf8"));
-    if (!isRecord(value) || !Number.isFinite(value.cached_at_ms) || typeof value.source_fingerprint !== "string" || !Array.isArray(value.models)) return null;
-    const models = value.models.map(toCachedCatalogEntry).filter((entry): entry is ZCodeModelCatalogEntry => entry !== null);
-    if (models.length !== value.models.length || models.length === 0) return null;
-    return { cached_at_ms: value.cached_at_ms as number, source_fingerprint: value.source_fingerprint, models };
-  } catch {
-    return null;
-  }
-}
-
-function toCachedCatalogEntry(value: unknown): ZCodeModelCatalogEntry | null {
-  if (!isRecord(value) || typeof value.provider_id !== "string" || !value.provider_id ||
-      typeof value.model_id !== "string" || !value.model_id || typeof value.label !== "string") return null;
-  if (value.reasoning_levels !== undefined && (!Array.isArray(value.reasoning_levels) ||
-      !value.reasoning_levels.every((level: unknown) => isRecord(level) && typeof level.value === "string" && typeof level.label === "string"))) return null;
-  for (const key of ["provider_label", "reasoning_default_level", "disabled_reason"]) if (value[key] !== undefined && typeof value[key] !== "string") return null;
-  for (const key of ["context_window", "max_output_tokens"]) if (value[key] !== undefined && (typeof value[key] !== "number" || !Number.isFinite(value[key]) || (value[key] as number) < 0)) return null;
-  const result: Record<string, unknown> = {};
-  for (const key of ["provider_id", "model_id", "label", "provider_label", "context_window", "max_output_tokens", "reasoning_default_level", "disabled_reason"]) if (value[key] !== undefined) result[key] = value[key];
-  if (Array.isArray(value.reasoning_levels)) result.reasoning_levels = value.reasoning_levels.map((level) => ({ value: level.value, label: level.label }));
-  return result as unknown as ZCodeModelCatalogEntry;
-}
-
-async function writeModelCatalogCache(cachePath: string, cache: CachedModelCatalog): Promise<void> {
+async function writeModelCatalogCache(cachePath: string, models: ZCodeModelCatalogEntry[]): Promise<void> {
   await mkdir(path.dirname(cachePath), { recursive: true });
   const tempPath = `${cachePath}.${process.pid}.${randomUUID()}.tmp`;
   try {
-    await writeFile(tempPath, `${JSON.stringify(cache)}\n`, { encoding: "utf8", flag: "wx", mode: 0o600 });
+    await writeFile(tempPath, `${JSON.stringify({
+      cached_at_ms: Date.now(),
+      source: "live_app_server_snapshot",
+      models,
+    })}\n`, { encoding: "utf8", flag: "wx", mode: 0o600 });
     await atomicRename(tempPath, cachePath);
   } catch (error) {
     await rm(tempPath, { force: true }).catch(() => undefined);

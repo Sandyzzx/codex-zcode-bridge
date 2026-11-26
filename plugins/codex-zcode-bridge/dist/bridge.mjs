@@ -30303,7 +30303,7 @@ var defaultModelSchema = object({
 
 // src/mcp/server.ts
 var SERVER_NAME = "codex-zcode-bridge";
-var SERVER_VERSION = "2.0.0-preview.18"; // x-release-please-version
+var SERVER_VERSION = "2.0.0-preview.19"; // x-release-please-version
 var EXECUTION_NOT_VERDICT = "Execution only. 'completed' is NOT calling host acceptance. Independently verify the workspace diff and checks.";
 var CODEX_THREAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 var OWNER_IDENTITY_INPUT_KEYS = /* @__PURE__ */ new Set([

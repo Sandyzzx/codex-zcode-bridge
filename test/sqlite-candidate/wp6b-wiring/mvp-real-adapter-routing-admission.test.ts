@@ -163,14 +163,14 @@ test("ADR-031 Gate E1: an explicit -StartPlan alias executes the raw model id ov
     routingHooks: { journal }, preserveFixtureOnFailure: true });
 });
 
-test("ADR-031 Gate E1: a confirmed unavailable verdict falls back to the coding plan provider without Billing", { timeout: 180_000 }, async () => {
+test("ADR-031: a Billing verdict cannot silently reroute a model offered by both plans", { timeout: 180_000 }, async () => {
   const gate = fakeHostBillingGate("entitled");
   const journal = new StartPlanEntitlementJournal();
   journal.record("GLM-5.3-Flash", "no_entitlement", Date.now());
   await withRealAdapterMcp(async (client, _manager, _dataRoot, workspace, runtime) => {
     const taskId = `routing-fallback-${randomUUID()}`;
     contentObject(await client.callTool({ name: "zcode_task", arguments: {
-      ...syntheticTask(workspace, taskId), model: { model_id: "GLM-5.3-Flash" },
+      ...syntheticTask(workspace, taskId), model: { model_id: "GLM-9-CodingOnly" },
     } }));
     const interaction = await waitForInteractionRequest(client, taskId);
     const request = interaction.details as Record<string, unknown>;
@@ -182,7 +182,7 @@ test("ADR-031 Gate E1: a confirmed unavailable verdict falls back to the coding 
     const requests = readFileSync(runtime.requestLog, "utf8").trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
     const setModel = requests.find((message) => message.method === "session/setModel") as { params?: { model?: { providerId?: string; modelId?: string } } } | undefined;
     assert.equal(setModel?.params?.model?.providerId, "account:bigmodel-individual-coding-plan");
-    assert.equal(setModel?.params?.model?.modelId, "GLM-5.3-Flash", "the fallback must keep the same official model id");
+    assert.equal(setModel?.params?.model?.modelId, "GLM-9-CodingOnly", "a Coding-only model routes without changing its official id");
   }, { runtimeVariant: "success", routingHooks: { journal }, preserveFixtureOnFailure: true });
 });
 

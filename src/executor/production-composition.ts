@@ -6,7 +6,7 @@ import type { SqliteLifecycleMcpAuthority } from "../manager/sqlite-lifecycle-mc
 import { BridgeError } from "../runtime/errors.js";
 import {
   createTaskModelRouter,
-  readStartPlanRoutingRegistry,
+  buildModelRoutingCatalog,
   RecordingStartPlanEntitlement,
   resolvePreferStartPlan,
   StartPlanEntitlementJournal,
@@ -167,6 +167,11 @@ export async function createProductionAuthorityComposition(
   }
 
   const startPlanAuthAbort = new AbortController();
+  const modelSettings = new ZCodeModelSettings(env, {
+    homeDir,
+    host: options.host,
+    workerModuleUrl: pathToFileURL(options.workerEntryPath),
+  });
   // Per-dispatch discovery observes login, logout, account switch, and config
   // changes without creating a second credential cache.
   const modelRoutingJournal = new StartPlanEntitlementJournal();
@@ -178,22 +183,12 @@ export async function createProductionAuthorityComposition(
         defaultProviderId: persistedEnv["ZCODE_BRIDGE_DEFAULT_PROVIDER_ID"]?.trim() ?? "",
       };
     },
-    journal: modelRoutingJournal,
-    registry: async () => {
-      try {
-        const persistedEnv = loadPersistedRuntimeEnvironment(env, homeDir, options.host);
-        const config = await new NodeRuntimeResolver({
-          env: persistedEnv,
-          homeDir,
-          host: options.host,
-        }).resolve();
-        return readStartPlanRoutingRegistry(config);
-      } catch (error) {
-        throw new BridgeError(
-          "provider_config_invalid",
-          `ZCode runtime configuration could not be resolved for model routing: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      }
+    catalog: async (workspace) => {
+      const routingCatalog = await modelSettings.listRoutingCatalog(workspace);
+      return {
+        ...buildModelRoutingCatalog(routingCatalog.models),
+        startPlanUnavailableReason: routingCatalog.startPlanUnavailableReason,
+      };
     },
   });
   const wakeCoordinator = createExecutorWakeCoordinator({
@@ -239,11 +234,6 @@ export async function createProductionAuthorityComposition(
     ...(options.testBeforeDispatch ? { testBeforeDispatch: options.testBeforeDispatch } : {}),
     ...(options.testOnScheduler ? { testOnScheduler: options.testOnScheduler } : {}),
     ...(options.dispatchFence ? { dispatchFence: options.dispatchFence } : {}),
-  });
-  const modelSettings = new ZCodeModelSettings(env, {
-    homeDir,
-    host: options.host,
-    workerModuleUrl: pathToFileURL(options.workerEntryPath),
   });
   const lifecycleChecks = () => authority.getDoctorChecks();
   return {

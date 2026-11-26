@@ -140,7 +140,7 @@ export function accountProviderRuleFacts(
  */
 export function accountProviderSelectionCapability(
   providerId: string,
-  modelId: string,
+  _modelId: string,
   config: ZCodeRuntimeConfig,
 ): AccountProviderSelectionCapability {
   const canonicalProviderId = accountProviderId(providerId, config);
@@ -162,12 +162,6 @@ export function accountProviderSelectionCapability(
     return {
       capability: codingPlan ? "coding_plan_discount" : "start_plan_static",
       failure: `${canonicalProviderId} is not configured as the expected BigModel ${expectedPlanKind} provider`,
-    };
-  }
-  if (!entry.builtinModelIds.includes(modelId)) {
-    return {
-      capability: codingPlan ? "coding_plan_discount" : "start_plan_static",
-      failure: `${canonicalProviderId} does not register the selected model ${modelId}`,
     };
   }
   return {
@@ -294,12 +288,7 @@ function readAccountProviderSource(
     const legacyConfig = asRecord(credentialProviders[legacyId]);
     const options = asRecord(legacyConfig.options);
     const apiKey = typeof options.apiKey === "string" ? options.apiKey.trim() : "";
-    const selectedEntitled = verifiedSelection?.providerId === providerId
-      && Array.isArray(rule.config?.builtinModelIds)
-      && rule.config.builtinModelIds.includes(verifiedSelection.modelId);
-    if (verifiedSelection?.providerId === providerId && !selectedEntitled) {
-      throw new Error("start_plan_model_not_registered");
-    }
+    const selectedEntitled = verifiedSelection?.providerId === providerId;
     // Start Plan's live Billing verdict is task/model scoped. A legacy cache
     // entry or old apiKey must never make this provider executable or visible
     // as entitled; only the exact verified selection can do so.

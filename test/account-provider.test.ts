@@ -128,11 +128,12 @@ test("official account snapshot keeps Start and Coding Plan facts independent an
     assert.equal(withLiveCheck?.providers["account:bigmodel-individual-coding-plan"]?.access.entitled, true);
     assert.equal(withLiveCheck?.states["account:bigmodel-individual-coding-plan"]?.current, true);
     assert.notEqual(withLiveCheck?.revision, withoutLiveCheck?.revision);
-    assert.throws(() => buildAccountProviderPayload(
+    const unregistered = buildAccountProviderPayload(
       config,
       { providerId: "account:bigmodel-start-plan", modelId: "unregistered-model" },
       root,
-    ), /start_plan_model_not_registered/u);
+    );
+    assert.equal(unregistered?.providers["account:bigmodel-start-plan"]?.access.entitled, true);
 
     writeFileSync(settingPath, JSON.stringify({
       modelProviderFamilySelectedKeys: { bigmodel: "start-plan:builtin:bigmodel-start-plan" },
@@ -284,7 +285,7 @@ test("builtin model order is preserved while revision remains deterministic", ()
   }
 });
 
-test("runtime-selected Provider capability uses the official registry and configured account snapshot", () => {
+test("runtime-selected Provider capability classifies the Provider without a static model gate", () => {
   const fixture = makeConnectionSelectionFixture();
   const modelId = "GLM-5.3-Flash";
   try {
@@ -318,9 +319,9 @@ test("runtime-selected Provider capability uses the official registry and config
     }
 
     fixture.writeBuiltin(["GLM-5.3"]);
-    assert.match(
-      accountProviderSelectionCapability("account:bigmodel-start-plan", modelId, fixture.config).failure ?? "",
-      /does not register the selected model/u,
+    assert.deepEqual(
+      accountProviderSelectionCapability("account:bigmodel-start-plan", modelId, fixture.config),
+      { capability: "start_plan_static", failure: null },
     );
 
     writeFileSync(fixture.config.providerBuiltinConfigFile, JSON.stringify({

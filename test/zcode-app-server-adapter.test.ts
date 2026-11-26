@@ -139,6 +139,10 @@ input.on("line", (line) => {
     process.stdout.write(JSON.stringify({ id: message.id, result: snapshot() }) + "\n");
   } else if (message.method === "session/setModel") {
     const requestedProviderId = message.params && message.params.model ? message.params.model.providerId : "";
+    if (requestedProviderId === "reject-provider") {
+      process.stdout.write(JSON.stringify({ id: message.id, error: { code: -32602, message: "model rejected" } }) + "\n");
+      return;
+    }
     if (typeof requestedProviderId === "string" && requestedProviderId.startsWith("account:")) {
       const provider = accountProviders[requestedProviderId];
       const state = accountStates[requestedProviderId];
@@ -1404,8 +1408,8 @@ test("a provider failure remains cleanup_failed when the root-exited scan retain
   }
 });
 
-test("lets the app-server resolve a requested model omitted from the initial catalog", async () => {
-  const runtime = await makeFakeRuntime({ providerId: "provider-default", modelId: "model-default" }, false);
+test("selects a newly advertised runtime model that Bridge has never listed", async () => {
+  const runtime = await makeFakeRuntime({ providerId: "provider-default", modelId: "model-default" }, true);
   try {
     const adapter = new ZCodeAppServerTestAdapter({
       resolver: { resolve: async () => runtime.config },
@@ -1413,15 +1417,47 @@ test("lets the app-server resolve a requested model omitted from the initial cat
       childEnvBase: { PATH: process.env.PATH },
     });
     const handle = await adapter.startTask({
-      task: { ...task, model: { provider_id: "account:zai-start-plan", model_id: "GLM-5.3-Flash" } },
+      task: { ...task, model: { provider_id: "provider-123", model_id: "model-x" } },
       workspace: makeWorkspace(runtime.root),
       attempt: 1,
     });
     assert.equal((await adapter.getResult(handle)).exitCode, 0);
     const requests = (await readFile(runtime.requestLog, "utf8"))
       .trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
-    assert.equal(requests.some((request) => request.method === "session/setModel"), true);
+    const setModel = requests.find((request) => request.method === "session/setModel");
+    assert.deepEqual((setModel?.params as Record<string, unknown>)?.["model"], {
+      providerId: "provider-123",
+      modelId: "model-x",
+    });
     assert.equal(requests.some((request) => request.method === "session/send"), true);
+  } finally {
+    await rm(runtime.root, { recursive: true, force: true });
+  }
+});
+
+test("a session/setModel failure stops before send and preserves the exact selection", async () => {
+  const runtime = await makeFakeRuntime({ providerId: "provider-default", modelId: "model-default" }, true);
+  const events: Array<{ type: string; summary: string; details?: Record<string, unknown> }> = [];
+  try {
+    const adapter = new ZCodeAppServerTestAdapter({
+      resolver: { resolve: async () => runtime.config },
+      timeoutMs: 10_000,
+      childEnvBase: { PATH: process.env.PATH },
+      onEvent: (event) => events.push(event),
+    });
+    const handle = await adapter.startTask({
+      task: { ...task, model: { provider_id: "reject-provider", model_id: "rejected-model" } },
+      workspace: makeWorkspace(runtime.root),
+      attempt: 1,
+    });
+    await assert.rejects(adapter.getResult(handle), /ZCode model setup failed for reject-provider\/rejected-model/u);
+    const requests = (await readFile(runtime.requestLog, "utf8")).trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+    assert.equal(requests.some((request) => request.method === "session/setModel"), true);
+    assert.equal(requests.some((request) => request.method === "session/send"), false);
+    const failure = events.find((event) => event.type === "model_setup_failed");
+    const requestedModel = failure?.details?.requested_model as { provider_id?: string; model_id?: string } | undefined;
+    assert.equal(requestedModel?.provider_id, "reject-provider");
+    assert.equal(requestedModel?.model_id, "rejected-model");
   } finally {
     await rm(runtime.root, { recursive: true, force: true });
   }
