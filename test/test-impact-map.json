@@ -606,7 +606,8 @@
       "type": "Integration",
       "gate": "T1",
       "domains": [
-        "zcode-path-discovery"
+        "zcode-path-discovery",
+        "provider-catalog"
       ]
     },
     {
@@ -837,7 +838,8 @@
       "gate": "T1",
       "domains": [
         "manager-lifecycle",
-        "worker-launch"
+        "worker-launch",
+        "sqlite-persistence"
       ]
     },
     {
