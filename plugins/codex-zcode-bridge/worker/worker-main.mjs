@@ -954,21 +954,7 @@ async function selectOfficialBuiltinRegistry(input2) {
     runtime = null;
   }
   if (!runtime) return bundled("invalid");
-  let bundledCandidate;
-  try {
-    bundledCandidate = decodeRegistry(await readFile2(input2.bundledPath));
-  } catch {
-    bundledCandidate = null;
-  }
-  if (!bundledCandidate) {
-    return runtimeSelected();
-  }
-  if (bundledCandidate.revision === runtime.revision) {
-    runtime.canonical ??= canonicalJson(runtime.value);
-    bundledCandidate.canonical ??= canonicalJson(bundledCandidate.value);
-    return runtime.canonical === bundledCandidate.canonical ? runtimeSelected() : bundled("same_revision_conflict", bundledCandidate.revision);
-  }
-  return runtime.revision > bundledCandidate.revision ? runtimeSelected() : bundled("lower_revision", bundledCandidate.revision);
+  return runtimeSelected();
   function runtimeSelected() {
     return {
       path: input2.runtimePath,
@@ -1007,17 +993,11 @@ function decodeRegistry(text) {
   if (isRecord4(providerRules) && Object.hasOwn(providerRules, OBSERVED_RETIRED_PROVIDER_ID)) {
     throw new Error("registry contains a retired provider");
   }
-  return { revision, value, canonical: null };
+  return { revision };
 }
 function hasExactKeys2(value, expected) {
   const keys = Object.keys(value);
   return keys.length === expected.length && expected.every((key) => Object.hasOwn(value, key));
-}
-function canonicalJson(value) {
-  if (value === null || typeof value !== "object") return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  const record3 = value;
-  return `{${Object.keys(record3).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(record3[key])}`).join(",")}}`;
 }
 function isRecord4(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -2744,14 +2724,14 @@ function deriveAdmissionPolicySnapshotDigest(value) {
     policy_digest: value.policy_digest,
     execution_profile_id: value.execution_profile_id
   };
-  return createHash8("sha256").update(canonicalJson2(envelope), "utf8").digest("hex");
+  return createHash8("sha256").update(canonicalJson(envelope), "utf8").digest("hex");
 }
-function canonicalJson2(value) {
+function canonicalJson(value) {
   if (value === null || typeof value === "string" || typeof value === "boolean") return JSON.stringify(value);
   if (typeof value === "number" && Number.isSafeInteger(value)) return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(canonicalJson2).join(",")}]`;
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
   if (value && Object.getPrototypeOf(value) === Object.prototype) {
-    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson2(value[key])}`).join(",")}}`;
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
   }
   throw new TypeError("invalid admission policy snapshot");
 }

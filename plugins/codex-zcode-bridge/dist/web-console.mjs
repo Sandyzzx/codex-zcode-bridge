@@ -728,21 +728,7 @@ async function selectOfficialBuiltinRegistry(input) {
     runtime = null;
   }
   if (!runtime) return bundled("invalid");
-  let bundledCandidate;
-  try {
-    bundledCandidate = decodeRegistry(await readFile7(input.bundledPath));
-  } catch {
-    bundledCandidate = null;
-  }
-  if (!bundledCandidate) {
-    return runtimeSelected();
-  }
-  if (bundledCandidate.revision === runtime.revision) {
-    runtime.canonical ??= canonicalJson(runtime.value);
-    bundledCandidate.canonical ??= canonicalJson(bundledCandidate.value);
-    return runtime.canonical === bundledCandidate.canonical ? runtimeSelected() : bundled("same_revision_conflict", bundledCandidate.revision);
-  }
-  return runtime.revision > bundledCandidate.revision ? runtimeSelected() : bundled("lower_revision", bundledCandidate.revision);
+  return runtimeSelected();
   function runtimeSelected() {
     return {
       path: input.runtimePath,
@@ -781,17 +767,11 @@ function decodeRegistry(text) {
   if (isRecord2(providerRules) && Object.hasOwn(providerRules, OBSERVED_RETIRED_PROVIDER_ID)) {
     throw new Error("registry contains a retired provider");
   }
-  return { revision, value, canonical: null };
+  return { revision };
 }
 function hasExactKeys(value, expected) {
   const keys = Object.keys(value);
   return keys.length === expected.length && expected.every((key) => Object.hasOwn(value, key));
-}
-function canonicalJson(value) {
-  if (value === null || typeof value !== "object") return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  const record3 = value;
-  return `{${Object.keys(record3).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(record3[key])}`).join(",")}}`;
 }
 function isRecord2(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -13127,7 +13107,7 @@ function sealEvidence(value) {
   return { ...value, evidence_digest: digest };
 }
 function evidenceSemanticDigest(value) {
-  return createHash11("sha256").update(canonicalJson2({
+  return createHash11("sha256").update(canonicalJson({
     schema_version: value.schema_version,
     fingerprint: value.fingerprint,
     installation: value.installation,
@@ -13148,10 +13128,10 @@ function validEvidenceRecord(value) {
     return false;
   }
   const { evidence_digest: digest, ...body } = record3;
-  const legacyDigest = createHash11("sha256").update(canonicalJson2(body), "utf8").digest("hex");
+  const legacyDigest = createHash11("sha256").update(canonicalJson(body), "utf8").digest("hex");
   return evidenceSemanticDigest(body) === digest || legacyDigest === digest;
 }
-function canonicalJson2(value) {
+function canonicalJson(value) {
   return JSON.stringify(sortObject(value)) ?? "null";
 }
 function sortObject(value) {
@@ -15500,7 +15480,7 @@ var TaskConsoleDiscoveryError = class extends Error {
   }
   code;
 };
-function canonicalJson3(value) {
+function canonicalJson2(value) {
   return JSON.stringify(sortObject2(value)) ?? "null";
 }
 function sortObject2(value) {
@@ -15510,7 +15490,7 @@ function sortObject2(value) {
   return Object.fromEntries(Object.entries(value).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0).map(([key, item]) => [key, sortObject2(item)]));
 }
 function recordDigest(record3) {
-  return createHash12("sha256").update(canonicalJson3(record3), "utf8").digest("hex");
+  return createHash12("sha256").update(canonicalJson2(record3), "utf8").digest("hex");
 }
 function discoveryRoot(dataRoot) {
   let root;
@@ -15615,7 +15595,7 @@ async function publishTaskConsoleDiscovery(input) {
   try {
     fd = openSync3(file, "wx", 384);
     created = true;
-    writeSync(fd, canonicalJson3(record3), void 0, "utf8");
+    writeSync(fd, canonicalJson2(record3), void 0, "utf8");
     closeSync3(fd);
     fd = void 0;
     if (readTaskConsoleDiscovery(root)?.record_digest !== record3.record_digest) {

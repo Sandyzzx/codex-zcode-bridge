@@ -5,8 +5,8 @@
  * `zcode.cjs` 0.18.0) so the Bridge and the Desktop load the same Built-in
  * Provider registry. These are observations, not an official contract:
  * - path: `<dataBaseDir>/.zcode/v2/runtime/provider/<platform>/<appVersion>/endpoint-<sha256(origin)[0:32]>/zcode-builtin.json`
- * - selection: the same revision with different content selects the bundled
- *   file; otherwise the higher revision wins and a tie selects the bundled file.
+ * - selection: a usable runtime registry is authoritative; only an absent or
+ *   unusable runtime registry falls back to the installation's bundled file.
  *
  * Pure module: every filesystem access is injectable and no official file is
  * ever written, downloaded, cached or updated by the Bridge.
@@ -91,9 +91,7 @@ export type OfficialBuiltinRegistryRuntimeStatus =
   | "unresolved"
   | "not_found"
   /** Present but not a regular file, unreadable, or not a valid release. */
-  | "invalid"
-  | "lower_revision"
-  | "same_revision_conflict";
+  | "invalid";
 
 export interface OfficialBuiltinRegistrySelection {
   /** The file the Bridge will hand to the AppServer. */
@@ -114,8 +112,6 @@ interface RegistryFileStat {
 
 interface RegistryCandidate {
   readonly revision: number;
-  readonly value: unknown;
-  canonical: string | null;
 }
 
 /** Official endpoint origin: env overrides first, then the built-in default. */
@@ -235,26 +231,7 @@ export async function selectOfficialBuiltinRegistry(input: {
   }
   if (!runtime) return bundled("invalid");
 
-  let bundledCandidate: RegistryCandidate | null;
-  try {
-    bundledCandidate = decodeRegistry(await readFile(input.bundledPath));
-  } catch {
-    bundledCandidate = null;
-  }
-  // Only a decodable bundled file can outrank the official runtime registry.
-  if (!bundledCandidate) {
-    return runtimeSelected();
-  }
-  if (bundledCandidate.revision === runtime.revision) {
-    runtime.canonical ??= canonicalJson(runtime.value);
-    bundledCandidate.canonical ??= canonicalJson(bundledCandidate.value);
-    return runtime.canonical === bundledCandidate.canonical
-      ? runtimeSelected()
-      : bundled("same_revision_conflict", bundledCandidate.revision);
-  }
-  return runtime.revision > bundledCandidate.revision
-    ? runtimeSelected()
-    : bundled("lower_revision", bundledCandidate.revision);
+  return runtimeSelected();
 
   function runtimeSelected(): OfficialBuiltinRegistrySelection {
     return {
@@ -305,20 +282,12 @@ function decodeRegistry(text: string): RegistryCandidate {
   if (isRecord(providerRules) && Object.hasOwn(providerRules, OBSERVED_RETIRED_PROVIDER_ID)) {
     throw new Error("registry contains a retired provider");
   }
-  return { revision, value, canonical: null };
+  return { revision };
 }
 
 function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
   const keys = Object.keys(value);
   return keys.length === expected.length && expected.every((key) => Object.hasOwn(value, key));
-}
-
-/** Key-order and whitespace independent comparison of two decoded releases. */
-function canonicalJson(value: unknown): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  const record = value as Record<string, unknown>;
-  return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(",")}}`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -400,14 +400,6 @@ function builtinRegistryCheck(config: ZCodeRuntimeConfig, selection: OfficialBui
       return { name, status: "ok", summary: `${summary}; ZCode Desktop has not written an official runtime registry at ${selection.runtimePath}` };
     case "invalid":
       return { name, status: "warning", summary: `${summary}; the official runtime registry at ${selection.runtimePath} is not a usable release` };
-    case "lower_revision":
-      return { name, status: "ok", summary: `${summary}${selection.revision === null ? "" : ` (revision ${selection.revision})`}; the official runtime registry at ${selection.runtimePath} is not newer` };
-    case "same_revision_conflict":
-      return {
-        name,
-        status: "warning",
-        summary: `${summary}${selection.revision === null ? "" : ` (revision ${selection.revision})`}; the official runtime registry at ${selection.runtimePath} has the same revision but different content`,
-      };
     case "selected":
       return { name, status: "ok", summary: `${summary}; the official runtime registry at ${selection.runtimePath} was not selected` };
   }

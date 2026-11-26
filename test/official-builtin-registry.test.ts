@@ -120,7 +120,7 @@ test("Desktop version comes from the installed app.asar build metadata", async (
   });
 });
 
-test("selection prefers a newer runtime registry and keeps the bundled identity as fallback", async () => {
+test("selection uses a usable runtime registry and keeps the bundled identity as fallback", async () => {
   await withTempRoot(async (root) => {
     const bundledPath = path.join(root, "resources", "config", "provider", "zcode-builtin.json");
     await mkdir(path.dirname(bundledPath), { recursive: true });
@@ -149,7 +149,7 @@ test("selection prefers a newer runtime registry and keeps the bundled identity 
   });
 });
 
-test("selection falls back to the bundled registry for unusable or older runtime files", async () => {
+test("selection falls back to the bundled registry only for unusable runtime files", async () => {
   await withTempRoot(async (root) => {
     const bundledPath = path.join(root, "resources", "config", "provider", "zcode-builtin.json");
     await mkdir(path.dirname(bundledPath), { recursive: true });
@@ -184,15 +184,15 @@ test("selection falls back to the bundled registry for unusable or older runtime
     assert.equal((await selectOfficialBuiltinRegistry({ bundledPath, runtimePath: retired })).runtimeStatus, "invalid");
 
     const older = await writeRuntimeRegistry(root, registryRelease(40, "older"), options);
-    const lower = await selectOfficialBuiltinRegistry({ bundledPath, runtimePath: older });
-    assert.equal(lower.source, "bundled");
-    assert.equal(lower.path, bundledPath);
-    assert.equal(lower.runtimeStatus, "lower_revision");
-    assert.equal(lower.revision, 44);
+    const selected = await selectOfficialBuiltinRegistry({ bundledPath, runtimePath: older });
+    assert.equal(selected.source, "runtime");
+    assert.equal(selected.path, older);
+    assert.equal(selected.runtimeStatus, "selected");
+    assert.equal(selected.revision, 40);
   });
 });
 
-test("equal revisions resolve to the bundled file unless the content is identical", async () => {
+test("a runtime registry is authoritative even when its revision equals the bundled file", async () => {
   await withTempRoot(async (root) => {
     const bundledPath = path.join(root, "resources", "config", "provider", "zcode-builtin.json");
     await mkdir(path.dirname(bundledPath), { recursive: true });
@@ -201,15 +201,9 @@ test("equal revisions resolve to the bundled file unless the content is identica
 
     const conflict = await writeRuntimeRegistry(root, registryRelease(44, "different"), options);
     const conflicted = await selectOfficialBuiltinRegistry({ bundledPath, runtimePath: conflict });
-    assert.equal(conflicted.source, "bundled");
-    assert.equal(conflicted.runtimeStatus, "same_revision_conflict");
-
-    // Same release, different formatting and key order: still the same content.
-    const reformatted = JSON.parse(registryRelease(44, "same")) as Record<string, unknown>;
-    const runtimePath = await writeRuntimeRegistry(root, JSON.stringify({ config: reformatted.config, revision: 44, schemaVersion: 1 }, null, 4), options);
-    const identical = await selectOfficialBuiltinRegistry({ bundledPath, runtimePath });
-    assert.equal(identical.source, "runtime");
-    assert.equal(identical.path, runtimePath);
+    assert.equal(conflicted.source, "runtime");
+    assert.equal(conflicted.path, conflict);
+    assert.equal(conflicted.runtimeStatus, "selected");
   });
 });
 
@@ -339,7 +333,7 @@ test("a refreshed official registry is discovered on the next resolution without
     assert.equal(invalid.providerBuiltinConfigFile, fixture.bundled);
 
     await writeFile(runtimePath, registryRelease(40, "older"), "utf8");
-    assert.equal((await nodeResolver(fixture, {}).resolve()).providerBuiltinConfigFile, fixture.bundled);
+    assert.equal((await nodeResolver(fixture, {}).resolve()).providerBuiltinConfigFile, runtimePath);
 
     const refreshed = JSON.stringify({
       schemaVersion: 1,

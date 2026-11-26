@@ -97,7 +97,7 @@ Bridge 与当前安装版 ZCode Desktop 使用同源的官方运行期 Built-in 
 - `<dataBaseDir>` 是 personal provider 配置所在的 `<base>/.zcode/v2` 的 `<base>`，即已校验的 `ZCODE_DATA_BASE_DIR`；`ZCODE_HOME` 已包含 `.zcode` 时取其父目录，不重复拼接。
 - `<platform>` 沿用官方命名（Windows 为 `windows`，架构 `x86_64` / `aarch64`）；`<appVersion>` 来自安装版 `out/metadata/build-meta.json`；`<hash>` 是当前 Endpoint origin 的 SHA-256 前 32 位。
 - Endpoint origin 优先级：`ZCODE_BASE_URL` → `ZCODE_ENDPOINT_ORIGIN` → 测试/生产 `ZCODE_TEST_BASE_URL` / `ZCODE_PRODUCTION_BASE_URL` → 官方默认值；按 `new URL(...).origin` 规范化。
-- 只定位上述唯一路径，不跨 Endpoint、Desktop 版本或数据根搜索“最新”Registry。文件缺失、非普通文件、非法 JSON 或 schema 不合法时，回退同一安装目录的 `resources/config/provider/zcode-builtin.json`。
+- 只定位上述唯一路径，不跨 Endpoint、Desktop 版本或数据根搜索“最新”Registry。有效的运行期文件始终优先，不比较 revision；只有文件缺失、非普通文件、非法 JSON 或 schema 不合法时，才回退同一安装目录的 `resources/config/provider/zcode-builtin.json`。
 - 每次解析运行时配置（即每次新 AppServer 启动）都重新选择，不缓存、不下载、不更新、不改写官方文件；官方 Registry 更新后无需修改 Bridge 或重装插件。
 
 AppServer 子进程环境、Account Overlay 与模型目录使用同一个已解析文件。Overlay 不再复制 `builtinModelIds`，Coding Plan 与 Start Plan 的模型成员由官方 Registry 决定；`access`、`states` 与 `basedOnZCodeBuiltinRevision` 不变。Adapter 在 AppServer 启动后、注册 Overlay 前复核 Registry 身份（路径、revision、SHA-256），与 Overlay 依据不一致时以 `provider_config_invalid` 失败且不重试。Detached Worker 只转发 Endpoint 相关非秘密环境键，保证与 Executor 定位同一 Registry。

@@ -59,7 +59,8 @@ Bridge 与安装版 Desktop 使用同源的官方 Built-in Registry。以下路�
 2. 运行期文件缺失、不是普通文件（含符号链接）、不是合法 JSON，或不满足
    `schemaVersion === 1`、`revision` 为非负安全整数、`config.providerConfigRules` 与
    `config.modelConfigRules` 均存在时，回退官方安装目录的 Built-in 配置。
-3. 两者均有效时：revision 相同而内容不同，取安装目录；否则取 revision 较高者，并列取安装目录。
+3. 运行期文件有效时始终使用该文件，不比较 revision；只有运行期文件缺失、不可读或
+   不满足上述结构时，才回退安装目录的 Built-in 配置。
 4. 每次解析运行时配置（即每次 AppServer 启动）都重新选择，Bridge 不缓存、不下载、不更新、
    不改写任何官方文件。
 5. 显式 `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE` 等于同一安装的 Built-in 文件时视为默认值而非

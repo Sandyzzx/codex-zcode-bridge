@@ -510,21 +510,7 @@ async function selectOfficialBuiltinRegistry(input) {
     runtime = null;
   }
   if (!runtime) return bundled("invalid");
-  let bundledCandidate;
-  try {
-    bundledCandidate = decodeRegistry(await readFile3(input.bundledPath));
-  } catch {
-    bundledCandidate = null;
-  }
-  if (!bundledCandidate) {
-    return runtimeSelected();
-  }
-  if (bundledCandidate.revision === runtime.revision) {
-    runtime.canonical ??= canonicalJson(runtime.value);
-    bundledCandidate.canonical ??= canonicalJson(bundledCandidate.value);
-    return runtime.canonical === bundledCandidate.canonical ? runtimeSelected() : bundled("same_revision_conflict", bundledCandidate.revision);
-  }
-  return runtime.revision > bundledCandidate.revision ? runtimeSelected() : bundled("lower_revision", bundledCandidate.revision);
+  return runtimeSelected();
   function runtimeSelected() {
     return {
       path: input.runtimePath,
@@ -563,17 +549,11 @@ function decodeRegistry(text2) {
   if (isRecord2(providerRules) && Object.hasOwn(providerRules, OBSERVED_RETIRED_PROVIDER_ID)) {
     throw new Error("registry contains a retired provider");
   }
-  return { revision, value, canonical: null };
+  return { revision };
 }
 function hasExactKeys(value, expected) {
   const keys = Object.keys(value);
   return keys.length === expected.length && expected.every((key) => Object.hasOwn(value, key));
-}
-function canonicalJson(value) {
-  if (value === null || typeof value !== "object") return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  const record5 = value;
-  return `{${Object.keys(record5).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(record5[key])}`).join(",")}}`;
 }
 function isRecord2(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -13111,14 +13091,6 @@ function builtinRegistryCheck(config2, selection) {
       return { name, status: "ok", summary: `${summary}; ZCode Desktop has not written an official runtime registry at ${selection.runtimePath}` };
     case "invalid":
       return { name, status: "warning", summary: `${summary}; the official runtime registry at ${selection.runtimePath} is not a usable release` };
-    case "lower_revision":
-      return { name, status: "ok", summary: `${summary}${selection.revision === null ? "" : ` (revision ${selection.revision})`}; the official runtime registry at ${selection.runtimePath} is not newer` };
-    case "same_revision_conflict":
-      return {
-        name,
-        status: "warning",
-        summary: `${summary}${selection.revision === null ? "" : ` (revision ${selection.revision})`}; the official runtime registry at ${selection.runtimePath} has the same revision but different content`
-      };
     case "selected":
       return { name, status: "ok", summary: `${summary}; the official runtime registry at ${selection.runtimePath} was not selected` };
   }
@@ -13174,7 +13146,7 @@ function hasValidLeaseHistory(root) {
     }
   });
 }
-function canonicalJson2(value) {
+function canonicalJson(value) {
   return JSON.stringify(sortObject(value)) ?? "null";
 }
 function sortObject(value) {
@@ -13198,7 +13170,7 @@ function ownerFromIdentity(ownerKind, identity) {
   };
 }
 function leaseDigest(record5) {
-  return createHash9("sha256").update(canonicalJson2(record5), "utf8").digest("hex");
+  return createHash9("sha256").update(canonicalJson(record5), "utf8").digest("hex");
 }
 function ensurePlainRoot(root) {
   let current;
@@ -13246,7 +13218,7 @@ async function probeOwner(owner, processProbe) {
 }
 function writeLeaseFile(file, record5) {
   const temporary = `${file}.new-${randomUUID3()}`;
-  const payload = canonicalJson2(record5);
+  const payload = canonicalJson(record5);
   let fd;
   try {
     fd = openSync3(temporary, "wx", 384);
@@ -13330,7 +13302,7 @@ async function acquireExecutorLease(input) {
   try {
     const fd = openSync3(file, "wx", 384);
     try {
-      writeSync(fd, canonicalJson2(lease), void 0, "utf8");
+      writeSync(fd, canonicalJson(lease), void 0, "utf8");
     } finally {
       closeSync3(fd);
     }
@@ -13504,14 +13476,14 @@ function deriveAdmissionPolicySnapshotDigest(value) {
     policy_digest: value.policy_digest,
     execution_profile_id: value.execution_profile_id
   };
-  return createHash10("sha256").update(canonicalJson3(envelope), "utf8").digest("hex");
+  return createHash10("sha256").update(canonicalJson2(envelope), "utf8").digest("hex");
 }
-function canonicalJson3(value) {
+function canonicalJson2(value) {
   if (value === null || typeof value === "string" || typeof value === "boolean") return JSON.stringify(value);
   if (typeof value === "number" && Number.isSafeInteger(value)) return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(canonicalJson3).join(",")}]`;
+  if (Array.isArray(value)) return `[${value.map(canonicalJson2).join(",")}]`;
   if (value && Object.getPrototypeOf(value) === Object.prototype) {
-    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson3(value[key])}`).join(",")}}`;
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson2(value[key])}`).join(",")}}`;
   }
   throw new TypeError("invalid admission policy snapshot");
 }
@@ -13989,7 +13961,7 @@ function resolvedRecoveryEventSet(evidence, eligibleDigests, errorCode4) {
   }
   const count = evidence.resolved_recovery_event_count;
   const root = evidence.resolved_recovery_event_root;
-  const expectedRoot = sha2563(canonicalJson4({
+  const expectedRoot = sha2563(canonicalJson3({
     contract: RESOLVED_RECOVERY_SET_CONTRACT2,
     event_digests: ordered
   }));
@@ -14851,7 +14823,7 @@ async function openClaimOnlyDriver(options) {
     const fingerprint = text(worker_identity.start_fingerprint, "cancellation_worker_fingerprint_missing");
     const state = evidence.identity_state;
     if (worker_identity.source !== "manager_verified_process_probe" || worker_identity.fixture !== false || evidence.source !== "manager_process_probe" || evidence.worker_identity_digest !== operationDigest || evidence.process_id !== processId || evidence.start_fingerprint !== fingerprint || state !== "alive" && state !== "exited" || typeof evidence.probe_reason !== "string" || typeof evidence.observed_at !== "string") return false;
-    return { state, worker_identity_digest: operationDigest, evidence_digest: sha2563(canonicalJson4(evidence)) };
+    return { state, worker_identity_digest: operationDigest, evidence_digest: sha2563(canonicalJson3(evidence)) };
   };
   const cancellationVerifier = ({ operation, cancel_intent, worker_identity, evidence }) => {
     const operationDigest = text(operation.claim_worker_identity_digest, "cancellation_claim_identity_missing");
@@ -14867,13 +14839,13 @@ async function openClaimOnlyDriver(options) {
       root_process_id: processId,
       root_start_fingerprint: fingerprint,
       worker_tree_complete: true,
-      evidence_digest: sha2563(canonicalJson4(evidence))
+      evidence_digest: sha2563(canonicalJson3(evidence))
     };
   };
   const recoveryEvidenceBindings = /* @__PURE__ */ new Map();
   const recoveryEvidenceVerifier = (context) => {
     const binding = recoveryEvidenceBindings.get(String(context.observation.evidence_digest));
-    if (!binding || binding.evidence_json !== canonicalJson4(context.evidence) || binding.operation_id !== context.operation.operation_id || binding.task_id !== context.operation.task_id || binding.attempt !== context.operation.attempt || binding.generation !== context.operation.generation || binding.claim_id !== context.operation.claim_id || binding.worker_identity_digest !== context.operation.worker_identity_digest || Object.entries(binding).some(([key, value]) => key !== "evidence_json" && context.observation[key] !== value)) return false;
+    if (!binding || binding.evidence_json !== canonicalJson3(context.evidence) || binding.operation_id !== context.operation.operation_id || binding.task_id !== context.operation.task_id || binding.attempt !== context.operation.attempt || binding.generation !== context.operation.generation || binding.claim_id !== context.operation.claim_id || binding.worker_identity_digest !== context.operation.worker_identity_digest || Object.entries(binding).some(([key, value]) => key !== "evidence_json" && context.observation[key] !== value)) return false;
     recoveryEvidenceBindings.delete(String(context.observation.evidence_digest));
     return {
       classification: binding.classification,
@@ -15204,8 +15176,8 @@ async function openClaimOnlyDriver(options) {
           close: { stage: "direct_close", status: "resolved", treeScanStatus: "verified" },
           treeScanStatus: "verified"
         };
-        const processTreeDigest = sha2563(canonicalJson4(processTreeFacts));
-        const resourcesDigest = sha2563(canonicalJson4(resourceFacts));
+        const processTreeDigest = sha2563(canonicalJson3(processTreeFacts));
+        const resourcesDigest = sha2563(canonicalJson3(resourceFacts));
         const interruptionReason = recoveryOptions.interruptionReason ?? (initialIdentityState === "alive" ? "worker_terminated_without_result" : "worker_exited_without_result");
         const interruptionEvidence = {
           contract: "sqlite-candidate-recovery-interruption-v1",
@@ -15455,8 +15427,8 @@ async function openClaimOnlyDriver(options) {
             worker_identity_digest: workerDigest,
             launch_receipt_digest: text(operation.launch_receipt_digest, "recovery_receipt_digest_missing"),
             result_commit_ref: text(committedResult.result_commit_ref, "recovery_result_ref_missing"),
-            process_tree_digest: sha2563(canonicalJson4(processTreeFacts)),
-            resources_digest: sha2563(canonicalJson4(resourceFacts)),
+            process_tree_digest: sha2563(canonicalJson3(processTreeFacts)),
+            resources_digest: sha2563(canonicalJson3(resourceFacts)),
             root_process_id: processId,
             root_start_fingerprint: fingerprint,
             worker_tree_complete: true,
@@ -15490,7 +15462,7 @@ async function openClaimOnlyDriver(options) {
       const disposition = phase === "running" && identityState === "exited" ? cancellationRequested ? "cancel_interrupted_without_committed_result" : "worker_exited_without_committed_result" : phase === "cleanup_unverified" ? identityState === "alive" ? "worker_still_alive" : identityState === "unknown" ? "cleanup_identity_unknown" : treeReason ?? "cleanup_evidence_incomplete" : identityState === "alive" ? "worker_still_alive" : identityState === "exited" && cleanupPhase ? treeReason ?? "cleanup_evidence_incomplete" : "worker_identity_unknown";
       const reasonCode = identityState === "unknown" ? cleanupPhase ? "cleanup_identity_unknown" : "worker_identity_unknown" : "cleanup_incomplete";
       const releaseTreeProbe = treeOutcome?.status === "resolved" && treeOutcome.result.clean === true && treeOutcome.result.livePids.length === 0 && treeOutcome.result.observedPids.includes(processId) && disposition === "complete_cleanup_closure_unavailable";
-      const processTreeScanDigest = releaseTreeProbe && treeOutcome?.status === "resolved" ? sha2563(canonicalJson4({
+      const processTreeScanDigest = releaseTreeProbe && treeOutcome?.status === "resolved" ? sha2563(canonicalJson3({
         contract: "sqlite-candidate-recovery-release-tree-v1",
         operation_id: operationId,
         task_id: operation.task_id,
@@ -15530,7 +15502,7 @@ async function openClaimOnlyDriver(options) {
         } : {},
         observed_at: typeof verdict2?.observed_at === "string" ? verdict2.observed_at : (/* @__PURE__ */ new Date()).toISOString()
       };
-      const evidenceDigest = sha2563(canonicalJson4(evidence));
+      const evidenceDigest = sha2563(canonicalJson3(evidence));
       const input = {
         operation_id: operationId,
         task_id: text(operation.task_id, "recovery_task_id_missing"),
@@ -15550,7 +15522,7 @@ async function openClaimOnlyDriver(options) {
           recovery_disposition: disposition
         } : {}
       };
-      recoveryEvidenceBindings.set(evidenceDigest, { ...input, evidence_json: canonicalJson4(evidence) });
+      recoveryEvidenceBindings.set(evidenceDigest, { ...input, evidence_json: canonicalJson3(evidence) });
       try {
         const recorded = asRecord5(port.recordRecoveryObservation(input, evidence));
         const latestActive = recorded.duplicate === true ? activeRecovery.at(-1) : void 0;
@@ -15784,7 +15756,7 @@ async function openClaimOnlyDriver(options) {
         termination_signal: terminationSignal,
         live_pids: [],
         termination_state: terminationState,
-        process_tree_digest: sha2563(canonicalJson4(processTreeFacts))
+        process_tree_digest: sha2563(canonicalJson3(processTreeFacts))
       };
       const current = asRecord5(port.readOperation(operationId));
       const verification = asRecord5(port.recordCancellationVerification({ ...fence, revision: Number(current.revision) }, treeEvidence));
@@ -15885,7 +15857,7 @@ async function openClaimOnlyDriver(options) {
         launch_receipt_digest: text(operation.launch_receipt_digest, "cancellation_receipt_digest_missing"),
         result_commit_ref: text(operation.result_commit_ref, "cancellation_result_ref_missing"),
         process_tree_digest: proof.processTreeDigest,
-        resources_digest: sha2563(canonicalJson4(resourceFacts)),
+        resources_digest: sha2563(canonicalJson3(resourceFacts)),
         root_process_id: Number(worker.process_id),
         root_start_fingerprint: String(worker.start_fingerprint),
         worker_tree_complete: true,
@@ -16702,7 +16674,7 @@ async function finalizeClaimedWorkerCleanup(port, input, generation, claimId, pr
             scan_clean: true,
             live_pids: [],
             observed_pids: observedPids,
-            execution_cleanup_proof_digest: sha2563(canonicalJson4(executionCleanup))
+            execution_cleanup_proof_digest: sha2563(canonicalJson3(executionCleanup))
           };
           const resourceFacts = {
             contract: executionCleanup.source === "zcode_app_server_adapter" ? "real-zcode-adapter-resources-v1" : "synthetic-claimed-worker-resources-v1",
@@ -16726,8 +16698,8 @@ async function finalizeClaimedWorkerCleanup(port, input, generation, claimId, pr
             worker_identity_digest: claimIdentityDigest,
             launch_receipt_digest: launchReceiptDigest,
             result_commit_ref: resultCommitRef,
-            process_tree_digest: sha2563(canonicalJson4(processTreeFacts)),
-            resources_digest: sha2563(canonicalJson4(resourceFacts)),
+            process_tree_digest: sha2563(canonicalJson3(processTreeFacts)),
+            resources_digest: sha2563(canonicalJson3(resourceFacts)),
             root_process_id: rootProcessId,
             root_start_fingerprint: rootFingerprint,
             worker_tree_complete: true,
@@ -17069,7 +17041,7 @@ function readSafeReservedAdmission(port, input, operation) {
   const lifecycle = asRecord5(port.readTaskLifecycle(input.task.task_id));
   const projection = asRecord5(lifecycle.projection);
   const attempt = asRecord5(lifecycle.attempt);
-  if (canonicalJson4(lifecycle.task) !== canonicalJson4(input.task) || projection.status !== "queued" || Number(projection.current_attempt) !== input.attempt || attempt.status !== "queued" || Number(attempt.attempt) !== input.attempt || Number(attempt.generation) !== generation) {
+  if (canonicalJson3(lifecycle.task) !== canonicalJson3(input.task) || projection.status !== "queued" || Number(projection.current_attempt) !== input.attempt || attempt.status !== "queued" || Number(attempt.attempt) !== input.attempt || Number(attempt.generation) !== generation) {
     throw new LifecycleGateError("launch_outcome_unknown", "reserved Operation no longer matches the current queued Attempt");
   }
   const events = port.readLifecycleEvents(input.operationId, { afterSequence: 0, limit: 200 });
@@ -17221,13 +17193,13 @@ function validSnapshotText(value) {
 function validSnapshotDigest(value) {
   return typeof value === "string" && /^[0-9a-f]{64}$/u.test(value);
 }
-function canonicalJson4(value) {
+function canonicalJson3(value) {
   if (value === null || typeof value === "string" || typeof value === "boolean") return JSON.stringify(value);
   if (typeof value === "number" && Number.isSafeInteger(value)) return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(canonicalJson4).join(",")}]`;
+  if (Array.isArray(value)) return `[${value.map(canonicalJson3).join(",")}]`;
   if (value && Object.getPrototypeOf(value) === Object.prototype) {
     const record5 = value;
-    return `{${Object.keys(record5).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson4(record5[key])}`).join(",")}}`;
+    return `{${Object.keys(record5).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson3(record5[key])}`).join(",")}}`;
   }
   throw new LifecycleGateError("cleanup_evidence_not_canonicalizable");
 }
@@ -23835,7 +23807,7 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
     const existingValue = this.#driver.readTaskLifecycle(task.task_id);
     if (existingValue) {
       const existing = asRecord7(existingValue);
-      if (canonicalJson5(existing.task) !== canonicalJson5(normalizedTask)) {
+      if (canonicalJson4(existing.task) !== canonicalJson4(normalizedTask)) {
         throw new TaskManagerError("TASK_ID_CONFLICT", `task_id already belongs to a different SQLite request: ${task.task_id}`);
       }
       const existingBinding = taskOwnerBinding(existing.owner_binding);
@@ -23860,7 +23832,7 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
       this.#driver.createTask(normalizedTask, admission);
     } catch (error2) {
       const raced = asRecord7(this.#driver.readTaskLifecycle(task.task_id));
-      if (!raced || canonicalJson5(raced.task) !== canonicalJson5(normalizedTask)) {
+      if (!raced || canonicalJson4(raced.task) !== canonicalJson4(normalizedTask)) {
         if (errorCode2(error2) === "task_already_exists") throw new TaskManagerError("TASK_ID_CONFLICT", `task_id already exists with different SQLite input: ${task.task_id}`);
         throw error2;
       }
@@ -24695,7 +24667,7 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
   }
   #makeExecutionObservation(state, taskId, snapshot, reason, observedAt) {
     const operation = snapshot.operation;
-    const reference = createHash19("sha256").update(canonicalJson5({
+    const reference = createHash19("sha256").update(canonicalJson4({
       task_id: taskId,
       attempt: Number(snapshot.projection.current_attempt),
       operation_id: operation?.operation_id ?? null,
@@ -25595,7 +25567,7 @@ function mergeAdjacentModelOutputRows(rows, maxBytes, includeAttempt = false) {
       sequence: row.sequence,
       at: row.at
     } : null;
-    const mergeFits = candidate !== null && (maxBytes === void 0 || Buffer.byteLength(canonicalJson5(toProgressEvent(candidate, includeAttempt)), "utf8") <= maxBytes);
+    const mergeFits = candidate !== null && (maxBytes === void 0 || Buffer.byteLength(canonicalJson4(toProgressEvent(candidate, includeAttempt)), "utf8") <= maxBytes);
     if (candidate && mergeFits) {
       merged[merged.length - 1] = candidate;
       omittedEventsByRow[omittedEventsByRow.length - 1] = Number(omittedEventsByRow.at(-1)) + 1;
@@ -25614,7 +25586,7 @@ function applyEventByteBudget(events, pageNextCursor, maxBytes, previousCursor =
   let bytes = 0;
   let kept = 0;
   for (const event of events) {
-    const size = Buffer.byteLength(canonicalJson5(event), "utf8");
+    const size = Buffer.byteLength(canonicalJson4(event), "utf8");
     if (kept > 0 && bytes + size > maxBytes) break;
     if (kept === 0 && size > maxBytes) {
       if (!options.allowOversizedFirstEvent) {
@@ -25737,11 +25709,11 @@ async function boundedObservationProbe(probe, pid, identity) {
     if (timer) clearTimeout(timer);
   }
 }
-function canonicalJson5(value) {
+function canonicalJson4(value) {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(canonicalJson5).join(",")}]`;
+  if (Array.isArray(value)) return `[${value.map(canonicalJson4).join(",")}]`;
   const record5 = value;
-  return `{${Object.keys(record5).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson5(record5[key])}`).join(",")}}`;
+  return `{${Object.keys(record5).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson4(record5[key])}`).join(",")}}`;
 }
 function asRecord7(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new TaskManagerError("TASK_STATE", "invalid SQLite lifecycle projection");
@@ -26117,17 +26089,17 @@ function isRecord7(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function wakeDigest(value) {
-  return createHash20("sha256").update(canonicalJson6(value), "utf8").digest("hex");
+  return createHash20("sha256").update(canonicalJson5(value), "utf8").digest("hex");
 }
-function canonicalJson6(value) {
+function canonicalJson5(value) {
   if (value === null || typeof value === "boolean" || typeof value === "string") return JSON.stringify(value);
   if (typeof value === "number") {
     if (!Number.isFinite(value)) throw new Error("wake_digest_number_invalid");
     return JSON.stringify(value);
   }
-  if (Array.isArray(value)) return `[${value.map(canonicalJson6).join(",")}]`;
+  if (Array.isArray(value)) return `[${value.map(canonicalJson5).join(",")}]`;
   if (isRecord7(value)) {
-    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson6(value[key])}`).join(",")}}`;
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson5(value[key])}`).join(",")}}`;
   }
   throw new Error("wake_digest_value_invalid");
 }
