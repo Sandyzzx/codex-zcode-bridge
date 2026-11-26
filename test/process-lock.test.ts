@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import test from "node:test";
-import { tryAcquireProcessLock } from "../src/store/process-lock.js";
+import { createSelfIdentityResolver, tryAcquireProcessLock } from "../src/store/process-lock.js";
 import { captureSpawnGenerationIdentity, createPlatformProbe, terminateProcessTree } from "../src/adapters/process-spawn.js";
 
 // Windows filesystem timing (2026-10-17 investigation): under real
@@ -121,6 +121,32 @@ const seedDeadOwner = (lock: string): void => {
     identity: { fingerprint: "dead-owner", identity_version: 1, platform: process.platform },
   }));
 };
+
+test("self identity retries a transient probe and never caches unavailable", () => {
+  let transientCalls = 0;
+  const transient = createSelfIdentityResolver(() => {
+    transientCalls += 1;
+    return transientCalls === 1
+      ? { state: "unknown" }
+      : { state: "live", fingerprint: "stable-process-start" };
+  });
+  assert.equal(transient()?.fingerprint, "stable-process-start");
+  assert.equal(transientCalls, 2, "the second bounded probe attempt must recover a transient unknown");
+  assert.equal(transient()?.fingerprint, "stable-process-start");
+  assert.equal(transientCalls, 2, "a live identity must be cached");
+
+  let unavailableCalls = 0;
+  const unavailableThenLive = createSelfIdentityResolver(() => {
+    unavailableCalls += 1;
+    return unavailableCalls <= 2
+      ? { state: "unknown" }
+      : { state: "live", fingerprint: "eventual-process-start" };
+  });
+  assert.equal(unavailableThenLive(), null, "an exhausted probe fails only the current resolution");
+  assert.equal(unavailableThenLive()?.fingerprint, "eventual-process-start", "the next caller must retry");
+  assert.equal(unavailableThenLive()?.fingerprint, "eventual-process-start");
+  assert.equal(unavailableCalls, 3);
+});
 
 test("ambiguous absent-destination publication failures (EPERM/EACCES/EBUSY) are retried and publish exactly one owner", () => {
   const root = mkdtempSync(path.join(tmpdir(), "bridge-lock-publish-"));

@@ -1,12 +1,13 @@
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import childProcess, { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, existsSync, readFileSync, readdirSync, writeFileSync, openSync, closeSync, fsyncSync, symlinkSync, rmSync, unlinkSync } from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { IsolatedAdmissionStore, AdmissionError, canonical, digest } from '../../../src/sqlite-candidate/wp6b2b1/store.mjs';
+import { IsolatedAdmissionStore, AdmissionError, canonical, createWriterIntentIdentity, digest } from '../../../src/sqlite-candidate/wp6b2b1/store.mjs';
 import { launchOnce } from '../../../dist-test/src/sqlite-candidate/wp6b2b1/manager-launch.js';
 import { verifyHandshakeAndCommitClaim } from '../../../dist-test/src/sqlite-candidate/wp6b2b1/worker-handshake.js';
 import { createPlatformProbe } from '../../../dist-test/src/adapters/process-spawn.js';
@@ -380,6 +381,55 @@ test('an identified interrupted writer intent is retired only when the process i
   }).generation,2);
   reopened.close();
   assert.ok(readdirSync(r).some(name=>name.startsWith('WRITER_INTENT.json.cleared-')));
+});
+
+test('self writer identity retries a transient probe failure without poisoning later transactions',()=>{
+  let calls=0;
+  const transient=createWriterIntentIdentity(()=> {
+    calls+=1;
+    return calls===1?{state:'unknown'}:{state:'live',fingerprint:'stable-process-start'};
+  },{attempts:2,retryDelayMs:0});
+  assert.equal(transient(),'stable-process-start');
+  assert.equal(calls,2,'the second bounded probe attempt must recover a transient unknown');
+  assert.equal(transient(),'stable-process-start');
+  assert.equal(calls,2,'a live fingerprint must be cached');
+
+  let unavailableCalls=0;
+  const unavailableThenLive=createWriterIntentIdentity(()=> {
+    unavailableCalls+=1;
+    return unavailableCalls<=2?{state:'unknown'}:{state:'live',fingerprint:'eventual-process-start'};
+  },{attempts:2,retryDelayMs:0});
+  assert.equal(unavailableThenLive(),null,'an exhausted probe must fail the current transaction closed');
+  assert.equal(unavailableThenLive(),'eventual-process-start','a later transaction must retry the probe');
+  assert.equal(unavailableThenLive(),'eventual-process-start');
+  assert.equal(unavailableCalls,3);
+});
+
+test('self writer identity recovers when the real Windows probe times out',{
+  skip:process.platform!=='win32',
+},()=>{
+  const realSpawnSync=childProcess.spawnSync;
+  const timeouts=[];
+  let calls=0;
+  childProcess.spawnSync=(command,args,options)=>{
+    calls+=1;
+    timeouts.push(options?.timeout);
+    if(calls===1)return {status:null,stdout:'',stderr:'',signal:'SIGTERM',error:new Error('injected timeout')};
+    return realSpawnSync(command,args,options);
+  };
+  syncBuiltinESMExports();
+  try {
+    const identity=createWriterIntentIdentity();
+    const fingerprint=identity();
+    assert.match(String(fingerprint),/^[0-9]+$/u);
+    assert.equal(calls,2,'the timed-out probe must be retried once');
+    assert.deepEqual(timeouts,[15000,15000],'self probes must use the extended timeout');
+    assert.equal(identity(),fingerprint);
+    assert.equal(calls,2,'the recovered fingerprint must be cached');
+  } finally {
+    childProcess.spawnSync=realSpawnSync;
+    syncBuiltinESMExports();
+  }
 });
 
 test('completed lifecycle history remains structurally readable; released history does not block controlled policy maintenance',()=>{

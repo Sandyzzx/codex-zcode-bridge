@@ -39,9 +39,7 @@ function parseLockOwner(raw: string): LockOwnerRecord | null {
  * failure stays unknown and cannot authorize reclaim. */
 function processStartEvidence(pid: number): ProcessStartEvidence {
   if (pid === process.pid && cachedStartFingerprint !== undefined) {
-    return cachedStartFingerprint === null
-      ? { state: "unknown" }
-      : { state: "live", fingerprint: cachedStartFingerprint };
+    return { state: "live", fingerprint: cachedStartFingerprint };
   }
   let evidence: ProcessStartEvidence = { state: "unknown" };
   try {
@@ -54,8 +52,9 @@ function processStartEvidence(pid: number): ProcessStartEvidence {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") evidence = { state: "absent" };
       }
     } else if (process.platform === "darwin") {
+      const timeout = pid === process.pid ? 15_000 : 5_000;
       const query = spawnSync("ps", ["-o", "pid=,lstart=", "-p", String(pid)], {
-        encoding: "utf8", timeout: 5_000, windowsHide: true, shell: false,
+        encoding: "utf8", timeout, windowsHide: true, shell: false,
       });
       const row = query.status === 0 ? query.stdout.split(/\r?\n/u).find((line) => line.trim()) : undefined;
       evidence = query.status !== 0
@@ -68,9 +67,10 @@ function processStartEvidence(pid: number): ProcessStartEvidence {
       const executable = systemRoot
         ? `${systemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`
         : "powershell.exe";
+      const timeout = pid === process.pid ? 15_000 : 5_000;
       const query = spawnSync(executable, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command",
         `$p=$null; try { $p=[System.Diagnostics.Process]::GetProcessById(${pid}); [Console]::Out.Write($p.StartTime.Ticks) } catch [System.ArgumentException] { [Console]::Out.Write('bridge_pid_absent_v1') }`], {
-        encoding: "utf8", timeout: 5_000, windowsHide: true, shell: false,
+        encoding: "utf8", timeout, windowsHide: true, shell: false,
       });
       const output = query.status === 0 ? query.stdout.trim() : "";
       evidence = output === "bridge_pid_absent_v1"
@@ -80,12 +80,42 @@ function processStartEvidence(pid: number): ProcessStartEvidence {
   } catch {
     evidence = { state: "unknown" };
   }
-  if (pid === process.pid) cachedStartFingerprint = evidence.state === "live" ? evidence.fingerprint : null;
+  if (pid === process.pid && evidence.state === "live") cachedStartFingerprint = evidence.fingerprint;
   return evidence;
 }
 
 let selfIdentity: ProcessIdentity | null = null;
-let cachedStartFingerprint: string | null | undefined;
+let cachedStartFingerprint: string | undefined;
+
+const SELF_IDENTITY_PROBE_ATTEMPTS = 2;
+const SELF_IDENTITY_RETRY_MS = 50;
+
+/** A failed self probe fails only the current resolution attempt. It is never
+ * cached as a permanent unknown; the next caller can retry. */
+export function createSelfIdentityResolver(
+  probe: (pid: number) => ProcessStartEvidence = processStartEvidence,
+): () => ProcessIdentity | null {
+  let identity: ProcessIdentity | null = null;
+  return function resolveSelfIdentity(): ProcessIdentity | null {
+    if (identity) return identity;
+    for (let attempt = 0; attempt < SELF_IDENTITY_PROBE_ATTEMPTS; attempt += 1) {
+      const evidence = probe(process.pid);
+      if (evidence.state === "live") {
+        identity = {
+          pid: process.pid,
+          fingerprint: evidence.fingerprint,
+          fingerprint_precision: "exact",
+          identity_version: 1,
+          platform: process.platform,
+          captured_at: new Date().toISOString(),
+        };
+        return identity;
+      }
+      if (attempt + 1 < SELF_IDENTITY_PROBE_ATTEMPTS) pauseBriefly(SELF_IDENTITY_RETRY_MS);
+    }
+    return null;
+  };
+}
 
 /** Errno codes that can appear while the lock directory's neighborhood is in
  * motion. Directly observed under real cross-process contention: EPERM on
@@ -130,26 +160,15 @@ function pauseBriefly(delayMs = RETRY_PAUSE_MS): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
 }
 
+const resolveSelfIdentity = createSelfIdentityResolver();
+
 export function publishSelfIdentity(identity: ProcessIdentity): void {
-  selfIdentity = identity;
-  cachedStartFingerprint = identity.fingerprint;
+  selfIdentity = identity.fingerprint ? identity : null;
+  if (identity.fingerprint) cachedStartFingerprint = identity.fingerprint;
 }
 
 export function currentSelfIdentity(): ProcessIdentity | null {
-  if (!selfIdentity) {
-    const evidence = processStartEvidence(process.pid);
-    const fingerprint = evidence.state === "live" ? evidence.fingerprint : null;
-    if (fingerprint) {
-      selfIdentity = {
-        pid: process.pid,
-        fingerprint,
-        fingerprint_precision: "exact",
-        identity_version: 1,
-        platform: process.platform,
-        captured_at: new Date().toISOString(),
-      };
-    }
-  }
+  if (!selfIdentity) selfIdentity = resolveSelfIdentity();
   return selfIdentity;
 }
 

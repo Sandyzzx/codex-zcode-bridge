@@ -12942,7 +12942,7 @@ function parseLockOwner(raw) {
 }
 function processStartEvidence(pid) {
   if (pid === process.pid && cachedStartFingerprint !== void 0) {
-    return cachedStartFingerprint === null ? { state: "unknown" } : { state: "live", fingerprint: cachedStartFingerprint };
+    return { state: "live", fingerprint: cachedStartFingerprint };
   }
   let evidence = { state: "unknown" };
   try {
@@ -12955,9 +12955,10 @@ function processStartEvidence(pid) {
         if (error2.code === "ENOENT") evidence = { state: "absent" };
       }
     } else if (process.platform === "darwin") {
+      const timeout = pid === process.pid ? 15e3 : 5e3;
       const query = spawnSync("ps", ["-o", "pid=,lstart=", "-p", String(pid)], {
         encoding: "utf8",
-        timeout: 5e3,
+        timeout,
         windowsHide: true,
         shell: false
       });
@@ -12966,6 +12967,7 @@ function processStartEvidence(pid) {
     } else if (process.platform === "win32") {
       const systemRoot = Object.entries(process.env).find(([key]) => key.toLowerCase() === "systemroot")?.[1];
       const executable = systemRoot ? `${systemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe` : "powershell.exe";
+      const timeout = pid === process.pid ? 15e3 : 5e3;
       const query = spawnSync(executable, [
         "-NoProfile",
         "-NonInteractive",
@@ -12975,7 +12977,7 @@ function processStartEvidence(pid) {
         `$p=$null; try { $p=[System.Diagnostics.Process]::GetProcessById(${pid}); [Console]::Out.Write($p.StartTime.Ticks) } catch [System.ArgumentException] { [Console]::Out.Write('bridge_pid_absent_v1') }`
       ], {
         encoding: "utf8",
-        timeout: 5e3,
+        timeout,
         windowsHide: true,
         shell: false
       });
@@ -12985,11 +12987,35 @@ function processStartEvidence(pid) {
   } catch {
     evidence = { state: "unknown" };
   }
-  if (pid === process.pid) cachedStartFingerprint = evidence.state === "live" ? evidence.fingerprint : null;
+  if (pid === process.pid && evidence.state === "live") cachedStartFingerprint = evidence.fingerprint;
   return evidence;
 }
 var selfIdentity = null;
 var cachedStartFingerprint;
+var SELF_IDENTITY_PROBE_ATTEMPTS = 2;
+var SELF_IDENTITY_RETRY_MS = 50;
+function createSelfIdentityResolver(probe = processStartEvidence) {
+  let identity = null;
+  return function resolveSelfIdentity2() {
+    if (identity) return identity;
+    for (let attempt = 0; attempt < SELF_IDENTITY_PROBE_ATTEMPTS; attempt += 1) {
+      const evidence = probe(process.pid);
+      if (evidence.state === "live") {
+        identity = {
+          pid: process.pid,
+          fingerprint: evidence.fingerprint,
+          fingerprint_precision: "exact",
+          identity_version: 1,
+          platform: process.platform,
+          captured_at: (/* @__PURE__ */ new Date()).toISOString()
+        };
+        return identity;
+      }
+      if (attempt + 1 < SELF_IDENTITY_PROBE_ATTEMPTS) pauseBriefly(SELF_IDENTITY_RETRY_MS);
+    }
+    return null;
+  };
+}
 var TRANSIENT_LOCK_FS_CODES = /* @__PURE__ */ new Set(["EEXIST", "EPERM", "EACCES", "EBUSY", "ENOTEMPTY"]);
 var DESTINATION_PRESENT_CONTENTION_CODES = /* @__PURE__ */ new Set(["EEXIST", "ENOTEMPTY"]);
 var PUBLICATION_RETRY_PAUSE_MS = 50;
@@ -13004,21 +13030,9 @@ function isTransientLockFsError(error2) {
 function pauseBriefly(delayMs = RETRY_PAUSE_MS) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
 }
+var resolveSelfIdentity = createSelfIdentityResolver();
 function currentSelfIdentity() {
-  if (!selfIdentity) {
-    const evidence = processStartEvidence(process.pid);
-    const fingerprint = evidence.state === "live" ? evidence.fingerprint : null;
-    if (fingerprint) {
-      selfIdentity = {
-        pid: process.pid,
-        fingerprint,
-        fingerprint_precision: "exact",
-        identity_version: 1,
-        platform: process.platform,
-        captured_at: (/* @__PURE__ */ new Date()).toISOString()
-      };
-    }
-  }
+  if (!selfIdentity) selfIdentity = resolveSelfIdentity();
   return selfIdentity;
 }
 async function withProcessLock(directory, operation, timeoutMs = 3e4) {

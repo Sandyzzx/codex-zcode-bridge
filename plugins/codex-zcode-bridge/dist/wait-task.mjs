@@ -338,6 +338,7 @@ __export(store_exports, {
   AdmissionError: () => AdmissionError,
   IsolatedAdmissionStore: () => IsolatedAdmissionStore,
   canonical: () => canonical3,
+  createWriterIntentIdentity: () => createWriterIntentIdentity,
   digest: () => digest,
   validateWorkspace: () => validateWorkspace
 });
@@ -1220,7 +1221,8 @@ function processStartEvidence(pid) {
       }
     }
     if (process.platform === "darwin") {
-      const query = spawnSync("ps", ["-o", "pid=,lstart=", "-p", String(pid)], { encoding: "utf8", timeout: 5e3, windowsHide: true, shell: false });
+      const timeout = pid === process.pid ? 15e3 : 5e3;
+      const query = spawnSync("ps", ["-o", "pid=,lstart=", "-p", String(pid)], { encoding: "utf8", timeout, windowsHide: true, shell: false });
       if (query.status !== 0) return { state: "unknown" };
       const row = query.stdout.split(/\r?\n/u).find((line) => line.trim());
       return row ? { state: "live", fingerprint: row.trim().split(/\s+/u).slice(1).join(" ") } : { state: "absent" };
@@ -1228,6 +1230,7 @@ function processStartEvidence(pid) {
     if (process.platform === "win32") {
       const systemRoot = Object.entries(process.env).find(([key]) => key.toLowerCase() === "systemroot")?.[1];
       const executable = systemRoot ? `${systemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe` : "powershell.exe";
+      const timeout = pid === process.pid ? 15e3 : 5e3;
       const query = spawnSync(executable, [
         "-NoProfile",
         "-NonInteractive",
@@ -1237,7 +1240,7 @@ function processStartEvidence(pid) {
         `$p=$null; try { $p=[System.Diagnostics.Process]::GetProcessById(${pid}); [Console]::Out.Write($p.StartTime.Ticks) } catch [System.ArgumentException] { [Console]::Out.Write('bridge_pid_absent_v1') }`
       ], {
         encoding: "utf8",
-        timeout: 5e3,
+        timeout,
         windowsHide: true,
         shell: false
       });
@@ -1249,12 +1252,25 @@ function processStartEvidence(pid) {
   }
   return { state: "unknown" };
 }
-function writerIntentIdentity() {
-  if (selfStartFingerprint === void 0) {
-    const evidence = processStartEvidence(process.pid);
-    selfStartFingerprint = evidence.state === "live" ? evidence.fingerprint : null;
-  }
-  return selfStartFingerprint;
+function createWriterIntentIdentity(probe = processStartEvidence, {
+  attempts = SELF_IDENTITY_PROBE_ATTEMPTS,
+  retryDelayMs = SELF_IDENTITY_RETRY_MS
+} = {}) {
+  let cached;
+  return function writerIntentIdentity2() {
+    if (cached !== void 0) return cached;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      const evidence = probe(process.pid);
+      if (evidence.state === "live") {
+        cached = evidence.fingerprint;
+        return cached;
+      }
+      if (attempt + 1 < attempts && retryDelayMs > 0) {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, retryDelayMs);
+      }
+    }
+    return null;
+  };
 }
 function readWriterIntent(file) {
   try {
@@ -1589,7 +1605,7 @@ function callDecision(fn, workspace, input) {
     return { state: "unknown" };
   }
 }
-var HERE, SCHEMA, RUNTIME_EVENTS_SCHEMA, ADMIN_ABANDONMENT_SCHEMA, NORMALIZED_ADMIN_ABANDONMENT_SCHEMA, LEGACY_ADMIN_ABANDONMENT_SCHEMA, CONSTRUCT, SCHEMA_VERSION, SCHEMA_OBJECT_QUERY, RUNTIME_EVENT_SCHEMA_OBJECTS, OWNER_BINDING_SCHEMA_OBJECTS, expectedSchemas, expectedRecoveryBindingTriggerSql, ADMIN_ABANDONMENT_TABLE_SQL, LEGACY_ADMIN_ABANDONMENT_TABLE_SQL, NORMALIZED_ADMIN_ABANDONMENT_TABLE_SQL, NORMALIZED_LEGACY_ADMIN_ABANDONMENT_TABLE_SQL, SQLITE_V14_ONLY_MESSAGE, V13_UPGRADE_MARKER_MESSAGE, v13UpgradeMarker, RESULT_CONTRACT_VERSION, RESULT_STATUSES2, RECOVERY_PHASES, RECOVERY_SOURCES, RECOVERY_REASON_CODES, RECOVERY_QUARANTINE_CODES, RECOVERY_EVIDENCE_KEYS, RECOVERY_RELEASE_EVIDENCE_KEYS, EXECUTOR_WAKE_BASE_EVIDENCE_KEYS, EXECUTOR_WAKE_EVIDENCE_KEYS, EXECUTOR_WAKE_STATES, EXECUTOR_WAKE_LIMIT, LATE_WAKE_REASON, LATE_WAKE_STATES, LATE_WAKE_LIMIT, RECOVERY_MATERIAL_BINDING_KEYS, RECOVERY_MATERIAL_DETAIL_KEYS, RESOLVED_RECOVERY_SET_CONTRACT, RECOVERY_MATERIAL_CONTRACT, digest, rawDigest, sortedDigests, upgradeRowJson, EVIDENCE_KEYS, FUTURE_EVENT_TYPES, FUTURE_EVIDENCE_KEYS, EVENT_PHASE, RECOVERY_INPUT_KEYS, RECOVERY_RELEASE_INPUT_KEYS, ADMIN_ABANDONMENT_INPUT_KEYS, ADMIN_ABANDONMENT_EVIDENCE_KEYS, USER_AUTHORIZED_RELEASE_INPUT_KEYS, USER_AUTHORIZED_FORCED_RELEASE_INPUT_KEYS, USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS, EXECUTOR_WAKE_BASE_INPUT_KEYS, EXECUTOR_WAKE_INPUT_KEYS, USER_AUTHORIZED_TERMINAL_RELEASE_INPUT_KEYS, AdmissionError, fail2, selfStartFingerprint, IsolatedAdmissionStore;
+var HERE, SCHEMA, RUNTIME_EVENTS_SCHEMA, ADMIN_ABANDONMENT_SCHEMA, NORMALIZED_ADMIN_ABANDONMENT_SCHEMA, LEGACY_ADMIN_ABANDONMENT_SCHEMA, CONSTRUCT, SCHEMA_VERSION, SCHEMA_OBJECT_QUERY, RUNTIME_EVENT_SCHEMA_OBJECTS, OWNER_BINDING_SCHEMA_OBJECTS, expectedSchemas, expectedRecoveryBindingTriggerSql, ADMIN_ABANDONMENT_TABLE_SQL, LEGACY_ADMIN_ABANDONMENT_TABLE_SQL, NORMALIZED_ADMIN_ABANDONMENT_TABLE_SQL, NORMALIZED_LEGACY_ADMIN_ABANDONMENT_TABLE_SQL, SQLITE_V14_ONLY_MESSAGE, V13_UPGRADE_MARKER_MESSAGE, v13UpgradeMarker, RESULT_CONTRACT_VERSION, RESULT_STATUSES2, RECOVERY_PHASES, RECOVERY_SOURCES, RECOVERY_REASON_CODES, RECOVERY_QUARANTINE_CODES, RECOVERY_EVIDENCE_KEYS, RECOVERY_RELEASE_EVIDENCE_KEYS, EXECUTOR_WAKE_BASE_EVIDENCE_KEYS, EXECUTOR_WAKE_EVIDENCE_KEYS, EXECUTOR_WAKE_STATES, EXECUTOR_WAKE_LIMIT, LATE_WAKE_REASON, LATE_WAKE_STATES, LATE_WAKE_LIMIT, RECOVERY_MATERIAL_BINDING_KEYS, RECOVERY_MATERIAL_DETAIL_KEYS, RESOLVED_RECOVERY_SET_CONTRACT, RECOVERY_MATERIAL_CONTRACT, digest, rawDigest, sortedDigests, upgradeRowJson, EVIDENCE_KEYS, FUTURE_EVENT_TYPES, FUTURE_EVIDENCE_KEYS, EVENT_PHASE, RECOVERY_INPUT_KEYS, RECOVERY_RELEASE_INPUT_KEYS, ADMIN_ABANDONMENT_INPUT_KEYS, ADMIN_ABANDONMENT_EVIDENCE_KEYS, USER_AUTHORIZED_RELEASE_INPUT_KEYS, USER_AUTHORIZED_FORCED_RELEASE_INPUT_KEYS, USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS, EXECUTOR_WAKE_BASE_INPUT_KEYS, EXECUTOR_WAKE_INPUT_KEYS, USER_AUTHORIZED_TERMINAL_RELEASE_INPUT_KEYS, AdmissionError, fail2, SELF_IDENTITY_PROBE_ATTEMPTS, SELF_IDENTITY_RETRY_MS, writerIntentIdentity, IsolatedAdmissionStore;
 var init_store = __esm({
   "src/sqlite-candidate/wp6b2b1/store.mjs"() {
     "use strict";
@@ -1743,6 +1759,9 @@ var init_store = __esm({
     fail2 = (code, message) => {
       throw new AdmissionError(code, message);
     };
+    SELF_IDENTITY_PROBE_ATTEMPTS = 2;
+    SELF_IDENTITY_RETRY_MS = 50;
+    writerIntentIdentity = createWriterIntentIdentity();
     IsolatedAdmissionStore = class _IsolatedAdmissionStore {
       #db;
       #paths;
