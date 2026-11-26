@@ -458,7 +458,8 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
   /** P1 §3.4A: bounded page over the exact stored canonical Result JSON. The
    * returned next_offset always lands on a UTF-8 codepoint boundary;
    * concatenating every page's data reproduces the stored bytes whose SHA-256
-   * equals the operation's result_digest. */
+   * is `page.content_digest`. This content digest is independent from the
+   * persisted Result-envelope `result_digest`; they are not asserted equal. */
   async getResultPage(taskId: string, offsetBytes: number, maxBytes: number): Promise<Record<string, unknown>> {
     this.#assertOpen();
     if (!Number.isSafeInteger(offsetBytes) || offsetBytes < 0
@@ -494,6 +495,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       ...(committed.error_code ? { error_code: committed.error_code } : {}),
       result_status: page.result_status,
       result_digest: page.result_digest,
+      result_content_digest: page.result_content_digest,
       result_commit_ref: page.result_commit_ref,
       page: {
         offset_bytes: page.offset_bytes,
@@ -650,16 +652,17 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     };
   }
 
-  async cancelTask(taskId: string): Promise<TaskStatusRecord> {
+  async cancelTask(taskId: string, options: { readonly acceptWorkerRisk?: boolean } = {}): Promise<TaskStatusRecord> {
     const existing = this.#recoveryRuns.get(taskId);
     if (existing) return existing;
-    const cancellation = Promise.resolve().then(() => this.#cancelTaskOnce(taskId));
+    const cancellation = Promise.resolve().then(() => this.#cancelTaskOnce(taskId, true, options));
     this.#recoveryRuns.set(taskId, cancellation);
     try { return await cancellation; }
     finally { if (this.#recoveryRuns.get(taskId) === cancellation) this.#recoveryRuns.delete(taskId); }
   }
 
-  async #cancelTaskOnce(taskId: string, reconcileClaimRace = true): Promise<TaskStatusRecord> {
+  async #cancelTaskOnce(taskId: string, reconcileClaimRace = true,
+    options: { readonly acceptWorkerRisk?: boolean } = {}): Promise<TaskStatusRecord> {
     this.#assertOpen();
     this.#assertRecoveryReady();
     const snapshot = this.#readSnapshot(taskId);
@@ -670,11 +673,16 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       catch (error) {
         const current = this.#readSnapshot(taskId);
         if (reconcileClaimRace && current.projection.status === "running"
-          && Number(current.attempt.attempt) === Number(attempt.attempt)) return this.#cancelTaskOnce(taskId, false);
+          && Number(current.attempt.attempt) === Number(attempt.attempt)) {
+          return this.#cancelTaskOnce(taskId, false, options);
+        }
         throw error;
       }
       this.#queued.delete(queueKey(taskId, Number(attempt.attempt)));
       this.#schedulePump();
+      if (options.acceptWorkerRisk === true) {
+        return await this.#userAuthorizedRelease(taskId, this.#readSnapshot(taskId), {}, true);
+      }
       return this.getStatus(taskId);
     }
     if (projection.status === "running") {
@@ -701,7 +709,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     }
     const operation = snapshot.operation ? asRecord(snapshot.operation) : null;
     if (projection.status === "cancelled" && operation?.phase === "launch_intent" && operation.claim_id === null) {
-      return await this.#userAuthorizedRelease(taskId, snapshot);
+      return await this.#userAuthorizedRelease(taskId, snapshot, {}, options.acceptWorkerRisk === true);
     }
     if (projection.status === "cancelled" && (!operation || operation.phase === "cancelled_before_launch")) return this.getStatus(taskId);
     if (isTerminal(projection.status as TaskStatus) && operation?.phase === "released") {
@@ -760,6 +768,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     taskId: string,
     snapshot: TaskSnapshot,
     authorizationEvidence: Record<string, unknown> = {},
+    acceptWorkerRisk = false,
   ): Promise<TaskStatusRecord> {
     const operation = snapshot.operation ? asRecord(snapshot.operation) : null;
     const projection = asRecord(snapshot.projection);
@@ -776,7 +785,8 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     if (operation.phase === "launch_intent"
       && (operation.launch_receipt_id !== null
         || operation.launch_receipt_digest !== null
-        || operation.launch_identity_json !== null)) {
+        || operation.launch_identity_json !== null)
+      && !acceptWorkerRisk) {
       throw new TaskManagerError(
         "CANCEL_FAILED",
         "launch_intent has durable spawn evidence; user-authorized unverified release is not allowed",
@@ -817,6 +827,13 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       ...releaseBinding,
     };
     if (cancelId !== null) releaseRequest.cancel_id = cancelId;
+    if (operation.phase === "launch_intent" && acceptWorkerRisk) {
+      if (typeof operation.launch_receipt_digest !== "string") {
+        throw new TaskManagerError("CANCEL_FAILED", "forced launch release requires the persisted Receipt digest");
+      }
+      releaseRequest.accept_worker_risk = true;
+      releaseRequest.launch_receipt_digest = operation.launch_receipt_digest;
+    }
     const outcome = asRecord(this.#driver.userAuthorizedReleaseUnverifiedOperation(releaseRequest as never));
     if (outcome.phase !== "released" || outcome.cleanup_verified !== false) {
       throw new TaskManagerError("CANCEL_FAILED", "SQLite user-authorized unverified release did not persist a distinct Release fact");
@@ -1609,7 +1626,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       const event = asRecord(value);
       if (String(event.event_type) !== "observation_recorded" || typeof event.operation_id !== "string") continue;
       try {
-        const evidence = asRecord(JSON.parse(String(event.evidence_json)));
+    const evidence = parseBoundedRecord(event.evidence_json, "SQLite Wake evidence is invalid");
         if (evidence.reason === "executor_wake") wakeNotified.add(event.operation_id);
       } catch {
         // Malformed evidence cannot prove a prior notification; the operation
@@ -2412,8 +2429,18 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 function parseRecord(value: unknown): Record<string, unknown> {
-  try { return asRecord(JSON.parse(string(value, "identity_missing"))); }
+  const raw = string(value, "identity_missing");
+  if (raw.length > 64 * 1024) throw new TaskManagerError("TASK_STATE", "SQLite Worker identity projection is oversized");
+  try { return asRecord(JSON.parse(raw)); }
   catch { throw new TaskManagerError("TASK_STATE", "SQLite Worker identity projection is corrupt"); }
+}
+
+function parseBoundedRecord(value: unknown, code: string): Record<string, unknown> {
+  if (typeof value !== "string" || !value || value.length > 64 * 1024) {
+    throw new TaskManagerError("TASK_STATE", code);
+  }
+  try { return asRecord(JSON.parse(value)); }
+  catch { throw new TaskManagerError("TASK_STATE", code); }
 }
 function string(value: unknown, code: string): string {
   if (typeof value !== "string" || !value) throw new TaskManagerError("TASK_STATE", code);

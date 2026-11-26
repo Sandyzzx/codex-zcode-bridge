@@ -45,6 +45,7 @@ export interface ExecutorLiveStatus extends Record<string, unknown> {
 export interface ExecutorWorkerSafety {
   readonly safe: boolean;
   readonly blockers: readonly string[];
+  readonly retained_operations?: readonly string[];
 }
 
 export type ExecutorRecoveryResult =
@@ -159,9 +160,10 @@ function workerIdentity(value: unknown, processProbe: ProcessProbe): ProcessIden
 }
 
 /**
- * Refuse Executor restart while a persisted Worker root is alive or cannot be
- * conclusively probed. A launch intent without a receipt is also unknown: its
- * child may have been created immediately before the Executor died.
+ * Inspect persisted Worker roots without making one uncertain root a global
+ * startup gate. Unknown outcomes and live identities are retained per
+ * Operation; SQLite's workspace fence prevents a new dispatch to the same
+ * path while unrelated Tasks continue.
  */
 export async function inspectExecutorWorkerSafety(
   dataRoot: string,
@@ -188,7 +190,7 @@ export async function inspectExecutorWorkerSafety(
     const operations = Array.isArray(snapshot.operations)
       ? snapshot.operations as ReadonlyArray<Readonly<Record<string, unknown>>>
       : [];
-    const blockers: string[] = [];
+    const retained: string[] = [];
     const identities: Array<{ readonly operation: string; readonly identity: ProcessIdentity }> = [];
     for (const operation of operations) {
       if (operation.operation_kind !== "attempt_lifecycle"
@@ -199,18 +201,17 @@ export async function inspectExecutorWorkerSafety(
       const label = `${String(operation.task_id)}/${String(operation.attempt)}`;
       if (operation.phase === "reserved") continue;
       if (operation.phase === "launch_intent" && operation.launch_receipt_digest === null) {
-        blockers.push(`launch_outcome_unknown:${label}`);
+        retained.push(`launch_outcome_unknown:${label}`);
         continue;
       }
       const claimed = workerIdentity(parseRecord(operation.claim_worker_identity_json), processProbe)
         ?? workerIdentity(parseRecord(operation.launch_identity_json), processProbe);
       if (!claimed) {
-        blockers.push(`worker_identity_unknown:${label}`);
+        retained.push(`worker_identity_unknown:${label}`);
         continue;
       }
       identities.push({ operation: label, identity: claimed });
     }
-    if (blockers.length > 0) return { safe: false, blockers };
     if (identities.length > 0) {
       const verdicts = await processProbe.probe(identities.map(({ identity }) => ({
         pid: identity.pid,
@@ -219,11 +220,11 @@ export async function inspectExecutorWorkerSafety(
       for (let index = 0; index < identities.length; index += 1) {
         const verdict = verdicts[index];
         if (verdict?.state !== "exited") {
-          blockers.push(`${verdict?.state === "alive" ? "worker_still_alive" : "worker_identity_unknown"}:${identities[index]!.operation}`);
+          retained.push(`${verdict?.state === "alive" ? "worker_still_alive" : "worker_identity_unknown"}:${identities[index]!.operation}`);
         }
       }
     }
-    return { safe: blockers.length === 0, blockers };
+    return { safe: true, blockers: [], retained_operations: retained };
   } catch (error) {
     return {
       safe: false,
@@ -323,6 +324,11 @@ export function createExecutorRecoveryCoordinator(options: ExecutorRecoveryOptio
             "Executor lease was not archived because Worker execution is still live or unverifiable",
             workers.blockers,
           );
+        }
+        if (workers.retained_operations?.length) {
+          console.error(`EXECUTOR_WORKER_OPERATIONS_RETAINED ${JSON.stringify({
+            operations: workers.retained_operations,
+          })}`);
         }
         try {
           const cleared = await clearLease(options.dataRoot);

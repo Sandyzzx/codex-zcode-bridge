@@ -431,6 +431,8 @@ var TEXT={
     decisionAllow:"Allow",decisionDeny:"Deny",decisionAccept:"Accept",decisionDecline:"Decline",
     cancel:"Request cancel",cancelConfirm:"Request cancellation of the active Attempt? This never forces Release.",
     cleanupRecovery:"Recover Cleanup",cleanupRecoveryConfirm:"Retry the Cleanup check for this Task? This re-checks the Worker and Cleanup facts, never clears a Hold, and does not bypass the Task state machine.",
+    authorizedCleanup:"Authorize cleanup",authorizedCleanupConfirm:
+      "Abandon this selected Task and release its Bridge occupancy? Existing evidence stays, execution success is not claimed, and a possibly live Worker may keep writing its Workspace. Type-safe confirmation only accepts these risks.",
     actionUnavailable:"No safe action is available for this Task right now.",actionBlocked:"Blocked by: {reasons}.",
     historicalReadOnly:"This is a historical Attempt. Actions apply only to the current Attempt.",
     task:"Task",attempt:"Attempt",workspace:"Workspace",updated:"Updated",model:"Model",plan:"Plan",discount:"Discount",effort:"Effort",status:"Status",result:"Result",
@@ -493,6 +495,8 @@ var TEXT={
     decisionAllow:"允许",decisionDeny:"拒绝",decisionAccept:"接受",decisionDecline:"不接受",
     cancel:"请求取消",cancelConfirm:"请求取消当前 Attempt？这不会强制 Release。",
     cleanupRecovery:"恢复 Cleanup",cleanupRecoveryConfirm:"重新核对 Worker 与 Cleanup 事实？此操作不会清除 Hold，也不会绕过任务状态机。",
+    authorizedCleanup:"授权清理",authorizedCleanupConfirm:
+      "放弃所选任务并解除 Bridge 占用？历史证据保留，不会宣称执行成功；Worker 仍可能存活并并发写入 Workspace。确认即表示接受这些风险。",
     actionUnavailable:"当前任务暂时没有安全可执行的动作。",actionBlocked:"阻塞原因：{reasons}。",
     historicalReadOnly:"这是历史 Attempt，动作只作用于当前 Attempt。",
     task:"任务",attempt:"Attempt",workspace:"Workspace",updated:"更新时间",model:"模型",plan:"套餐",discount:"优惠",effort:"Effort",status:"状态",result:"Result",
@@ -789,6 +793,13 @@ function renderProblemActions(detail,attempt,current){
   if(caps.can_continue){var continueButton=el("button","button primary",t("continue"));continueButton.type="button";continueButton.addEventListener("click",function(){state.actionForm=state.actionForm==="continue"?null:"continue";renderDetail();});actions.appendChild(continueButton);}
   if(caps.can_rework){var reworkButton=el("button","button",t("rework"));reworkButton.type="button";reworkButton.addEventListener("click",function(){state.actionForm=state.actionForm==="rework"?null:"rework";renderDetail();});actions.appendChild(reworkButton);}
   if(caps.can_recover_cleanup){var recoverButton=el("button","button",t("cleanupRecovery"));recoverButton.type="button";recoverButton.addEventListener("click",function(){void recoverCleanup();});actions.appendChild(recoverButton);}
+  var cleanupRisk=current&&(attempt.cleanup.state!=="verified"||attempt.hold.active
+    ||attempt.reply_outcome_unknown_requests.length>0
+    ||attempt.wake?.state==="submission_unknown"||attempt.operation_phase==="launch_intent");
+  if(current&&(caps.can_cancel||caps.can_recover_cleanup||cleanupRisk)){
+    var forceButton=el("button","button danger",t("authorizedCleanup"));
+    forceButton.type="button";forceButton.addEventListener("click",function(){void forceCleanup();});actions.appendChild(forceButton);
+  }
   if(caps.can_reply){var replyButton=el("button","button",t("reply"));replyButton.type="button";replyButton.addEventListener("click",function(){state.actionForm=state.actionForm==="reply"?null:"reply";renderDetail();});actions.appendChild(replyButton);}
   if(caps.can_cancel){var cancelButton=el("button","button danger",t("cancel"));cancelButton.type="button";cancelButton.addEventListener("click",function(){void cancelTask();});actions.appendChild(cancelButton);}
   if(actions.children.length)section.appendChild(actions);
@@ -1171,6 +1182,14 @@ async function cancelTask(){
     state.selectedAttempt=null;toast(t("taskActionDone"));await loadTasks();await loadDetail();if(state.eventsOpen)await ensureEvents(true);
   }catch(error){toast(errorMessage(error),true);setError(errorMessage(error));}
   finally{state.busy=false;}
+}
+async function forceCleanup(){
+  if(!canMutate())return;if(!window.confirm(t("authorizedCleanupConfirm")))return;state.busy=true;
+  try {
+    await api("/api/tasks/"+encodeURIComponent(state.selected)+"/force-cleanup",{method:"POST",csrf:true,body:JSON.stringify({
+      release_mode:"user_authorized_unverified_release",accept_worker_risk:true})});
+    state.selectedAttempt=null;state.actionForm=null;toast(t("taskActionDone"));await loadTasks();await loadDetail();if(state.eventsOpen)await ensureEvents(true);
+  } finally {state.busy=false;}
 }
 async function recoverCleanup(){
   if(!canMutate())return;if(!window.confirm(t("cleanupRecoveryConfirm")))return;state.busy=true;

@@ -1,7 +1,8 @@
 // P1 §3.4A Result Readback integrity (2026-11-24): bounded pages over the
 // exact stored canonical Result JSON. Concatenating every page's data must
-// reproduce the stored bytes whose SHA-256 equals the operation's
-// result_digest; offsets always land on UTF-8 codepoint boundaries via
+// reproduce the stored bytes whose SHA-256 is result_content_digest; it is
+// distinct from the Result-envelope result_digest. Offsets land on UTF-8
+// codepoint boundaries via
 // next_offset; out-of-range and uncommitted reads fail explicitly.
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -20,6 +21,7 @@ test('paged reads reproduce the stored canonical bytes and digest exactly',()=>{
     const storedCanonical=canonical(value);
     const expectedDigest=digest({result_contract_version:1,result_status:'completed',result:value});
     assert.equal(committed.result_digest,expectedDigest);
+    let seenContentDigest=null;
     let offset=0;let concatenated='';
     for(;;){
       const page=store.readTaskResultPage(fence.task_id,offset,1024);
@@ -29,10 +31,14 @@ test('paged reads reproduce the stored canonical bytes and digest exactly',()=>{
       if(page.next_offset===null)break;
       assert.ok(page.next_offset>offset,'next_offset must advance');
       offset=page.next_offset;
+      seenContentDigest=page.result_content_digest;
     }
     assert.equal(concatenated,storedCanonical,'page data must reproduce the stored canonical JSON');
     assert.equal(createHash('sha256').update(concatenated,'utf8').digest('hex'),
       createHash('sha256').update(Buffer.from(storedCanonical,'utf8')).digest('hex'));
+    assert.equal(seenContentDigest,
+      createHash('sha256').update(Buffer.from(storedCanonical,'utf8')).digest('hex'));
+    assert.notEqual(seenContentDigest,committed.result_digest);
   }finally{store.close();}
 });
 

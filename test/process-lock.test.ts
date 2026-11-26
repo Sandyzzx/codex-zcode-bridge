@@ -114,7 +114,12 @@ const assertDeadPidFixture = (): void => {
 };
 const seedDeadOwner = (lock: string): void => {
   mkdirSync(lock, { recursive: true });
-  writeFileSync(path.join(lock, "owner.json"), JSON.stringify({ pid: IMPOSSIBLE_DEAD_PID, token: "dead-owner", started_at: new Date().toISOString() }));
+  writeFileSync(path.join(lock, "owner.json"), JSON.stringify({
+    pid: IMPOSSIBLE_DEAD_PID,
+    token: "dead-owner",
+    started_at: new Date().toISOString(),
+    identity: { fingerprint: "dead-owner", identity_version: 1, platform: process.platform },
+  }));
 };
 
 test("ambiguous absent-destination publication failures (EPERM/EACCES/EBUSY) are retried and publish exactly one owner", () => {
@@ -527,6 +532,38 @@ test("an owner record that turns invalid inside the guarded recheck blocks witho
     assert.equal(existsSync(`${lock}.reclaim`), false, "the invalid-record exit must remove the shared guard");
     assert.equal(existsSync(lock), true, "the unknown lock is preserved for explicit diagnosis");
   } finally { rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
+});
+
+test("PID reuse cannot reclaim a lock; exact absence can", { timeout: 20_000 }, async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "bridge-lock-pid-reuse-"));
+  try {
+    const lock = path.join(root, "state.lock");
+    const child = spawn(process.execPath, ["-e", "setInterval(() => undefined, 1_000);"], {
+      stdio: "ignore", windowsHide: true,
+    });
+    try {
+      const identity = await captureSpawnGenerationIdentity(child, createPlatformProbe());
+      assert.ok(identity?.fingerprint, "the live PID must expose an exact fingerprint");
+      mkdirSync(lock, { recursive: true });
+      const wrongFingerprint = identity.fingerprint === "reused-generation" ? "previous-generation" : "reused-generation";
+      writeFileSync(path.join(lock, "owner.json"), JSON.stringify({
+        pid: child.pid,
+        token: "previous-owner",
+        started_at: new Date().toISOString(),
+        identity: { fingerprint: wrongFingerprint, identity_version: 1, platform: process.platform },
+      }));
+      assert.equal(tryAcquireProcessLock(lock), null, "a reused PID must never authorize reclaim");
+      assert.equal(child.exitCode, null, "the live reused process must remain untouched");
+    } finally {
+      child.kill("SIGKILL");
+      await new Promise((resolve) => child.once("exit", resolve));
+    }
+    const release = tryAcquireProcessLock(lock);
+    assert.ok(release, "a platform-proven absent PID may reclaim");
+    release();
+  } finally {
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  }
 });
 
 test("a lock vanishing at recheck returns to contention, and a guard cleanup failure there stays visible", { timeout: 15_000 }, () => {

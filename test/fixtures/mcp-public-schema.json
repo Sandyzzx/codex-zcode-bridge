@@ -2148,6 +2148,9 @@
               "minimum": 0,
               "maximum": 9007199254740991
             },
+            "result_content_digest": {
+              "type": "string"
+            },
             "data": {
               "type": "string"
             }
@@ -2156,6 +2159,7 @@
             "offset_bytes",
             "next_offset",
             "total_bytes",
+            "result_content_digest",
             "data"
           ],
           "additionalProperties": false
@@ -2164,6 +2168,9 @@
           "type": "string"
         },
         "result_digest": {
+          "type": "string"
+        },
+        "result_content_digest": {
           "type": "string"
         },
         "result_commit_ref": {

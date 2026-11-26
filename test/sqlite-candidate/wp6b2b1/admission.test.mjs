@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
-import { mkdirSync, existsSync, readFileSync, writeFileSync, openSync, closeSync, fsyncSync, symlinkSync, rmSync } from 'node:fs';
+import { mkdirSync, existsSync, readFileSync, readdirSync, writeFileSync, openSync, closeSync, fsyncSync, symlinkSync, rmSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { IsolatedAdmissionStore, AdmissionError, canonical, digest } from '../../../src/sqlite-candidate/wp6b2b1/store.mjs';
@@ -350,8 +350,36 @@ test('interrupted durable writer intent blocks a fresh child after reopen withou
   assert.equal(result.out.ok,false);assert.equal(result.out.code,'root_writer_busy');
   assert.equal(existsSync(path.join(r,'ROOT_POISONED.json')),false);
   assert.deepEqual(JSON.parse(readFileSync(intentPath,'utf8')),intent);
-  const reopened=IsolatedAdmissionStore.open(r);capture(()=>admit(reopened,input(),options),'root_writer_busy');
-  assert.deepEqual(JSON.parse(readFileSync(intentPath,'utf8')),intent);reopened.close();
+  capture(()=>IsolatedAdmissionStore.open(r),'root_writer_busy');
+  assert.deepEqual(JSON.parse(readFileSync(intentPath,'utf8')),intent);
+});
+
+test('an identified interrupted writer intent is retired only when the process is absent',async()=>{
+  const {r,s}=setup('identified-intent');s.close();
+  const intentPath=path.join(r,'WRITER_INTENT.json');
+  const writeIntent=(processId,fingerprint='previous-writer-fingerprint')=>{
+    const intent={version:2,token:`writer-${processId}`,started_at:new Date().toISOString(),
+      process_id:processId,platform:process.platform,identity_version:1,start_fingerprint:fingerprint};
+    const fd=openSync(intentPath,'wx',0o600);
+    try{writeFileSync(fd,JSON.stringify(intent));fsyncSync(fd);}finally{closeSync(fd);}
+  };
+  writeIntent(process.pid,'reused-or-mismatched-fingerprint');
+  capture(()=>IsolatedAdmissionStore.open(r),'root_writer_busy');
+  assert.equal(existsSync(intentPath),true);
+  unlinkSync(intentPath);
+
+  writeIntent(999_999_999);
+  const reopened=IsolatedAdmissionStore.open(r);
+  assert.equal(existsSync(intentPath),false);
+  assert.equal(existsSync(path.join(r,'ROOT_POISONED.json')),false);
+  assert.equal(reopened.provisionCapacity({
+    operation_id:'identified-intent-recovery-write',
+    capacity_limit:3,
+    expected_generation:1,
+    maintenance:{dispatch_blocked:true,writers_drained:true},
+  }).generation,2);
+  reopened.close();
+  assert.ok(readdirSync(r).some(name=>name.startsWith('WRITER_INTENT.json.cleared-')));
 });
 
 test('completed lifecycle history remains structurally readable; released history does not block controlled policy maintenance',()=>{

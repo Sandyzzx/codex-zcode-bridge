@@ -38,9 +38,9 @@ test("Task Console autostart honors only explicit opt-out values", () => {
 });
 
 function manager(): TaskConsoleManager & {
-  readonly calls: { cancel: number; reply: number };
+  readonly calls: { cancel: number; forcedRisk: boolean | null; reply: number };
 } {
-  const calls = { cancel: 0, reply: 0 };
+  const calls = { cancel: 0, forcedRisk: null as boolean | null, reply: 0 };
   const status = (taskId: string): TaskStatusRecord => ({
     task_id: taskId,
     status: "waiting_for_master",
@@ -97,8 +97,9 @@ function manager(): TaskConsoleManager & {
         finished_at: "2026-01-01T00:02:00Z",
       };
     },
-    async cancelTask(taskId) {
+    async cancelTask(taskId, options) {
       calls.cancel += 1;
+      calls.forcedRisk = options?.acceptWorkerRisk === true;
       return { ...status(taskId), status: "cancelled" as const };
     },
     async replyToInteraction() {
@@ -480,6 +481,31 @@ test("Web Console mutations require same-origin CSRF and preserve task actions",
     });
     assert.equal(cancelled.status, 200);
     assert.equal(fixture.calls.cancel, 1);
+    assert.equal(fixture.calls.forcedRisk, false);
+
+    const invalidForce = await request(address, "/api/tasks/task-a/force-cleanup", {
+      method: "POST",
+      body: { release_mode: "user_authorized_unverified_release" },
+      headers: { Origin: address.origin, "X-ZCode-Bridge-CSRF": token },
+    });
+    assert.equal(invalidForce.status, 400);
+    assert.equal(fixture.calls.cancel, 1);
+
+    const authorized = await request(address, "/api/tasks/task-a/force-cleanup", {
+      method: "POST",
+      body: {
+        release_mode: "user_authorized_unverified_release",
+        accept_worker_risk: true,
+      },
+      headers: { Origin: address.origin, "X-ZCode-Bridge-CSRF": token },
+    });
+    assert.equal(authorized.status, 200);
+    assert.equal(fixture.calls.cancel, 2);
+    assert.equal(fixture.calls.forcedRisk, true);
+    assert.equal(
+      (authorized.json as { result: { release_mode: string } }).result.release_mode,
+      "user_authorized_unverified_release",
+    );
 
     const replied = await request(address, "/api/tasks/task-a/reply", {
       method: "POST",

@@ -1,13 +1,91 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { ProcessIdentity } from "../runtime/process-probe.js";
 
-/** Best-effort self identity published with lock ownership. Initialized
- * asynchronously at startup; until then locks are written with a null
- * fingerprint, which stays readable for old records and never auto-binds a
- * recycled PID to the previous owner (A2). */
+type ProcessStartEvidence =
+  | { readonly state: "live"; readonly fingerprint: string }
+  | { readonly state: "absent" }
+  | { readonly state: "unknown" };
+
+interface LockOwnerRecord {
+  readonly pid: number;
+  readonly token?: unknown;
+  readonly started_at?: unknown;
+  readonly identity?: {
+    readonly fingerprint?: unknown;
+    readonly identity_version?: unknown;
+    readonly platform?: unknown;
+  };
+}
+
+function parseLockOwner(raw: string): LockOwnerRecord | null {
+  try {
+    const owner = JSON.parse(raw) as LockOwnerRecord;
+    return Number.isSafeInteger(owner?.pid) && owner.pid > 0
+      && typeof owner.identity?.fingerprint === "string" && owner.identity.fingerprint.length > 0
+      && owner.identity.identity_version === 1
+      && owner.identity.platform === process.platform
+      ? owner
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Exact startup fingerprint used for owner validation and publication. Only
+ * a platform-specific absence marker can classify a PID as absent; query
+ * failure stays unknown and cannot authorize reclaim. */
+function processStartEvidence(pid: number): ProcessStartEvidence {
+  if (pid === process.pid && cachedStartFingerprint !== undefined) {
+    return cachedStartFingerprint === null
+      ? { state: "unknown" }
+      : { state: "live", fingerprint: cachedStartFingerprint };
+  }
+  let evidence: ProcessStartEvidence = { state: "unknown" };
+  try {
+    if (process.platform === "linux") {
+      try {
+        const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+        const fingerprint = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19]?.trim();
+        evidence = fingerprint ? { state: "live", fingerprint } : { state: "unknown" };
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") evidence = { state: "absent" };
+      }
+    } else if (process.platform === "darwin") {
+      const query = spawnSync("ps", ["-o", "pid=,lstart=", "-p", String(pid)], {
+        encoding: "utf8", timeout: 5_000, windowsHide: true, shell: false,
+      });
+      const row = query.status === 0 ? query.stdout.split(/\r?\n/u).find((line) => line.trim()) : undefined;
+      evidence = query.status !== 0
+        ? { state: "unknown" }
+        : row
+          ? { state: "live", fingerprint: row.trim().split(/\s+/u).slice(1).join(" ") }
+          : { state: "absent" };
+    } else if (process.platform === "win32") {
+      const systemRoot = Object.entries(process.env).find(([key]) => key.toLowerCase() === "systemroot")?.[1];
+      const executable = systemRoot
+        ? `${systemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`
+        : "powershell.exe";
+      const query = spawnSync(executable, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command",
+        `$p=$null; try { $p=[System.Diagnostics.Process]::GetProcessById(${pid}); [Console]::Out.Write($p.StartTime.Ticks) } catch [System.ArgumentException] { [Console]::Out.Write('bridge_pid_absent_v1') }`], {
+        encoding: "utf8", timeout: 5_000, windowsHide: true, shell: false,
+      });
+      const output = query.status === 0 ? query.stdout.trim() : "";
+      evidence = output === "bridge_pid_absent_v1"
+        ? { state: "absent" }
+        : /^[0-9]+$/u.test(output) ? { state: "live", fingerprint: output } : { state: "unknown" };
+    }
+  } catch {
+    evidence = { state: "unknown" };
+  }
+  if (pid === process.pid) cachedStartFingerprint = evidence.state === "live" ? evidence.fingerprint : null;
+  return evidence;
+}
+
 let selfIdentity: ProcessIdentity | null = null;
+let cachedStartFingerprint: string | null | undefined;
 
 /** Errno codes that can appear while the lock directory's neighborhood is in
  * motion. Directly observed under real cross-process contention: EPERM on
@@ -54,9 +132,24 @@ function pauseBriefly(delayMs = RETRY_PAUSE_MS): void {
 
 export function publishSelfIdentity(identity: ProcessIdentity): void {
   selfIdentity = identity;
+  cachedStartFingerprint = identity.fingerprint;
 }
 
 export function currentSelfIdentity(): ProcessIdentity | null {
+  if (!selfIdentity) {
+    const evidence = processStartEvidence(process.pid);
+    const fingerprint = evidence.state === "live" ? evidence.fingerprint : null;
+    if (fingerprint) {
+      selfIdentity = {
+        pid: process.pid,
+        fingerprint,
+        fingerprint_precision: "exact",
+        identity_version: 1,
+        platform: process.platform,
+        captured_at: new Date().toISOString(),
+      };
+    }
+  }
   return selfIdentity;
 }
 
@@ -109,10 +202,8 @@ function tryAcquireProcessLockWithRetry(directory: string, deadline: number): ((
     pid: process.pid,
     token,
     started_at: new Date().toISOString(),
-    // Fingerprint may be null before the async self-identity probe finishes;
-    // null never authorizes binding a recycled PID to a prior owner.
-    identity: selfIdentity
-      ? { fingerprint: selfIdentity.fingerprint, identity_version: selfIdentity.identity_version, platform: selfIdentity.platform }
+    identity: currentSelfIdentity()
+      ? { fingerprint: currentSelfIdentity()!.fingerprint, identity_version: currentSelfIdentity()!.identity_version, platform: currentSelfIdentity()!.platform }
       : null,
   };
   try {
@@ -188,10 +279,9 @@ function acquireExistingLock(directory: string): (() => void) | null {
   // below — errors raised while reclaiming a verified-dead owner (for example
   // a shared guard that cannot be removed) must propagate, not be swallowed
   // by a catch-all (2026-10-17 review).
-  let owner: { pid: number };
+  let owner: LockOwnerRecord | null;
   try {
-    owner = JSON.parse(readFileSync(path.join(directory, "owner.json"), "utf8")) as { pid: number };
-    if (!Number.isSafeInteger(owner.pid) || owner.pid <= 0) throw new Error("invalid lock owner");
+    owner = parseLockOwner(readFileSync(path.join(directory, "owner.json"), "utf8"));
   } catch {
     // Never reclaim an unreadable legacy lock by age. It needs explicit
     // diagnosis; new acquisitions cannot create this state after staged publish.
@@ -202,6 +292,7 @@ function acquireExistingLock(directory: string): (() => void) | null {
     }
     return null;
   }
+  if (!owner) return null;
   try { process.kill(owner.pid, 0); }
   catch (failure) {
     if ((failure as NodeJS.ErrnoException).code === "ESRCH") {
@@ -264,22 +355,18 @@ function reclaimDeadOwner(directory: string): boolean {
   // failed, that original error wins over the cleanup error.
   let outcome: { kind: "reclaimed" } | { kind: "busy" } | { kind: "error"; error: unknown };
   try {
-    const owner = JSON.parse(readFileSync(path.join(directory, "owner.json"), "utf8")) as { pid: number };
-    if (!Number.isSafeInteger(owner.pid) || owner.pid <= 0) {
+    const owner = parseLockOwner(readFileSync(path.join(directory, "owner.json"), "utf8"));
+    if (!owner) {
       outcome = { kind: "busy" }; // invalid owner record: needs explicit diagnosis, never reclaimed here
     } else {
-      try {
-        process.kill(owner.pid, 0);
-        outcome = { kind: "busy" }; // owner is live again: plain contention, not death
-      } catch (failure) {
-        if ((failure as NodeJS.ErrnoException).code !== "ESRCH") {
-          outcome = { kind: "busy" }; // unknown liveness is never treated as death
-        } else {
-          const retired = `${directory}.${randomUUID()}.retired`;
-          renameWithTransientRetry(directory, retired);
-          removeStagedLock(retired);
-          outcome = { kind: "reclaimed" };
-        }
+      const identityEvidence = processStartEvidence(owner.pid);
+      if (identityEvidence.state !== "absent") {
+        outcome = { kind: "busy" }; // unknown identity means plain contention
+      } else {
+        const retired = `${directory}.${randomUUID()}.retired`;
+        renameWithTransientRetry(directory, retired);
+        removeStagedLock(retired);
+        outcome = { kind: "reclaimed" };
       }
     }
   } catch (error) {

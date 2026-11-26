@@ -433,7 +433,7 @@ export function createTaskConsoleServer(options: TaskConsoleServerOptions): Task
       });
       return;
     }
-    const match = /^\/api\/tasks\/([^/]+)\/(cancel|reply|continue|rework|recover-cleanup)$/u.exec(url.pathname);
+    const match = /^\/api\/tasks\/([^/]+)\/(cancel|force-cleanup|reply|continue|rework|recover-cleanup)$/u.exec(url.pathname);
     if (!match) throw failure(404, "WEB_NOT_FOUND", "route not found");
     const taskId = decodeTaskId(match[1]!);
     const action = match[2];
@@ -463,6 +463,20 @@ export function createTaskConsoleServer(options: TaskConsoleServerOptions): Task
     }
     if (action === "cancel") {
       json(response, 200, { ok: true, result: await options.manager.cancelTask(taskId) });
+      return;
+    }
+    if (action === "force-cleanup") {
+      if (body.release_mode !== "user_authorized_unverified_release"
+        || body.accept_worker_risk !== true) {
+        throw failure(400, "WEB_INVALID_INPUT", "authorized cleanup requires explicit worker-risk acceptance");
+      }
+      json(response, 200, {
+        ok: true,
+        result: {
+          ...await options.manager.cancelTask(taskId, { acceptWorkerRisk: true }),
+          release_mode: "user_authorized_unverified_release",
+        },
+      });
       return;
     }
     if (action === "continue") {

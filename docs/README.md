@@ -1,9 +1,9 @@
 # 文档路由 / Documentation
 
 > Status: AUTHORITATIVE（仅指本索引）
-> Last updated: 2026-11-25（Preview.17 候选：Executor Recovery、Master 自治返工、单页 Task Workspace、Original E 图标与顶层 interface 接线）
-> Last verified: 2026-11-25，核对四条 Preview.17 工作线、ADR-060 真实 Store/Executor 故障注入、ADR-061 确定性 Master 策略夹具与真实 Host 自动 Continue 闭环、ADR-062 真实 Authority/IPC/HTTP/Chromium Task Workspace（搜索、共享 bucket、品牌图标字节），以及 ADR-063 图标 blob/尺寸/SHA validator 和重新安装后的真实插件页图标。完整 `npm test` 1,153/1,151 pass/2 skip/0 fail，typecheck、build、Plugin Validation 与 14 个生成物 freshness 通过。Windows/Ubuntu PR CI 与合并事实由最终交付报告记录；严格 Wake C/D、Desktop fully exited 与 notLoaded 仍为 `NOT_RUN`。
-> Verified against: `6775d8b1`（含顶层 `interface` 修复；后续仅有文档提交）。
+> Last updated: 2026-11-26（Preview.18 候选：ADR-064 Executor 启动能力、Writer Intent 身份恢复与用户授权释放）
+> Last verified: 2026-11-26，核对 ADR-064 的 Executor recovery 真实进程 13/13、SQLite writer intent 35/35、forced cleanup Store、Result paging、Web HTTP 清理与 process-lock PID reuse 定向测试。完整本地/双平台 Release Gate 与真实 Host 场景以 Preview.18 最终报告记录。
+> Verified against: `57e0a70b` 基线上的候选工作树；提交后由最终报告记录候选 SHA。
 
 English users start at [README.md](../README.md). 技术文档为中文。先读当前事实，按问题加载合同；研究或历史材料不作为当前实现或发布证明。
 
@@ -34,6 +34,7 @@ English users start at [README.md](../README.md). 技术文档为中文。先读
 | Preview.15 发布 | [GitHub Release](https://github.com/Sandyzzx/codex-zcode-bridge/releases/tag/codex-zcode-bridge-preview-v2.0.0-preview.15)、[发布记录](reports/preview15-publication-20261124.md) | Preview.15 prerelease 已发布：Tag 与 Release commit 一致，ZIP/SHA256 可下载且回验一致，Latest 仍为 Stable |
 | Preview.16 发布 | [GitHub Release](https://github.com/Sandyzzx/codex-zcode-bridge/releases/tag/codex-zcode-bridge-preview-v2.0.0-preview.16)、[发布记录](reports/preview16-publication-20261124.md) | Preview.16 prerelease 已发布：Owner Binding + 安装即生效 Auto Wake；Tag 与 Release commit 一致，ZIP/SHA256 可下载且回验一致，Latest 仍为 Stable |
 | Preview.17 候选 | [A 报告](reports/preview17-a-executor-recovery-20261125.md)、[B 研究](research/preview17-master-goal-autonomy-20261125.md)、[C 报告](reports/preview17-c-webui-20261125/REPORT.md)、[D 报告](reports/preview17-d-icon-20261125.md)、[真实 Host E2E](reports/preview17-real-host-e2e-20261125.md) | Executor 崩溃恢复与 Release 事实 Continue、Master 验收驱动返工（真实两轮 Continue 闭环）、单页 Task Workspace（搜索、共享 bucket、品牌图标字节、动作前置、成本证据折叠）、Original E 恢复与顶层 interface 接线；未创建 Tag/Release，本地完整门禁通过，Windows/Ubuntu CI 与 merge 以最终 PR/交付报告为准 |
+| Preview.18 候选 | [ADR-064](decisions/ADR-064-executor-startability-and-user-release.md) | Worker/launch 不确定性 Operation 级隔离、exact process identity 恢复、SQLite 用户授权清理、Spawn error 保护、Result envelope/content digest 分离；完整门禁与发布事实以最终 PR/交付报告为准 |
 | Preview.15 集成与验证 | [验证记录](reports/preview15-final-integration-verification-20261124.md)、[发布准备](reports/preview15-release-20261124.md) | PR #135 + 4.0.0 适配 + ADR-054/055/056 + P1/P2 整改的候选验证：Protocol Smoke 与真实任务 E2E 为 REAL PASS；发布事实以 Release Gate 运行为准 |
 | Preview.16 Owner Binding + Auto Wake | [ADR-059](decisions/ADR-059-owner-binding-and-installed-auto-wake.md)、[架构合同](architecture/BRIDGE_ASYNC_EXECUTION_V1.md)、[真实 Host E2E](reports/preview16-real-host-e2e-20261124.md) | `PASS — REAL`：`_meta.threadId` 唯一身份来源、Task/Attempt/Binding 同事务、并发隔离、无授权文件 Queue、ACK 与 Turn Started 分离、Late Wake 独立补偿、receipt Console link；真实安装制品 + 真实 Codex Host 完成一次非空工程 Auto Wake 闭环 |
 | Preview.14 发布 | [GitHub Release](https://github.com/Sandyzzx/codex-zcode-bridge/releases/tag/codex-zcode-bridge-preview-v2.0.0-preview.14)、[发布报告](reports/preview14-release-20261123.md) | 独立 Executor、Thin MCP、CLI/Web/Wake 已发布为 prerelease；ZIP 与 SHA256 可下载，Latest 仍为 Stable |
@@ -64,7 +65,7 @@ AUTHORITATIVE 描述当前事实或合同；DECISION 记录已批准取舍；RES
 
 [ADR 索引](decisions/README.md) 区分当前有效、部分被替代和完全被替代。历史文件保持原路径，避免破坏引用。不要默认加载 `docs/archive`、`docs/research`、旧审计日志或生成 bundle。
 
-当前 Preview 候选身份为 `2.0.0-preview.17`。`package.json`、`package-lock.json`、两份插件 manifest、MCP server version、固定 Official Host/BOM 与图标资产必须来自同一最终候选；合并到 `preview` 本身不创建 Tag、GitHub Release 或 Stable 支持声明。发布支持范围仍限定为 Windows x64、Node.js `24.16.0` 与 ZCode Desktop `3.18.2.10443`，其他安全安装按 ADR-054 运行但兼容性保持未验证。Preview.17 在既有独立 Executor、Thin MCP、Owner Binding、Auto Wake 与 Async Master Handoff 之上加入 Host 请求触发的 Executor 崩溃恢复、Release 事实 Continue、Master 验收驱动返工和单页 Task Console；SQLite v14 仍是唯一当前 Schema。Provider、折扣或 Start Plan 能力不因合并自动提升。旧 JSON/CLI 生产链退役决策见 [ADR-029](decisions/ADR-029-legacy-runtime-retirement.md)。
+当前 Preview 候选身份为 `2.0.0-preview.18`。`package.json`、`package-lock.json`、两份插件 manifest、MCP server version、固定 Official Host/BOM 与图标资产必须来自同一最终候选；合并到 `preview` 本身不创建 Tag、GitHub Release 或 Stable 支持声明。发布支持范围仍限定为 Windows x64、Node.js `24.16.0` 与 ZCode Desktop `3.18.2.10443`，其他安全安装按 ADR-054 运行但兼容性保持未验证。Preview.18 在既有独立 Executor、Thin MCP、Owner Binding、Auto Wake 与 Async Master Handoff 之上加入 ADR-064 启动能力整改、用户授权清理、精确身份锁恢复与 Result content digest 合同；SQLite v14 仍是唯一当前 Schema。Provider、折扣或 Start Plan 能力不因合并自动提升。旧 JSON/CLI 生产链退役决策见 [ADR-029](decisions/ADR-029-legacy-runtime-retirement.md)。
 
 Async Executor PR 2–6 已通过 PR #131 合并至 Preview，并由 PR #133 发布为 Preview.14 Release commit `8d58e9e3`；合并后 CI `45130689135` 通过。历史候选 `c75c3433` 的 1060 项本地完整回归、4/4 注册压力矩阵、生成物与插件校验仍只属于该提交。隔离 Host 真实完成 loaded/idle trusted-local Queue、新 Turn、Native MCP Result readback、Result digest、Cleanup/Release、Master 生命周期独立验收与 Desktop Visible；严格 C/D、Desktop fully exited、Official Runtime provenance 和非空工程交付仍为 `NOT_RUN`。历史失败与 readback 诊断保留在 [trusted-local evidence](reports/trusted-local-wake-20261123.md)。
 

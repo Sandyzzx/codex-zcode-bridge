@@ -434,7 +434,7 @@ export interface TaskManager {
    * omitted (default) view keeps the frozen full-Result contract. */
   getResult(taskId: string, view?: "summary" | "full"): Promise<TaskResult>;
   continueTask(input: ContinueTaskInput): Promise<TaskReceipt>;
-  cancelTask(taskId: string): Promise<TaskStatusRecord>;
+  cancelTask(taskId: string, options?: { readonly acceptWorkerRisk?: boolean }): Promise<TaskStatusRecord>;
 }
 
 /** Additive Phase 7 capability; the frozen V0.1 TaskManager contract stays intact. */

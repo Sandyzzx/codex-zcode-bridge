@@ -127,11 +127,13 @@ class FakeTaskManager implements TaskManager {
       finished_at: null,
       result_status: "completed",
       result_digest: "a".repeat(64),
+      result_content_digest: "b".repeat(64),
       result_commit_ref: "result-" + "a".repeat(64),
       page: {
         offset_bytes: offsetBytes,
         next_offset: null,
         total_bytes: 12,
+        result_content_digest: "b".repeat(64),
         data: "{\"task_id\":1}",
       },
     };

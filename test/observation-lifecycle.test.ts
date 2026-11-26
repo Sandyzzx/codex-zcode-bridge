@@ -27,7 +27,7 @@ test("a fresh heartbeat without business events does not assert business executi
   assert.equal(judgeTaskObservation({ ...input, status: { ...input.status, started_at: iso(59_000) } }).activity.code, "starting");
 });
 
-test("A2-07: lock owners are never evicted by age; reclaim needs explicit exit evidence", () => {
+test("A2-07: lock owners are never evicted by age; reclaim needs exact exit evidence", () => {
   const tmp = mkdtempSync(path.join(tmpdir(), "zcode-bridge-test-a2-lock-"));
   try {
     const lockDir = path.join(tmp, "case.lock");
@@ -41,20 +41,31 @@ test("A2-07: lock owners are never evicted by age; reclaim needs explicit exit e
     assert.ok(release);
     assert.equal(tryAcquireProcessLock(liveDir), null);
     release();
-    // Dead owner (impossible pid → ESRCH): reclaimed.
+    // Legacy PID-only records cannot authorize reclaim by ESRCH.
     const deadDir = path.join(tmp, "dead.lock");
     mkdirSync(deadDir, { recursive: true });
     writeFileSync(path.join(deadDir, "owner.json"), JSON.stringify({ pid: 987654, token: "t" }));
-    const reclaimed = tryAcquireProcessLock(deadDir);
-    assert.ok(reclaimed, "a provably dead owner is reclaimed");
-    reclaimed();
-    // Old-format owner without fingerprint stays readable and reclaimable on ESRCH only.
+    assert.equal(tryAcquireProcessLock(deadDir), null, "a legacy owner cannot be reclaimed");
+    // Exact platform absence evidence permits reclaim; a legacy record stays fail-closed.
     const oldDir = path.join(tmp, "old.lock");
     mkdirSync(oldDir, { recursive: true });
     writeFileSync(path.join(oldDir, "owner.json"), JSON.stringify({ pid: 987655 }));
+    assert.equal(tryAcquireProcessLock(oldDir), null);
+    const absentDir = path.join(tmp, "absent.lock");
+    mkdirSync(absentDir, { recursive: true });
+    writeFileSync(path.join(absentDir, "owner.json"), JSON.stringify({
+      pid: 987654,
+      token: "t",
+      identity: {
+        fingerprint: "previous-exact-fingerprint",
+        identity_version: 1,
+        platform: process.platform,
+      },
+    }));
+    const reclaimed = tryAcquireProcessLock(absentDir);
+    assert.ok(reclaimed, "a platform-proven absent owner is reclaimed");
     const reclaimedOld = tryAcquireProcessLock(oldDir);
-    assert.ok(reclaimedOld);
-    reclaimedOld();
+    assert.equal(reclaimedOld, null, "an old-format owner still requires diagnosis");
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
