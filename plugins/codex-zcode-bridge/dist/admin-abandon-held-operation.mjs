@@ -2156,7 +2156,8 @@ function processStartEvidence(pid) {
       }
     }
     if (process.platform === "darwin") {
-      const query = spawnSync("ps", ["-o", "pid=,lstart=", "-p", String(pid)], { encoding: "utf8", timeout: 5e3, windowsHide: true, shell: false });
+      const timeout = pid === process.pid ? 15e3 : 5e3;
+      const query = spawnSync("ps", ["-o", "pid=,lstart=", "-p", String(pid)], { encoding: "utf8", timeout, windowsHide: true, shell: false });
       if (query.status !== 0) return { state: "unknown" };
       const row = query.stdout.split(/\r?\n/u).find((line) => line.trim());
       return row ? { state: "live", fingerprint: row.trim().split(/\s+/u).slice(1).join(" ") } : { state: "absent" };
@@ -2164,6 +2165,7 @@ function processStartEvidence(pid) {
     if (process.platform === "win32") {
       const systemRoot = Object.entries(process.env).find(([key]) => key.toLowerCase() === "systemroot")?.[1];
       const executable = systemRoot ? `${systemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe` : "powershell.exe";
+      const timeout = pid === process.pid ? 15e3 : 5e3;
       const query = spawnSync(executable, [
         "-NoProfile",
         "-NonInteractive",
@@ -2173,7 +2175,7 @@ function processStartEvidence(pid) {
         `$p=$null; try { $p=[System.Diagnostics.Process]::GetProcessById(${pid}); [Console]::Out.Write($p.StartTime.Ticks) } catch [System.ArgumentException] { [Console]::Out.Write('bridge_pid_absent_v1') }`
       ], {
         encoding: "utf8",
-        timeout: 5e3,
+        timeout,
         windowsHide: true,
         shell: false
       });
@@ -2185,14 +2187,29 @@ function processStartEvidence(pid) {
   }
   return { state: "unknown" };
 }
-var selfStartFingerprint;
-function writerIntentIdentity() {
-  if (selfStartFingerprint === void 0) {
-    const evidence = processStartEvidence(process.pid);
-    selfStartFingerprint = evidence.state === "live" ? evidence.fingerprint : null;
-  }
-  return selfStartFingerprint;
+var SELF_IDENTITY_PROBE_ATTEMPTS = 2;
+var SELF_IDENTITY_RETRY_MS = 50;
+function createWriterIntentIdentity(probe = processStartEvidence, {
+  attempts = SELF_IDENTITY_PROBE_ATTEMPTS,
+  retryDelayMs = SELF_IDENTITY_RETRY_MS
+} = {}) {
+  let cached;
+  return function writerIntentIdentity2() {
+    if (cached !== void 0) return cached;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      const evidence = probe(process.pid);
+      if (evidence.state === "live") {
+        cached = evidence.fingerprint;
+        return cached;
+      }
+      if (attempt + 1 < attempts && retryDelayMs > 0) {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, retryDelayMs);
+      }
+    }
+    return null;
+  };
 }
+var writerIntentIdentity = createWriterIntentIdentity();
 function readWriterIntent(file) {
   try {
     const stat = lstatSync(file);

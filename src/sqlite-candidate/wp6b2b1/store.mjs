@@ -1115,7 +1115,8 @@ function processStartEvidence(pid) {
       } catch(e) { return e?.code==='ENOENT'?{state:'absent'}:{state:'unknown'}; }
     }
     if (process.platform === 'darwin') {
-      const query=spawnSync('ps',['-o','pid=,lstart=','-p',String(pid)],{encoding:'utf8',timeout:5000,windowsHide:true,shell:false});
+      const timeout=pid===process.pid?15000:5000;
+      const query=spawnSync('ps',['-o','pid=,lstart=','-p',String(pid)],{encoding:'utf8',timeout,windowsHide:true,shell:false});
       if(query.status!==0)return {state:'unknown'};
       const row=query.stdout.split(/\r?\n/u).find(line=>line.trim());
       return row?{state:'live',fingerprint:row.trim().split(/\s+/u).slice(1).join(' ')}:{state:'absent'};
@@ -1123,9 +1124,10 @@ function processStartEvidence(pid) {
     if (process.platform === 'win32') {
       const systemRoot=Object.entries(process.env).find(([key])=>key.toLowerCase()==='systemroot')?.[1];
       const executable=systemRoot?`${systemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`:'powershell.exe';
+      const timeout=pid===process.pid?15000:5000;
       const query=spawnSync(executable,['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-Command',
         `$p=$null; try { $p=[System.Diagnostics.Process]::GetProcessById(${pid}); [Console]::Out.Write($p.StartTime.Ticks) } catch [System.ArgumentException] { [Console]::Out.Write('bridge_pid_absent_v1') }`],{
-        encoding:'utf8',timeout:5000,windowsHide:true,shell:false});
+        encoding:'utf8',timeout,windowsHide:true,shell:false});
       const output=query.status===0?query.stdout.trim():'';
       return output==='bridge_pid_absent_v1'?{state:'absent'}
         :/^[0-9]+$/u.test(output)?{state:'live',fingerprint:output}:{state:'unknown'};
@@ -1133,14 +1135,33 @@ function processStartEvidence(pid) {
   } catch { return {state:'unknown'}; }
   return {state:'unknown'};
 }
-let selfStartFingerprint;
-function writerIntentIdentity() {
-  if(selfStartFingerprint===undefined) {
-    const evidence=processStartEvidence(process.pid);
-    selfStartFingerprint=evidence.state==='live'?evidence.fingerprint:null;
-  }
-  return selfStartFingerprint;
+const SELF_IDENTITY_PROBE_ATTEMPTS=2;
+const SELF_IDENTITY_RETRY_MS=50;
+/** Resolve the process's own start fingerprint. A timed-out or otherwise
+ * unknown probe must not be cached: the current transaction fails closed, but
+ * the next transaction may retry and succeed. Only a live fingerprint is
+ * stable for the lifetime of the process. */
+export function createWriterIntentIdentity(probe=processStartEvidence, {
+  attempts=SELF_IDENTITY_PROBE_ATTEMPTS,
+  retryDelayMs=SELF_IDENTITY_RETRY_MS,
+}={}) {
+  let cached;
+  return function writerIntentIdentity() {
+    if(cached!==undefined)return cached;
+    for(let attempt=0;attempt<attempts;attempt+=1) {
+      const evidence=probe(process.pid);
+      if(evidence.state==='live') {
+        cached=evidence.fingerprint;
+        return cached;
+      }
+      if(attempt+1<attempts&&retryDelayMs>0) {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,retryDelayMs);
+      }
+    }
+    return null;
+  };
 }
+const writerIntentIdentity=createWriterIntentIdentity();
 function readWriterIntent(file) {
   try {
     const stat=lstatSync(file);
