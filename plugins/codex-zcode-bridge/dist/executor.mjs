@@ -25980,7 +25980,7 @@ async function createProductionAuthorityComposition(options) {
     workerModuleUrl: pathToFileURL2(options.workerEntryPath)
   });
   const modelRoutingJournal = new StartPlanEntitlementJournal();
-  const routeTaskModel2 = createTaskModelRouter({
+  const routeTaskModel2 = options.testOnlyFakeAdapter === true ? void 0 : createTaskModelRouter({
     settings: () => {
       const persistedEnv = loadPersistedRuntimeEnvironment(env, homeDir, options.host);
       return {
@@ -26028,7 +26028,7 @@ async function createProductionAuthorityComposition(options) {
       signal: startPlanAuthAbort.signal,
       journal: modelRoutingJournal
     }),
-    routeTaskModel: routeTaskModel2,
+    ...routeTaskModel2 ? { routeTaskModel: routeTaskModel2 } : {},
     onOperationReleased: (fact, recorder) => wakeCoordinator.handle(fact, {
       recordExecutorWakeObservation: (input) => recorder(input)
     }).then(() => void 0),

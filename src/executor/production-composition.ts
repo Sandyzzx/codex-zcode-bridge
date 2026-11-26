@@ -175,22 +175,26 @@ export async function createProductionAuthorityComposition(
   // Per-dispatch discovery observes login, logout, account switch, and config
   // changes without creating a second credential cache.
   const modelRoutingJournal = new StartPlanEntitlementJournal();
-  const routeTaskModel = createTaskModelRouter({
-    settings: () => {
-      const persistedEnv = loadPersistedRuntimeEnvironment(env, homeDir, options.host);
-      return {
-        preferStartPlan: resolvePreferStartPlan(persistedEnv),
-        defaultProviderId: persistedEnv["ZCODE_BRIDGE_DEFAULT_PROVIDER_ID"]?.trim() ?? "",
-      };
-    },
-    catalog: async (workspace) => {
-      const routingCatalog = await modelSettings.listRoutingCatalog(workspace);
-      return {
-        ...buildModelRoutingCatalog(routingCatalog.models),
-        startPlanUnavailableReason: routingCatalog.startPlanUnavailableReason,
-      };
-    },
-  });
+  // The synthetic adapter never starts the installed AppServer, so there is no
+  // live catalog to consult. Production entry points never enable this mode.
+  const routeTaskModel = options.testOnlyFakeAdapter === true
+    ? undefined
+    : createTaskModelRouter({
+        settings: () => {
+          const persistedEnv = loadPersistedRuntimeEnvironment(env, homeDir, options.host);
+          return {
+            preferStartPlan: resolvePreferStartPlan(persistedEnv),
+            defaultProviderId: persistedEnv["ZCODE_BRIDGE_DEFAULT_PROVIDER_ID"]?.trim() ?? "",
+          };
+        },
+        catalog: async (workspace) => {
+          const routingCatalog = await modelSettings.listRoutingCatalog(workspace);
+          return {
+            ...buildModelRoutingCatalog(routingCatalog.models),
+            startPlanUnavailableReason: routingCatalog.startPlanUnavailableReason,
+          };
+        },
+      });
   const wakeCoordinator = createExecutorWakeCoordinator({
     authorityRoot: options.authorityRoot,
     codexExecutable: defaultCodexExecutable(env),
@@ -224,7 +228,7 @@ export async function createProductionAuthorityComposition(
       signal: startPlanAuthAbort.signal,
       journal: modelRoutingJournal,
     }),
-    routeTaskModel,
+    ...(routeTaskModel ? { routeTaskModel } : {}),
     onOperationReleased: (fact, recorder) => wakeCoordinator.handle(fact, {
       recordExecutorWakeObservation: (input) => recorder(input),
     }).then(() => undefined),
