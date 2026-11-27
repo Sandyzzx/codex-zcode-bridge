@@ -65,6 +65,17 @@ export function registryRelease(revision: number, marker: string): string {
   });
 }
 
+/**
+ * The client platform label of the machine running the test. ZCode Desktop
+ * writes its runtime registry under its own platform, so the fixture follows
+ * the real host instead of assuming Windows.
+ */
+export function hostClientPlatform(): string {
+  const operatingSystem = process.platform === "win32" ? "windows" : process.platform;
+  const architecture = process.arch === "arm64" ? "aarch64" : process.arch === "x64" ? "x86_64" : process.arch;
+  return `${operatingSystem}-${architecture}`;
+}
+
 /** The official runtime registry location, computed independently of the production code. */
 export function runtimeRegistryFile(
   dataBaseDir: string,
@@ -81,7 +92,7 @@ export function runtimeRegistryFile(
     "v2",
     "runtime",
     "provider",
-    options.platform ?? "windows-x86_64",
+    options.platform ?? hostClientPlatform(),
     options.appVersion,
     `endpoint-${endpointKey}`,
     "zcode-builtin.json",

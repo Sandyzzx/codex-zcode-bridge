@@ -25,6 +25,7 @@ import {
 import { NodeRuntimeResolver } from "../src/runtime/resolver.js";
 import type { ZCodeRuntimeConfig } from "../src/interfaces.js";
 import {
+  hostClientPlatform,
    registryRelease,
    runtimeRegistryFile,
    writeDesktopAsar,
@@ -285,11 +286,13 @@ test("the runtime resolver prefers the official runtime registry of the same dat
     assert.equal(after.providerPersonalConfigFile, fixture.personal);
     assert.deepEqual(observations, ["runtime:selected"]);
 
-    // Another Desktop version, Endpoint or data root never contributes a
-    // registry, even when its revision is higher.
+    // Another Desktop version, Endpoint, data root or platform never
+    // contributes a registry, even when its revision is higher.
     await writeRuntimeRegistry(fixture.dataBase, registryRelease(90, "other-version"), { appVersion: "3.19.0" });
     await writeRuntimeRegistry(fixture.dataBase, registryRelease(91, "other-endpoint"), { appVersion: "4.0.0", origin: "https://zcode.chatglm.site" });
     await writeRuntimeRegistry(path.join(root, "other-data"), registryRelease(92, "other-data-root"), { appVersion: "4.0.0" });
+    const otherPlatform = hostClientPlatform() === "windows-x86_64" ? "linux-x86_64" : "windows-x86_64";
+    await writeRuntimeRegistry(fixture.dataBase, registryRelease(93, "other-platform"), { appVersion: "4.0.0", platform: otherPlatform });
     assert.equal((await nodeResolver(fixture, {}).resolve()).providerBuiltinConfigFile, runtimePath);
     const testEndpoint = await nodeResolver(fixture, { ZCODE_ENV: "test" }).resolve();
     assert.equal(testEndpoint.providerBuiltinConfigFile, runtimeRegistryFile(fixture.dataBase, { appVersion: "4.0.0", origin: "https://zcode.chatglm.site" }));
