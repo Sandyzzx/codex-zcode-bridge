@@ -18,7 +18,7 @@ English users start at [README.md](../README.md). 中文产品说明见 [README.
 | 官方 ZCode Runtime、Executor 恢复与 SQLite v14 | [ZCODE_RUNTIME.md](ZCODE_RUNTIME.md) |
 | 单页 Task Workspace 与 Diagnostics | [WEB_CONSOLE.md](WEB_CONSOLE.md) |
 | 测试入口、影响力选择和 CI 门禁 | [testing/README.md](testing/README.md) |
-| 插件安装、安全与第三方说明 | [插件 README](../plugins/codex-zcode-bridge/README.md)、[插件安全](../plugins/codex-zcode-bridge/SECURITY.md)、[根安全说明](../SECURITY.md) |
+| 插件安装、安全与第三方说明 | [插件 README](../plugins/codex-zcode-bridge/README.md)、[插件安全](../plugins/codex-zcode-bridge/SECURITY.md) |
 
 ## 状态与历史 / Status and history
 
