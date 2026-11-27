@@ -2081,6 +2081,55 @@
             }
           ]
         },
+        "rpc_diagnostics": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "method": {
+                "type": "string"
+              },
+              "code": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "message": {
+                "type": "string"
+              },
+              "data_name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "data_code": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "stack": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "method",
+              "code",
+              "message",
+              "data_name",
+              "data_code"
+            ],
+            "additionalProperties": false
+          }
+        },
         "projection": {
           "type": "object",
           "properties": {

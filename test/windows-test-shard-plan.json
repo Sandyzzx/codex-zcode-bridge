@@ -7,7 +7,7 @@
   "shards": [
     {
       "id": 1,
-      "estimated_ms": 818774,
+      "estimated_ms": 819324,
       "tests": [
         {
           "file": "test/agent-report.test.ts",
@@ -98,6 +98,10 @@
           "estimated_ms": 273
         },
         {
+          "file": "test/official-builtin-registry.test.ts",
+          "estimated_ms": 500
+        },
+        {
           "file": "test/official-provider-runtime-auth-diagnostics.test.ts",
           "estimated_ms": 306
         },
@@ -116,6 +120,10 @@
         {
           "file": "test/release-wake-recovery.test.ts",
           "estimated_ms": 2000
+        },
+        {
+          "file": "test/rpc-diagnostics.test.ts",
+          "estimated_ms": 50
         },
         {
           "file": "test/runtime-preferences.test.ts",
@@ -237,7 +245,7 @@
     },
     {
       "id": 2,
-      "estimated_ms": 831819,
+      "estimated_ms": 831839,
       "tests": [
         {
           "file": "test/account-provider.test.ts",
@@ -326,6 +334,10 @@
         {
           "file": "test/runtime/trusted-local-policy-config.test.ts",
           "estimated_ms": 340
+        },
+        {
+          "file": "test/session-history.test.ts",
+          "estimated_ms": 20
         },
         {
           "file": "test/session-frames.test.ts",

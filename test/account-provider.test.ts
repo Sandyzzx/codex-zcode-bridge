@@ -262,24 +262,47 @@ test("task-scoped current authorizes only the selected account provider", () => 
   }
 });
 
-test("builtin model order is preserved while revision remains deterministic", () => {
+test("account overlay inherits registry model membership and keeps the registry identity", () => {
   const fixture = makeConnectionSelectionFixture(["GLM-5.3", "GLM-5.3-Flash"]);
   try {
     const first = buildAccountProviderPayload(fixture.config, undefined, fixture.root);
     const repeat = buildAccountProviderPayload(fixture.config, undefined, fixture.root);
-    assert.deepEqual(
-      first?.providers["account:bigmodel-start-plan"]?.builtinModelIds,
-      ["GLM-5.3", "GLM-5.3-Flash"],
-    );
     assert.equal(first?.revision, repeat?.revision);
+    assert.equal(JSON.stringify(first).includes("builtinModelIds"), false);
+    for (const [providerId, provider] of Object.entries(first?.providers ?? {})) {
+      assert.deepEqual(
+        Object.keys(provider).sort(),
+        ["access"],
+        `${providerId} inherits its models from the official registry`,
+      );
+    }
 
+    // ADR-066: membership lives in the registry the AppServer loads, so a
+    // registry rewritten in place under the same revision does not change the
+    // overlay; the identity stays `revision + path`, exactly as the AppServer
+    // computes it.
     fixture.writeBuiltin(["GLM-5.3-Flash", "GLM-5.3"]);
     const reordered = buildAccountProviderPayload(fixture.config, undefined, fixture.root);
-    assert.deepEqual(
-      reordered?.providers["account:bigmodel-start-plan"]?.builtinModelIds,
-      ["GLM-5.3-Flash", "GLM-5.3"],
-    );
-    assert.notEqual(reordered?.revision, first?.revision);
+    assert.equal(reordered?.revision, first?.revision);
+    assert.equal(JSON.stringify(reordered).includes("builtinModelIds"), false);
+
+    writeFileSync(fixture.config.providerBuiltinConfigFile, JSON.stringify({
+      revision: 9,
+      config: { providerConfigRules: { providerRules: [
+        {
+          providerId: "account:bigmodel-start-plan",
+          config: { access: { type: "zhipu-account", mode: "start-plan", accountType: "bigmodel" } },
+        },
+        {
+          providerId: "account:bigmodel-individual-coding-plan",
+          config: { access: { type: "zhipu-account", mode: "individual-coding-plan", accountType: "bigmodel" } },
+        },
+      ] } },
+    }));
+    const nextRevision = buildAccountProviderPayload(fixture.config, undefined, fixture.root);
+    assert.notEqual(nextRevision?.revision, first?.revision);
+    assert.match(nextRevision?.basedOnZCodeBuiltinRevision ?? "", /^zcode-builtin:9:/u);
+    assert.equal(JSON.stringify(nextRevision).includes("builtinModelIds"), false);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }

@@ -5,8 +5,12 @@ export const MAX_WORKER_RESULT_FRAME_BYTES=MAX_TASK_RESULT_BYTES+MAX_RESULT_ENVE
 export class ResultContractError extends Error { constructor(code,message=code){super(message);this.code=code;} }
 const fail=(code,message=code)=>{throw new ResultContractError(code,message);};
 const RESULT_STATUSES=new Set(['completed','failed','cancelled','waiting_for_master']);
-const RESULT_FIELDS = new Set(['task_id','attempt','status','summary','files_changed','tests','issues','needs_master_decision','zcode_output','exit_code','session_id','started_at','finished_at','error_code','report_candidate','usage','model','timing']);
+const RESULT_FIELDS = new Set(['task_id','attempt','status','summary','files_changed','tests','issues','needs_master_decision','zcode_output','exit_code','session_id','started_at','finished_at','error_code','report_candidate','usage','model','timing','rpc_diagnostics']);
 const REQUIRED_RESULT_FIELDS = ['task_id','attempt','status','summary','files_changed','tests','issues','needs_master_decision','zcode_output','exit_code','session_id','started_at','finished_at'];
+// ADR-066: bounded, redacted rejections of official RPCs; failed Results only.
+const MAX_RPC_DIAGNOSTICS=4;
+const MAX_RPC_DIAGNOSTICS_BYTES=8192;
+const RPC_METHOD=/^[a-z]+(?:\/[A-Za-z0-9_]+){1,2}$/u;
 export function canonical(value) {
   if (value === null || typeof value === 'string' || typeof value === 'boolean') return JSON.stringify(value);
   if (typeof value === 'number' && Number.isSafeInteger(value)) return JSON.stringify(value);
@@ -57,8 +61,17 @@ export function prepareWorkerResultFrameParts(frame) {
   let resultJson;
   try { resultJson=canonicalTaskResult(frame.result,{task_id:frame.task_id,attempt:frame.attempt,result_status:frame.result?.status}); }
   catch(error) {
-    const result=submissionFailure({task_id:frame.task_id,attempt:frame.attempt},error);
-    resultJson=canonicalTaskResult(result,{task_id:frame.task_id,attempt:frame.attempt,result_status:'failed'});
+    // Diagnostics are additive evidence: a defective entry must never cost
+    // the Result its own report.
+    const {rpc_diagnostics,...withoutDiagnostics}=frame.result??{};
+    const keepReport=Object.hasOwn(frame.result??{},'rpc_diagnostics');
+    try {
+      if(!keepReport)throw error;
+      resultJson=canonicalTaskResult(withoutDiagnostics,{task_id:frame.task_id,attempt:frame.attempt,result_status:frame.result?.status});
+    } catch {
+      const failed=submissionFailure({task_id:frame.task_id,attempt:frame.attempt},error);
+      resultJson=canonicalTaskResult(failed,{task_id:frame.task_id,attempt:frame.attempt,result_status:'failed'});
+    }
   }
   // Reuse the encoded result: never stringify it as a nested JSON string and
   // never allocate another serialization of the large report for the envelope.
@@ -102,6 +115,32 @@ function validateTiming(value){
     ||typeof value.derived!=='boolean')fail('invalid_result_payload');
   validateStringArray(value.notes,64);
 }
+// `at <function> (<basename>:<line>:<column>)`, `at <location>`; a `/` is
+// only legal inside a `node:` URI, so no directory can survive validation.
+const RPC_STACK_LINE=/^at (?:(?:[^\s()\\/:]+)? ?(?:\((?:node:[^\s()\\]*|[^\s()\\/]*)\)|node:[^\s()\\]*|[^\s()\\/]*))$/u;
+const RPC_DATA_NAME=/^[A-Za-z][A-Za-z0-9_]*$/u;
+const RPC_DATA_CODE=/^[A-Za-z0-9][A-Za-z0-9_.:-]*$/u;
+const CLEAN_DIAGNOSTIC_TEXT=(text)=>typeof text==='string'&&!/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/u.test(text);
+function validateRpcDiagnostics(value,status){
+  if(status!=='failed'||!Array.isArray(value)||value.length<1||value.length>MAX_RPC_DIAGNOSTICS)fail('invalid_result_payload');
+  const seen=new Set();
+  for(const entry of value){
+    validateResultObject(entry,new Set(['method','code','message','data_name','data_code','stack']),['method','code','message','data_name','data_code']);
+    const stack=Object.hasOwn(entry,'stack')?entry.stack:'';
+    const stackLines=typeof stack==='string'?stack.split('\n'):[];
+    const identity=`${String(entry.method)}|${String(entry.code)}|${String(entry.data_code)}`;
+    if(typeof entry.method!=='string'||!RPC_METHOD.test(entry.method)
+      ||!(entry.code===null||(typeof entry.code==='number'&&Number.isSafeInteger(entry.code)))
+      ||typeof entry.message!=='string'||!CLEAN_DIAGNOSTIC_TEXT(entry.message)||/[\r\n\t]/u.test(entry.message)||[...entry.message].length>500
+      ||!(entry.data_name===null||(typeof entry.data_name==='string'&&CLEAN_DIAGNOSTIC_TEXT(entry.data_name)&&entry.data_name.length<=64&&RPC_DATA_NAME.test(entry.data_name)))
+      ||!(entry.data_code===null||(typeof entry.data_code==='string'&&CLEAN_DIAGNOSTIC_TEXT(entry.data_code)&&entry.data_code.length<=128&&RPC_DATA_CODE.test(entry.data_code)))
+      ||(Object.hasOwn(entry,'stack')&&(typeof entry.stack!=='string'||entry.stack.length>1200||stackLines.length>12
+        ||stackLines.some((line)=>!CLEAN_DIAGNOSTIC_TEXT(line)||!RPC_STACK_LINE.test(line))))
+      ||seen.has(identity))fail('invalid_result_payload');
+    seen.add(identity);
+  }
+  if(Buffer.byteLength(canonical(value),'utf8')>MAX_RPC_DIAGNOSTICS_BYTES)fail('invalid_result_payload');
+}
 export function canonicalTaskResult(result,input){
   validateResultObject(result,RESULT_FIELDS,REQUIRED_RESULT_FIELDS);
   if(result.task_id!==input.task_id||result.attempt!==input.attempt||result.status!==input.result_status||!RESULT_STATUSES.has(result.status)
@@ -117,6 +156,7 @@ export function canonicalTaskResult(result,input){
   if(Object.hasOwn(result,'usage')&&result.usage!==null)validateUsage(result.usage);
   if(Object.hasOwn(result,'model')&&result.model!==null)validateModel(result.model);
   if(Object.hasOwn(result,'timing')&&result.timing!==null)validateTiming(result.timing);
+  if(Object.hasOwn(result,'rpc_diagnostics'))validateRpcDiagnostics(result.rpc_diagnostics,result.status);
   const json=canonical(result);
   const bytes=Buffer.byteLength(json,'utf8');
   if(bytes>MAX_TASK_RESULT_BYTES)throw new ResultContractError('result_too_large', `canonical TaskResult ${bytes} bytes exceeds ${MAX_TASK_RESULT_BYTES}; original report not committed`);

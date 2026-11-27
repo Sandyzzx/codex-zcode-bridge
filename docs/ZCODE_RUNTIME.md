@@ -1,9 +1,9 @@
 # ZCode 运行配置边界
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-25（Preview.17、ADR-060 Executor 自动恢复开关与 ADR-062 单页 Console）
-> Last verified: 2026-11-25，核对真实 Executor 正常/异常退出后的自动恢复、恢复锁位于 Host 设置目录、默认开启与显式诊断关闭，以及 Console 单页启动/Diagnostics 边界；Preview.17 完整 Host/CI 验证在集成阶段更新。
-> Verified against: `685c9158`（四条 Preview.17 工作线的代码集成快照；最终候选提交与 CI 结果由交付报告记录）。
+> Last updated: 2026-11-26（Preview.20、ADR-066 官方运行期 Registry、Continue Session 分离与 RPC 诊断）
+> Last verified: 2026-11-26，核对运行期 Registry 路径选择与回退、AppServer env/Account Overlay 同源、Endpoint 环境转发、`configure-runtime.ps1` 的静态路径清除，以及 Preview.19 真实错误样本的定向测试；真实 Coding Plan `GLM-5.4 / low` E2E、完整 CI 与发布事实由 Preview.20 报告记录。
+> Verified against: `f77a6176508f20bad73b8605b44a04703bacf231`（Preview.19 基线）与 Preview.20 候选工作树；最终提交 SHA 由发布报告记录。
 
 当前生产路径是 `node <installed-runtime>/resources/glm/zcode.cjs app-server --stdio --surface desktop`，不是历史 CLI `--prompt --json`。任务 Adapter 与模型目录探测共用 `createInstalledOfficialHostSessionFactory` 的同一启动合同；安装版兼容性由 `OfficialAppServerRuntimeResolver` 精确校验，配置项与用户设置方法见仓库 README。
 
@@ -85,6 +85,24 @@ v13 数据库返回稳定错误码 `unsupported_sqlite_schema` 和 `SQLite v14 O
 3. 自动发现安装按固定优先级 `ZCODE_WINDOWS_APP_INSTALL_DIR` → `%LOCALAPPDATA%\Programs\ZCode` → `%ProgramFiles%\ZCode`，且 `resources/glm/zcode.cjs` 与 `resources/config/provider/zcode-builtin.json` 必须来自同一安装根，否则跳过该根（错误信息列出各根的存在性）。显式 `ZCODE_BRIDGE_ZCODE_CJS` 时 builtin 从该 runtime 所在安装派生；缺失报 `provider_config_missing`。Node 入口仍按 `ZCODE_BRIDGE_NODE`/PATH 既有合同。
 4. personal provider 配置候选顺序：显式 `ZCODE_DATA_BASE_DIR` → `setting.json` 发现的 `dataBaseDir` → 用户目录。credentials 与 personal 配置在数据目录；builtin 配置在安装目录；CLI 配置、AGENTS.md、Skills 在用户目录——Desktop 数据迁移不迁移 CLI 用户配置。
 5. runtime-config.json 仅持久化显式来源的 `ZCODE_HOME`/`ZCODE_DATA_BASE_DIR`；`setting.json` 的发现值不持久化，保证 Desktop 后续迁移可被跟随。
+
+## 官方运行期 Built-in Registry（ADR-066）
+
+Bridge 与当前安装版 ZCode Desktop 使用同源的官方运行期 Built-in Registry。路径规则镜像 Observed 的官方行为（Desktop 4.0.0.10870、`zcode.cjs` 0.18.0），不是官方合同：
+
+```text
+<dataBaseDir>/.zcode/v2/runtime/provider/<platform>/<appVersion>/endpoint-<hash>/zcode-builtin.json
+```
+
+- `<dataBaseDir>` 是 personal provider 配置所在的 `<base>/.zcode/v2` 的 `<base>`，即已校验的 `ZCODE_DATA_BASE_DIR`；`ZCODE_HOME` 已包含 `.zcode` 时取其父目录，不重复拼接。
+- `<platform>` 沿用官方命名（Windows 为 `windows`，架构 `x86_64` / `aarch64`）；`<appVersion>` 来自安装版 `out/metadata/build-meta.json`；`<hash>` 是当前 Endpoint origin 的 SHA-256 前 32 位。
+- Endpoint origin 优先级：`ZCODE_BASE_URL` → `ZCODE_ENDPOINT_ORIGIN` → 测试/生产 `ZCODE_TEST_BASE_URL` / `ZCODE_PRODUCTION_BASE_URL` → 官方默认值；按 `new URL(...).origin` 规范化。
+- 只定位上述唯一路径，不跨 Endpoint、Desktop 版本或数据根搜索“最新”Registry。有效的运行期文件始终优先，不比较 revision；只有文件缺失、非普通文件、非法 JSON 或 schema 不合法时，才回退同一安装目录的 `resources/config/provider/zcode-builtin.json`。
+- 每次解析运行时配置（即每次新 AppServer 启动）都重新选择，不缓存、不下载、不更新、不改写官方文件；官方 Registry 更新后无需修改 Bridge 或重装插件。
+
+AppServer 子进程环境、Account Overlay 与模型目录使用同一个已解析文件。Overlay 不再复制 `builtinModelIds`，Coding Plan 与 Start Plan 的模型成员由官方 Registry 决定；`access`、`states` 与 `basedOnZCodeBuiltinRevision` 不变。Adapter 在 AppServer 启动后、注册 Overlay 前复核 Registry 身份（路径、revision、SHA-256），与 Overlay 依据不一致时以 `provider_config_invalid` 失败且不重试。Detached Worker 只转发 Endpoint 相关非秘密环境键，保证与 Executor 定位同一 Registry。
+
+`configure-runtime.ps1` 仅在 `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE` 显式指向同安装 Built-in 之外的文件时持久化该键；默认派生路径写入 `null`，清除旧安装器留下的静态路径。安装目录 Built-in 仍是运行期 Registry 不可用时的回退，因此脚本继续校验其存在性。
 
 Windows 子进程环境：`createMinimalOsEnv`/`createWorkerEnv` 把 `HOME` 归一为 Bridge 解析出的用户目录（`USERPROFILE` 原样保留），使 Worker 与 ZCode 子进程使用与主进程相同的数据目录；不透传任意父进程环境变量或凭据。Windows 进程身份探针从 `SystemRoot` 绝对路径启动系统 Windows PowerShell，通过 .NET `Process.GetProcessById().StartTime.Ticks` 读取创建指纹；它不依赖父进程的 `PSModulePath`，查询失败仍为 unknown。
 

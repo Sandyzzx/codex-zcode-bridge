@@ -11,14 +11,16 @@ import type {
   RuntimeResolver,
   TaskPackage,
   TaskResult,
+  RpcDiagnostic,
   WorkspaceRef,
   ZCodeInteractionRequest,
   ZCodeRuntimeConfig,
 } from "../interfaces.js";
 import { parseAgentReport } from "./agent-report.js";
 import type { ZCodeRunOutcome } from "./run-outcome.js";
+import { appendRpcDiagnostic, extractRpcDiagnostic, redactDiagnosticText } from "./rpc-diagnostics.js";
 import { buildContinuePrompt, buildTaskPrompt } from "../prompts/task-prompt.js";
-import { BridgeError } from "../runtime/errors.js";
+import { BridgeError, SESSION_NOT_RESUMABLE } from "../runtime/errors.js";
 import { loadPersistedRuntimeEnvironment, NodeRuntimeResolver } from "../runtime/resolver.js";
 import { captureSpawnGenerationIdentity, childStillOnSpawnGeneration, isProcessRunning, terminateProcessTree, verifyProcessTreeClaimantsClean, type TerminateProcessTree, type TreeClaimantTarget } from "./process-spawn.js";
 import { createPlatformProbe, type ProcessProbe } from "../runtime/process-probe.js";
@@ -43,11 +45,13 @@ import {
 import { createHash, randomUUID } from "node:crypto";
 import { createMinimalOsEnv } from "../runtime/child-env.js";
 import { buildZCodeAppServerLaunch } from "../runtime/desktop-host-launch.js";
+import { forwardOfficialEndpointEnv } from "../runtime/official-builtin-registry.js";
 import {
   accountProviderRuleFacts,
   BIGMODEL_START_PLAN_PROVIDER_ID,
   buildAccountProviderPayload,
   catalogProviderId,
+  currentBuiltinRegistryRevision,
   testOnlyRuntimeAuthReply,
   zcodeDataBaseDir,
 } from "../runtime/account-provider.js";
@@ -221,6 +225,19 @@ function readFactsCandidate(error: unknown): FactsCandidate | null {
   return (error as MarkedError)[FACTS_CANDIDATE] ?? null;
 }
 
+/** ADR-066: keep the redacted rejection of one RPC with its Attempt. */
+function recordRpcDiagnostic(entry: RunEntry, method: string, error: unknown): void {
+  try {
+    const diagnostic = extractRpcDiagnostic(method, error);
+    if (diagnostic) entry.rpcDiagnostics = appendRpcDiagnostic(entry.rpcDiagnostics, diagnostic);
+  } catch { /* diagnostics can never change the failure itself */ }
+}
+
+/** Diagnostics of a failed Attempt; a Bridge timeout or cancellation is not an RPC verdict. */
+function failedRpcDiagnostics(entry: RunEntry): readonly RpcDiagnostic[] | undefined {
+  return entry.timedOut || entry.cancelRequested || entry.rpcDiagnostics.length === 0 ? undefined : entry.rpcDiagnostics;
+}
+
 /** Safe registration diagnostics: only controlled enums and registry-backed
  * RPC fields leave the private adapter boundary. Upstream text is never copied. */
 function registrationFailure(error: unknown): {
@@ -279,6 +296,8 @@ interface RunEntry {
   outcome: ZCodeRunOutcome | null;
   error: unknown;
   runPromise: Promise<ZCodeRunOutcome>;
+  /** ADR-066: redacted rejections of official RPCs, in order of occurrence. */
+  rpcDiagnostics: readonly RpcDiagnostic[];
   resolveTurn: (value: TurnResult) => void;
   rejectTurn: (error: Error) => void;
   onEvent: ProgressSink;
@@ -645,6 +664,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       outcome: null,
       error: null,
       runPromise: Promise.resolve(null as unknown as ZCodeRunOutcome),
+      rpcDiagnostics: [],
       resolveTurn,
       rejectTurn,
       onEvent: this.#onEvent,
@@ -776,6 +796,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       entry.onEvent({ type: "app_server_started", summary: "ZCode app-server process started", details: { pid: client.child.pid } });
 
       if (accountProviderPayload) {
+        this.#assertRegistryUnchanged(config, accountProviderPayload.basedOnZCodeBuiltinRevision);
         try {
           const syncResult = asRecord(await client.request(
             "provider/updateAccountConfig",
@@ -814,10 +835,25 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
 
       let snapshot: JsonRecord;
       if (resumeSessionId) {
-        snapshot = asRecord(await client.request("session/resume", {
-          sessionId: resumeSessionId,
-          workspace: { workspacePath: workspace.canonicalPath, workspaceKey: projectPath },
-        }));
+        try {
+          snapshot = asRecord(await client.request("session/resume", {
+            sessionId: resumeSessionId,
+            workspace: { workspacePath: workspace.canonicalPath, workspaceKey: projectPath },
+          }));
+        } catch (error) {
+          // ADR-066: the Manager resumes only a Session with real turn
+          // history. Its rejection is reported and never replaced by a new
+          // Session, which would silently drop that context. A transport
+          // failure says nothing about the Session and keeps its own code.
+          const candidate = readFactsCandidate(error);
+          if (candidate?.kind !== "rpc" || !candidate.rejected) throw error;
+          throw withFactsCandidate(new BridgeError(
+            SESSION_NOT_RESUMABLE,
+            `ZCode rejected resuming session ${resumeSessionId} (session/resume, code ${candidate.code}); `
+              + "its context was not restored and no new Session was created",
+            { cause: error },
+          ), candidate);
+        }
         const returnedId = nestedString(snapshot, ["session", "sessionId"]);
         if (!returnedId) {
           throw new Error("ZCode app-server resume snapshot did not contain session.sessionId");
@@ -900,7 +936,10 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
               persistAsWorkspaceLastUsed: false,
             }));
           } catch (error) {
-            const reason = error instanceof Error ? error.message : String(error);
+            // ADR-066: the upstream message is evidence, not a credential
+            // channel; keep one redacted, bounded line.
+            const reason = redactDiagnosticText(error instanceof Error ? error.message : String(error))
+              .replace(/\s+/gu, " ").trim().slice(0, 500);
             entry.onEvent({
               type: "model_setup_failed",
               summary: `ZCode rejected ${requestedProviderId}/${preferences.model.model_id}; the Attempt was stopped before Worker dispatch.`,
@@ -1217,7 +1256,11 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       catch (error) {
         entry.onEvent({ type: "outcome_checkpoint_failed", summary: error instanceof Error ? error.message : String(error) });
       }
-      return await this.#completeCleanup(entry, outcome);
+      const completed = await this.#completeCleanup(entry, outcome);
+      const diagnostics = completed.cleanupVerified ? undefined : failedRpcDiagnostics(entry);
+      // A turn that ran but whose cleanup is unverified is still a failed
+      // Result; it keeps the diagnostics of any earlier RPC rejection.
+      return diagnostics ? { ...completed, rpcDiagnostics: diagnostics } : completed;
     } catch (error) {
       // Runtime timeout bounds an active ZCode turn. Once the turn has failed
       // or been cancelled, cleanup follows its own bounded process-tree
@@ -1288,6 +1331,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
           throw new BridgeError("cleanup_failed", `ZCode process termination could not be verified; workspace remains occupied.${browserSuffix}`, {
             cause: cleanupFailure,
             memberPids,
+            ...(failedRpcDiagnostics(entry) ? { rpcDiagnostics: failedRpcDiagnostics(entry) } : {}),
           });
         }
       }
@@ -1295,7 +1339,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         throw new BridgeError(
           "cleanup_failed",
           `ZCode process termination was verified, but the managed browser cleanup could not be verified: ${entry.browserCleanupError}`,
-          { cause: error },
+          { cause: error, ...(failedRpcDiagnostics(entry) ? { rpcDiagnostics: failedRpcDiagnostics(entry) } : {}) },
         );
       }
       if (failureCleanupReceipt && !cleanupFailure) {
@@ -1317,13 +1361,33 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         exitCode: null, signal: null, sessionId: entry.sessionId, response: "", usage: null,
         agentReport: null, reportCandidate: null, reportError: message,
         errorCode: code as ZCodeRunOutcome["errorCode"], cleanupVerified: false,
+        ...(failedRpcDiagnostics(entry) ? { rpcDiagnostics: failedRpcDiagnostics(entry) } : {}),
       };
       const cleaned = await this.#completeCleanup(entry, failedOutcome);
-      if (!cleaned.cleanupVerified) throw new BridgeError("cleanup_failed", `${message}; cleanup: ${cleaned.cleanupError ?? "unverified"}`, { cause: error, memberPids: cleaned.cleanupMemberPids });
+      if (!cleaned.cleanupVerified) throw new BridgeError("cleanup_failed", `${message}; cleanup: ${cleaned.cleanupError ?? "unverified"}`, {
+        cause: error, memberPids: cleaned.cleanupMemberPids, ...(failedRpcDiagnostics(entry) ? { rpcDiagnostics: failedRpcDiagnostics(entry) } : {}),
+      });
       entry.onEvent({ type: "error", summary: message.slice(0, 1_500), details: { error_code: code } });
       if (spawnRecovery) throw new BridgeError("spawn_failed", message);
-      if (error instanceof BridgeError) throw error;
-      throw new BridgeError(code, message);
+      // ADR-066: a throw still hands over the RPC rejections and the Session
+      // ID observed before it; the Worker persists them on the failed Result.
+      const diagnostics = error instanceof BridgeError
+        ? error.rpcDiagnostics ?? failedRpcDiagnostics(entry)
+        : failedRpcDiagnostics(entry);
+      const sessionId = (error instanceof BridgeError ? error.sessionId : undefined) ?? entry.sessionId ?? undefined;
+      if (error instanceof BridgeError
+        && diagnostics === error.rpcDiagnostics
+        && sessionId === error.sessionId) throw error;
+      throw new BridgeError(
+        error instanceof BridgeError ? error.code : code,
+        error instanceof BridgeError ? error.message : message,
+        {
+          cause: error,
+          ...(error instanceof BridgeError && error.memberPids ? { memberPids: error.memberPids } : {}),
+          ...(diagnostics ? { rpcDiagnostics: diagnostics } : {}),
+          ...(sessionId ? { sessionId } : {}),
+        },
+      );
     } finally {
       if (timer) clearTimeout(timer);
       if (warningTimer) clearTimeout(warningTimer);
@@ -1544,6 +1608,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
           ? (error as { code: number }).code : null;
         const data = asRecord((error as { data?: unknown } | null)?.data);
         const dataCode = registeredCode(data.code, RPC_DATA_CODE_REGISTRY);
+        recordRpcDiagnostic(entry, method, error);
         throw withFactsCandidate(
           new Error(`ZCode official runtime request failed for ${method}${code === null ? "" : ` (code ${code})`}`),
           { kind: "rpc", method, code, dataCode, rejected: code !== null },
@@ -2115,6 +2180,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         const data = asRecord(error.data);
         const rpcCode = typeof error.code === "number" && Number.isSafeInteger(error.code) ? error.code : null;
         const dataCode = registeredCode(data.code, RPC_DATA_CODE_REGISTRY);
+        recordRpcDiagnostic(entry, call.method, error);
         call.reject(withFactsCandidate(
           new Error(`ZCode app-server request failed for ${call.method}${typeof error.code === "number" ? ` (code ${error.code})` : ""}`),
           { kind: "rpc", method: call.method, code: rpcCode, dataCode, rejected: true },
@@ -2868,7 +2934,24 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     if (source.ZCODE_HOME) env.ZCODE_HOME = source.ZCODE_HOME;
     const dataBaseDir = zcodeDataBaseDir(config.providerPersonalConfigFile);
     if (dataBaseDir) env.ZCODE_DATA_BASE_DIR = dataBaseDir;
+    // ADR-066: the registry was selected for this Endpoint; the AppServer must
+    // resolve the same Endpoint.
+    forwardOfficialEndpointEnv(env, source);
     return env;
+  }
+
+  /**
+   * ADR-066: the Overlay and the started AppServer must have read the same
+   * official registry. A Desktop refresh between the two reads would leave
+   * the account providers unregistered, so stop before registration.
+   */
+  #assertRegistryUnchanged(config: ZCodeRuntimeConfig, basedOnZCodeBuiltinRevision: string): void {
+    if (currentBuiltinRegistryRevision(config) === basedOnZCodeBuiltinRevision) return;
+    throw new BridgeError(
+      "provider_config_invalid",
+      "The official Built-in Provider registry changed while the ZCode AppServer was starting; "
+        + "the Attempt was stopped before account provider registration and no model request was sent",
+    );
   }
 
   #require(handle: AgentHandle, method: string): RunEntry {

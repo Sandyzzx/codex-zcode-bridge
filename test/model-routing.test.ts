@@ -208,3 +208,79 @@ test("recording entitlement remains diagnostic and adds no routing request", asy
   assert.equal(checks, 1);
   assert.equal(journal.latest("GLM-5.3-Flash"), "quota_exhausted");
 });
+
+function persistedTask(model: { provider_id: string; model_id: string; reasoning_level?: string }): TaskPackage {
+  return { ...task({ task_id: "persisted_task" }), model } as TaskPackage;
+}
+
+test("a continuation validates its persisted selection without rewriting it", async () => {
+  const plans: Array<string | undefined> = [];
+  const router = createTaskModelRouter({
+    settings,
+    catalog: async (_workspace, plan) => {
+      plans.push(plan);
+      return catalog(entry(CODING, "GLM-5.4"));
+    },
+  });
+  const selected = persistedTask({ provider_id: CODING, model_id: "GLM-5.4", reasoning_level: "max" });
+  const before = { ...selected.model! };
+  await router.validatePersisted(selected);
+  assert.deepEqual(selected.model, before, "validation must never re-route or switch the persisted model");
+  assert.deepEqual(plans, ["current"]);
+});
+
+test("a continuation keeps the persisted model when the live catalog dropped it", async () => {
+  const router = createTaskModelRouter({ settings, catalog: async () => catalog(entry(CODING, "GLM-5.3")) });
+  const selected = persistedTask({ provider_id: CODING, model_id: "GLM-5.4", reasoning_level: "max" });
+  await assert.rejects(router.validatePersisted(selected), (error: unknown) =>
+    error instanceof Error && (error as { code?: string }).code === "provider_config_invalid"
+      && /no longer contains account:bigmodel-individual-coding-plan\/GLM-5\.4/u.test(error.message));
+  assert.deepEqual(selected.model, { provider_id: CODING, model_id: "GLM-5.4", reasoning_level: "max" });
+});
+
+test("a continuation rejects an unavailable reasoning level instead of silently changing it", async () => {
+  const router = createTaskModelRouter({
+    settings,
+    catalog: async () => catalog(entry(CODING, "GLM-5.4", ["low", "high"], "high")),
+  });
+  const selected = persistedTask({ provider_id: CODING, model_id: "GLM-5.4", reasoning_level: "max" });
+  await assert.rejects(router.validatePersisted(selected), /reasoning level max is not available/u);
+  assert.equal(selected.model!.reasoning_level, "max");
+});
+
+test("a persisted bare provider id is accepted when the catalog advertises its account namespace", async () => {
+  const router = createTaskModelRouter({ settings, catalog: async () => catalog(entry(CODING, "GLM-5.4")) });
+  await router.validatePersisted(persistedTask({
+    provider_id: "bigmodel-individual-coding-plan",
+    model_id: "GLM-5.4",
+  }));
+});
+
+test("a Start Plan continuation reads only the Start Plan catalog and reports its absence", async () => {
+  const plans: Array<string | undefined> = [];
+  const router = createTaskModelRouter({
+    settings,
+    catalog: async (_workspace, plan) => {
+      plans.push(plan);
+      return { entries: [], startPlanUnavailableReason: "no Start Plan entitlement" };
+    },
+  });
+  await assert.rejects(
+    router.validatePersisted(persistedTask({ provider_id: START_PLAN_PROVIDER_ID, model_id: "GLM-5.3" })),
+    /no Start Plan entitlement/u,
+  );
+  assert.deepEqual(plans, ["start_plan"]);
+});
+
+test("a catalog read failure blocks the continuation with a bounded provider error", async () => {
+  const router = createTaskModelRouter({
+    settings,
+    catalog: async () => { throw new Error("runtime unavailable"); },
+  });
+  await assert.rejects(
+    router.validatePersisted(persistedTask({ provider_id: CODING, model_id: "GLM-5.4" })),
+    (error: unknown) => error instanceof Error
+      && (error as { code?: string }).code === "provider_config_invalid"
+      && /catalog could not be read/u.test(error.message),
+  );
+});

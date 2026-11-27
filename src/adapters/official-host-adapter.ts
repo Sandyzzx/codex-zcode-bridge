@@ -169,6 +169,7 @@ export function createInstalledOfficialHostSessionFactory(
       const missingRuntimeAsset = descriptor.installation_safety !== "OFFICIAL_INSTALLATION_SAFE"
         || !descriptor.bundle_path
         || !descriptor.builtin_provider_config_path
+        || !descriptor.active_builtin_provider_config_path
         || !descriptor.runtime_host_path;
       if (missingRuntimeAsset) {
         const failure = descriptor.installation_safety === "OFFICIAL_INSTALLATION_UNSAFE"
@@ -195,7 +196,7 @@ export function createInstalledOfficialHostSessionFactory(
           root: descriptor.install_dir!,
           hostModulePath: packaged.hostModulePath,
           appServerEntryPath: descriptor.bundle_path,
-          builtinProviderConfigPath: descriptor.builtin_provider_config_path,
+          builtinProviderConfigPath: descriptor.active_builtin_provider_config_path,
           runtimeHostPath: descriptor.runtime_host_path,
           manifestDigest: descriptor.installation_fingerprint
             ?? descriptor.bundle_sha256
@@ -373,7 +374,10 @@ export function createOfficialHostClientFactory(input: {
         cwd: workspacePath,
         env: {
           ...launchEnv,
-          ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: assets.builtinProviderConfigPath,
+          // ADR-066: the AppServer registry and the Account Overlay must come
+          // from the same resolved config. `context.config` is what the
+          // overlay reads; the memoized asset descriptor may be older.
+          ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: context.config.providerBuiltinConfigFile,
           ZCODE_PERSONAL_PROVIDER_CONFIG_FILE: context.config.providerPersonalConfigFile,
           ZCODE_RUNTIME_HOST_PATH: assets.runtimeHostPath,
         },

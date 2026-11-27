@@ -6,6 +6,7 @@ import { createWorkerEnv } from "./child-env.js";
 import { discoverZCodeData, discoverZCodeInstall, isAbsolutePathForPlatform, isPermissionDeniedCode, resolveUserHome, sameFileSystemPath } from "./paths.js";
 import { resolveSessionPreferences } from "./session-preferences.js";
 import { loadPersistedRuntimeEnvironment, NodeRuntimeResolver, type RuntimeResolverOptions } from "./resolver.js";
+import type { OfficialBuiltinRegistrySelection } from "./official-builtin-registry.js";
 import type { ZCodeRuntimeConfig } from "../interfaces.js";
 
 export type DoctorStatus = "ok" | "warning" | "error" | "unknown";
@@ -239,9 +240,15 @@ export async function runBridgeDoctor(options: BridgeDoctorOptions = {}): Promis
   }
 
   try {
-    config = await new NodeRuntimeResolver({ ...options.resolver, env }).resolve();
+    let registrySelection: OfficialBuiltinRegistrySelection | null = null;
+    config = await new NodeRuntimeResolver({
+      ...options.resolver,
+      env,
+      onBuiltinRegistrySelection: (selection) => { registrySelection = selection; },
+    }).resolve();
     checks.push({ name: "zcode_runtime", status: "ok", summary: "ZCode runtime was found and its configured path is readable" });
     checks.push({ name: "provider_config", status: "ok", summary: "Builtin and personal provider configs passed validation" });
+    checks.push(builtinRegistryCheck(config, registrySelection));
   } catch (error) {
     const code = error instanceof BridgeError ? error.code : null;
     if (code === "runtime_not_found") {
@@ -366,6 +373,36 @@ export async function runBridgeDoctor(options: BridgeDoctorOptions = {}): Promis
   }
 
   return { checked_at: new Date().toISOString(), execution_mode: mode, checks };
+}
+
+/** ADR-066 read-only observation: which official Built-in registry is in effect and why. */
+function builtinRegistryCheck(config: ZCodeRuntimeConfig, selection: OfficialBuiltinRegistrySelection | null): DoctorCheck {
+  const name = "builtin_registry";
+  if (!selection) {
+    return {
+      name,
+      status: "ok",
+      summary: `Built-in registry is explicitly configured: ${config.providerBuiltinConfigFile}; the official runtime registry is not used`,
+    };
+  }
+  if (selection.source === "runtime") {
+    return {
+      name,
+      status: "ok",
+      summary: `Built-in registry: official runtime registry${selection.revision === null ? "" : ` (revision ${selection.revision})`} at ${selection.path}; installation fallback ${selection.bundledPath}`,
+    };
+  }
+  const summary = `Built-in registry: installation fallback ${selection.path}`;
+  switch (selection.runtimeStatus) {
+    case "unresolved":
+      return { name, status: "ok", summary: `${summary}; the official runtime registry was not located (no Desktop version or data base directory)` };
+    case "not_found":
+      return { name, status: "ok", summary: `${summary}; ZCode Desktop has not written an official runtime registry at ${selection.runtimePath}` };
+    case "invalid":
+      return { name, status: "warning", summary: `${summary}; the official runtime registry at ${selection.runtimePath} is not a usable release` };
+    case "selected":
+      return { name, status: "ok", summary: `${summary}; the official runtime registry at ${selection.runtimePath} was not selected` };
+  }
 }
 
 function safeError(error: unknown): string {

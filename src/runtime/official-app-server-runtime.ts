@@ -6,10 +6,18 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { RuntimeResolver, ZCodeRuntimeConfig } from "../interfaces.js";
+import { zcodeDataBaseDir } from "./account-provider.js";
 import { codexHostProfile, type BridgeHostProfile } from "./host-profile.js";
 import { buildZCodeAppServerLaunch } from "./desktop-host-launch.js";
 import { BridgeError } from "./errors.js";
 import { isSupportedNodeVersion, SUPPORTED_NODE_RANGE } from "./node-runtime.js";
+import {
+  isOfficialBuiltinRegistryPin,
+  officialRuntimeRegistryPath,
+  selectOfficialBuiltinRegistry,
+  type OfficialBuiltinRegistrySelection,
+  type OfficialBuiltinRegistrySource,
+} from "./official-builtin-registry.js";
 import { discoverZCodeInstall, isAbsolutePathForPlatform } from "./paths.js";
 import {
   computeOfficialInstallationFingerprint,
@@ -150,6 +158,15 @@ export interface OfficialAppServerRuntimeDescriptor {
   readonly builtin_provider_config_path: string | null;
   readonly builtin_provider_config_bytes: number | null;
   readonly builtin_provider_config_sha256: string | null;
+  /**
+   * ADR-066: the official Built-in registry actually handed to the AppServer.
+   * `builtin_provider_config_*` above keep describing the installation's
+   * bundled file so the manifest and installation fingerprint stay stable
+   * while the Desktop refreshes its runtime registry.
+   */
+  readonly active_builtin_provider_config_path: string | null;
+  readonly active_builtin_provider_config_source: OfficialBuiltinRegistrySource | null;
+  readonly active_builtin_provider_config_revision: number | null;
   readonly runtime_host_path: string | null;
   readonly runtime_host_bytes: number | null;
   readonly runtime_host_sha256: string | null;
@@ -415,6 +432,23 @@ export class OfficialAppServerRuntimeResolver implements RuntimeResolver {
     const observedDesktopVersion = desktopVersion ?? "unavailable";
     const observedAppVersion = launchEnv.ZCODE_APP_VERSION ?? "unavailable";
     const observedBuildCommitId = launchEnv.ZCODE_BUILD_COMMIT_ID ?? "unavailable";
+    // ADR-066: an explicitly configured builtin file other than this
+    // installation's own bundled file is a pin and is left untouched. The
+    // bundled path itself is the default left by older installers, so it
+    // follows the official runtime registry.
+    const registryPinned = await this.#builtinRegistryPinned(builtinPath);
+    let registry: OfficialBuiltinRegistrySelection | null = null;
+    if (!registryPinned) {
+      const dataBaseDir = await this.#personalDataBaseDir();
+      const runtimePath = dataBaseDir && launchEnv.ZCODE_APP_VERSION
+        ? officialRuntimeRegistryPath({
+          dataBaseDir,
+          appVersion: launchEnv.ZCODE_APP_VERSION,
+          env,
+        })
+        : null;
+      registry = await selectOfficialBuiltinRegistry({ bundledPath: builtinPath, runtimePath });
+    }
     const installationFingerprint = computeOfficialInstallationFingerprint({
       desktop_version: observedDesktopVersion,
       desktop_app_version: observedAppVersion,
@@ -488,6 +522,9 @@ export class OfficialAppServerRuntimeResolver implements RuntimeResolver {
       builtin_provider_config_path: builtinPath,
       builtin_provider_config_bytes: builtinBytes,
       builtin_provider_config_sha256: builtinSha256,
+      active_builtin_provider_config_path: registry?.path ?? builtinPath,
+      active_builtin_provider_config_source: registry?.source ?? "bundled",
+      active_builtin_provider_config_revision: registry?.revision ?? null,
       runtime_host_path: runtimeHostPath,
       runtime_host_bytes: runtimeHostBytes,
       runtime_host_sha256: runtimeHostSha256,
@@ -544,6 +581,7 @@ export class OfficialAppServerRuntimeResolver implements RuntimeResolver {
     if (descriptor.installation_safety !== "OFFICIAL_INSTALLATION_SAFE"
       || !descriptor.bundle_path
       || !descriptor.builtin_provider_config_path
+      || !descriptor.active_builtin_provider_config_path
       || !descriptor.runtime_host_path) {
       throw new BridgeError(
         "provider_config_invalid",
@@ -551,6 +589,7 @@ export class OfficialAppServerRuntimeResolver implements RuntimeResolver {
           "OFFICIAL_DISCOUNT_NOT_VERIFIED",
       );
     }
+    const registryPinned = await this.#builtinRegistryPinned(descriptor.builtin_provider_config_path);
     const base = this.#baseResolver ?? new NodeRuntimeResolver({
       env: this.#env,
       ...(this.#homeDir ? { homeDir: this.#homeDir } : {}),
@@ -561,8 +600,40 @@ export class OfficialAppServerRuntimeResolver implements RuntimeResolver {
       ...configured,
       nodeExecutable: descriptor.node_executable,
       zcodeEntrypoint: descriptor.bundle_path,
-      providerBuiltinConfigFile: descriptor.builtin_provider_config_path,
+      providerBuiltinConfigFile: registryPinned
+        ? configured.providerBuiltinConfigFile
+        : descriptor.active_builtin_provider_config_path,
     };
+  }
+
+  /** True only for an explicit builtin file that is not this installation's bundled file. */
+  async #builtinRegistryPinned(bundledPath: string | null): Promise<boolean> {
+    return isOfficialBuiltinRegistryPin(
+      this.#persistedEnv()["ZCODE_BUILTIN_PROVIDER_CONFIG_FILE"],
+      bundledPath,
+    );
+  }
+
+  #persistedEnv(): NodeJS.ProcessEnv {
+    return loadPersistedRuntimeEnvironment(
+      this.#env,
+      this.#homeDir,
+      this.#host ?? codexHostProfile(this.#homeDir),
+    );
+  }
+
+  /** Data base directory of the personal provider config the base resolver selects; null when unavailable. */
+  async #personalDataBaseDir(): Promise<string | null> {
+    try {
+      const base = this.#baseResolver ?? new NodeRuntimeResolver({
+        env: this.#env,
+        ...(this.#homeDir ? { homeDir: this.#homeDir } : {}),
+        ...(this.#host ? { host: this.#host } : {}),
+      });
+      return zcodeDataBaseDir((await base.resolve()).providerPersonalConfigFile);
+    } catch {
+      return null;
+    }
   }
 }
 
@@ -589,6 +660,9 @@ function unverified(
     builtin_provider_config_path: details.builtin_provider_config_path ?? null,
     builtin_provider_config_bytes: details.builtin_provider_config_bytes ?? null,
     builtin_provider_config_sha256: details.builtin_provider_config_sha256 ?? null,
+    active_builtin_provider_config_path: details.active_builtin_provider_config_path ?? null,
+    active_builtin_provider_config_source: details.active_builtin_provider_config_source ?? null,
+    active_builtin_provider_config_revision: details.active_builtin_provider_config_revision ?? null,
     runtime_host_path: details.runtime_host_path ?? null,
     runtime_host_bytes: details.runtime_host_bytes ?? null,
     runtime_host_sha256: details.runtime_host_sha256 ?? null,

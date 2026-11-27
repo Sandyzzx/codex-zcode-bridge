@@ -501,7 +501,7 @@ test("Executor exclusively owns the production Authority, routing, auth, diagnos
   assert.match(composition, /testOnlyFakeAdapter === true[\s\S]*?\? undefined[\s\S]*?: createTaskModelRouter\(/u);
   assert.match(composition, /\.\.\.\(routeTaskModel \? \{ routeTaskModel \} : \{\}\),\s*onOperationReleased:[\s\S]*?onWorkerDiagnosticLine:/u);
   assert.match(composition, /settings:\s*\(\)\s*=>\s*\{[\s\S]*?loadPersistedRuntimeEnvironment\(env, homeDir, options\.host\)/u);
-  assert.match(composition, /catalog:\s*async\s*\(workspace\)\s*=>\s*\{[\s\S]*?modelSettings\.listRoutingCatalog\(workspace\)/u);
+  assert.match(composition, /catalog:\s*async\s*\(workspace,\s*plan\)\s*=>\s*\{[\s\S]*?modelSettings\.listRoutingCatalog\(workspace,\s*\{\s*plan\s*\}\)/u);
   assert.match(composition, /new ZCodeModelSettings\(env,/u);
   assert.match(composition, /doctor:\s*\(\)\s*=>\s*runBridgeDoctor\(/u);
   assert.doesNotMatch(host, /testOnlyFakeAdapter|executeFakeResultAdapter|adapter_mode\s*:\s*"test_fake"/u,

@@ -88,6 +88,7 @@
         "src/runtime/desktop-host-launch.ts",
         "src/runtime/doctor.ts",
         "src/runtime/node-runtime.ts",
+        "src/runtime/official-builtin-registry.ts",
         "src/runtime/official-app-server-runtime.ts",
         "src/runtime/official-runtime-authorization.ts",
         "plugins/codex-zcode-bridge/launch-node24.mjs",
@@ -118,6 +119,7 @@
         "src/adapters/zcode-app-server-adapter.ts",
         "src/adapters/official-host-adapter.ts",
         "src/adapters/official-app-server-adapter.ts",
+        "src/adapters/rpc-diagnostics.ts",
         "src/runtime/official-provider-runtime-auth.ts",
         "src/runtime/desktop-host-launch.ts",
         "src/runtime/task-timeout.ts",
@@ -139,6 +141,7 @@
       "paths": [
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
+        "src/manager/session-history.ts",
         "src/runtime/auto-wake-setting.ts",
         "src/runtime/process-probe.ts",
         "src/manager/sqlite-lifecycle-mcp-authority.ts",
@@ -599,6 +602,23 @@
       ]
     },
     {
+      "file": "test/official-builtin-registry.test.ts",
+      "type": "Integration",
+      "gate": "T1",
+      "domains": [
+        "zcode-path-discovery",
+        "provider-catalog"
+      ]
+    },
+    {
+      "file": "test/official-registry-fixture.ts",
+      "type": "Fixture",
+      "gate": "T1",
+      "domains": [
+        "test-execution-contract"
+      ]
+    },
+    {
       "file": "test/official-app-server-adapter.test.ts",
       "type": "Integration",
       "gate": "T2",
@@ -704,6 +724,16 @@
       ]
     },
     {
+      "file": "test/rpc-diagnostics.test.ts",
+      "type": "Unit",
+      "gate": "T1",
+      "domains": [
+        "appserver-adapter",
+        "interface-contract",
+        "manager-lifecycle"
+      ]
+    },
+    {
       "file": "test/run-worker-task.test.ts",
       "type": "Integration",
       "gate": "T2",
@@ -800,6 +830,16 @@
       "domains": [
         "sqlite-persistence",
         "mcp-host"
+      ]
+    },
+    {
+      "file": "test/session-history.test.ts",
+      "type": "Unit",
+      "gate": "T1",
+      "domains": [
+        "manager-lifecycle",
+        "worker-launch",
+        "sqlite-persistence"
       ]
     },
     {

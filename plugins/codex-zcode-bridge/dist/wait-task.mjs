@@ -88,6 +88,19 @@ function validateTiming(value) {
   if (["queued_ms", "execution_ms", "turn_ms", "finalize_ms", "wall_ms"].some((k) => value[k] !== null && (!Number.isSafeInteger(value[k]) || value[k] < 0)) || typeof value.derived !== "boolean") fail("invalid_result_payload");
   validateStringArray(value.notes, 64);
 }
+function validateRpcDiagnostics(value, status) {
+  if (status !== "failed" || !Array.isArray(value) || value.length < 1 || value.length > MAX_RPC_DIAGNOSTICS) fail("invalid_result_payload");
+  const seen = /* @__PURE__ */ new Set();
+  for (const entry of value) {
+    validateResultObject(entry, /* @__PURE__ */ new Set(["method", "code", "message", "data_name", "data_code", "stack"]), ["method", "code", "message", "data_name", "data_code"]);
+    const stack = Object.hasOwn(entry, "stack") ? entry.stack : "";
+    const stackLines = typeof stack === "string" ? stack.split("\n") : [];
+    const identity = `${String(entry.method)}|${String(entry.code)}|${String(entry.data_code)}`;
+    if (typeof entry.method !== "string" || !RPC_METHOD.test(entry.method) || !(entry.code === null || typeof entry.code === "number" && Number.isSafeInteger(entry.code)) || typeof entry.message !== "string" || !CLEAN_DIAGNOSTIC_TEXT(entry.message) || /[\r\n\t]/u.test(entry.message) || [...entry.message].length > 500 || !(entry.data_name === null || typeof entry.data_name === "string" && CLEAN_DIAGNOSTIC_TEXT(entry.data_name) && entry.data_name.length <= 64 && RPC_DATA_NAME.test(entry.data_name)) || !(entry.data_code === null || typeof entry.data_code === "string" && CLEAN_DIAGNOSTIC_TEXT(entry.data_code) && entry.data_code.length <= 128 && RPC_DATA_CODE.test(entry.data_code)) || Object.hasOwn(entry, "stack") && (typeof entry.stack !== "string" || entry.stack.length > 1200 || stackLines.length > 12 || stackLines.some((line) => !CLEAN_DIAGNOSTIC_TEXT(line) || !RPC_STACK_LINE.test(line))) || seen.has(identity)) fail("invalid_result_payload");
+    seen.add(identity);
+  }
+  if (Buffer.byteLength(canonical(value), "utf8") > MAX_RPC_DIAGNOSTICS_BYTES) fail("invalid_result_payload");
+}
 function canonicalTaskResult(result, input) {
   validateResultObject(result, RESULT_FIELDS, REQUIRED_RESULT_FIELDS);
   if (result.task_id !== input.task_id || result.attempt !== input.attempt || result.status !== input.result_status || !RESULT_STATUSES.has(result.status) || typeof result.summary !== "string" || typeof result.zcode_output !== "string" || typeof result.needs_master_decision !== "boolean" || result.exit_code !== null && !Number.isSafeInteger(result.exit_code) || !isNullableText(result.session_id) || !isNullableText(result.started_at, 64) || !isNullableText(result.finished_at, 64)) fail("invalid_result_payload");
@@ -100,12 +113,13 @@ function canonicalTaskResult(result, input) {
   if (Object.hasOwn(result, "usage") && result.usage !== null) validateUsage(result.usage);
   if (Object.hasOwn(result, "model") && result.model !== null) validateModel(result.model);
   if (Object.hasOwn(result, "timing") && result.timing !== null) validateTiming(result.timing);
+  if (Object.hasOwn(result, "rpc_diagnostics")) validateRpcDiagnostics(result.rpc_diagnostics, result.status);
   const json = canonical(result);
   const bytes = Buffer.byteLength(json, "utf8");
   if (bytes > MAX_TASK_RESULT_BYTES) throw new ResultContractError("result_too_large", `canonical TaskResult ${bytes} bytes exceeds ${MAX_TASK_RESULT_BYTES}; original report not committed`);
   return json;
 }
-var MAX_TASK_RESULT_BYTES, MAX_RESULT_ENVELOPE_BYTES, MAX_WORKER_RESULT_FRAME_BYTES, ResultContractError, fail, RESULT_STATUSES, RESULT_FIELDS, REQUIRED_RESULT_FIELDS;
+var MAX_TASK_RESULT_BYTES, MAX_RESULT_ENVELOPE_BYTES, MAX_WORKER_RESULT_FRAME_BYTES, ResultContractError, fail, RESULT_STATUSES, RESULT_FIELDS, REQUIRED_RESULT_FIELDS, MAX_RPC_DIAGNOSTICS, MAX_RPC_DIAGNOSTICS_BYTES, RPC_METHOD, RPC_STACK_LINE, RPC_DATA_NAME, RPC_DATA_CODE, CLEAN_DIAGNOSTIC_TEXT;
 var init_result_contract = __esm({
   "src/result-contract.mjs"() {
     "use strict";
@@ -122,8 +136,15 @@ var init_result_contract = __esm({
       throw new ResultContractError(code, message);
     };
     RESULT_STATUSES = /* @__PURE__ */ new Set(["completed", "failed", "cancelled", "waiting_for_master"]);
-    RESULT_FIELDS = /* @__PURE__ */ new Set(["task_id", "attempt", "status", "summary", "files_changed", "tests", "issues", "needs_master_decision", "zcode_output", "exit_code", "session_id", "started_at", "finished_at", "error_code", "report_candidate", "usage", "model", "timing"]);
+    RESULT_FIELDS = /* @__PURE__ */ new Set(["task_id", "attempt", "status", "summary", "files_changed", "tests", "issues", "needs_master_decision", "zcode_output", "exit_code", "session_id", "started_at", "finished_at", "error_code", "report_candidate", "usage", "model", "timing", "rpc_diagnostics"]);
     REQUIRED_RESULT_FIELDS = ["task_id", "attempt", "status", "summary", "files_changed", "tests", "issues", "needs_master_decision", "zcode_output", "exit_code", "session_id", "started_at", "finished_at"];
+    MAX_RPC_DIAGNOSTICS = 4;
+    MAX_RPC_DIAGNOSTICS_BYTES = 8192;
+    RPC_METHOD = /^[a-z]+(?:\/[A-Za-z0-9_]+){1,2}$/u;
+    RPC_STACK_LINE = /^at (?:(?:[^\s()\\/:]+)? ?(?:\((?:node:[^\s()\\]*|[^\s()\\/]*)\)|node:[^\s()\\]*|[^\s()\\/]*))$/u;
+    RPC_DATA_NAME = /^[A-Za-z][A-Za-z0-9_]*$/u;
+    RPC_DATA_CODE = /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/u;
+    CLEAN_DIAGNOSTIC_TEXT = (text) => typeof text === "string" && !/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/u.test(text);
   }
 });
 
@@ -6133,6 +6154,22 @@ import { fileURLToPath as fileURLToPath3 } from "node:url";
 import { accessSync, existsSync as existsSync2, readFileSync as readFileSync2, statSync as statSync2 } from "node:fs";
 import path4 from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
+
+// src/runtime/desktop-host-launch.ts
+var MAX_ASAR_HEADER_BYTES = 32 * 1024 * 1024;
+var MAX_METADATA_BYTES = 64 * 1024;
+
+// src/runtime/official-builtin-registry.ts
+var OFFICIAL_ENDPOINT_ENV_KEYS = Object.freeze([
+  "ZCODE_ENV",
+  "ZCODE_BASE_URL",
+  "ZCODE_ENDPOINT_ORIGIN",
+  "ZCODE_PRODUCTION_BASE_URL",
+  "ZCODE_TEST_BASE_URL"
+]);
+var MAX_REGISTRY_BYTES = 8 * 1024 * 1024;
+
+// src/runtime/resolver.ts
 function findPackageRoot(startDir) {
   let current = startDir ?? path4.dirname(fileURLToPath2(import.meta.url));
   for (let depth = 0; depth < 10; depth++) {

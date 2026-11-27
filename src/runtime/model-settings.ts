@@ -6,7 +6,8 @@ import { createMinimalOsEnv } from "./child-env.js";
 import { buildZCodeAppServerLaunch } from "./desktop-host-launch.js";
 import { buildAccountProviderPayload, zcodeDataBaseDir } from "./account-provider.js";
 import { BridgeError } from "./errors.js";
-import { startPlanAliasCatalogEntries } from "./model-routing.js";
+import { forwardOfficialEndpointEnv } from "./official-builtin-registry.js";
+import { startPlanAliasCatalogEntries, type RoutingCatalogPlan } from "./model-routing.js";
 import { loadPersistedRuntimeEnvironment } from "./resolver.js";
 import { ZCODE_SESSION_MODES, type ZCodeSessionMode } from "./session-preferences.js";
 import type { ZCodeRuntimeConfig } from "../interfaces.js";
@@ -158,17 +159,22 @@ export class ZCodeModelSettings {
    * when that Provider is configured. No model or Billing request is sent.
    * A Start read failure is preserved for explicit Start selections and does
    * not erase Coding models. */
-  async listRoutingCatalog(workspace: string): Promise<{
+  async listRoutingCatalog(workspace: string, options: { readonly plan?: RoutingCatalogPlan } = {}): Promise<{
     models: ZCodeModelCatalogEntry[];
     startPlanUnavailableReason: string | null;
   }> {
+    const plan = options.plan ?? "all";
+    if (plan === "start_plan") {
+      // ADR-066: a Start Plan selection is validated against its own catalog,
+      // so a failed read is reported instead of degraded to Coding models.
+      return { models: (await this.#readStartPlanCatalog(workspace)).models, startPlanUnavailableReason: null };
+    }
     const currentCatalog = await this.listModels(workspace);
+    if (plan === "current") return { models: currentCatalog.models, startPlanUnavailableReason: null };
     let startModels: ZCodeModelCatalogEntry[] = [];
     let startPlanUnavailableReason: string | null = null;
     try {
-      const workspacePath = await realpath(workspace.trim());
-      const source = await this.#resolveCatalogSource(workspacePath);
-      const startCatalog = await this.#readLiveCatalog(workspacePath, source, "start_plan");
+      const startCatalog = await this.#readStartPlanCatalog(workspace);
       startModels = startCatalog.models;
     } catch (error) {
       startPlanUnavailableReason = error instanceof Error ? error.message : String(error);
@@ -179,6 +185,13 @@ export class ZCodeModelSettings {
       models: [...currentCatalog.models, ...additions],
       startPlanUnavailableReason,
     };
+  }
+
+  /** One zero-model live read of the Start Plan catalog. */
+  async #readStartPlanCatalog(workspace: string): Promise<ZCodeModelCatalog> {
+    const workspacePath = await realpath(workspace.trim());
+    const source = await this.#resolveCatalogSource(workspacePath);
+    return this.#readLiveCatalog(workspacePath, source, "start_plan");
   }
 
   async #readLiveCatalog(workspacePath: string, source: CatalogSource, catalogPlan: "current" | "start_plan" = "current"): Promise<ZCodeModelCatalog> {
@@ -437,6 +450,9 @@ function buildRuntimeChildEnv(config: ZCodeRuntimeConfig, source: NodeJS.Process
   if (source.ZCODE_HOME) env.ZCODE_HOME = source.ZCODE_HOME;
   const dataBaseDir = zcodeDataBaseDir(config.providerPersonalConfigFile);
   if (dataBaseDir) env.ZCODE_DATA_BASE_DIR = dataBaseDir;
+  // ADR-066: the catalog AppServer must load the Endpoint's registry the
+  // resolver selected.
+  forwardOfficialEndpointEnv(env, source);
   return env;
 }
 

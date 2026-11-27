@@ -37,6 +37,11 @@ import type {
   CandidateTaskResult,
   CandidateWorkerResultFrame,
 } from "../sqlite-candidate/wp6c/fake-result-adapter.js";
+import {
+  continuationSessionId,
+  validateSessionHistoryEnvelope,
+  type SessionHistory,
+} from "../manager/session-history.js";
 
 const MAX_NODE_TIMER_DELAY_MS = 2_147_483_647;
 
@@ -322,6 +327,8 @@ interface SqliteExecutionEnvelope {
   readonly host_profile: BridgeHostProfile;
   readonly continuation: Readonly<Record<string, unknown>> | null;
   readonly previous_result: CandidateTaskResult | null;
+  /** ADR-066: present only when the previous Result carries a Session ID. */
+  readonly session_history?: SessionHistory;
   readonly private_auth?: {
     readonly account: string;
     readonly claim: string;
@@ -337,8 +344,9 @@ function validateExecutionEnvelope(value: unknown, bootstrap: {
 }, profile: { readonly id: string; readonly sessionMode: "yolo"; readonly unrestricted: false }): SqliteExecutionEnvelope {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("post-Claim execution envelope is required");
   const envelope = value as Record<string, unknown>;
-  const envelopeKeys = Object.keys(envelope).sort().join("|");
-  if (!["adapter_mode|attempt|continuation|execution_profile_id|generation|host_profile|operation_id|policy_snapshot_digest|previous_result|protocol|task|task_id|workspace_ref", "adapter_mode|attempt|continuation|execution_profile_id|generation|host_profile|operation_id|policy_snapshot_digest|previous_result|private_auth|protocol|task|task_id|workspace_ref"].includes(envelopeKeys)
+  // `private_auth` and `session_history` are independent optional keys.
+  const envelopeKeys = Object.keys(envelope).filter((key) => key !== "private_auth" && key !== "session_history").sort().join("|");
+  if (envelopeKeys !== "adapter_mode|attempt|continuation|execution_profile_id|generation|host_profile|operation_id|policy_snapshot_digest|previous_result|protocol|task|task_id|workspace_ref"
     || envelope.protocol !== "bridge-sqlite-execution-envelope-v1"
     || envelope.operation_id !== bootstrap.operation_id || envelope.task_id !== bootstrap.task_id
     || envelope.attempt !== bootstrap.attempt || envelope.generation !== bootstrap.generation
@@ -367,6 +375,14 @@ function validateExecutionEnvelope(value: unknown, bootstrap: {
       || task.model?.provider_id !== auth.provider || task.model.model_id !== auth.model) {
       throw new Error("private auth binding rejected");
     }
+  }
+  if (envelope.session_history !== undefined) {
+    const previousSessionId = (envelope.previous_result as { session_id?: unknown } | null)?.session_id;
+    validateSessionHistoryEnvelope(envelope.session_history, {
+      attempt: bootstrap.attempt,
+      continuation: envelope.continuation,
+      previousResultSessionId: typeof previousSessionId === "string" ? previousSessionId : null,
+    });
   }
   validateHostProfile(envelope.host_profile as BridgeHostProfile);
   return envelope as unknown as SqliteExecutionEnvelope;
@@ -427,7 +443,12 @@ async function runZCodeAdapter(
   const { normalizeUsage, phaseDuration } = await import("../usage/normalize.js");
   const startedAt = new Date().toISOString();
   let outcome: import("../adapters/run-outcome.js").ZCodeRunOutcome | null = null;
-  let failure: { code: string; message: string } | null = null;
+  let failure: {
+    code: string;
+    message: string;
+    rpcDiagnostics?: import("../interfaces.js").RpcDiagnostic[];
+    sessionId?: string;
+  } | null = null;
   const modelProfile: import("../interfaces.js").ExecutionProfile = {
     executor: "zcode",
     provider_id: null,
@@ -764,7 +785,13 @@ async function runZCodeAdapter(
           attempt: bootstrap.attempt,
           feedback: requiredString(execution.continuation.feedback, "continuation feedback missing"),
           additionalRequirements: requiredStringArray(execution.continuation.additional_requirements, "continuation requirements invalid"),
-          previousSessionId: nullableString(execution.previous_result?.session_id),
+          // ADR-066: with a Manager verdict only a resumable Session is
+          // resumed; otherwise the continuation starts a new Session. Without
+          // one (older Manager) the previous ID is used as before.
+          previousSessionId: continuationSessionId(
+            execution.session_history,
+            nullableString(execution.previous_result?.session_id),
+          ),
           previousResult: execution.previous_result as import("../interfaces.js").TaskResult | null,
         })
       : await adapter.startTask({ task: execution.task, workspace, attempt: bootstrap.attempt });
@@ -772,7 +799,10 @@ async function runZCodeAdapter(
     if (outcome.cleanupError) failure = { code: "cleanup_failed", message: outcome.cleanupError };
   } catch (error) {
     failure = { code: error instanceof Error && "code" in error && typeof (error as { code?: unknown }).code === "string"
-      ? (error as { code: string }).code : "worker_error", message: error instanceof Error ? error.message : String(error) };
+      ? (error as { code: string }).code : "worker_error", message: error instanceof Error ? error.message : String(error),
+      // ADR-066: an Adapter that throws (unverified cleanup) still hands
+      // over the RPC rejections and Session ID it observed.
+      ...thrownFailureEvidence(error) };
   } finally {
     writeDiagnostic("[bridge-worker] adapter run settled\n");
     clearCachedAuth();
@@ -812,6 +842,8 @@ async function runZCodeAdapter(
     usage,
     model: modelProfile,
     timing,
+    rpcDiagnostics: outcome?.rpcDiagnostics ?? null,
+    sessionId: failure?.sessionId ?? null,
   });
   const result: CandidateTaskResult = {
     task_id: taskResult.task_id,
@@ -831,6 +863,7 @@ async function runZCodeAdapter(
     ...(taskResult.model !== undefined ? { model: taskResult.model as Record<string, unknown> | null } : {}),
     ...(taskResult.timing !== undefined ? { timing: taskResult.timing as Record<string, unknown> | null } : {}),
     ...(taskResult.error_code ? { error_code: taskResult.error_code } : {}),
+    ...(taskResult.rpc_diagnostics?.length ? { rpc_diagnostics: taskResult.rpc_diagnostics as unknown as Record<string, unknown>[] } : {}),
     ...(taskResult.report_candidate ? { report_candidate: taskResult.report_candidate as Record<string, unknown> } : {}),
   };
   const executionCleanup = buildExecutionCleanupProof(outcome);
@@ -850,6 +883,21 @@ async function runZCodeAdapter(
     execution_cleanup_verified: executionCleanup !== null,
     execution_cleanup: executionCleanup,
     result,
+  };
+}
+
+function thrownFailureEvidence(error: unknown): {
+  readonly rpcDiagnostics?: import("../interfaces.js").RpcDiagnostic[];
+  readonly sessionId?: string;
+} {
+  const value = error as { rpcDiagnostics?: unknown; sessionId?: unknown } | null;
+  const diagnostics = value?.rpcDiagnostics;
+  const sessionId = value?.sessionId;
+  return {
+    ...(Array.isArray(diagnostics) && diagnostics.length
+      ? { rpcDiagnostics: diagnostics as import("../interfaces.js").RpcDiagnostic[] }
+      : {}),
+    ...(typeof sessionId === "string" && sessionId ? { sessionId } : {}),
   };
 }
 

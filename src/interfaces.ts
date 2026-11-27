@@ -146,6 +146,25 @@ export interface TestReport {
   details?: string;
 }
 
+/**
+ * ADR-066: bounded, redacted diagnostics of one rejected official RPC. Only a
+ * failed Result carries them; they replace a reproduction as the evidence of
+ * a failure that happened before any model turn.
+ */
+export interface RpcDiagnostic {
+  method: string;
+  /** JSON-RPC error code, or null when the rejection carried none. */
+  code: number | null;
+  /** Redacted upstream message, at most 500 characters on one line. */
+  message: string;
+  /** `error.data.name` when it is a plain identifier. */
+  data_name: string | null;
+  /** `error.data.code` when it is a plain token, e.g. `model_not_found`. */
+  data_code: string | null;
+  /** Function names and `basename:line:column` only; every directory is removed. */
+  stack?: string;
+}
+
 export interface TaskResult {
   task_id: string;
   status: "completed" | "failed" | "cancelled" | "waiting_for_master";
@@ -169,6 +188,8 @@ export interface TaskResult {
   model?: ExecutionProfile | null;
   /** B4 additive: bounded phase timings with explicit boundaries. */
   timing?: AttemptTiming | null;
+  /** ADR-066 additive: at most 4 redacted RPC rejections; `status === "failed"` only. */
+  rpc_diagnostics?: RpcDiagnostic[];
 }
 
 export interface WorkspaceRef {

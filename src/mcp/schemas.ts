@@ -197,6 +197,16 @@ const attemptTimingSchema = z.object({
   notes: z.array(z.string()),
 });
 
+/** ADR-066: bounded, redacted rejection of one official RPC (failed Results only). */
+const rpcDiagnosticSchema = z.object({
+  method: z.string(),
+  code: z.number().int().nullable(),
+  message: z.string(),
+  data_name: z.string().nullable(),
+  data_code: z.string().nullable(),
+  stack: z.string().optional(),
+});
+
 export const taskResultSchema = z.object({
   task_id: z.string(),
   status: z.enum(["completed", "failed", "cancelled", "waiting_for_master"]),
@@ -222,6 +232,7 @@ export const taskResultSchema = z.object({
   usage: normalizedUsageSchema.nullable().optional(),
   model: executionProfileSchema.nullable().optional(),
   timing: attemptTimingSchema.nullable().optional(),
+  rpc_diagnostics: z.array(rpcDiagnosticSchema).optional(),
 });
 
 // A union at the root would cause older MCP protocol codecs to wrap the result.

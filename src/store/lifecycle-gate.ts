@@ -15,6 +15,7 @@ import { createPlatformProbe, PROCESS_IDENTITY_VERSION, type ProcessIdentity, ty
 import { terminateProcessTree, verifyProcessTreeClaimantsClean } from "../adapters/process-spawn.js";
 import { fingerprintRuntimeArtifact, type RuntimeBuildProvenance } from "../runtime/build-provenance.js";
 import { spawnClaimOnlyWorker, type ClaimOnlyWorkerProcess } from "../manager/spawn-worker.js";
+import type { SessionHistory } from "../manager/session-history.js";
 import {
   spawnAndBootstrapOnce,
   type PrivateBootstrapChild,
@@ -506,6 +507,8 @@ export interface ClaimOnlyRunInput {
   readonly attempt: number;
   readonly continuation?: Readonly<Record<string, unknown>> | null;
   readonly previousResult?: CandidateTaskResult | null;
+  /** ADR-066: whether `previousResult.session_id` may be resumed by this Attempt. */
+  readonly sessionHistory?: SessionHistory | null;
 }
 
 export interface ClaimOnlyRunResult {
@@ -2879,6 +2882,7 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
             host_profile: workerHostProfile,
             continuation: input.continuation ?? null,
             previous_result: input.previousResult ?? null,
+            ...(input.sessionHistory ? { session_history: input.sessionHistory } : {}),
             ...(usePrivateAuth ? { private_auth: {
               account: startPlanPrivateAuth!.account,
               claim: claimId,

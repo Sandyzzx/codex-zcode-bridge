@@ -4,14 +4,25 @@
 // - Provider config: prefer a valid inherited official pair
 //   (ZCODE_BUILTIN_PROVIDER_CONFIG_FILE + ZCODE_PERSONAL_PROVIDER_CONFIG_FILE);
 //   otherwise resolve the builtin from the ZCode installation and the personal
-//   config from ZCODE_DATA_BASE_DIR or the home directory.
+//   config from ZCODE_DATA_BASE_DIR or the home directory. ADR-066: when the
+//   builtin config is the installation's own bundled file (not an explicit
+//   pin), the official runtime registry of the same data root, Desktop version
+//   and Endpoint is preferred and the bundled file is the fallback.
 // - Validates paths and JSON structure only; never logs or returns file
 //   contents; never copies or edits ZCode files; never silently accepts a stub.
 import { accessSync, existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { zcodeDataBaseDir } from "./account-provider.js";
 import { BridgeError } from "./errors.js";
+import {
+  isOfficialBuiltinRegistryPin,
+  officialDesktopAppVersion,
+  officialRuntimeRegistryPath,
+  selectOfficialBuiltinRegistry,
+  type OfficialBuiltinRegistrySelection,
+} from "./official-builtin-registry.js";
 import { builtinConfigForRuntime, discoverZCodeData, discoverZCodeInstall, isAbsolutePathForPlatform, sameFileSystemPath } from "./paths.js";
 import type { RuntimeResolver, ZCodeRuntimeConfig } from "../interfaces.js";
 import { codexHostProfile, validateHostProfile, type BridgeHostProfile } from "./host-profile.js";
@@ -94,6 +105,8 @@ export interface RuntimeResolverOptions {
   /** Bridge installation directory used as the default data root; auto-detected otherwise. */
   packageRoot?: string;
   host?: BridgeHostProfile;
+  /** ADR-066 read-only observation of the Built-in registry selection, for diagnostics. */
+  onBuiltinRegistrySelection?: (selection: Readonly<OfficialBuiltinRegistrySelection>) => void;
 }
 
 export class NodeRuntimeResolver implements RuntimeResolver {
@@ -101,12 +114,14 @@ export class NodeRuntimeResolver implements RuntimeResolver {
   readonly #homeDir: string;
   readonly #packageRoot: string | null;
   readonly #host: BridgeHostProfile;
+  readonly #onBuiltinRegistrySelection: RuntimeResolverOptions["onBuiltinRegistrySelection"];
 
   constructor(options: RuntimeResolverOptions = {}) {
     this.#env = options.env ?? process.env;
     this.#homeDir = options.homeDir ?? homedir();
     this.#packageRoot = options.packageRoot ?? null;
     this.#host = validateHostProfile(options.host ?? codexHostProfile(this.#homeDir));
+    this.#onBuiltinRegistrySelection = options.onBuiltinRegistrySelection;
   }
 
   async resolve(): Promise<ZCodeRuntimeConfig> {
@@ -250,6 +265,12 @@ export class NodeRuntimeResolver implements RuntimeResolver {
         `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE must be ZCODE_HOME/v2/provider_config.json (${zcodeHome})`,
       );
     }
+    builtinConfigFile = await this.#selectBuiltinRegistry(
+      builtinConfigFile,
+      zcodeEntrypoint,
+      personalConfigFile,
+      env,
+    );
 
     // Bridge data root: explicit override or the Bridge installation directory.
     const dataOverride = env["ZCODE_BRIDGE_DATA_DIR"]?.trim();
@@ -279,6 +300,33 @@ export class NodeRuntimeResolver implements RuntimeResolver {
     if (!isReadableFile(filePath)) {
       throw new BridgeError("runtime_not_found", `${label}: ${filePath}`);
     }
+  }
+
+  /**
+   * ADR-066: the installation's own bundled file is the default, not a pin.
+   * Values left by older installers therefore follow the official runtime
+   * registry; any other explicit path stays untouched.
+   */
+  async #selectBuiltinRegistry(
+    builtinConfigFile: string,
+    zcodeEntrypoint: string,
+    personalConfigFile: string,
+    env: NodeJS.ProcessEnv,
+  ): Promise<string> {
+    if (await isOfficialBuiltinRegistryPin(builtinConfigFile, builtinConfigForRuntime(zcodeEntrypoint))) {
+      return builtinConfigFile;
+    }
+    const dataBaseDir = zcodeDataBaseDir(personalConfigFile);
+    const appVersion = dataBaseDir ? officialDesktopAppVersion(zcodeEntrypoint) : null;
+    const runtimePath = dataBaseDir && appVersion
+      ? officialRuntimeRegistryPath({ dataBaseDir, appVersion, env })
+      : null;
+    const selection = await selectOfficialBuiltinRegistry({ bundledPath: builtinConfigFile, runtimePath });
+    try { this.#onBuiltinRegistrySelection?.(selection); }
+    catch { /* diagnostics cannot change the selection */ }
+    if (selection.source !== "runtime") return builtinConfigFile;
+    this.#validateBuiltinConfig(selection.path);
+    return selection.path;
   }
 
   /**
