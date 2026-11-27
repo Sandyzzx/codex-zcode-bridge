@@ -4,6 +4,29 @@
 
 当前版本以 `package.json` 和 Release Please manifest 为准。提交推送到 `master` 后，Release Please 会在有待发布变更时创建发布 PR，并同步更新版本文件与本日志；合并发布 PR 后会生成对应 Git tag 和 GitHub Release。
 
+## [2.0.0](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-v1.7.2...codex-zcode-bridge-v2.0.0) (2026-11-27)
+
+Stable 2.0.0 将已验证的 Preview.20 `d2644817` 提升为新的稳定基线。发布身份、README、作者维护说明、真实脱敏截图与 Marketplace 名称统一为 Stable；运行时代码基线保持不变。
+
+### Features
+
+* 独立 Executor 与 Lifetime Lease 持有任务 Authority；Thin MCP、Task CLI 和单页 Task Workspace 共享同一控制面。
+* SQLite v14-only Authority，持久化 Task、Attempt、Operation、Result、Usage、Cleanup、Release 与 Wake 事实；旧 JSON Authority 与 v13 升级路径已退役。
+* Worker 通过已安装的官方 ZCode AppServer 执行；模型目录、Provider 选择与运行期 Registry 从官方当前安装和账户配置动态发现。
+* 持久 Owner Binding 与安装即生效 Auto Wake；Queue ACK、新 Turn、Master 验收和资源释放保持独立事实。
+* Master 独立验收与验收驱动 `zcode_continue` 返工；任务续作与 ZCode Session 恢复分离，用户选择的 Provider、Model 和 Reasoning 不被静默改写。
+* Task Workspace、Diagnostics、有界脱敏 RPC 失败诊断，以及精确身份、写者意图和用户授权清理保护。
+
+### Validation
+
+* Preview.20 的 Windows/Ubuntu Release Gate、SQLite 资源矩阵、Cost Lab、1199 项本地回归与真实 Coding Plan `GLM-5.4 / low` 任务通过。
+* Stable 发布验证另行覆盖版本/制品一致性、Typecheck、Build、Plugin Validation、Generated Artifact、定向测试、Markdown 链接、`git diff --check`、PR Release Gate 与 master push CI；具体运行结果以发布报告为准。
+
+### Compatibility
+
+* 支持 Windows x64 与 Node.js `24.16.0`。ZCode Desktop `3.18.2.10443`、`3.19.0.10774` 和 `4.0.0.10870` 的验证范围不同；其他安全安装可尝试运行，但不保证兼容。
+* 当前真实 Continue、Start Plan 权益与执行、Desktop 完全退出恢复、notLoaded Wake 和 Windows 重启恢复仍为 `NOT_RUN`，不得从离线测试或 CI 推断为已通过。
+
 ## [2.0.0-preview.15](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-preview-v2.0.0-preview.14...codex-zcode-bridge-preview-v2.0.0-preview.15) (2026-11-24)
 
 Preview 2.0.0-preview.15（EXPERIMENTAL / PREVIEW ONLY；发布目标为 `preview` 分支）。

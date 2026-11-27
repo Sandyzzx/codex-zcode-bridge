@@ -1,13 +1,14 @@
 # Project State
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-25（Preview.17 候选：ADR-060 Executor 恢复、ADR-061 Master 自治返工、ADR-062 单页 Task Console、ADR-063 Original E 素材与顶层 interface 图标接线）
-> Last verified: 2026-11-25，核对四条 Preview.17 工作线的代码集成、真实 Store Continue、真实 Executor 崩溃/恢复与 Worker 保护、Master 确定性策略夹具、真实 SQLite Authority + IPC + HTTP + Chromium 单页 Console（内部标识与缺失字段隐藏、单次未观测汇总、Execution completed 与 Master accepted 分离、Result 合并、单行计数筛选、最多三行任务列表、详情四段、品牌图标字节、动作前置与证据折叠）、正确图标 blob/validator、真实 Host 两轮自动 Continue/验收，以及重新安装后的真实插件详情页图标。完整 `npm test` 为 1,153 tests / 1,151 pass / 2 existing skip / 0 fail；typecheck、build、Plugin Validation 与 14 个生成物 freshness 通过。Windows/Ubuntu PR CI 与合并事实由最终交付报告记录；严格 C/D、Desktop fully exited、notLoaded、Windows 重启仍为 `NOT_RUN`。
-> Verified against: `6775d8b1`（含顶层 `interface` 图标接线修复；后续仅有文档提交，不改变运行时）。
+> Last updated: 2026-11-27（Stable 2.0.0 发布身份；运行时基线为 Preview.20）
+> Last verified: 2026-11-26，Preview.20 的官方运行期 Registry、任务 Continue 与 Session Resume 分离、RPC 诊断、Windows/Ubuntu Release Gate 与一次真实 Coding Plan `GLM-5.4 / low` 任务采用既有证据；Stable 候选只改变版本、README、AGENTS、截图和发布身份。最终本地/远程门禁与发布资产以 Stable 发布报告为准。
+> Verified against: `d26448175917bee0ade3e32ba6943ab070dac9b0`（`2.0.0-preview.20` 代码基线）。
 
 当前发布状态：
 
-- Stable `v1.7.2`：Tag `codex-zcode-bridge-v1.7.2`。
+- Stable `2.0.0`：Tag `codex-zcode-bridge-v2.0.0`。由已验证 Preview.20 `d2644817` 提升；Stable 候选统一发布身份，并把独立 Executor、Thin MCP、SQLite v14-only Authority、官方运行期 Registry、Task Continue / Session Resume 分离、Auto Wake、Master 验收驱动返工和单页 Task Workspace 提升为稳定合同。运行时实现不因本次版本提升改变。
+- 历史 Stable `v1.7.2`：Tag `codex-zcode-bridge-v1.7.2`。其旧执行链与 SQLite v13 兼容范围不再属于 2.x 生产支持。
 - 已发布 Preview `2.0.0-preview.5`：Tag `codex-zcode-bridge-preview-v2.0.0-preview.5`；追加 Official Host、R7 Runtime Events/Usage、v14 兼容迁移与 Administrative Recovery 修复。
 - Preview `2.0.0-preview.6`：Owner 已批准发布。支持声明限定为 Windows x64、Node.js `24.16.0` 与已安装的官方 ZCode Desktop `3.18.2.10443`。
 - Preview `2.0.0-preview.7`：在 Preview.6 上应用 ADR-038 整改，并修复 CI dispatch 边界与 Events summary 分页。
@@ -32,7 +33,7 @@
 
 - 一个 SQLite Task Authority（Schema v14）、一个 Lifecycle Manager、一条 Worker → 官方 Host 生产链。
 - Windows x64 生产 Worker 使用 `OfficialAppServerWorkerAdapter` 与共享 `createInstalledOfficialHostSessionFactory`。固定 Official Host module 提供只读 Start Plan 认证投影，官方 `ZCodeAgentProcessManager` 启动安装版 AppServer；模型目录和任务执行共用 Runtime Resolver、ProcessManager、ProtocolClient、认证回调和 Close 所有权。Bridge 不复制 AgentRuntime、Prompt、Tools 或 Provider。Resolver 先验证安装安全并计算精确指纹；ADR-054 后安装安全是唯一执行门禁，Manifest 匹配降为诊断，未验证版本不阻断调用（`officialProviderCapabilityWarning`），已验证版本由 README 声明。Linux、macOS 与 Windows 非 x64 在 Adapter 构造前以 `unsupported_worker_platform` fail closed；direct stdio 只保留 `ZCodeAppServerTestAdapter` 隔离测试入口。
-- 旧 JSON TaskStore/Manager/Worker、CLI Adapter 和 GitWorktreeProvider 已从 Preview 生产执行链退役；ADR-038 进一步删除旧 JSON 导入 Writer、迁移 Result/Event Reader 与不完整迁移收据专用执行方法。旧 JSON 文件不由 Bridge 读取、导入或删除，旧迁移 Task 不再作为当前查询对象。
+- 旧 JSON TaskStore/Manager/Worker、CLI Adapter 和 GitWorktreeProvider 已从 Stable 2.0.0 生产执行链退役；ADR-038 进一步删除旧 JSON 导入 Writer、迁移 Result/Event Reader 与不完整迁移收据专用执行方法。旧 JSON 文件不由 Bridge 读取、导入或删除，旧迁移 Task 不再作为当前查询对象。
 - Project Ledger、固定人类 Markdown 报告、每任务 Codex Rollout Token 采集和 Desktop task-index 私有写镜像已退役。用户已有 `.agent-ledger` 文件不由 Bridge 修改或删除；SQLite Task Authority 保持不变。
 - Result、进程退出、Cleanup 与 Release 是不同事实。官方 close resolved 不能单独授权 Release；exact Worker identity、recorded-tree scan、resource facts、Cleanup Digest 和现有 CAS 仍然必需。
 - Attention/Thin Waiter 读取同一 SQLite Authority；`zcode_doctor` 也绑定该 Authority。
@@ -45,8 +46,8 @@ Preview.7 继承 Preview.6 固定的 ZCode `3.18.2`、commit `fec975905a2abd4c07
 
 ## 套餐与认证
 
-- **Z.ai Start Plan：** Preview.6 消费固定 Official Host 的窄认证投影，再执行实时模型权益检查，并通过单任务 Private Lease 向官方 Runtime 交付认证。Start Plan 与普通模型目录条目分离，使用 `<ModelId>-StartPlan` 别名。
-- **Z.ai Coding Plan：** 保留官方 Coding Plan 账户/API Key 路径；Start Plan 预检不改变 Coding Plan 的既有注册和执行语义。所有 Provider 使用安装版官方 AppServer；生产发布仍只支持精确 Manifest 中的 3.18.2，未知安全版本只可按 ADR-042 授权用于实验探测，不声明优惠兼容。
+- **Z.ai Start Plan：** 技术适配保留，消费 Official Host 的窄认证投影，再执行实时模型权益检查，并通过单任务 Private Lease 向官方 Runtime 交付认证。Start Plan 与普通模型目录条目分离，使用 `<ModelId>-StartPlan` 别名；当前账户真实可用性未验证，不承诺权益、发放或执行成功。
+- **Z.ai Coding Plan：** 保留官方 Coding Plan 账户/API Key 路径；Start Plan 预检不改变 Coding Plan 的既有注册和执行语义。所有 Provider 使用安装版官方 AppServer 和官方运行期 Registry；ADR-054 后安装安全是唯一执行门禁，已验证 Desktop 版本及范围以 README 为准，其他安全安装可尝试但兼容性不保证。
 - 所有 Provider 最终都由安装版官方 ZCode AppServer 执行；Bridge 不复制 AppServer 的 Provider 请求构造，也不携带第二套 AppServer Runtime。
 - 账户 refresh 使用固定上游 patch 的 profile-scoped lock、lock-time reread、一次远端刷新和 CAS 发布。该协调已由合成竞争矩阵验证；真实 Coding Plan 与 Start Plan 任务已经通过官方认证路径执行。真实 OAuth refresh/账户轮换仍未单独验收；Preview 阶段接受该有限风险，失败路径不得损坏现有凭据或意外切换账户。
 - [ADR-037](decisions/ADR-037-official-zcode-authentication-reuse.md) 已接受且 Preview.6 已实现：官方 Host 统一拥有凭据解密、keyring、OAuth、账户身份和请求认证，Bridge 只消费当前任务所需的认证投影。生产源码不再包含旧的 v1/v2 AES、Keyring、账户资料、JWT payload 或 telemetry device 解析。真实 Coding Plan 完整 E2E 与 Start Plan 核心功能路径已通过，但历史完整 E2E 因 Workspace 边界保持 `FAIL`；3.18.0/3.18.1 实机安装矩阵仍为 `NOT_VERIFIED`。

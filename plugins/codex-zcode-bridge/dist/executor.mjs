@@ -26117,7 +26117,7 @@ var AppServerProxyConnector = class {
   #clientVersion;
   constructor(options = {}) {
     this.#spawnImpl = options.spawnImpl ?? spawn6;
-    this.#clientVersion = options.clientVersion ?? "2.0.0-preview.11";
+    this.#clientVersion = options.clientVersion ?? "2.0.0";
   }
   async connect(input) {
     if (!existsSync10(input.socketPath)) throw new Error("app_server_control_socket_unavailable");

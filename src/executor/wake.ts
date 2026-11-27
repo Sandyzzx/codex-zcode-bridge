@@ -528,7 +528,7 @@ export class AppServerProxyConnector implements WakeAppServerConnector {
 
   constructor(options: AppServerProxyConnectorOptions = {}) {
     this.#spawnImpl = options.spawnImpl ?? spawn;
-    this.#clientVersion = options.clientVersion ?? "2.0.0-preview.11";
+    this.#clientVersion = options.clientVersion ?? "2.0.0";
   }
 
   async connect(input: {

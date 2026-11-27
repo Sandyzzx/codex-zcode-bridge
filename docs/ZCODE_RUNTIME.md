@@ -1,9 +1,9 @@
 # ZCode 运行配置边界
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-26（Preview.20、ADR-066 官方运行期 Registry、Continue Session 分离与 RPC 诊断）
+> Last updated: 2026-11-27（Stable 2.0.0 发布身份；运行时基线为 Preview.20）
 > Last verified: 2026-11-26，核对运行期 Registry 路径选择与回退、AppServer env/Account Overlay 同源、Endpoint 环境转发、`configure-runtime.ps1` 的静态路径清除，以及 Preview.19 真实错误样本的定向测试；真实 Coding Plan `GLM-5.4 / low` E2E、完整 CI 与发布事实由 Preview.20 报告记录。
-> Verified against: `f77a6176508f20bad73b8605b44a04703bacf231`（Preview.19 基线）与 Preview.20 候选工作树；最终提交 SHA 由发布报告记录。
+> Verified against: `d26448175917bee0ade3e32ba6943ab070dac9b0`（Stable 2.0.0 运行时基线）。
 
 当前生产路径是 `node <installed-runtime>/resources/glm/zcode.cjs app-server --stdio --surface desktop`，不是历史 CLI `--prompt --json`。任务 Adapter 与模型目录探测共用 `createInstalledOfficialHostSessionFactory` 的同一启动合同；安装版兼容性由 `OfficialAppServerRuntimeResolver` 精确校验，配置项与用户设置方法见仓库 README。
 

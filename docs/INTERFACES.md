@@ -1,11 +1,11 @@
 # 当前接口与兼容边界
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-26（Preview.20：ADR-066 Continue Session 分离、`session_not_resumable` 与 `rpc_diagnostics`）
+> Last updated: 2026-11-27（Stable 2.0.0 发布身份；运行时基线为 Preview.20）
 > Last verified: 2026-11-26，核对 ADR-064 既有定向测试、Continue 无 Turn Session 不再 resume、resume 被拒显式失败且不新建 Session、Continue 持久化模型校验、RPC 诊断提取/脱敏/预算与 Result 合同。真实 Coding Plan E2E 与完整 CI 在发布阶段更新。
-> Verified against: `f77a6176508f20bad73b8605b44a04703bacf231`（Preview.19 基线）与 Preview.20 候选工作树；最终报告记录候选 SHA。
+> Verified against: `d26448175917bee0ade3e32ba6943ab070dac9b0`（Stable 2.0.0 运行时基线）。
 > ADR-039 Last verified: 2026-11-22，隔离 SQLite/MCP 覆盖 Receipt 保护、live descendant、活动 Worker、终止失败、completed/failed/waiting_for_master/cancelled 终态绑定、并发重复取消与 SQLite 历史校验；生产取消未重试。
-> ADR-047/048: Accepted for Preview；默认 `zcode_result` 保持完整，Summary 仍为显式 opt-in。
+> ADR-047/048: Accepted；默认 `zcode_result` 保持完整，Summary 仍为显式 opt-in。
 
 准确字段以 `src/interfaces.ts`、`src/mcp/schemas.ts` 与共享 `src/result-contract.mjs` 为准。[ARCHITECTURE.md](ARCHITECTURE.md) 描述实现，[SHARED_CORE.md](SHARED_CORE.md) 列出 Core API 主版本兼容策略。ADR-038 保留 13 个默认 MCP 工具、SQLite v14、32 MiB Result 与现有 Task 状态语义。
 

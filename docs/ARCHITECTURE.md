@@ -3,11 +3,11 @@
 > Status: AUTHORITATIVE
 
 > 2026-11-16 本地候选修订：[ADR-039](decisions/ADR-039-host-authorized-cancellation.md) 将取消授权与清理事实分离。queued + Launch Intent 无 Claim 时允许原子持久化取消并禁止迟到 Claim，未证明的进程/资源占用保留；Running 的 cleanup-only Hold 可经新鲜取消树证明追加消解记录，再继续原 CAS。此修复不增加 MCP 工具、Schema、重派或第二套恢复引擎。
-> Last updated: 2026-11-26（Preview.18 候选：ADR-064 Executor 启动能力、Writer Intent 身份恢复与用户授权释放）
-> Last verified: 2026-11-26，核对 Executor recovery 真实进程 13/13、SQLite writer intent 35/35、forced cleanup Store、Result paging、Web HTTP 清理与 process-lock PID reuse 定向测试。完整回归、Windows/Ubuntu Release Gate 与真实 Host 场景在集成/发布阶段记录。
-> Verified against: `57e0a70b` 基线上的候选工作树；提交后由最终报告记录候选 SHA。
+> Last updated: 2026-11-27（Stable 2.0.0 发布身份）
+> Last verified: 2026-11-26，Preview.20 的官方运行期 Registry、Task Continue / Session Resume 分离、RPC 诊断、Executor recovery、writer intent、forced cleanup Store、Result paging 与 loopback Web 定向测试；Windows/Ubuntu Release Gate 与真实 Coding Plan E2E 采用 Preview.20 既有证据。Stable 候选不改变运行时合同。
+> Verified against: `d26448175917bee0ade3e32ba6943ab070dac9b0`（Stable 2.0.0 运行时基线）。
 
-本文件描述当前 Preview.17 候选的生产架构。Windows x64 已默认切换到官方 Host 路径，R7 Runtime Events/Usage 复用同一 SQLite Authority；候选保留 ZCode 3.18.2 Host 模块、官方 Start Plan 认证投影与官方签名 runtime host，并完成 ADR-041 的 Thin Official Host 收敛。PR #116 已在 `450c18af` 合入 opt-in Result 摘要/默认完整 Result 与 Event Attempt 归属；PR #121 已在 `f51e965e` 合入无固定次数的 Recovery 观察去重与历史 v14 Hold 兼容；PR #129 已合入完整已捕获响应的 AgentReport 扫描；PR #130 已合入四种终态 Result 的统一 `zcode_cancel` 行政释放；PR #131 已合入独立 Executor、Thin MCP、Task CLI/Web 与 Async Master Handoff；ADR-059 已用持久 Owner Binding 与安装即生效 Auto Wake 取代专用 Wake 授权。Preview.17 增加 Host 请求触发的 Executor 恢复、Release 事实驱动的 Continue、Master 验收驱动返工和单页 Task Console。公开合同继续以 [INTERFACES.md](INTERFACES.md) 为准，宿主和运行配置分别见 [SHARED_CORE.md](SHARED_CORE.md) 与 [ZCODE_RUNTIME.md](ZCODE_RUNTIME.md)。
+本文件描述 Stable 2.0.0 的生产架构。Windows x64 已默认切换到官方 Host 路径，R7 Runtime Events/Usage 复用同一 SQLite Authority；稳定版保留官方 Start Plan 认证投影、官方签名 runtime host、独立 Executor、Thin MCP、单页 Task Console 与安装即生效 Auto Wake。Preview.18 增加 Host 请求触发的 Executor 恢复、精确身份锁恢复与用户授权清理；Preview.20 再增加每次 AppServer 启动重新发现的官方运行期 Registry、Task Continue / Session Resume 分离和失败 Result 的有界脱敏 RPC 诊断。公开合同继续以 [INTERFACES.md](INTERFACES.md) 为准，宿主和运行配置分别见 [SHARED_CORE.md](SHARED_CORE.md) 与 [ZCODE_RUNTIME.md](ZCODE_RUNTIME.md)。
 
 > 2026-11-24 架构状态：Owner 已接受 [ADR-045](decisions/ADR-045-async-executor-ownership.md) 与 Async Executor 总体架构，并以 [ADR-059](decisions/ADR-059-owner-binding-and-installed-auto-wake.md) 确定 Owner Binding 与 Auto Wake 合同。PR #131 的 Lifetime Lease、IPC、Thin MCP、Control-only CLI、loopback Web 与 Async Master Handoff 继续有效；`wake-policy.json`、Owner Grant、模型/Provider/Effort 匹配与 loaded/idle 前置门禁已退役。Task 受理时把 Host `_meta.threadId` 与 Task、首个 Attempt 同事务持久化，Release 后最多提交一次官方 Codex Queue；`web_notify`、ACK、`turn_started` 与 Master Accepted 分别记录。真实安装制品 + 真实 Codex Host 的非空工程 Auto Wake 闭环为 `PASS — REAL`；strict C/D、Desktop fully exited、notLoaded、Official Runtime provenance 与真实模型 Skill 遵循率仍为 `NOT_RUN`。
 
@@ -56,7 +56,7 @@ MCP tools                                      │ queue / cancel / read-only re
                               independent Cleanup proof -> Release
 ```
 
-当前 Preview 中 `SqliteLifecycleMcpAuthority` 仍由 MCP Host 进程持有。PR 2.5 candidate 不改变这个历史事实，但把候选分支的 shipped MCP 入口收窄为 Thin MCP：`ExecutorControlClient` 连接独立 Executor，生产 `SqliteLifecycleMcpAuthority`、SQLite writer、Worker IPC、Official Runtime 和 Recovery 均迁入 Executor；测试专用 legacy Host harness 不进入生产包。`lifecycle-gate.ts` 负责 Bootstrap、进程身份、私有 Claim/Result/Interaction 管道、Schema 校验和清理证明；SQLite Store 负责事务、Task/Attempt/Operation、Result digest、Capacity 和不可覆盖事件。
+Stable 2.0.0 的 shipped MCP 入口是 Thin MCP：`ExecutorControlClient` 连接独立 Executor，生产 `SqliteLifecycleMcpAuthority`、SQLite writer、Worker IPC、Official Runtime 和 Recovery 均由 Executor 持有；测试专用 legacy Host harness 不进入生产包。`lifecycle-gate.ts` 负责 Bootstrap、进程身份、私有 Claim/Result/Interaction 管道、Schema 校验和清理证明；SQLite Store 负责事务、Task/Attempt/Operation、Result digest、Capacity 和不可覆盖事件。
 
 [ADR-060](decisions/ADR-060-executor-crash-recovery-and-release-fact-continue.md) 在 Thin MCP 首次收到控制通道
 `EXECUTOR_UNAVAILABLE` 时触发一次性恢复，不增加常驻 Supervisor 或后台轮询。
@@ -123,6 +123,6 @@ Store 在任何可写 SQLite 句柄之前执行只读 `PRAGMA user_version` 预�
 
 ## 发布边界
 
-`2.0.0-preview.18` 的 `package.json`、`package-lock.json`、插件 manifest、MCP server version、固定官方 Host、BOM、Runtime Events Schema、图标资产与 Administrative Recovery CLI 应由同一候选提交构建。Preview 支持声明限定为 Windows x64、Node.js `24.16.0` 和已安装的官方 ZCode Desktop `3.18.2.10443`。Preview.18 保持 v14 数据合同（`task_owner_bindings` 为同一 Authority 的加性扩展），并包含独立 Executor、Thin MCP、单页 Task Console、Host 请求触发的崩溃恢复、持久 Owner Binding、安装即生效的 Auto Wake（默认开启，可关闭）、Async Master Handoff 与验收驱动返工。合并到 `preview` 不等同于创建 Tag、GitHub Release 或 Stable 支持声明。
+Stable `2.0.0` 的 `package.json`、`package-lock.json`、插件 manifest、MCP server version、固定官方 Host、BOM、Runtime Events Schema、图标资产与 Administrative Recovery CLI 必须来自同一发布提交。支持声明为 Windows x64 与 Node.js `24.16.0`；ZCode Desktop `3.18.2.10443`、`3.19.0.10774` 与 `4.0.0.10870` 的验证范围不同，其他安全安装按 ADR-054 运行但不保证兼容。Stable 保持 v14 数据合同（`task_owner_bindings` 为同一 Authority 的加性扩展），并包含独立 Executor、Thin MCP、单页 Task Console、Host 请求触发的崩溃恢复、持久 Owner Binding、安装即生效的 Auto Wake（默认开启，可关闭）、Async Master Handoff 与验收驱动返工。
 
 Preview.6 的固定源码树重建、ordered-patch replay、same-source-tree repeatability、BOM/native load、clean install、签名 helper ProcessManager smoke 和带数据的升级回滚为 `PASS`。Preview.7 的 Windows/Ubuntu Release Gate、SQLite 矩阵、生成物 Freshness、CI dispatch 边界与 MCP Events 分页为 `PASS`；真实模型流量不重复执行。跨机器复现仍为 `NOT_VERIFIED`，仅作为 Preview 阶段风险接受；完整 ZCode 产品资源图不进入 Bridge 支持范围。真实 Coding Plan 完整 E2E 和 Start Plan 核心功能路径已通过；历史 Start Plan 完整 E2E 因 Workspace 边界保持 `FAIL`，一般 Desktop Main 独立性、真实 OAuth refresh 与 3.18.0/3.18.1 实机安装组合仍未验证。3.18.0/3.18.1 是 `NOT_VERIFIED`，不是已证明不兼容。
