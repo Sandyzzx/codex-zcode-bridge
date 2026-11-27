@@ -6,7 +6,6 @@ on:
   push:
     branches:
       - master
-      - preview
   workflow_dispatch:
     inputs:
       release_gate:

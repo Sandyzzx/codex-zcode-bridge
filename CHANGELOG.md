@@ -1,12 +1,10 @@
 # 更新日志
 
-本文件记录面向用户的变更。版本号遵循语义化版本，并由 Release Please 根据 Conventional Commits 生成发布记录：`fix:` 升补丁号，`feat:` 升次版本号，`BREAKING CHANGE:` 升主版本号。
-
-当前版本以 `package.json` 和 Release Please manifest 为准。提交推送到 `master` 后，Release Please 会在有待发布变更时创建发布 PR，并同步更新版本文件与本日志；合并发布 PR 后会生成对应 Git tag 和 GitHub Release。
+本文件记录面向用户的发布变更。Stable 2.0.0 是当前正式版本，项目已进入冻结维护阶段；不自动创建新的版本提交、Tag 或 GitHub Release。历史版本段落保留为变更记录，不代表当前支持范围。
 
 ## [2.0.0](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-v1.7.2...codex-zcode-bridge-v2.0.0) (2026-11-27)
 
-Stable 2.0.0 将已验证的 Preview.20 `d2644817` 提升为新的稳定基线。发布身份、README、作者维护说明、真实脱敏截图与 Marketplace 名称统一为 Stable；运行时代码基线保持不变。
+Stable 2.0.0 将已完成的 2.0 运行时基线提升为新的稳定版本。发布身份、README、作者维护说明、真实脱敏截图与 Marketplace 名称统一为 Stable。
 
 ### Features
 
@@ -19,7 +17,7 @@ Stable 2.0.0 将已验证的 Preview.20 `d2644817` 提升为新的稳定基线�
 
 ### Validation
 
-* Preview.20 的 Windows/Ubuntu Release Gate、SQLite 资源矩阵、Cost Lab、1199 项本地回归与真实 Coding Plan `GLM-5.4 / low` 任务通过。
+* 2.0 运行时基线的 Windows/Ubuntu Release Gate、SQLite 资源矩阵、Cost Lab、1199 项本地回归与真实 Coding Plan `GLM-5.4 / low` 任务通过。
 * Stable 发布验证另行覆盖版本/制品一致性、Typecheck、Build、Plugin Validation、Generated Artifact、定向测试、Markdown 链接、`git diff --check`、PR Release Gate 与 master push CI；具体运行结果以发布报告为准。
 
 ### Compatibility

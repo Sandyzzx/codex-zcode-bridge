@@ -1,9 +1,9 @@
 # Bridge Task Workspace
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-25（Preview.17 最终 UI 冻结）
-> Last verified: 2026-11-25，核对内部 Task/工作流标识隐藏、缺失字段隐藏与单次未观测汇总、Attempt 与 Result 合并、Execution completed 与 Master accepted 分离、Workspace 简称与按需完整路径、单行计数筛选、最多三行任务列表、动作前置、逐 Attempt Usage/Effort、Master 与 Worker 分栏、Technical details 折叠、完整 Events 分页、真实 SQLite Authority 到 IPC/HTTP/Chromium 的 Console projection、Continue/Rework/Cleanup recovery 能力门、原始 Z 图标字节绑定、Diagnostics 零外部请求、双语、明暗主题与窄屏布局；真实模型、真实 Desktop、真实 Queue Wake 与 Master Usage 不在已验证范围。
-> Verified against: `3ddc6f78`（Preview.17 最终 UI 冻结；最终候选提交与 CI 结果由交付报告记录）
+> Last updated: 2026-11-27（Stable 2.0.0 结项清理）
+> Last verified: 2026-11-27，核对当前权威文档中的 Task Workspace 投影、动作门槛、HTTP/安全边界和 Runtime Auto-Learn 合同；真实 SQLite Authority、Executor IPC 与 Chromium 仍由既有定向测试覆盖，未执行新的真实模型、Desktop 或 Queue Wake 验收。
+> Verified against: `dfee062e7c30261763f642106d9ae18b48ce1ae0`（`codex-zcode-bridge-v2.0.0`）
 
 Task Workspace 是 Executor Control Pipe 的本地可视化 Adapter。它只有一个
 loopback Origin、一个 HTTP Server 和一个单页界面，不创建 Task、Manager、
@@ -214,13 +214,13 @@ Runtime 证据存储在：
 Billing 证据。证据去重并最多保留 200 条；不同 fingerprint 不继承结论。
 Candidate Report 只生成待 Owner 审核的建议，不修改生产 Manifest。
 
-完整规则见 [ADR-053](decisions/ADR-053-runtime-auto-learn-compatibility.md)。
+Runtime Auto-Learn 只提供只读证据、Candidate Report 和待 Owner 审核的建议；不会修改生产 Manifest、自动提高 Provider/套餐结论或发起真实模型请求。任何真实 Provider/Billing 读取都必须由用户显式触发并确认。
 
 ## 已知边界
 
 - 当前 Chromium E2E 使用真实 SQLite Authority、Executor IPC、HTTP 和
   Chromium，但 Worker/Result 是 synthetic fixture；不是真实模型证据。
-- 真实 Desktop 全退、真实 Queue Wake、Master Usage、逐 Attempt Coding Plan
-  settlement/discount 和完整 CI 仍需要后续验收。
-- 真实 Provider/Billing 读取和真实 Coding Plan 验证仍必须由用户显式点击
-  并确认；本轮 `NOT_RUN`，定向 synthetic Worker 证据不提升为真实账单结论。
+- 真实 Desktop 全退、真实 Queue Wake、Master Usage 和逐 Attempt Coding Plan
+  settlement/discount 仍为 `NOT_RUN`。
+- 真实 Provider/Billing 读取和真实 Coding Plan 验证必须由用户显式点击并确认；
+  当前 `NOT_RUN`，定向 synthetic Worker 证据不提升为真实账单结论。

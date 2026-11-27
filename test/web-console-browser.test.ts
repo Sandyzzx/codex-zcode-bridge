@@ -511,7 +511,7 @@ test("real SQLite Authority drives the single-page Task Console in Chromium", {
     page.on("pageerror", (error: Error) => pageErrors.push(error.message));
     page.on("request", (request: PlaywrightRequest) => pageRequests.push(request.url()));
     const evidenceDirectory = process.env.BRIDGE_BROWSER_EVIDENCE_DIR
-      ?? path.resolve("docs/reports/preview17-c-webui-20261125/screenshots");
+      ?? path.resolve(".test-build/browser-evidence");
     mkdirSync(evidenceDirectory, { recursive: true });
 
     await page.goto(`${address.origin}/?task_id=${seeded.doneTaskId}`, { waitUntil: "domcontentloaded" });
