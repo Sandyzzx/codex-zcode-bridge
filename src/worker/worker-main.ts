@@ -7,87 +7,146 @@ import { prepareWorkerResultFrameParts } from "../result-contract.mjs";
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, createWriteStream, readFileSync, writeFileSync, writeSync } from "node:fs";
 import { Socket } from "node:net";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { BRIDGE_WORKER_LAUNCH_MARKER, fingerprintRuntimeArtifact, verifyWorkerProvenance } from "../runtime/build-provenance.js";
-import { validateHostProfile, type BridgeHostProfile } from "../host/profile.js";
+import { validateHostProfile, type BridgeHostProfile } from "../runtime/host-profile.js";
 import { createPlatformProbe } from "../runtime/process-probe.js";
 import { StartPlanSecretRedactor } from "../runtime/start-plan-secret-redactor.js";
-import type { TaskPackage, WorkspaceRef } from "../interfaces.js";
+import type { TaskPackage, WorkspaceRef, ZCodeRuntimeConfig } from "../interfaces.js";
 import type {
+  OfficialHostModuleSource,
+  OfficialHostPackagedAssets,
+} from "../adapters/official-host-adapter.js";
+import type { OfficialInstalledRuntimeResolver } from "../adapters/official-app-server-adapter.js";
+import type { ZCodeAppServerAdapterOptions } from "../adapters/zcode-app-server-adapter.js";
+import {
+  BIGMODEL_START_PLAN_PROVIDER_ID,
+} from "../runtime/account-provider.js";
+import {
+  createOfficialProviderRuntimeAuthDispatcher,
+  createOfficialProviderRuntimeAuthResolver,
+} from "../runtime/official-provider-runtime-auth.js";
+import {
+  selectOfficialProviderRuntime,
+  selectProductionAdapter,
+} from "./production-adapter-selection.js";
+import type {
+  CandidateAdapterCleanupEvidence,
   CandidateExecutionCleanupProof,
   CandidateTaskResult,
   CandidateWorkerResultFrame,
 } from "../sqlite-candidate/wp6c/fake-result-adapter.js";
+import {
+  continuationSessionId,
+  validateSessionHistoryEnvelope,
+  type SessionHistory,
+} from "../manager/session-history.js";
 
 const MAX_NODE_TIMER_DELAY_MS = 2_147_483_647;
 
-const workerArgs = process.argv.slice(2);
-const bridgeLaunchMarker = workerArgs.at(-1) === BRIDGE_WORKER_LAUNCH_MARKER;
-const interactionMode = workerArgs.includes("--bridge-sqlite-interaction-v1");
-const privateAuthMode = workerArgs.includes("--bridge-sqlite-private-auth-v1");
-const dropAfterPrepared = workerArgs.includes("--bridge-sqlite-interaction-drop-after-prepared-v1");
-const positionalArgs = bridgeLaunchMarker ? workerArgs.slice(0, -1).filter(argument =>
-  argument !== "--bridge-sqlite-interaction-v1" && argument !== "--bridge-sqlite-interaction-drop-after-prepared-v1" && argument !== "--bridge-sqlite-private-auth-v1") : workerArgs;
-if (bridgeLaunchMarker && positionalArgs.length === 0) {
-  let claimOnlyStage = "start";
-  let interactionStreamsCreated = false;
-  // CI evidence: the Worker once died silently with exit code 1 after the
-  // Result frame was written. Worker stderr is a pipe here, so the default
-  // fatal report is an async write that can be truncated by the immediate
-  // exit. Flush a bounded, sanitized reason synchronously and keep the same
-  // exit-code semantics the Manager verifies.
-  const writeFatalDiagnostic = (origin: string, error: unknown): void => {
-    const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-    const frames = error instanceof Error && typeof error.stack === "string"
-      ? error.stack.split("\n").slice(1, 6).join("\n") : "";
-    writeDiagnostic(`[bridge-worker] fatal ${origin} at ${claimOnlyStage}: ${message.slice(0, 300)}\n${frames.slice(0, 1_200)}\n`);
-  };
-  const reallyExit = (process as NodeJS.Process & { reallyExit(code?: number): void }).reallyExit.bind(process);
-  process.on("exit", (code) => {
-    // Keep the final lifecycle marker synchronous: Manager-side result and
-    // close decisions depend on the process exit code, not on async stderr.
-    writeDiagnostic(`[bridge-worker] exit code=${String(code)}\n`);
-  });
-  process.on("uncaughtException", (error) => { writeFatalDiagnostic("uncaught_exception", error); reallyExit(1); });
-  process.on("unhandledRejection", (reason) => { writeFatalDiagnostic("unhandled_rejection", reason); reallyExit(1); });
-  try {
-    if (dropAfterPrepared && !interactionMode) throw new Error("interaction test mode required");
-    await runClaimOnlyHandshake({ interactionMode, privateAuthMode, dropAfterPrepared, onStage: (stage) => {
-      claimOnlyStage = stage;
-      // The interaction harness uses only fixed diagnostic stage labels; it
-      // never writes Bootstrap, identity, request, or token values to stderr.
-      if (interactionMode) writeDiagnostic(`[bridge-worker] claim-only stage=${stage}\n`);
-    }, onInteractionStreamsCreated: () => { interactionStreamsCreated = true; } });
-    process.exitCode = 0;
-  } catch (error) {
-    // Do not print a Bootstrap or token-derived value. A Claim-only Worker has
-    // no Adapter/TaskStore path and exits closed on every invalid handshake.
-    if (interactionMode && !interactionStreamsCreated) {
-      // Inherited interaction pipes are owned by this test-only harness. Close
-      // them on every failure so setting exitCode cannot leave a detached
-      // Worker alive solely because its unused descriptors remain open.
-      for (const fd of [7, 8, 9]) {
-        try { closeSync(fd); } catch { /* descriptor may already be closed */ }
-      }
-    }
-    if (privateAuthMode) for (const fd of [10, 11, 12, 13]) { try { closeSync(fd); } catch { /* already closed */ } }
-    const failureCode = error && typeof error === "object" && "code" in error
-      && typeof (error as { readonly code?: unknown }).code === "string"
-      ? (error as { readonly code: string }).code : "unclassified";
-    writeDiagnostic(`[bridge-worker] claim-only handshake rejected${interactionMode ? ` at ${claimOnlyStage} code=${failureCode}` : ""}\n`);
-    process.exitCode = 3;
-  }
-  // At this point the Result frame has been written synchronously and owned
-  // interaction streams are closed. CI repeatedly showed that relying on the
-  // event loop to drain can leave teardown handles alive (or expose the idle
-  // Worker to a cleanup race), so exit deterministically with the same code
-  // the Manager already verifies.
-  process.exit(process.exitCode ?? 0);
-} else {
-  console.error("usage: Worker requires the SQLite private lifecycle channels");
-  process.exit(2);
+export interface WorkerMainDependencies {
+  /** Test-owned import boundary; production invokes the fixed Host module. */
+  readonly testOnlyOfficialHostModule?: OfficialHostModuleSource;
+  /** Test-owned asset root used by the test Worker wrapper. */
+  readonly testOnlyWorkerModuleUrl?: string | URL;
+  /** Test-owned installed-runtime descriptor used by the loopback Worker. */
+  readonly testOnlyOfficialRuntimeResolver?: OfficialInstalledRuntimeResolver;
+  /** Test-owned packaged Host manager assets used with the loopback module. */
+  readonly testOnlyOfficialHostAssets?: OfficialHostPackagedAssets;
+  /** Test-owned direct Adapter wrapper for the retained synthetic rollback suite. */
+  readonly testOnlyLegacyDirectAdapter?: true;
+  /** Test-owned probes used only by the loopback Host wrapper. */
+  readonly testOnlyProbe?: ZCodeAppServerAdapterOptions["probe"];
+  readonly testOnlyVerifyTreeClean?: ZCodeAppServerAdapterOptions["verifyTreeClean"];
 }
 
-async function runClaimOnlyHandshake(options: { readonly interactionMode: boolean; readonly privateAuthMode: boolean; readonly dropAfterPrepared: boolean;
+export async function runWorkerMain(
+  dependencies: WorkerMainDependencies = {},
+  workerArgs: readonly string[] = process.argv.slice(2),
+): Promise<void> {
+  const bridgeLaunchMarker = workerArgs.at(-1) === BRIDGE_WORKER_LAUNCH_MARKER;
+  const interactionMode = workerArgs.includes("--bridge-sqlite-interaction-v1");
+  const privateAuthMode = workerArgs.includes("--bridge-sqlite-private-auth-v1");
+  const runtimeEventMode = workerArgs.includes("--bridge-sqlite-runtime-events-v1");
+  const dropAfterPrepared = workerArgs.includes("--bridge-sqlite-interaction-drop-after-prepared-v1");
+  const positionalArgs = bridgeLaunchMarker ? workerArgs.slice(0, -1).filter(argument =>
+    argument !== "--bridge-sqlite-interaction-v1" && argument !== "--bridge-sqlite-interaction-drop-after-prepared-v1"
+      && argument !== "--bridge-sqlite-private-auth-v1" && argument !== "--bridge-sqlite-runtime-events-v1") : workerArgs;
+  if (bridgeLaunchMarker && positionalArgs.length === 0) {
+    let claimOnlyStage = "start";
+    let interactionStreamsCreated = false;
+    // CI evidence: the Worker once died silently with exit code 1 after the
+    // Result frame was written. Worker stderr is a pipe here, so the default
+    // fatal report is an async write that can be truncated by the immediate
+    // exit. Flush a bounded, sanitized reason synchronously and keep the same
+    // exit-code semantics the Manager verifies.
+    const writeFatalDiagnostic = (origin: string, error: unknown): void => {
+      const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+      const frames = error instanceof Error && typeof error.stack === "string"
+        ? error.stack.split("\n").slice(1, 6).join("\n") : "";
+      writeDiagnostic(`[bridge-worker] fatal ${origin} at ${claimOnlyStage}: ${message.slice(0, 300)}\n${frames.slice(0, 1_200)}\n`);
+    };
+    const reallyExit = (process as NodeJS.Process & { reallyExit(code?: number): void }).reallyExit.bind(process);
+    process.on("exit", (code) => {
+      // Keep the final lifecycle marker synchronous: Manager-side result and
+      // close decisions depend on the process exit code, not on async stderr.
+      writeDiagnostic(`[bridge-worker] exit code=${String(code)}\n`);
+    });
+    process.on("uncaughtException", (error) => { writeFatalDiagnostic("uncaught_exception", error); reallyExit(1); });
+    process.on("unhandledRejection", (reason) => { writeFatalDiagnostic("unhandled_rejection", reason); reallyExit(1); });
+    try {
+      if (dropAfterPrepared && !interactionMode) throw new Error("interaction test mode required");
+      if (runtimeEventMode && !interactionMode) throw new Error("runtime events require interaction mode");
+      await runClaimOnlyHandshake({
+        interactionMode,
+        privateAuthMode,
+        runtimeEventMode,
+        dropAfterPrepared,
+        dependencies,
+        onStage: (stage) => {
+          claimOnlyStage = stage;
+          // The interaction harness uses only fixed diagnostic stage labels; it
+          // never writes Bootstrap, identity, request, or token values to stderr.
+          if (interactionMode) writeDiagnostic(`[bridge-worker] claim-only stage=${stage}\n`);
+        },
+        onInteractionStreamsCreated: () => { interactionStreamsCreated = true; },
+      });
+      process.exitCode = 0;
+    } catch (error) {
+      // Do not print a Bootstrap or token-derived value. A Claim-only Worker has
+      // no Adapter/TaskStore path and exits closed on every invalid handshake.
+      if (interactionMode && !interactionStreamsCreated) {
+        // Inherited interaction pipes are owned by this test-only harness. Close
+        // them on every failure so setting exitCode cannot leave a detached
+        // Worker alive solely because its unused descriptors remain open.
+        for (const fd of [7, 8, 9]) {
+          try { closeSync(fd); } catch { /* descriptor may already be closed */ }
+        }
+      }
+      if (privateAuthMode) for (const fd of [10, 11, 12, 13]) { try { closeSync(fd); } catch { /* already closed */ } }
+      if (runtimeEventMode) try { closeSync(14); } catch { /* already closed */ }
+      const failureCode = error && typeof error === "object" && "code" in error
+        && typeof (error as { readonly code?: unknown }).code === "string"
+        ? (error as { readonly code: string }).code : "unclassified";
+      writeDiagnostic(`[bridge-worker] claim-only handshake rejected${interactionMode ? ` at ${claimOnlyStage} code=${failureCode}` : ""}\n`);
+      process.exitCode = 3;
+    }
+    // At this point the Result frame has been written synchronously and owned
+    // interaction streams are closed. CI repeatedly showed that relying on the
+    // event loop to drain can leave teardown handles alive (or expose the idle
+    // Worker to a cleanup race), so exit deterministically with the same code
+    // the Manager already verifies.
+    process.exit(process.exitCode ?? 0);
+  } else {
+    console.error("usage: Worker requires the SQLite private lifecycle channels");
+    process.exit(2);
+  }
+}
+
+async function runClaimOnlyHandshake(options: { readonly interactionMode: boolean; readonly privateAuthMode: boolean;
+  readonly runtimeEventMode: boolean; readonly dropAfterPrepared: boolean;
+  readonly dependencies: WorkerMainDependencies;
   readonly onStage?: (stage: string) => void; readonly onInteractionStreamsCreated?: () => void }): Promise<void> {
   options.onStage?.("provenance verification");
   if (process.argv.at(-1) !== BRIDGE_WORKER_LAUNCH_MARKER) throw new Error("launch marker required");
@@ -164,6 +223,19 @@ async function runClaimOnlyHandshake(options: { readonly interactionMode: boolea
   if (options.privateAuthMode !== Boolean(execution.private_auth)) throw new Error("private auth mode mismatch");
 
   let closeInteraction: (() => Promise<void>) | undefined;
+  let runtimeEvents: CandidateRuntimeEventPublisher | undefined;
+  if (options.runtimeEventMode) {
+    options.onStage?.("runtime event channel setup");
+    const { createCandidateWorkerRuntimeEventChannel } = await import("../sqlite-candidate/wp6b2b1/runtime-event-channel.mjs");
+    const stream = createWriteStream(process.execPath, { fd: 14 });
+    try {
+      const sender = await createCandidateWorkerRuntimeEventChannel({ writeStream: stream });
+      runtimeEvents = createBoundedRuntimeEventPublisher(sender);
+    } catch (error) {
+      stream.destroy();
+      throw error;
+    }
+  }
   let candidateInteraction: Awaited<ReturnType<typeof import("../sqlite-candidate/wp6b2b1/interaction-channel.mjs").createCandidateWorkerInteractionChannel>> | undefined;
   if (options.interactionMode) {
     options.onStage?.("interaction channel setup");
@@ -214,11 +286,24 @@ async function runClaimOnlyHandshake(options: { readonly interactionMode: boolea
     options.onStage?.(execution.adapter_mode === "test_fake" ? "test adapter start" : "zcode adapter start");
     const resultFrame = execution.adapter_mode === "test_fake"
       ? await runExplicitFakeAdapter(bootstrap, execution, candidateInteraction)
-      : await runZCodeAdapter(bootstrap, execution, candidateInteraction, options.privateAuthMode ? identity : undefined);
+      : await runZCodeAdapter(
+          bootstrap,
+          execution,
+          candidateInteraction,
+          options.privateAuthMode ? identity : undefined,
+          options.dependencies,
+          runtimeEvents,
+        );
     options.onStage?.("adapter result frame prepared");
+    // A close failure means at least one queued event may not be durable. Do
+    // not emit a success-looking Result frame; the Manager must leave the
+    // existing Operation in its Recovery/Hold path.
+    await runtimeEvents?.close();
+    options.onStage?.("runtime event channel closed");
     writePrivateFrame(6, resultFrame, prepareWorkerResultFrameParts(resultFrame));
     options.onStage?.("adapter result frame written");
   } finally {
+    await closeRuntimeEvents(runtimeEvents);
     // The Manager closes its interaction endpoints after observing the result.
     // Emit the result first so Worker shutdown does not wait on its own peer.
     options.onStage?.("worker interaction close start");
@@ -242,6 +327,8 @@ interface SqliteExecutionEnvelope {
   readonly host_profile: BridgeHostProfile;
   readonly continuation: Readonly<Record<string, unknown>> | null;
   readonly previous_result: CandidateTaskResult | null;
+  /** ADR-066: present only when the previous Result carries a Session ID. */
+  readonly session_history?: SessionHistory;
   readonly private_auth?: {
     readonly account: string;
     readonly claim: string;
@@ -257,8 +344,9 @@ function validateExecutionEnvelope(value: unknown, bootstrap: {
 }, profile: { readonly id: string; readonly sessionMode: "yolo"; readonly unrestricted: false }): SqliteExecutionEnvelope {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("post-Claim execution envelope is required");
   const envelope = value as Record<string, unknown>;
-  const envelopeKeys = Object.keys(envelope).sort().join("|");
-  if (!["adapter_mode|attempt|continuation|execution_profile_id|generation|host_profile|operation_id|policy_snapshot_digest|previous_result|protocol|task|task_id|workspace_ref", "adapter_mode|attempt|continuation|execution_profile_id|generation|host_profile|operation_id|policy_snapshot_digest|previous_result|private_auth|protocol|task|task_id|workspace_ref"].includes(envelopeKeys)
+  // `private_auth` and `session_history` are independent optional keys.
+  const envelopeKeys = Object.keys(envelope).filter((key) => key !== "private_auth" && key !== "session_history").sort().join("|");
+  if (envelopeKeys !== "adapter_mode|attempt|continuation|execution_profile_id|generation|host_profile|operation_id|policy_snapshot_digest|previous_result|protocol|task|task_id|workspace_ref"
     || envelope.protocol !== "bridge-sqlite-execution-envelope-v1"
     || envelope.operation_id !== bootstrap.operation_id || envelope.task_id !== bootstrap.task_id
     || envelope.attempt !== bootstrap.attempt || envelope.generation !== bootstrap.generation
@@ -288,6 +376,14 @@ function validateExecutionEnvelope(value: unknown, bootstrap: {
       throw new Error("private auth binding rejected");
     }
   }
+  if (envelope.session_history !== undefined) {
+    const previousSessionId = (envelope.previous_result as { session_id?: unknown } | null)?.session_id;
+    validateSessionHistoryEnvelope(envelope.session_history, {
+      attempt: bootstrap.attempt,
+      continuation: envelope.continuation,
+      previousResultSessionId: typeof previousSessionId === "string" ? previousSessionId : null,
+    });
+  }
   validateHostProfile(envelope.host_profile as BridgeHostProfile);
   return envelope as unknown as SqliteExecutionEnvelope;
 }
@@ -315,23 +411,70 @@ type CachedPrivateAuth = PrivateAuthScope & {
   readonly expiresAt: number;
 };
 
+type CandidateRuntimeObservedEvent = Readonly<{
+  type: string;
+  summary: string;
+  details?: Record<string, unknown>;
+}>;
+type CandidateRuntimeEventPublisher = Readonly<{
+  publish(event: CandidateRuntimeObservedEvent): void;
+  setOutputSanitizer(sanitize: (value: string, options?: { readonly final?: boolean }) => string): void;
+  close(): Promise<void>;
+}>;
+
 async function runZCodeAdapter(
   bootstrap: { readonly operation_id: string; readonly task_id: string; readonly attempt: number; readonly generation: number; readonly workspace_ref: string; readonly policy_snapshot_digest: string },
   execution: SqliteExecutionEnvelope,
   interaction: Awaited<ReturnType<typeof import("../sqlite-candidate/wp6b2b1/interaction-channel.mjs").createCandidateWorkerInteractionChannel>> | undefined,
   workerIdentity?: import("../runtime/process-probe.js").ProcessIdentity,
+  dependencies: WorkerMainDependencies = {},
+  runtimeEvents?: CandidateRuntimeEventPublisher,
 ): Promise<CandidateWorkerResultFrame> {
   if (execution.adapter_mode !== "zcode_app_server") throw new Error("real ZCode Adapter mode is required");
-  const { ZCodeAppServerAdapter } = await import("../adapters/zcode-app-server-adapter.js");
+  const { OfficialAppServerWorkerAdapter } = await import("../adapters/official-app-server-adapter.js");
+  const {
+    isOfficialCodingPlanProvider,
+    OFFICIAL_CODING_PLAN_PROVIDER_ID,
+  } = await import("../runtime/official-app-server-runtime.js");
+  const { loadPersistedRuntimeEnvironment } = await import("../runtime/resolver.js");
+  const { resolveSessionPreferences } = await import("../runtime/session-preferences.js");
+  const { ZCodeAppServerTestAdapter } = await import("../adapters/zcode-app-server-adapter.js");
   const { buildTaskResult } = await import("../manager/normalize.js");
+  const { normalizeUsage, phaseDuration } = await import("../usage/normalize.js");
   const startedAt = new Date().toISOString();
   let outcome: import("../adapters/run-outcome.js").ZCodeRunOutcome | null = null;
-  let failure: { code: string; message: string } | null = null;
+  let failure: {
+    code: string;
+    message: string;
+    rpcDiagnostics?: import("../interfaces.js").RpcDiagnostic[];
+    sessionId?: string;
+  } | null = null;
+  const modelProfile: import("../interfaces.js").ExecutionProfile = {
+    executor: "zcode",
+    provider_id: null,
+    model_id: null,
+    requested_model: execution.task.model
+      ? `${execution.task.model.provider_id}/${execution.task.model.model_id}`
+      : null,
+    requested_reasoning_level: execution.task.model?.reasoning_level ?? null,
+    effective_reasoning_level: null,
+    effective_reasoning_level_source: "not_reported",
+    selection_source: null,
+    effective_at: null,
+    session_id: null,
+    turn_id: null,
+  };
+  let turnStartedAt: string | null = null;
+  let turnCompletedAt: string | null = null;
+  let rpcAcceptedAt: string | null = null;
   let cachedAuth: CachedPrivateAuth | null = null;
   let privateAuthPending: { readonly scope: PrivateAuthScope; readonly promise: Promise<CachedPrivateAuth> } | null = null;
   let privateAuthExpiryTimer: NodeJS.Timeout | undefined;
   let privateAuthStarted = false;
   const secretRedactor = execution.private_auth ? new StartPlanSecretRedactor() : undefined;
+  if (secretRedactor && runtimeEvents) {
+    runtimeEvents.setOutputSanitizer((value, options) => secretRedactor.streamText(value, options));
+  }
   let privateAuthParentLive = false;
   let privateAuthConfirmed = false;
   let notifyPrivateAuthConfirmation: (() => void) | undefined;
@@ -442,7 +585,14 @@ async function runZCodeAdapter(
     signal.addEventListener("abort", () => { if (cachedAuth === current) clearCachedAuth(); }, { once: true });
     return current;
   };
-  const adapter = new ZCodeAppServerAdapter({
+  let providerAuthModel = execution.task.model;
+  let providerRuntimeAuthConfig: ZCodeRuntimeConfig | undefined;
+  let providerRuntimeAuthResolver:
+    | ReturnType<typeof createOfficialProviderRuntimeAuthResolver>
+    | undefined;
+  const providerRuntimeAuthDispatcher = createOfficialProviderRuntimeAuthDispatcher();
+  const resolveProviderRuntimeAuth = providerRuntimeAuthDispatcher.resolve;
+  const adapterOptions: ZCodeAppServerAdapterOptions = {
     host: execution.host_profile,
     // Manager resolved this attempt's effective budget before dispatch.
     timeoutMs: execution.task.timeout_ms,
@@ -455,11 +605,56 @@ async function runZCodeAdapter(
       writeDiagnostic(`[bridge-worker] failure-facts ${JSON.stringify(facts)}\n`);
     },
     executionProfileId: execution.execution_profile_id,
+    ...(dependencies.testOnlyProbe ? { probe: dependencies.testOnlyProbe } : {}),
+    ...(dependencies.testOnlyVerifyTreeClean ? { verifyTreeClean: dependencies.testOnlyVerifyTreeClean } : {}),
     ...(execution.private_auth ? { startPlanProviderEntitled: execution.private_auth.entitled } : {}),
+    resolveProviderRuntimeAuth,
+    onRuntimeAuthDiagnostic: (facts) => {
+      writeDiagnostic(`[bridge-worker] runtime-auth ${JSON.stringify(facts)}\n`);
+    },
     onEvent: (event) => {
+      runtimeEvents?.publish(event);
+      if (event.type === "official_runtime_verified"
+        || event.type === "official_runtime_experimental"
+        || event.type === "official_runtime_manifest_unverified") {
+        const digest = event.details?.["bundle_sha256"];
+        if (typeof digest === "string" && /^[0-9a-f]{64}$/u.test(digest)) {
+          writeDiagnostic(`[bridge-worker] installed-runtime ${bootstrap.task_id} ${bootstrap.attempt} ${digest}\n`);
+        }
+      }
+      if (event.type === "session_ready" && typeof event.details?.["session_id"] === "string") {
+        modelProfile.session_id = event.details["session_id"];
+      } else if (event.type === "model_selected") {
+        if (typeof event.details?.["provider_id"] === "string") modelProfile.provider_id = event.details["provider_id"];
+        if (typeof event.details?.["model_id"] === "string") modelProfile.model_id = event.details["model_id"];
+        if (typeof event.details?.["selected_model"] === "string" && modelProfile.model_id === null) {
+          modelProfile.model_id = event.details["selected_model"];
+        }
+        if (typeof event.details?.["reasoning_level"] === "string") {
+          modelProfile.effective_reasoning_level = event.details["reasoning_level"];
+          modelProfile.effective_reasoning_level_source = "runtime";
+        } else {
+          modelProfile.effective_reasoning_level = null;
+          modelProfile.effective_reasoning_level_source = "not_reported";
+        }
+        if (typeof event.details?.["model_source"] === "string") {
+          modelProfile.selection_source = event.details["model_source"];
+        }
+        modelProfile.effective_at = new Date().toISOString();
+      } else if (event.type === "turn_accepted") {
+        // Request acceptance is not Turn Start (P1 §3.1); it only fixes the
+        // acceptance timestamp. turnStartedAt stays null until the adapter
+        // publishes the native turn_started event.
+        rpcAcceptedAt ??= new Date().toISOString();
+      } else if (event.type === "turn_started") {
+        turnStartedAt = new Date().toISOString();
+        if (typeof event.details?.["turn_id"] === "string") modelProfile.turn_id = event.details["turn_id"];
+      } else if (event.type === "turn_completed") {
+        turnCompletedAt = new Date().toISOString();
+        if (typeof event.details?.["turn_id"] === "string") modelProfile.turn_id = event.details["turn_id"];
+      }
       // Bounded lifecycle evidence without request payloads. This distinguishes
       // a Worker that reached adapter cleanup from one killed before cleanup.
-      if (!interactionMode) return;
       if (event.type === "cleanup_unverified") {
         const summary = event.summary;
         const reason = summary.startsWith("Managed browser cleanup")
@@ -518,8 +713,65 @@ async function runZCodeAdapter(
       if (signal.aborted) return { action: "decline" };
       return (await interaction.acceptCommittedReply()).answer;
     } : undefined,
-  });
+  };
   try {
+    const selectedAdapter = dependencies.testOnlyLegacyDirectAdapter
+      ? "direct_app_server" as const
+      : selectProductionAdapter();
+    const officialHostOptions = {
+      ...adapterOptions,
+      ...(dependencies.testOnlyOfficialHostModule
+        ? { testOnlyOfficialHostModule: dependencies.testOnlyOfficialHostModule } : {}),
+      ...(dependencies.testOnlyWorkerModuleUrl
+        ? { workerModuleUrl: dependencies.testOnlyWorkerModuleUrl } : {}),
+      ...(dependencies.testOnlyOfficialRuntimeResolver
+        ? { officialRuntimeResolver: dependencies.testOnlyOfficialRuntimeResolver } : {}),
+      ...(dependencies.testOnlyOfficialHostAssets
+        ? { testOnlyOfficialHostPackagedAssets: dependencies.testOnlyOfficialHostAssets } : {}),
+    };
+    const preferences = selectedAdapter === "direct_app_server" ? null : resolveSessionPreferences(
+      execution.task.model,
+      loadPersistedRuntimeEnvironment(process.env, undefined, execution.host_profile),
+      execution.execution_profile_id,
+    );
+    const codingPlanPreferences = preferences?.model && isOfficialCodingPlanProvider(preferences.model.provider_id)
+      ? { ...preferences, model: { ...preferences.model, provider_id: OFFICIAL_CODING_PLAN_PROVIDER_ID } }
+      : null;
+    if (codingPlanPreferences) providerAuthModel = codingPlanPreferences.model;
+    const officialProviderRuntime = selectedAdapter === "direct_app_server"
+      ? null
+      : selectOfficialProviderRuntime(preferences?.model?.provider_id);
+    if (selectedAdapter !== "direct_app_server") {
+      providerRuntimeAuthDispatcher.bind(async (request, config, signal) => {
+        if (!providerRuntimeAuthResolver || providerRuntimeAuthConfig !== config) {
+          providerRuntimeAuthConfig = config;
+          providerRuntimeAuthResolver = createOfficialProviderRuntimeAuthResolver({
+            config,
+            isSelected: (providerId, modelId) =>
+              providerAuthModel === undefined
+              || (providerAuthModel.provider_id === providerId
+                && providerAuthModel.model_id === modelId),
+            onDiagnostic: (facts) => {
+              writeDiagnostic(`[bridge-worker] runtime-auth ${JSON.stringify(facts)}\n`);
+            },
+          });
+        }
+        return providerRuntimeAuthResolver(request, signal);
+      });
+    }
+    const officialSessionPreferences = officialProviderRuntime === "coding_plan_discount"
+      ? codingPlanPreferences
+      : officialProviderRuntime === "start_plan_static"
+        && preferences?.model?.provider_id === BIGMODEL_START_PLAN_PROVIDER_ID
+        ? preferences
+        : null;
+    const adapter = selectedAdapter === "direct_app_server"
+      ? new ZCodeAppServerTestAdapter(adapterOptions)
+      : new OfficialAppServerWorkerAdapter({
+          ...officialHostOptions,
+          providerCapability: officialProviderRuntime ?? "installed_runtime",
+          ...(officialSessionPreferences ? { sessionPreferences: officialSessionPreferences } : {}),
+        });
     const workspace: WorkspaceRef = {
       requestedPath: execution.task.workspace,
       canonicalPath: bootstrap.workspace_ref,
@@ -533,7 +785,13 @@ async function runZCodeAdapter(
           attempt: bootstrap.attempt,
           feedback: requiredString(execution.continuation.feedback, "continuation feedback missing"),
           additionalRequirements: requiredStringArray(execution.continuation.additional_requirements, "continuation requirements invalid"),
-          previousSessionId: nullableString(execution.previous_result?.session_id),
+          // ADR-066: with a Manager verdict only a resumable Session is
+          // resumed; otherwise the continuation starts a new Session. Without
+          // one (older Manager) the previous ID is used as before.
+          previousSessionId: continuationSessionId(
+            execution.session_history,
+            nullableString(execution.previous_result?.session_id),
+          ),
           previousResult: execution.previous_result as import("../interfaces.js").TaskResult | null,
         })
       : await adapter.startTask({ task: execution.task, workspace, attempt: bootstrap.attempt });
@@ -541,7 +799,10 @@ async function runZCodeAdapter(
     if (outcome.cleanupError) failure = { code: "cleanup_failed", message: outcome.cleanupError };
   } catch (error) {
     failure = { code: error instanceof Error && "code" in error && typeof (error as { code?: unknown }).code === "string"
-      ? (error as { code: string }).code : "worker_error", message: error instanceof Error ? error.message : String(error) };
+      ? (error as { code: string }).code : "worker_error", message: error instanceof Error ? error.message : String(error),
+      // ADR-066: an Adapter that throws (unverified cleanup) still hands
+      // over the RPC rejections and Session ID it observed.
+      ...thrownFailureEvidence(error) };
   } finally {
     writeDiagnostic("[bridge-worker] adapter run settled\n");
     clearCachedAuth();
@@ -549,7 +810,41 @@ async function runZCodeAdapter(
     if (execution.private_auth && !privateAuthStarted) for (const fd of [10, 11, 12]) { try { closeSync(fd); } catch { /* not open */ } }
   }
   const finishedAt = new Date().toISOString();
-  const taskResult = buildTaskResult({ task: execution.task, attempt: bootstrap.attempt, startedAt, finishedAt, outcome, failure });
+  if (modelProfile.model_id === null && outcome?.modelProfile?.model_id) {
+    Object.assign(modelProfile, outcome.modelProfile);
+  }
+  rpcAcceptedAt ??= outcome?.phaseTimestamps?.rpc_accepted_at ?? null;
+  turnStartedAt ??= outcome?.phaseTimestamps?.turn_started_at ?? null;
+  turnCompletedAt ??= outcome?.phaseTimestamps?.turn_completed_at ?? null;
+  modelProfile.session_id ??= outcome?.sessionId ?? null;
+  const timingNotes: string[] = [];
+  const timing: import("../interfaces.js").AttemptTiming = {
+    queued_ms: null,
+    execution_ms: phaseDuration(startedAt, finishedAt, timingNotes),
+    turn_ms: phaseDuration(turnStartedAt, turnCompletedAt, timingNotes),
+    finalize_ms: phaseDuration(turnCompletedAt, finishedAt, timingNotes),
+    wall_ms: phaseDuration(startedAt, finishedAt, timingNotes),
+    derived: false,
+    notes: timingNotes,
+  };
+  const usage = normalizeUsage(outcome?.usage ?? null, {
+    source: "zcode_runtime_turn",
+    scope: outcome?.sessionId ? `session:${outcome.sessionId}` : null,
+    observedAt: finishedAt,
+  });
+  const taskResult = buildTaskResult({
+    task: execution.task,
+    attempt: bootstrap.attempt,
+    startedAt,
+    finishedAt,
+    outcome,
+    failure,
+    usage,
+    model: modelProfile,
+    timing,
+    rpcDiagnostics: outcome?.rpcDiagnostics ?? null,
+    sessionId: failure?.sessionId ?? null,
+  });
   const result: CandidateTaskResult = {
     task_id: taskResult.task_id,
     attempt: taskResult.attempt,
@@ -568,10 +863,15 @@ async function runZCodeAdapter(
     ...(taskResult.model !== undefined ? { model: taskResult.model as Record<string, unknown> | null } : {}),
     ...(taskResult.timing !== undefined ? { timing: taskResult.timing as Record<string, unknown> | null } : {}),
     ...(taskResult.error_code ? { error_code: taskResult.error_code } : {}),
+    ...(taskResult.rpc_diagnostics?.length ? { rpc_diagnostics: taskResult.rpc_diagnostics as unknown as Record<string, unknown>[] } : {}),
     ...(taskResult.report_candidate ? { report_candidate: taskResult.report_candidate as Record<string, unknown> } : {}),
   };
   const executionCleanup = buildExecutionCleanupProof(outcome);
-  secretRedactor?.close();
+  try {
+    await runtimeEvents?.close();
+  } finally {
+    secretRedactor?.close();
+  }
   return {
     protocol: "bridge-sqlite-candidate-result-v1",
     operation_id: bootstrap.operation_id,
@@ -583,6 +883,21 @@ async function runZCodeAdapter(
     execution_cleanup_verified: executionCleanup !== null,
     execution_cleanup: executionCleanup,
     result,
+  };
+}
+
+function thrownFailureEvidence(error: unknown): {
+  readonly rpcDiagnostics?: import("../interfaces.js").RpcDiagnostic[];
+  readonly sessionId?: string;
+} {
+  const value = error as { rpcDiagnostics?: unknown; sessionId?: unknown } | null;
+  const diagnostics = value?.rpcDiagnostics;
+  const sessionId = value?.sessionId;
+  return {
+    ...(Array.isArray(diagnostics) && diagnostics.length
+      ? { rpcDiagnostics: diagnostics as import("../interfaces.js").RpcDiagnostic[] }
+      : {}),
+    ...(typeof sessionId === "string" && sessionId ? { sessionId } : {}),
   };
 }
 
@@ -604,6 +919,8 @@ function buildExecutionCleanupProof(
     };
   }
   if (outcome?.cleanupVerified !== true || outcome.cleanupError) return null;
+  const adapterCleanup = buildAdapterCleanupEvidence(outcome.adapterCleanup);
+  if (!adapterCleanup) return null;
   if (!receipt) {
     const scan = outcome.cleanupTreeScan;
     if (!scan || !Number.isSafeInteger(scan.rootPid) || scan.rootPid < 1 || !scan.rootFingerprint
@@ -620,6 +937,7 @@ function buildExecutionCleanupProof(
       process_tree_scan_digest: scan.evidenceDigest,
       process_tree_member_count: scan.observedMemberCount,
       managed_browser_cleanup_verified: true,
+      adapter_cleanup: adapterCleanup,
     };
   }
   const root = receipt.members.find((member) => member.pid === receipt.rootPid);
@@ -636,6 +954,52 @@ function buildExecutionCleanupProof(
     process_tree_receipt_digest: createHash("sha256").update(JSON.stringify(receipt), "utf8").digest("hex"),
     process_tree_member_count: receipt.members.length,
     managed_browser_cleanup_verified: true,
+    adapter_cleanup: adapterCleanup,
+  };
+}
+
+function buildAdapterCleanupEvidence(
+  value: import("../adapters/run-outcome.js").ZCodeRunOutcome["adapterCleanup"],
+): CandidateAdapterCleanupEvidence | null {
+  if (!value || value.contract !== "adapter-cleanup-v1" || !value.close) return null;
+  const scanStatuses = new Set(["verified", "live", "incomplete", "not_applicable"]);
+  const stages = new Set([
+    "not_started",
+    "direct_close",
+    "official_manager_dispose",
+    "official_manager_dispose_all",
+    "official_manager_workspace_dispose",
+  ]);
+  const boundedToken = (item: unknown): item is string =>
+    typeof item === "string"
+    && item.length > 0
+    && item.length <= 120
+    && /^[A-Za-z][A-Za-z0-9_.:-]*$/u.test(item);
+  if (!["resolved", "rejected"].includes(value.close.status)
+    || !stages.has(value.close.stage)
+    || !value.close.treeScanStatus || !scanStatuses.has(value.close.treeScanStatus)
+    || !value.treeScanStatus || !scanStatuses.has(value.treeScanStatus)
+    || (value.close.errorName !== undefined && !boundedToken(value.close.errorName))
+    || (value.close.errorCode !== undefined && !boundedToken(value.close.errorCode))
+    || (value.close.managerProcessCountAfter !== undefined
+      && (!Number.isSafeInteger(value.close.managerProcessCountAfter)
+        || value.close.managerProcessCountAfter < 0))
+    || (value.close.stage.startsWith("official_")
+      && !Number.isSafeInteger(value.close.managerProcessCountAfter))) {
+    return null;
+  }
+  return {
+    contract: "adapter-cleanup-v1",
+    close: {
+      status: value.close.status,
+      stage: value.close.stage,
+      ...(value.close.errorName ? { errorName: value.close.errorName } : {}),
+      ...(value.close.errorCode ? { errorCode: value.close.errorCode } : {}),
+      ...(value.close.managerProcessCountAfter !== undefined
+        ? { managerProcessCountAfter: value.close.managerProcessCountAfter } : {}),
+      treeScanStatus: value.close.treeScanStatus,
+    },
+    treeScanStatus: value.treeScanStatus,
   };
 }
 
@@ -654,6 +1018,126 @@ function requiredStringArray(value: unknown, error: string): string[] {
 }
 
 function nullableString(value: unknown): string | null { return typeof value === "string" ? value : null; }
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function splitUtf8Text(value: string, maximumBytes: number): string[] {
+  const chunks: string[] = [];
+  let chunkStart = 0;
+  let chunkBytes = 0;
+  for (let index = 0; index < value.length;) {
+    const codePoint = value.codePointAt(index)!;
+    const character = String.fromCodePoint(codePoint);
+    const characterBytes = Buffer.byteLength(character, "utf8");
+    if (chunkBytes > 0 && chunkBytes + characterBytes > maximumBytes) {
+      chunks.push(value.slice(chunkStart, index));
+      chunkStart = index;
+      chunkBytes = 0;
+    }
+    chunkBytes += characterBytes;
+    index += character.length;
+  }
+  if (chunkStart < value.length) chunks.push(value.slice(chunkStart));
+  return chunks;
+}
+
+export function createBoundedRuntimeEventPublisher(
+  sender: Readonly<{ send(event: CandidateRuntimeObservedEvent): number; close(): Promise<void> }>,
+): CandidateRuntimeEventPublisher {
+  const allowed = new Set([
+    "session_ready", "model_selected", "turn_started", "model_tool_call",
+    "tool_status", "model_output", "turn_completed", "turn_failed", "report_ready",
+  ]);
+  let pendingOutput = "";
+  let outputTimer: NodeJS.Timeout | undefined;
+  let closePromise: Promise<void> | undefined;
+  let outputSanitizer: ((value: string, options?: { readonly final?: boolean }) => string) | undefined;
+  let firstError: unknown;
+  const flush = (final = false): void => {
+    if (outputTimer) {
+      clearTimeout(outputTimer);
+      outputTimer = undefined;
+    }
+    if (!pendingOutput) {
+      if (final && outputSanitizer) {
+        const visible = outputSanitizer("", { final: true });
+        for (const chunk of splitUtf8Text(visible, 2_000)) sender.send({ type: "model_output", summary: chunk });
+      }
+      return;
+    }
+    const output = pendingOutput;
+    pendingOutput = "";
+    const visible = outputSanitizer ? outputSanitizer(output, { final }) : output;
+    for (const chunk of splitUtf8Text(visible, 2_000)) sender.send({ type: "model_output", summary: chunk });
+  };
+  return Object.freeze({
+    publish(event) {
+      try {
+        if (event.type === "model_output") {
+          pendingOutput += event.summary;
+          if (Buffer.byteLength(pendingOutput, "utf8") >= 4_000) flush(false);
+          else if (!outputTimer) {
+            outputTimer = setTimeout(() => {
+              outputTimer = undefined;
+              try {
+                flush(false);
+              } catch (error) {
+                firstError ??= error;
+              }
+            }, 500);
+            outputTimer.unref();
+          }
+          return;
+        }
+        // A non-output event does not end the visible text stream. Keep the
+        // redactor's overlap so a credential can never be reconstructed by
+        // filtering these events out and joining model_output chunks.
+        flush(false);
+        if (allowed.has(event.type)) sender.send(event);
+      } catch (error) {
+        firstError ??= error;
+      }
+    },
+    setOutputSanitizer(sanitize) {
+      if (typeof sanitize !== "function" || outputSanitizer) throw new Error("runtime_event_output_sanitizer_invalid");
+      outputSanitizer = sanitize;
+    },
+    close() {
+      closePromise ??= (async () => {
+        try {
+          flush(true);
+        } catch (error) {
+          firstError ??= error;
+        }
+        try {
+          await sender.close();
+        } catch (error) {
+          firstError ??= error;
+        }
+        if (firstError) {
+          throw Object.assign(new Error("runtime event publication failed"), {
+            code: "runtime_event_publish_failed",
+            cause: firstError,
+          });
+        }
+      })();
+      return closePromise;
+    },
+  });
+}
+
+async function closeRuntimeEvents(publisher: CandidateRuntimeEventPublisher | undefined): Promise<void> {
+  if (!publisher) return;
+  try {
+    await publisher.close();
+  } catch {
+    writeDiagnostic("[bridge-worker] runtime event channel close failed\n");
+  }
+}
 
 function writeDiagnostic(line: string): void {
   try { writeSync(2, line); } catch { /* stderr may already be gone */ }
@@ -697,3 +1181,7 @@ function writePrivateFrame(fd: number, value: unknown, encoded: string | readonl
   writeFileSync(fd, "\n", "utf8");
   closeSync(fd);
 }
+
+const invokedWorkerPath = process.argv[1] ? path.resolve(process.argv[1]) : null;
+const modulePath = path.resolve(fileURLToPath(import.meta.url));
+if (invokedWorkerPath === modulePath) await runWorkerMain();

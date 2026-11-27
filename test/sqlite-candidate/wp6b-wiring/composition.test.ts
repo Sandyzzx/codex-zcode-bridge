@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { DatabaseSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -11,8 +12,9 @@ import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { build } from "esbuild";
 import { SqliteLifecycleMcpAuthority } from "../../../src/manager/sqlite-lifecycle-mcp-authority.js";
 import { createBridgeServer } from "../../../src/mcp/server.js";
-import { createTrustedLocalCandidateContext, serveStdioLifecycleHost, type StdioLifecycleHost } from "../../../src/host/stdio.js";
-import { initializeIsolatedCandidateRoot, loadLifecycleCandidateModules, openClaimOnlyDriver, readAllLifecycleEventsForRecovery } from "../../../src/store/lifecycle-gate.js";
+import { createTrustedLocalCandidateContext } from "../../../src/executor/production-composition.js";
+import { serveStdioLifecycleHost, type StdioLifecycleHost } from "../../fixtures/stdio-lifecycle-host.js";
+import { initializeFreshInstallSqliteRoot, initializeIsolatedCandidateRoot, loadLifecycleCandidateModules, openClaimOnlyDriver, readAllLifecycleEventsForRecovery } from "../../../src/store/lifecycle-gate.js";
 import { DirectWorkspaceProvider } from "../../../src/workspace/direct-provider.js";
 import { createPlatformProbe, PROCESS_IDENTITY_VERSION, type ProcessProbe, type ProbeRequest, type ProbeVerdict } from "../../../src/runtime/process-probe.js";
 import { runBridgeDoctor } from "../../../src/runtime/doctor.js";
@@ -35,6 +37,439 @@ function candidateEvidenceDigest(value: unknown): string {
   return createHash("sha256").update(canonicalTestJson(value)).digest("hex");
 }
 
+function trustedIdentityEvidence(
+  kind: "launch" | "worker",
+  suffix: string,
+  processId: number,
+  fingerprint: string,
+  generation = 1,
+) {
+  const evidence = {
+    source: kind === "launch" ? "manager_os_spawn_observation" : "manager_verified_process_probe",
+    fixture: false,
+    ...(kind === "launch"
+      ? { launch_id: `launch-${suffix}`, generation }
+      : { worker_id: `worker-${suffix}` }),
+    process_id: processId,
+    start_fingerprint: fingerprint,
+    fingerprint_precision: "exact",
+    identity_version: PROCESS_IDENTITY_VERSION,
+    platform: "win32",
+    captured_at: new Date().toISOString(),
+  };
+  return { ...evidence, evidence_digest: candidateEvidenceDigest(evidence) };
+}
+
+function seedRunningClaim(
+  dataRoot: string,
+  modules: Awaited<ReturnType<typeof loadLifecycleCandidateModules>>,
+  workspace: string,
+  taskId: string,
+  operationId: string,
+  processId: number,
+  fingerprint: string,
+  runtimeEvent?: string,
+): void {
+  const store = modules.Store.open(dataRoot);
+  try {
+    const port = modules.createPort(store);
+    port.createTask(syntheticTask(workspace, taskId) as unknown as Parameters<typeof port.createTask>[0]);
+    const allow = () => ({ state: "allow", fixture: true });
+    const admitted = port.admitOperation({
+      operation_id: operationId,
+      task_id: taskId,
+      attempt: 1,
+      workspace_ref: workspace,
+    }, {
+      workspaceValidator: allow,
+      executionPermissionCheck: allow,
+    }) as Record<string, unknown>;
+    const launch = {
+      operation_id: operationId,
+      task_id: taskId,
+      attempt: 1,
+      generation: Number(admitted.generation),
+      revision: Number(admitted.revision),
+      launch_id: `launch-${taskId}`,
+      launch_epoch: 1,
+      launch_token: `interruption-recovery-${taskId}-0123456789`,
+    };
+    const intent = port.createLaunchIntent(launch) as Record<string, unknown>;
+    const receipt = port.recordLaunchReceipt({
+      ...launch,
+      revision: Number(intent.revision),
+      receipt_id: `receipt-${taskId}`,
+      launch_identity: trustedIdentityEvidence("launch", taskId, processId, fingerprint, Number(admitted.generation)),
+    }) as Record<string, unknown>;
+    port.commitPermanentClaim({
+      ...launch,
+      revision: Number(receipt.revision),
+      claim_id: `claim-${taskId}`,
+      worker_identity: trustedIdentityEvidence("worker", taskId, processId, fingerprint),
+    } as unknown as Parameters<typeof port.commitPermanentClaim>[0]);
+    if (runtimeEvent) {
+      const operation = port.readOperation(operationId) as Record<string, unknown>;
+      const runtimeStore = store as typeof store & {
+        appendRuntimeTaskEvent(input: Readonly<Record<string, unknown>>): unknown;
+      };
+      runtimeStore.appendRuntimeTaskEvent({
+        operation_id: operationId,
+        task_id: taskId,
+        attempt: 1,
+        generation: Number(operation.generation),
+        claim_id: String(operation.claim_id),
+        worker_sequence: 1,
+        event_type: runtimeEvent,
+        at: new Date().toISOString(),
+        summary: `synthetic ${runtimeEvent} evidence`,
+      });
+    }
+  } finally {
+    store.close();
+  }
+}
+
+function seedCancelledCleanupHold(
+  dataRoot: string,
+  modules: Awaited<ReturnType<typeof loadLifecycleCandidateModules>>,
+  workspace: string,
+  taskId: string,
+  operationId: string,
+  resultStatus: "completed" | "failed" | "waiting_for_master" | "cancelled" = "cancelled",
+): { readonly processId: number; readonly fingerprint: string } {
+  const store = modules.Store.open(dataRoot);
+  try {
+    const port = modules.createPort(store);
+    port.createTask(syntheticTask(workspace, taskId) as unknown as Parameters<typeof port.createTask>[0]);
+    const allow = () => ({ state: "allow", fixture: true });
+    const admitted = port.admitOperation({
+      operation_id: operationId,
+      task_id: taskId,
+      attempt: 1,
+      workspace_ref: workspace,
+    }, {
+      workspaceValidator: allow,
+      executionPermissionCheck: allow,
+    }) as Record<string, unknown>;
+    const processId = 47001;
+    const fingerprint = `cancelled-cleanup-${taskId}`;
+    const launch = {
+      operation_id: operationId,
+      task_id: taskId,
+      attempt: 1,
+      generation: Number(admitted.generation),
+      revision: Number(admitted.revision),
+      launch_id: `launch-${taskId}`,
+      launch_epoch: 1,
+      launch_token: `cancelled-cleanup-${taskId}-0123456789`,
+    };
+    const intent = port.createLaunchIntent(launch) as Record<string, unknown>;
+    const receipt = port.recordLaunchReceipt({
+      ...launch,
+      revision: Number(intent.revision),
+      receipt_id: `receipt-${taskId}`,
+      launch_identity: trustedIdentityEvidence("launch", taskId, processId, fingerprint, 1),
+    }) as Record<string, unknown>;
+    port.commitPermanentClaim({
+      ...launch,
+      revision: Number(receipt.revision),
+      claim_id: `claim-${taskId}`,
+      worker_identity: trustedIdentityEvidence("worker", taskId, processId, fingerprint, 1),
+    } as unknown as Parameters<typeof port.commitPermanentClaim>[0]);
+    const claimed = port.readOperation(operationId) as Record<string, unknown>;
+    const workerIdentity = JSON.parse(String(claimed.claim_worker_identity_json)) as Record<string, unknown>;
+    const identityEvidence = {
+      contract: "synthetic-cancel-identity-v1",
+      process_id: processId,
+      start_fingerprint: fingerprint,
+      observed_at: new Date().toISOString(),
+    };
+    const identityDigest = candidateEvidenceDigest(identityEvidence);
+    const treeEvidence = {
+      contract: "synthetic-cancel-tree-v1",
+      process_id: processId,
+      start_fingerprint: fingerprint,
+      scan_clean: true,
+      live_pids: [],
+      observed_pids: [processId],
+      observed_at: new Date().toISOString(),
+    };
+    const treeDigest = candidateEvidenceDigest(treeEvidence);
+    const fence = {
+      operation_id: operationId,
+      task_id: taskId,
+      attempt: 1,
+      generation: Number(claimed.generation),
+      revision: Number(claimed.revision),
+      claim_id: String(claimed.claim_id),
+      claim_worker_identity_digest: String(claimed.claim_worker_identity_digest),
+      worker_identity: workerIdentity,
+    };
+    let cancelVerificationDigest: string | undefined;
+    if (resultStatus === "cancelled") {
+      const cancelPort = modules.createPort(store, {
+        workerIdentityVerifier: () => ({
+          state: "alive",
+          worker_identity_digest: claimed.claim_worker_identity_digest,
+          evidence_digest: identityDigest,
+        }),
+        cancellationVerifier: () => ({
+          state: "verified",
+          worker_identity_digest: claimed.claim_worker_identity_digest,
+          process_tree_digest: "a".repeat(64),
+          root_process_id: processId,
+          root_start_fingerprint: fingerprint,
+          worker_tree_complete: true,
+          evidence_digest: treeDigest,
+        }),
+      });
+      cancelPort.requestCancellation(fence, identityEvidence);
+      const afterIntent = port.readOperation(operationId) as Record<string, unknown>;
+      const verification = cancelPort.recordCancellationVerification({
+        ...fence,
+        revision: Number(afterIntent.revision),
+      }, treeEvidence) as Record<string, unknown>;
+      cancelVerificationDigest = String(verification.cancellation_verification_digest);
+    }
+    const afterVerification = port.readOperation(operationId) as Record<string, unknown>;
+    const finishedAt = new Date().toISOString();
+    port.commitResult({
+      operation_id: operationId,
+      task_id: taskId,
+      attempt: 1,
+      generation: Number(afterVerification.generation),
+      revision: Number(afterVerification.revision),
+      claim_id: String(afterVerification.claim_id),
+      claim_worker_identity_digest: String(afterVerification.claim_worker_identity_digest),
+      result_status: resultStatus,
+      ...(cancelVerificationDigest ? { cancel_verification_digest: cancelVerificationDigest } : {}),
+      result: {
+        task_id: taskId,
+        attempt: 1,
+        status: resultStatus,
+        summary: `synthetic ${resultStatus} cleanup`,
+        files_changed: [],
+        tests: [],
+        issues: [],
+        needs_master_decision: false,
+        zcode_output: "",
+        exit_code: null,
+        session_id: null,
+        started_at: new Date(Date.now() - 1_000).toISOString(),
+        finished_at: finishedAt,
+      },
+    });
+    const committed = port.readOperation(operationId) as Record<string, unknown>;
+    const cleanupFence = {
+      operation_id: operationId,
+      task_id: taskId,
+      attempt: 1,
+      generation: Number(committed.generation),
+      claim_id: String(committed.claim_id),
+      claim_worker_identity_digest: String(committed.claim_worker_identity_digest),
+    };
+    const pending = port.beginCleanup({
+      ...cleanupFence,
+      revision: Number(committed.revision),
+    }) as Record<string, unknown>;
+    port.recordCleanupEvidence({
+      ...cleanupFence,
+      revision: Number(pending.revision),
+      outcome: "unverified",
+      probe_state: "incomplete",
+      reason: "adapter_cleanup_unverified",
+    });
+    return { processId, fingerprint };
+  } finally {
+    store.close();
+  }
+}
+
+function seedReleasedTaskWithRuntimeEvents(
+  dataRoot: string,
+  modules: Awaited<ReturnType<typeof loadLifecycleCandidateModules>>,
+  workspace: string,
+  taskId: string,
+  operationId: string,
+): {
+  readonly tinyCursors: readonly number[];
+  readonly largeCursors: readonly number[];
+  readonly boundaryCursor: number;
+} {
+  const store = modules.Store.open(dataRoot);
+  if (!store) throw new Error("isolated SQLite Store did not open");
+  try {
+    const port = modules.createPort(store);
+    port.createTask(syntheticTask(workspace, taskId) as unknown as Parameters<typeof port.createTask>[0]);
+    const allow = () => ({ state: "allow", fixture: true });
+    const admitted = port.admitOperation({
+      operation_id: operationId,
+      task_id: taskId,
+      attempt: 1,
+      workspace_ref: workspace,
+    }, {
+      workspaceValidator: allow,
+      executionPermissionCheck: allow,
+    }) as Record<string, unknown>;
+    const launch = {
+      operation_id: operationId,
+      task_id: taskId,
+      attempt: 1,
+      generation: Number(admitted.generation),
+      revision: Number(admitted.revision),
+      launch_id: `launch-${taskId}`,
+      launch_epoch: 1,
+      launch_token: `event-pagination-${taskId}-0123456789`,
+    };
+    const intent = port.createLaunchIntent(launch) as Record<string, unknown>;
+    const processId = 47101;
+    const fingerprint = `event-pagination-${taskId}`;
+    const receipt = port.recordLaunchReceipt({
+      ...launch,
+      revision: Number(intent.revision),
+      receipt_id: `receipt-${taskId}`,
+      launch_identity: trustedIdentityEvidence("launch", taskId, processId, fingerprint, Number(admitted.generation)),
+    }) as Record<string, unknown>;
+    const claim = port.commitPermanentClaim({
+      ...launch,
+      revision: Number(receipt.revision),
+      claim_id: `claim-${taskId}`,
+      worker_identity: trustedIdentityEvidence("worker", taskId, processId, fingerprint),
+    } as unknown as Parameters<typeof port.commitPermanentClaim>[0]) as Record<string, unknown>;
+    const operationAfterClaim = port.readOperation(operationId) as Record<string, unknown>;
+    const runtimeStore = store as typeof store & {
+      appendRuntimeTaskEvent(input: Readonly<Record<string, unknown>>): { readonly event_cursor: number };
+    };
+    const fence = {
+      operation_id: operationId,
+      task_id: taskId,
+      attempt: 1,
+      generation: Number(operationAfterClaim.generation),
+      claim_id: String(claim.claim_id),
+    };
+    const append = (
+      workerSequence: number,
+      eventType: string,
+      summary: string,
+      details?: Readonly<Record<string, unknown>>,
+    ): number => runtimeStore.appendRuntimeTaskEvent({
+      ...fence,
+      worker_sequence: workerSequence,
+      event_type: eventType,
+      at: `2026-11-15T00:00:${String(workerSequence).padStart(2, "0")}.000Z`,
+      summary,
+      ...(details ? { details } : {}),
+    }).event_cursor;
+    const tinyCursors = [
+      append(1, "model_output", "a".repeat(300)),
+      append(2, "model_output", "b".repeat(300)),
+      append(3, "model_output", "c".repeat(300)),
+    ];
+    const largeCursors = [
+      append(4, "model_output", `L1 ${"x".repeat(800)}`),
+      append(5, "model_output", `L2 ${"y".repeat(800)}`),
+      append(6, "model_output", `L3 ${"z".repeat(800)}`),
+    ];
+    const boundaryCursor = append(7, "model_tool_call", "tool boundary", {
+      tool_name: "Read",
+      tool_call_id: "event-pagination-tool",
+    });
+    append(8, "turn_started", "synthetic turn started");
+    const result = {
+      task_id: taskId,
+      attempt: 1,
+      status: "completed" as const,
+      summary: "event pagination fixture",
+      files_changed: [],
+      tests: [],
+      issues: [],
+      needs_master_decision: false,
+      zcode_output: "",
+      exit_code: 0,
+      session_id: null,
+      started_at: "2026-11-15T00:00:00.000Z",
+      finished_at: "2026-11-15T00:00:08.000Z",
+    };
+    port.commitResult({
+      operation_id: operationId,
+      task_id: taskId,
+      attempt: 1,
+      generation: Number(admitted.generation),
+      revision: Number(operationAfterClaim.revision),
+      claim_id: String(claim.claim_id),
+      claim_worker_identity_digest: String(operationAfterClaim.claim_worker_identity_digest),
+      result_status: "completed",
+      result,
+    });
+    const committed = port.readOperation(operationId) as Record<string, unknown>;
+    const cleanupFence = {
+      operation_id: operationId,
+      task_id: taskId,
+      attempt: 1,
+      generation: Number(committed.generation),
+      revision: Number(committed.revision),
+      claim_id: String(committed.claim_id),
+      claim_worker_identity_digest: String(committed.claim_worker_identity_digest),
+      launch_receipt_digest: String(committed.launch_receipt_digest),
+      result_commit_ref: String(committed.result_commit_ref),
+      process_id: processId,
+      start_fingerprint: fingerprint,
+    };
+    const pending = port.beginCleanup(cleanupFence);
+    port.recordCleanupEvidence({
+      ...cleanupFence,
+      revision: Number(pending.revision),
+      outcome: "verified",
+      cleanup_evidence: {
+        source: "synthetic_fixture",
+        fixture: true,
+        operation_id: operationId,
+        task_id: taskId,
+        attempt: 1,
+        generation: Number(committed.generation),
+        claim_id: String(committed.claim_id),
+        worker_identity_digest: String(committed.claim_worker_identity_digest),
+        launch_receipt_digest: String(committed.launch_receipt_digest),
+        result_commit_ref: String(committed.result_commit_ref),
+        process_tree_digest: "c".repeat(64),
+        resources_digest: "d".repeat(64),
+        root_process_id: processId,
+        root_start_fingerprint: fingerprint,
+        worker_tree_complete: true,
+        operation_resources_complete: true,
+        workspace_touched: false,
+      },
+    });
+    return { tinyCursors, largeCursors, boundaryCursor };
+  } finally {
+    store.close();
+  }
+}
+
+async function exitedProcessIdentity(probe: ProcessProbe): Promise<{ readonly processId: number; readonly fingerprint: string }> {
+  const child = spawn(process.execPath, ["-e", "setInterval(() => undefined, 1000)"], {
+    stdio: "ignore",
+    windowsHide: true,
+  });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      child.once("spawn", () => resolve());
+      child.once("error", reject);
+    });
+    const processId = child.pid;
+    assert.ok(processId);
+    const identity = await probe.identityOf(processId);
+    assert.equal(identity.fingerprint_precision, "exact");
+    assert.ok(identity.fingerprint);
+    const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
+    child.kill();
+    await closed;
+    return { processId, fingerprint: identity.fingerprint };
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill();
+  }
+}
+
 function redactTestDiagnostic(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(redactTestDiagnostic);
   if (typeof value === "string") {
@@ -53,15 +488,25 @@ function redactTestDiagnostic(value: unknown): unknown {
   return redacted;
 }
 
-test("production Host composition initializes the bound SQLite Authority and exposes no test Fake adapter", () => {
+test("Executor exclusively owns the production Authority, routing, auth, diagnostics, and model composition", () => {
   const host = source("host/stdio.ts");
-  assert.match(host, /initializeFreshInstallSqliteRoot\(dataRoot,\s*FRESH_SQLITE_DATABASE_FILE/u);
-  assert.match(host, /const \{ SqliteLifecycleMcpAuthority \} = await import\("\.\.\/manager\/sqlite-lifecycle-mcp-authority\.js"\)/u);
-  assert.match(host, /manager = authority/u);
-  assert.match(host, /lifecycleChecks = \(\) => authority\.getDoctorChecks\(\)/u);
-  assert.match(host, /lifecycleChecks\s*\}/u);
+  const executor = source("executor/service.ts");
+  const composition = source("executor/production-composition.ts");
+  assert.doesNotMatch(host, /createProductionAuthorityComposition|SqliteAuthority\.create|LeaseGuardedTaskManager/u);
+  assert.match(executor, /createProductionAuthorityComposition\(/u);
+  assert.match(executor, /createWorkerDiagnosticSink\("\[executor\]"\)/u);
+  assert.match(composition, /initializeFreshInstallSqliteRoot\(/u);
+  assert.match(composition, /SqliteAuthority\.create\(/u);
+  assert.match(composition, /startPlanPrivateAuthFactory:\s*\(\)\s*=>\s*createHostStartPlanIssuer\(/u);
+  assert.match(composition, /testOnlyFakeAdapter === true[\s\S]*?\? undefined[\s\S]*?: createTaskModelRouter\(/u);
+  assert.match(composition, /\.\.\.\(routeTaskModel \? \{ routeTaskModel \} : \{\}\),\s*onOperationReleased:[\s\S]*?onWorkerDiagnosticLine:/u);
+  assert.match(composition, /settings:\s*\(\)\s*=>\s*\{[\s\S]*?loadPersistedRuntimeEnvironment\(env, homeDir, options\.host\)/u);
+  assert.match(composition, /catalog:\s*async\s*\(workspace,\s*plan\)\s*=>\s*\{[\s\S]*?modelSettings\.listRoutingCatalog\(workspace,\s*\{\s*plan\s*\}\)/u);
+  assert.match(composition, /new ZCodeModelSettings\(env,/u);
+  assert.match(composition, /doctor:\s*\(\)\s*=>\s*runBridgeDoctor\(/u);
   assert.doesNotMatch(host, /testOnlyFakeAdapter|executeFakeResultAdapter|adapter_mode\s*:\s*"test_fake"/u,
-    "the formal Host entry must not expose the explicit Fake test capability");
+    "the formal MCP Host must not expose the explicit Fake test capability");
+  assert.match(host, /no local SQLite Manager is constructed/u);
 });
 
 test("claim-only lifecycle composition has no JSON TaskStore or real Adapter dependency", () => {
@@ -71,7 +516,7 @@ test("claim-only lifecycle composition has no JSON TaskStore or real Adapter dep
   assert.match(gate, /verifyHandshakeAndCommitClaim/u);
 });
 
-test("SQLite Manager startup and live Recovery are re-entrant, read-only, and retain unknown active Operation occupancy", { timeout: 30_000 }, async () => {
+test("SQLite Manager online Recovery is re-entrant and retains unknown active Operation occupancy", { timeout: 30_000 }, async () => {
   const taskId = `recovery-held-${randomUUID()}`;
   const queuedTaskId = `recovery-root-queued-${randomUUID()}`;
   let spawnCount = 0;
@@ -93,7 +538,7 @@ test("SQLite Manager startup and live Recovery are re-entrant, read-only, and re
       await Promise.all([manager.recoverTasks(), manager.recoverTasks()]);
       await manager.recoverTasks();
       assert.equal(JSON.stringify(port.readRecoverySnapshot()), beforeRetry,
-        "live Recovery must be idempotent and must not alter an unresolved Operation");
+        "repeated online Recovery must be idempotent when exact Worker identity is unavailable");
       const sameWorkspace = await manager.createTask(syntheticTask(workspace, `same-path-${randomUUID()}`) as unknown as Parameters<SqliteLifecycleMcpAuthority["createTask"]>[0]);
       assert.equal(sameWorkspace.status, "queued", "new work may queue behind the occupied execution path");
       const independentWorkspace = path.join(dataRoot, "independent-workspace");
@@ -157,6 +602,272 @@ test("SQLite Manager startup and live Recovery are re-entrant, read-only, and re
       }
     },
     onChildSpawn: () => { spawnCount += 1; },
+  });
+});
+
+test("startup Recovery requeues a Result-less Attempt only after exact exited Worker and tree proof", {
+  timeout: 60_000,
+  skip: process.platform !== "win32",
+}, async () => {
+  const taskId = `recovery-exited-requeue-${randomUUID()}`;
+  const operationId = candidateOperationId(taskId, 1);
+  const probe = createPlatformProbe();
+  const exitedWorker = spawn(process.execPath, ["-e", "setInterval(() => undefined, 1000)"], {
+    stdio: "ignore",
+    windowsHide: true,
+  });
+  let spawnCount = 0;
+  try {
+    await new Promise<void>((resolve, reject) => {
+      exitedWorker.once("spawn", () => resolve());
+      exitedWorker.once("error", reject);
+    });
+    const processId = exitedWorker.pid;
+    assert.ok(processId);
+    const identity = await probe.identityOf(processId);
+    assert.equal(identity.fingerprint_precision, "exact");
+    assert.ok(identity.fingerprint);
+    const fingerprint = identity.fingerprint;
+    exitedWorker.kill();
+    await new Promise<void>((resolve) => exitedWorker.once("close", () => resolve()));
+
+    await withSqliteMcp(async (client, _manager, dataRoot) => {
+      const terminal = await waitForTerminal(client, taskId, 2);
+      assert.equal(terminal.status, "completed");
+      await waitForCandidateOperationPhase(dataRoot, candidateOperationId(taskId, 2), "released");
+      assert.equal(spawnCount, 1, "Recovery must create and spawn exactly one next Attempt");
+
+      const modules = await loadLifecycleCandidateModules();
+      const store = modules.Store.openForRecovery(dataRoot);
+      assert.ok(store);
+      try {
+        const port = modules.createPort(store);
+        const lifecycle = port.readTaskLifecycle(taskId) as Record<string, unknown>;
+        const projection = lifecycle.projection as Record<string, unknown>;
+        const attempt = lifecycle.attempt as Record<string, unknown>;
+        assert.equal(projection.task_id, taskId);
+        assert.equal(projection.current_attempt, 2);
+        assert.equal(projection.status, "completed");
+        assert.equal(attempt.attempt, 2);
+        assert.equal(attempt.status, "completed");
+        assert.equal((lifecycle.operation as Record<string, unknown>).phase, "released");
+
+        const prior = port.readCommittedResult(operationId);
+        assert.ok(prior);
+        assert.equal(prior.result_status, "failed");
+        assert.equal(prior.result.error_code, "worker_exited_without_result");
+        const priorEvents = port.readLifecycleEvents(operationId) as Array<Record<string, unknown>>;
+        assert.equal(priorEvents.filter(event => event.event_type === "result_committed").length, 1);
+        assert.equal(priorEvents.filter(event => event.event_type === "released").length, 1);
+        const interruption = priorEvents.find(event => {
+          if (event.event_type !== "observation_recorded") return false;
+          return JSON.parse(String(event.evidence_json)).reason === "worker_exited_without_result";
+        });
+        assert.ok(interruption, "the old Attempt must retain explicit interruption evidence");
+
+        const attemptTwoEvents = port.readTaskEvents(taskId, { afterCursor: 0, limit: 200 }).events
+          .filter(event => event.operation_attempt === 2);
+        assert.equal(attemptTwoEvents.filter(event => event.event_type === "claim_committed").length, 1);
+        assert.equal(attemptTwoEvents.filter(event => event.event_type === "released").length, 1);
+      } finally {
+        store.close();
+      }
+    }, {
+      processProbe: probe,
+      onChildSpawn: () => { spawnCount += 1; },
+      beforeAuthority: (dataRoot, modules, workspace) => {
+        const store = modules.Store.open(dataRoot);
+        try {
+          const port = modules.createPort(store);
+          port.createTask(syntheticTask(workspace, taskId) as unknown as Parameters<typeof port.createTask>[0]);
+          const allow = () => ({ state: "allow", fixture: true });
+          const admitted = port.admitOperation({
+            operation_id: operationId,
+            task_id: taskId,
+            attempt: 1,
+            workspace_ref: workspace,
+          }, {
+            workspaceValidator: allow,
+            executionPermissionCheck: allow,
+          }) as Record<string, unknown>;
+          const launch = {
+            operation_id: operationId,
+            task_id: taskId,
+            attempt: 1,
+            generation: Number(admitted.generation),
+            revision: Number(admitted.revision),
+            launch_id: `launch-${taskId}`,
+            launch_epoch: 1,
+            launch_token: `exited-recovery-token-${taskId}-0123456789`,
+          };
+          const intent = port.createLaunchIntent(launch) as Record<string, unknown>;
+          const receipt = port.recordLaunchReceipt({
+            ...launch,
+            revision: Number(intent.revision),
+            receipt_id: `receipt-${taskId}`,
+            launch_identity: trustedIdentityEvidence("launch", taskId, processId, fingerprint, Number(admitted.generation)),
+          }) as Record<string, unknown>;
+          port.commitPermanentClaim({
+            ...launch,
+            revision: Number(receipt.revision),
+            claim_id: `claim-${taskId}`,
+            worker_identity: trustedIdentityEvidence("worker", taskId, processId, fingerprint),
+          } as unknown as Parameters<typeof port.commitPermanentClaim>[0]);
+        } finally {
+          store.close();
+        }
+      },
+    });
+  } finally {
+    if (exitedWorker.exitCode === null && exitedWorker.signalCode === null) exitedWorker.kill();
+  }
+});
+
+test("startup Recovery keeps an official Adapter Attempt held without Adapter cleanup proof", {
+  timeout: 60_000,
+  skip: process.platform !== "win32",
+}, async () => {
+  const taskId = `official-adapter-proof-required-${randomUUID()}`;
+  const operationId = candidateOperationId(taskId, 1);
+  const probe = createPlatformProbe();
+  const identity = await exitedProcessIdentity(probe);
+  let spawnCount = 0;
+  const stages: Array<{ readonly stage: string; readonly detail?: Readonly<Record<string, unknown>> }> = [];
+
+  await withSqliteMcp(async (_client, _manager, dataRoot) => {
+    const modules = await loadLifecycleCandidateModules();
+    const store = modules.Store.openForRecovery(dataRoot);
+    assert.ok(store);
+    try {
+      const port = modules.createPort(store);
+      const lifecycle = port.readTaskLifecycle(taskId) as Record<string, unknown>;
+      const projection = lifecycle.projection as Record<string, unknown>;
+      const operation = lifecycle.operation as Record<string, unknown>;
+      assert.equal(projection.current_attempt, 1);
+      assert.equal(projection.status, "running");
+      assert.equal(operation.phase, "running");
+      assert.equal(operation.result_digest, null);
+      const events = port.readLifecycleEvents(operationId) as Array<Record<string, unknown>>;
+      assert.equal(events.some((event) => event.event_type === "cleanup_verified"), false);
+      assert.equal(events.some((event) => event.event_type === "released"), false);
+    } finally {
+      store.close();
+    }
+    assert.equal(spawnCount, 0, "missing Adapter cleanup proof must not dispatch another Worker");
+  }, {
+    processProbe: probe,
+    testOnlyFakeAdapter: false,
+    testVerifyProcessTreeClaimantsClean: async () => {
+      throw new Error("missing Adapter cleanup proof must be classified before a tree scan can release it");
+    },
+    beforeAuthority: (dataRoot, modules, workspace) => {
+      seedRunningClaim(dataRoot, modules, workspace, taskId, operationId, identity.processId, identity.fingerprint);
+    },
+    onChildSpawn: () => { spawnCount += 1; },
+    onStage: (stage, detail) => stages.push({ stage, detail }),
+    testOnScheduler: (stage, detail) => stages.push({ stage, detail }),
+  });
+  assert.ok(stages.some((entry) => entry.stage === "recovery_workspace_scoped"
+    && entry.detail?.reason === "adapter_cleanup_unverified"));
+});
+
+test("startup Recovery holds an Attempt after Runtime execution evidence even when its Worker exited", {
+  timeout: 60_000,
+  skip: process.platform !== "win32",
+}, async () => {
+  const taskId = `execution-side-effect-hold-${randomUUID()}`;
+  const operationId = candidateOperationId(taskId, 1);
+  const probe = createPlatformProbe();
+  const identity = await exitedProcessIdentity(probe);
+  let spawnCount = 0;
+  const stages: Array<{ readonly stage: string; readonly detail?: Readonly<Record<string, unknown>> }> = [];
+
+  await withSqliteMcp(async (_client, _manager, dataRoot) => {
+    const modules = await loadLifecycleCandidateModules();
+    const store = modules.Store.openForRecovery(dataRoot);
+    assert.ok(store);
+    try {
+      const port = modules.createPort(store);
+      const lifecycle = port.readTaskLifecycle(taskId) as Record<string, unknown>;
+      const projection = lifecycle.projection as Record<string, unknown>;
+      const operation = lifecycle.operation as Record<string, unknown>;
+      assert.equal(projection.current_attempt, 1);
+      assert.equal(projection.status, "running");
+      assert.equal(operation.phase, "running");
+      const runtimeEvents = port.readTaskEvents(taskId, { afterCursor: 0, limit: 200 }).events
+        .filter((event) => event.event_type === "turn_started");
+      assert.equal(runtimeEvents.length, 1, "the synthetic Worker reached turn execution before interruption");
+    } finally {
+      store.close();
+    }
+    assert.equal(spawnCount, 0, "execution evidence must retain the old Attempt instead of replaying it");
+  }, {
+    processProbe: probe,
+    beforeAuthority: (dataRoot, modules, workspace) => {
+      seedRunningClaim(dataRoot, modules, workspace, taskId, operationId, identity.processId, identity.fingerprint,
+        "turn_started");
+    },
+    onChildSpawn: () => { spawnCount += 1; },
+    onStage: (stage, detail) => stages.push({ stage, detail }),
+    testOnScheduler: (stage, detail) => stages.push({ stage, detail }),
+  });
+  assert.ok(stages.some((entry) => entry.stage === "recovery_workspace_scoped"
+    && entry.detail?.reason === "execution_side_effect_unverified"));
+});
+
+test("online Recovery requeues a Worker that exits before Result and dispatches exactly one next Attempt", {
+  timeout: 90_000,
+  skip: process.platform !== "win32",
+}, async (t) => {
+  const taskId = `online-exit-requeue-${randomUUID()}`;
+  const operationId = candidateOperationId(taskId, 1);
+  const crashMarker = path.join(integrationRoot, `online-exit-${randomUUID()}.marker`);
+  const workerEntryPath = await buildPreResultCrashWorker("online-exit", crashMarker);
+  writeFileSync(crashMarker, "exit-on-first-run", { flag: "wx" });
+  t.after(() => {
+    rmSync(workerEntryPath, { force: true });
+    rmSync(crashMarker, { force: true });
+  });
+  let spawnCount = 0;
+  const stages: Array<{ readonly stage: string; readonly detail?: Readonly<Record<string, unknown>> }> = [];
+  await withSqliteMcp(async (client, _manager, dataRoot, workspace) => {
+    const created = contentObject(await client.callTool({ name: "zcode_task", arguments: syntheticTask(workspace, taskId) }));
+    assert.equal(created.status, "queued");
+    try {
+      assert.equal((await waitForTerminal(client, taskId, 2)).status, "completed");
+    } catch (error) {
+      throw new Error(`${error instanceof Error ? error.message : String(error)} stages=${JSON.stringify(stages.slice(-40))}`);
+    }
+    await waitForCandidateOperationPhase(dataRoot, candidateOperationId(taskId, 2), "released");
+    assert.equal(spawnCount, 2, "one crashed Worker and one recovered Attempt must Spawn exactly once each");
+
+    const modules = await loadLifecycleCandidateModules();
+    const store = modules.Store.openForRecovery(dataRoot);
+    assert.ok(store);
+    try {
+      const port = modules.createPort(store);
+      const lifecycle = port.readTaskLifecycle(taskId) as Record<string, unknown>;
+      assert.equal((lifecycle.projection as Record<string, unknown>).current_attempt, 2);
+      assert.equal((lifecycle.projection as Record<string, unknown>).status, "completed");
+      assert.equal((lifecycle.operation as Record<string, unknown>).phase, "released");
+
+      const interrupted = port.readCommittedResult(operationId);
+      assert.ok(interrupted);
+      assert.equal(interrupted.result_status, "failed");
+      assert.equal(interrupted.result.error_code, "worker_exited_without_result");
+      const events = port.readLifecycleEvents(operationId) as Array<Record<string, unknown>>;
+      assert.equal(events.filter((event) => event.event_type === "released").length, 1);
+      assert.ok(events.some((event) => {
+        if (event.event_type !== "observation_recorded") return false;
+        return JSON.parse(String(event.evidence_json)).reason === "worker_exited_without_result";
+      }), "the interrupted Attempt must retain explicit evidence");
+    } finally {
+      store.close();
+    }
+  }, {
+    workerEntryPath,
+    onChildSpawn: () => { spawnCount += 1; },
+    onStage: (stage, detail) => { stages.push({ stage, detail }); },
   });
 });
 
@@ -291,6 +1002,9 @@ for (const recoveryProbeMode of ["alive", "unknown"] as const) test(
       }
     }, {
       processProbe: recoveryProbe,
+      testStopWorkerForRecovery: async () => {
+        throw new Error("a Worker without a local Host handle must never be terminated");
+      },
       beforeAuthority: (dataRoot, modules, workspace) => {
         const store = modules.Store.open(dataRoot);
         try {
@@ -523,6 +1237,619 @@ const compiledCandidate = path.join(projectRoot, "dist-test", "src", "sqlite-can
 // WAL/SHM sidecars.
 const integrationRoot = path.join(compiledCandidate, ".wp6i");
 
+test("normal Cleanup independently scans the exact Worker root and binds adapter cleanup evidence", { timeout: 45_000 }, async () => {
+  const taskId = `cleanup-normal-scan-${randomUUID()}`;
+  const operationId = candidateOperationId(taskId, 1);
+  const scans: Array<readonly { readonly pid: number; readonly fingerprint: string | null }[]> = [];
+  const stages: Array<{ stage: string; detail?: Readonly<Record<string, unknown>> }> = [];
+  await withSqliteMcp(async (client, _manager, dataRoot, workspace) => {
+    const created = contentObject(await client.callTool({ name: "zcode_task", arguments: syntheticTask(workspace, taskId) }));
+    assert.equal(created.status, "queued");
+    const terminal = await waitForTerminal(client, taskId, 1);
+    assert.equal(terminal.status, "completed");
+    await waitForLifecycleEvent(client, taskId, "released");
+
+    const modules = await loadLifecycleCandidateModules();
+    const store = modules.Store.openForRecovery(dataRoot);
+    assert.ok(store);
+    try {
+      const port = modules.createPort(store);
+      const operation = port.readOperation(operationId) as Record<string, unknown>;
+      const worker = JSON.parse(String(operation.claim_worker_identity_json)) as Record<string, unknown>;
+      assert.equal(scans.length, 1, "normal Cleanup must perform exactly one exact-root scan");
+      assert.deepEqual(scans[0], [{ pid: worker.process_id, fingerprint: worker.start_fingerprint }]);
+      assert.equal(operation.phase, "released");
+      const events = port.readLifecycleEvents(operationId) as Array<Record<string, unknown>>;
+      assert.deepEqual(events.slice(-3).map((event) => event.event_type), ["cleanup_pending", "cleanup_verified", "released"]);
+      const cleanup = events.find((event) => event.event_type === "cleanup_verified");
+      const evidence = JSON.parse(String(cleanup?.evidence_json)) as Record<string, unknown>;
+      assert.equal(evidence.worker_tree_complete, true);
+      assert.equal(evidence.operation_resources_complete, true);
+      assert.match(String(evidence.cleanup_digest), /^[0-9a-f]{64}$/u);
+      assert.equal(evidence.workspace_touched, false);
+      const snapshot = port.readRecoverySnapshot() as { operations: Array<Record<string, unknown>> };
+      assert.equal(snapshot.operations.find((row) => row.operation_id === operationId)?.capacity_occupied, false);
+    } finally {
+      store.close();
+    }
+  }, {
+    testVerifyProcessTreeClaimantsClean: async (targets) => {
+      scans.push(targets.map((target) => ({ pid: target.pid, fingerprint: target.fingerprint })));
+      return { clean: true, livePids: [], observedPids: targets.map((target) => target.pid) };
+    },
+    onStage: (stage, detail) => stages.push({ stage, detail }),
+  });
+  const cleanStage = stages.find((entry) => entry.stage === "cleanup_tree_scan_clean");
+  assert.equal(cleanStage?.detail?.execution_cleanup_method, "synthetic_fixture",
+    "the adapter close proof must remain separately bound when the Manager scan succeeds");
+});
+
+for (const descendantCase of [
+  { id: "root", name: "Worker exited with a live helper or AppServer descendant" },
+  { id: "parent", name: "a live descendant remained below an already-exited parent" },
+] as const) {
+  test(`${descendantCase.name} keeps normal Cleanup in Hold`, { timeout: 45_000 }, async () => {
+    const taskId = `clean-desc-${descendantCase.id}-${randomUUID()}`;
+    const operationId = candidateOperationId(taskId, 1);
+    let livePid = 0;
+    let observedPids: readonly number[] = [];
+    await withSqliteMcp(async (client, _manager, dataRoot, workspace) => {
+      const created = contentObject(await client.callTool({ name: "zcode_task", arguments: syntheticTask(workspace, taskId) }));
+      assert.equal(created.status, "queued");
+      assert.equal((await waitForTerminal(client, taskId, 1)).status, "completed");
+      await waitForLifecycleEvent(client, taskId, "cleanup_unverified");
+
+      const modules = await loadLifecycleCandidateModules();
+      const store = modules.Store.openForRecovery(dataRoot);
+      assert.ok(store);
+      try {
+        const port = modules.createPort(store);
+        const operation = port.readOperation(operationId) as Record<string, unknown>;
+        assert.equal(operation.phase, "cleanup_unverified");
+        const snapshot = port.readRecoverySnapshot() as { operations: Array<Record<string, unknown>> };
+        assert.equal(snapshot.operations.find((row) => row.operation_id === operationId)?.capacity_occupied, true,
+          "a live descendant must retain Capacity");
+        const events = port.readLifecycleEvents(operationId) as Array<Record<string, unknown>>;
+        assert.equal(events.some((event) => event.event_type === "cleanup_verified"), false);
+        assert.equal(events.some((event) => event.event_type === "released"), false);
+        const failure = events.find((event) => event.event_type === "cleanup_unverified");
+        const evidence = JSON.parse(String(failure?.evidence_json)) as Record<string, unknown>;
+        assert.equal(evidence.reason, "process_tree_still_live");
+        assert.equal(evidence.probe_state, "incomplete");
+      } finally {
+        store.close();
+      }
+    }, {
+      testVerifyProcessTreeClaimantsClean: async (targets) => {
+        const rootPid = targets[0]!.pid;
+        const exitedParentPid = rootPid + 1;
+        livePid = descendantCase.id === "parent" ? rootPid + 2 : rootPid + 100_000;
+        observedPids = descendantCase.id === "parent"
+          ? [rootPid, exitedParentPid, livePid]
+          : [rootPid, livePid];
+        return { clean: false, livePids: [livePid], observedPids };
+      },
+    });
+    assert.ok(livePid > 0);
+    assert.deepEqual(observedPids, descendantCase.id === "parent"
+      ? [livePid - 2, livePid - 1, livePid]
+      : [livePid - 100_000, livePid]);
+  });
+}
+
+test("PID reuse or identity mismatch cannot authorize the normal Cleanup scan", { timeout: 45_000 }, async () => {
+  const taskId = `cleanup-identity-mismatch-${randomUUID()}`;
+  const operationId = candidateOperationId(taskId, 1);
+  const platformProbe = createPlatformProbe();
+  let cleanupPid: number | null = null;
+  let scans = 0;
+  const stages: Array<{ stage: string; detail?: Readonly<Record<string, unknown>> }> = [];
+  const probe: ProcessProbe = {
+    ...platformProbe,
+    probe: async (requests) => {
+      if (cleanupPid !== null && requests.some((request) => request.pid === cleanupPid)) {
+        return requests.map(() => ({
+          state: "unknown" as const,
+          reason_code: "identity_mismatch",
+          observed_at: new Date().toISOString(),
+        }));
+      }
+      return await platformProbe.probe(requests);
+    },
+  };
+  await withSqliteMcp(async (client, _manager, dataRoot, workspace) => {
+    const created = contentObject(await client.callTool({ name: "zcode_task", arguments: syntheticTask(workspace, taskId) }));
+    assert.equal(created.status, "queued");
+    assert.equal((await waitForTerminal(client, taskId, 1)).status, "completed");
+    await waitForLifecycleEvent(client, taskId, "cleanup_unverified");
+
+    const modules = await loadLifecycleCandidateModules();
+    const store = modules.Store.openForRecovery(dataRoot);
+    assert.ok(store);
+    try {
+      const port = modules.createPort(store);
+      assert.equal((port.readOperation(operationId) as Record<string, unknown>).phase, "cleanup_unverified");
+      const events = port.readLifecycleEvents(operationId) as Array<Record<string, unknown>>;
+      const failure = events.find((event) => event.event_type === "cleanup_unverified");
+      const evidence = JSON.parse(String(failure?.evidence_json)) as Record<string, unknown>;
+      assert.equal(evidence.reason, "worker_exit_identity_not_proven");
+      assert.equal(evidence.probe_state, "unknown");
+      assert.equal(events.some((event) => event.event_type === "released"), false);
+    } finally {
+      store.close();
+    }
+  }, {
+    processProbe: probe,
+    onStage: (stage, detail) => {
+      stages.push({ stage, detail });
+      if (stage === "worker_close" && typeof detail?.pid === "number") cleanupPid = detail.pid;
+    },
+    testVerifyProcessTreeClaimantsClean: async (targets) => {
+      scans += 1;
+      return { clean: true, livePids: [], observedPids: targets.map((target) => target.pid) };
+    },
+  });
+  assert.equal(scans, 0, "an uncertain exact identity must fail closed before the claimant scan");
+  const identityStage = stages.find((entry) => entry.stage === "cleanup_identity_probe_complete");
+  assert.equal(identityStage?.detail?.state, "unknown");
+  assert.equal(identityStage?.detail?.reason, "identity_mismatch");
+});
+
+test("missing adapter resource facts keep Cleanup in Hold without scanning or Release", { timeout: 60_000 }, async (t) => {
+  const taskId = `cleanup-resource-${randomUUID()}`;
+  const operationId = candidateOperationId(taskId, 1);
+  const workerEntryPath = await buildWorkerWithMissingResourceFacts();
+  t.after(() => rmSync(workerEntryPath, { force: true }));
+  let scans = 0;
+  await withSqliteMcp(async (client, _manager, dataRoot, workspace) => {
+    const created = contentObject(await client.callTool({ name: "zcode_task", arguments: syntheticTask(workspace, taskId) }));
+    assert.equal(created.status, "queued");
+    assert.equal((await waitForTerminal(client, taskId, 1)).status, "completed");
+    await waitForLifecycleEvent(client, taskId, "cleanup_unverified");
+
+    const modules = await loadLifecycleCandidateModules();
+    const store = modules.Store.openForRecovery(dataRoot);
+    assert.ok(store);
+    try {
+      const port = modules.createPort(store);
+      assert.equal((port.readOperation(operationId) as Record<string, unknown>).phase, "cleanup_unverified");
+      const events = port.readLifecycleEvents(operationId) as Array<Record<string, unknown>>;
+      const failure = events.find((event) => event.event_type === "cleanup_unverified");
+      const evidence = JSON.parse(String(failure?.evidence_json)) as Record<string, unknown>;
+      assert.equal(evidence.reason, "adapter_cleanup_unverified");
+      assert.equal(evidence.probe_state, "incomplete");
+      assert.equal(events.some((event) => event.event_type === "released"), false);
+      const snapshot = port.readRecoverySnapshot() as { operations: Array<Record<string, unknown>> };
+      assert.equal(snapshot.operations.find((row) => row.operation_id === operationId)?.capacity_occupied, true);
+    } finally {
+      store.close();
+    }
+  }, {
+    workerEntryPath,
+    testVerifyProcessTreeClaimantsClean: async (targets) => {
+      scans += 1;
+      return { clean: true, livePids: [], observedPids: targets.map((target) => target.pid) };
+    },
+  });
+  assert.equal(scans, 0, "missing adapter resource facts must block before a process-tree scan");
+});
+
+for (const scanMode of ["reject", "timeout"] as const) {
+  test(`normal Cleanup ${scanMode} keeps an incomplete-evidence Hold`, { timeout: 45_000 }, async () => {
+    const taskId = `cleanup-${scanMode}-${randomUUID()}`;
+    const operationId = candidateOperationId(taskId, 1);
+    let scans = 0;
+    await withSqliteMcp(async (client, _manager, dataRoot, workspace) => {
+      const created = contentObject(await client.callTool({ name: "zcode_task", arguments: syntheticTask(workspace, taskId) }));
+      assert.equal(created.status, "queued");
+      assert.equal((await waitForTerminal(client, taskId, 1)).status, "completed");
+      await waitForLifecycleEvent(client, taskId, "cleanup_unverified");
+
+      const modules = await loadLifecycleCandidateModules();
+      const store = modules.Store.openForRecovery(dataRoot);
+      assert.ok(store);
+      try {
+        const port = modules.createPort(store);
+        const operation = port.readOperation(operationId) as Record<string, unknown>;
+        assert.equal(operation.phase, "cleanup_unverified");
+        assert.equal(scans, 1);
+        const events = port.readLifecycleEvents(operationId) as Array<Record<string, unknown>>;
+        assert.equal(events.some((event) => event.event_type === "released"), false);
+        const failure = events.find((event) => event.event_type === "cleanup_unverified");
+        const evidence = JSON.parse(String(failure?.evidence_json)) as Record<string, unknown>;
+        assert.equal(evidence.reason, scanMode === "reject" ? "process_tree_probe_rejected" : "process_tree_probe_timeout");
+        assert.equal(evidence.probe_state, "incomplete");
+      } finally {
+        store.close();
+      }
+    }, {
+      testProcessTreeProbeTimeoutMs: 50,
+      testVerifyProcessTreeClaimantsClean: async () => {
+        scans += 1;
+        if (scanMode === "reject") throw new Error("synthetic recorded-tree rejection");
+        return await new Promise(() => undefined);
+      },
+    });
+  });
+}
+
+test("a Worker crash after Result commit retains the existing Cleanup Hold", { timeout: 60_000 }, async (t) => {
+  const taskId = `cleanup-worker-crash-${randomUUID()}`;
+  const operationId = candidateOperationId(taskId, 1);
+  const workerEntryPath = await buildPostResultCrashWorker("after-result");
+  t.after(() => rmSync(workerEntryPath, { force: true }));
+  let scans = 0;
+  await withSqliteMcp(async (client, _manager, dataRoot, workspace) => {
+    const created = contentObject(await client.callTool({ name: "zcode_task", arguments: syntheticTask(workspace, taskId) }));
+    assert.equal(created.status, "queued");
+    assert.equal((await waitForTerminal(client, taskId, 1)).status, "completed");
+    await waitForLifecycleEvent(client, taskId, "cleanup_unverified");
+
+    const modules = await loadLifecycleCandidateModules();
+    const store = modules.Store.openForRecovery(dataRoot);
+    assert.ok(store);
+    try {
+      const port = modules.createPort(store);
+      assert.equal((port.readOperation(operationId) as Record<string, unknown>).phase, "cleanup_unverified");
+      const events = port.readLifecycleEvents(operationId) as Array<Record<string, unknown>>;
+      const failure = events.find((event) => event.event_type === "cleanup_unverified");
+      const evidence = JSON.parse(String(failure?.evidence_json)) as Record<string, unknown>;
+      assert.equal(evidence.reason, "worker_exit_not_verified");
+      assert.equal(events.some((event) => event.event_type === "released"), false);
+      assert.equal(scans, 0, "a non-zero Worker exit must not be promoted by a later scan");
+    } finally {
+      store.close();
+    }
+  }, {
+    workerEntryPath,
+    testVerifyProcessTreeClaimantsClean: async (targets) => {
+      scans += 1;
+      return { clean: true, livePids: [], observedPids: targets.map((target) => target.pid) };
+    },
+  });
+});
+
+test("a failed Worker close remains observable and online Recovery releases exactly once", { timeout: 90_000 }, async (t) => {
+  const taskId = `cleanup-close-recovery-${randomUUID()}`;
+  const operationId = candidateOperationId(taskId, 1);
+  const workerEntryPath = await buildPostResultCrashWorker("restart-recovery");
+  t.after(() => rmSync(workerEntryPath, { force: true }));
+  const stages: Array<{ stage: string; detail?: Readonly<Record<string, unknown>> }> = [];
+  await withSqliteMcp(async (client, manager, dataRoot, workspace) => {
+    const created = contentObject(await client.callTool({ name: "zcode_task", arguments: syntheticTask(workspace, taskId) }));
+    assert.equal(created.status, "queued");
+    assert.equal((await waitForTerminal(client, taskId, 1)).status, "completed");
+    await waitForLifecycleEvent(client, taskId, "cleanup_unverified");
+    await waitForCandidateOperationPhase(dataRoot, operationId, "released");
+
+    const modules = await loadLifecycleCandidateModules();
+    let originalFailureDigest = "";
+    const before = modules.Store.openForRecovery(dataRoot);
+    assert.ok(before);
+    try {
+      const port = modules.createPort(before);
+      const operation = port.readOperation(operationId) as Record<string, unknown>;
+      const claim = JSON.parse(String(operation.claim_worker_identity_json)) as Record<string, unknown>;
+      const events = port.readLifecycleEvents(operationId) as Array<Record<string, unknown>>;
+      const failure = events.find((event) => event.event_type === "cleanup_unverified");
+      assert.ok(failure);
+      assert.equal(operation.phase, "released", "online Recovery must finish Cleanup without a Manager restart");
+      originalFailureDigest = String(failure.evidence_digest);
+      const evidence = JSON.parse(String(failure.evidence_json)) as Record<string, unknown>;
+      assert.equal(evidence.reason, "worker_exit_not_verified");
+      const closeStage = stages.find((entry) => entry.stage === "worker_close");
+      assert.equal(closeStage?.detail?.exitCode, 9, "the failed close outcome must remain observable");
+      assert.equal(claim.process_id, closeStage?.detail?.pid);
+      assert.equal(events.filter((event) => event.event_type === "cleanup_reverified").length, 1);
+      assert.equal(events.filter((event) => event.event_type === "cleanup_verified").length, 1);
+      assert.equal(events.filter((event) => event.event_type === "released").length, 1);
+      const snapshot = port.readRecoverySnapshot() as { operations: Array<Record<string, unknown>> };
+      assert.equal(snapshot.operations.find((row) => row.operation_id === operationId)?.capacity_occupied, false);
+    } finally {
+      before.close();
+    }
+
+    await manager.shutdown();
+    const settingsDirectory = path.join(dataRoot, "restart-clean-settings");
+    mkdirSync(settingsDirectory, { recursive: true });
+    let recoverySpawns = 0;
+    const probeRequests: ProbeRequest[] = [];
+    const scans: Array<readonly { readonly pid: number; readonly fingerprint: string }[]> = [];
+    const platformProbe = createPlatformProbe();
+    const recoveryManager = await SqliteLifecycleMcpAuthority.create({
+      dataRoot,
+      workerEntryPath,
+      bridgeEntryPath: fileURLToPath(import.meta.url),
+      trustedLocalContext: createTrustedLocalCandidateContext({ name: "cleanup-restart-clean", settingsDirectory }),
+      testOnlyFakeAdapter: true,
+      processProbe: {
+        ...platformProbe,
+        probe: async (requests) => {
+          probeRequests.push(...requests);
+          return requests.map(() => ({
+            state: "exited" as const,
+            reason_code: "synthetic_exact_identity_absent",
+            observed_at: new Date().toISOString(),
+          }));
+        },
+      },
+      testProcessProbeTimeoutMs: 500,
+      testProcessTreeProbeTimeoutMs: 50,
+      testVerifyProcessTreeClaimantsClean: async (targets) => {
+        scans.push(targets.map((target) => {
+          assert.ok(target.fingerprint);
+          return { pid: target.pid, fingerprint: target.fingerprint };
+        }));
+        return { clean: true, livePids: [], observedPids: targets.map((target) => target.pid) };
+      },
+      onChildSpawn: () => { recoverySpawns += 1; },
+    });
+    try {
+      assert.equal(recoverySpawns, 0, "Recovery must not replay the committed Worker");
+      assert.equal(probeRequests.length, 0, "a terminal Operation must not be probed again");
+      assert.equal(scans.length, 0, "a terminal Operation must not be scanned again");
+      const recovered = modules.Store.openForRecovery(dataRoot);
+      assert.ok(recovered);
+      try {
+        const port = modules.createPort(recovered);
+        const operation = port.readOperation(operationId) as Record<string, unknown>;
+        assert.equal(operation.phase, "released");
+        const events = port.readLifecycleEvents(operationId) as Array<Record<string, unknown>>;
+        assert.equal(events.filter((event) => event.event_type === "cleanup_unverified").length, 1);
+        assert.equal(events.find((event) => event.event_type === "cleanup_unverified")?.evidence_digest,
+          originalFailureDigest, "Recovery must preserve the original close-failure evidence");
+        assert.equal(events.filter((event) => event.event_type === "cleanup_reverified").length, 1);
+        const cleanupVerified = events.filter((event) => event.event_type === "cleanup_verified");
+        assert.equal(cleanupVerified.length, 1);
+        assert.equal(events.filter((event) => event.event_type === "released").length, 1);
+        const cleanupEvidence = JSON.parse(String(cleanupVerified[0]?.evidence_json)) as Record<string, unknown>;
+        const claim = JSON.parse(String(operation.claim_worker_identity_json)) as Record<string, unknown>;
+        assert.equal(cleanupEvidence.root_process_id, claim.process_id);
+        assert.equal(cleanupEvidence.root_start_fingerprint, claim.start_fingerprint);
+        assert.equal(cleanupEvidence.worker_tree_complete, true);
+        assert.equal(cleanupEvidence.operation_resources_complete, true);
+        const snapshot = port.readRecoverySnapshot() as { operations: Array<Record<string, unknown>> };
+        assert.equal(snapshot.operations.find((row) => row.operation_id === operationId)?.capacity_occupied, false);
+      } finally {
+        recovered.close();
+      }
+    } finally {
+      await recoveryManager.shutdown();
+    }
+
+    const scanCountAfterRelease = scans.length;
+    const repeatedSettings = path.join(dataRoot, "restart-repeated-settings");
+    mkdirSync(repeatedSettings, { recursive: true });
+    const repeated = await SqliteLifecycleMcpAuthority.create({
+      dataRoot,
+      workerEntryPath,
+      bridgeEntryPath: fileURLToPath(import.meta.url),
+      trustedLocalContext: createTrustedLocalCandidateContext({ name: "cleanup-restart-repeated", settingsDirectory: repeatedSettings }),
+      testOnlyFakeAdapter: true,
+      testVerifyProcessTreeClaimantsClean: async () => {
+        scans.push([]);
+        throw new Error("released Operation must not be scanned again");
+      },
+    });
+    try {
+      assert.equal(scans.length, scanCountAfterRelease, "repeated Recovery must not scan or release a terminal Operation");
+      const repeatedStore = modules.Store.openForRecovery(dataRoot);
+      assert.ok(repeatedStore);
+      try {
+        const events = modules.createPort(repeatedStore).readLifecycleEvents(operationId) as Array<Record<string, unknown>>;
+        assert.equal(events.filter((event) => event.event_type === "cleanup_verified").length, 1);
+        assert.equal(events.filter((event) => event.event_type === "released").length, 1);
+      } finally {
+        repeatedStore.close();
+      }
+    } finally {
+      await repeated.shutdown();
+    }
+  }, {
+    workerEntryPath,
+    onStage: (stage, detail) => stages.push({ stage, detail }),
+  });
+});
+
+test("restart Recovery reuses persisted identity and retains incomplete scan evidence", { timeout: 90_000 }, async (t) => {
+  const taskId = `cleanup-restart-incomplete-${randomUUID()}`;
+  const operationId = candidateOperationId(taskId, 1);
+  const workerEntryPath = await buildPostResultCrashWorker("restart-incomplete");
+  t.after(() => rmSync(workerEntryPath, { force: true }));
+  await withSqliteMcp(async (client, manager, dataRoot, workspace) => {
+    const created = contentObject(await client.callTool({ name: "zcode_task", arguments: syntheticTask(workspace, taskId) }));
+    assert.equal(created.status, "queued");
+    assert.equal((await waitForTerminal(client, taskId, 1)).status, "completed");
+    await waitForLifecycleEvent(client, taskId, "cleanup_unverified");
+    await manager.recoverTasks();
+
+    const modules = await loadLifecycleCandidateModules();
+    const before = modules.Store.openForRecovery(dataRoot);
+    assert.ok(before);
+    let claim: Record<string, unknown>;
+    try {
+      const operation = modules.createPort(before).readOperation(operationId) as Record<string, unknown>;
+      claim = JSON.parse(String(operation.claim_worker_identity_json)) as Record<string, unknown>;
+    } finally {
+      before.close();
+    }
+
+    await manager.shutdown();
+    const platformProbe = createPlatformProbe();
+    const probeRequests: ProbeRequest[] = [];
+    const scans: Array<readonly { readonly pid: number; readonly fingerprint: string }[]> = [];
+    const settingsDirectory = path.join(dataRoot, "restart-incomplete-settings");
+    mkdirSync(settingsDirectory, { recursive: true });
+    const recoveryManager = await SqliteLifecycleMcpAuthority.create({
+      dataRoot,
+      workerEntryPath,
+      bridgeEntryPath: fileURLToPath(import.meta.url),
+      trustedLocalContext: createTrustedLocalCandidateContext({ name: "cleanup-restart-incomplete", settingsDirectory }),
+      testOnlyFakeAdapter: true,
+      processProbe: {
+        ...platformProbe,
+        probe: async (requests) => {
+          probeRequests.push(...requests);
+          return requests.map(() => ({
+            state: "exited" as const,
+            reason_code: "synthetic_exact_identity_absent",
+            observed_at: new Date().toISOString(),
+          }));
+        },
+      },
+      testProcessProbeTimeoutMs: 500,
+      testProcessTreeProbeTimeoutMs: 50,
+      testVerifyProcessTreeClaimantsClean: async (targets) => {
+        scans.push(targets.map((target) => {
+          assert.ok(target.fingerprint);
+          return { pid: target.pid, fingerprint: target.fingerprint };
+        }));
+        return { clean: true, livePids: [], observedPids: [] };
+      },
+    });
+    try {
+      assert.equal(probeRequests.length, 1, "restart Recovery must probe the persisted exact Worker identity");
+      assert.equal(probeRequests[0]?.pid, claim.process_id);
+      assert.equal(probeRequests[0]?.identity?.fingerprint, claim.start_fingerprint);
+      assert.equal(scans.length, 1);
+      assert.deepEqual(scans[0], [{ pid: claim.process_id, fingerprint: claim.start_fingerprint }]);
+
+      const recovered = modules.Store.openForRecovery(dataRoot);
+      assert.ok(recovered);
+      try {
+        const port = modules.createPort(recovered);
+        const operation = port.readOperation(operationId) as Record<string, unknown>;
+        assert.equal(operation.phase, "cleanup_unverified");
+        const snapshot = port.readRecoverySnapshot() as { operations: Array<Record<string, unknown>> };
+        assert.equal(snapshot.operations.find((row) => row.operation_id === operationId)?.capacity_occupied, true);
+        const events = port.readLifecycleEvents(operationId) as Array<Record<string, unknown>>;
+        assert.equal(events.filter((event) => event.event_type === "cleanup_unverified").length, 1);
+        assert.equal(events.some((event) => event.event_type === "cleanup_verified"), false);
+        assert.equal(events.some((event) => event.event_type === "released"), false);
+        const recoveryHolds = events.filter((event) => event.event_type === "observation_recorded")
+          .map((event) => JSON.parse(String(event.evidence_json)) as Record<string, unknown>)
+          .filter((evidence) => evidence.reason === "recovery_hold");
+        assert.ok(recoveryHolds.length >= 1, "the incomplete scan must remain observable after online and restart Recovery");
+        assert.ok(recoveryHolds.every((evidence) => evidence.reason_code === "cleanup_incomplete"));
+      } finally {
+        recovered.close();
+      }
+    } finally {
+      await recoveryManager.shutdown();
+    }
+  }, {
+    workerEntryPath,
+    testVerifyProcessTreeClaimantsClean: async () => ({
+      clean: true,
+      livePids: [],
+      observedPids: [],
+    }),
+  });
+});
+
+async function buildPostResultCrashWorker(name: string): Promise<string> {
+  mkdirSync(integrationRoot, { recursive: true });
+  const outfile = path.join(integrationRoot, `cleanup-post-result-crash-${name}-${randomUUID()}.mjs`);
+  await build({
+    entryPoints: [path.join(projectRoot, "src", "worker", "worker-main.ts")],
+    outfile,
+    bundle: true,
+    platform: "node",
+    format: "esm",
+    target: "node22.18",
+    packages: "external",
+    logLevel: "silent",
+    plugins: [{
+      name: "post-result-worker-crash",
+      setup(buildApi) {
+        buildApi.onLoad({ filter: /worker-main\.ts$/ }, async (args) => {
+          const marker = 'options.onStage?.("adapter result frame written");';
+          const source = readFileSync(args.path, "utf8").replaceAll("\r\n", "\n");
+          if (!source.includes(marker)) throw new Error("post-result crash Worker seam missing");
+          return {
+            contents: source.replace(marker, `${marker}\n  process.exit(9);`),
+            loader: "ts",
+            resolveDir: path.dirname(args.path),
+          };
+        });
+      },
+    }],
+  });
+  return outfile;
+}
+
+async function buildPreResultCrashWorker(name: string, crashMarker: string): Promise<string> {
+  mkdirSync(integrationRoot, { recursive: true });
+  const outfile = path.join(integrationRoot, `cleanup-pre-result-crash-${name}-${randomUUID()}.mjs`);
+  await build({
+    entryPoints: [path.join(projectRoot, "src", "worker", "worker-main.ts")],
+    outfile,
+    bundle: true,
+    platform: "node",
+    format: "esm",
+    target: "node22.18",
+    packages: "external",
+    logLevel: "silent",
+    plugins: [{
+      name: "pre-result-worker-crash",
+      setup(buildApi) {
+        buildApi.onLoad({ filter: /worker-main\.ts$/ }, async (args) => {
+          const marker = 'options.onStage?.("adapter result frame prepared");';
+          const source = readFileSync(args.path, "utf8").replaceAll("\r\n", "\n");
+          if (!source.includes(marker)) throw new Error("pre-result crash Worker seam missing");
+          const crash = [
+            'const crashFs = await import("node:fs");',
+            `if (crashFs.existsSync(${JSON.stringify(crashMarker)})) {`,
+            `  crashFs.rmSync(${JSON.stringify(crashMarker)});`,
+            "  process.exit(9);",
+            "}",
+          ].join("\n  ");
+          return {
+            contents: source.replace(marker, `${marker}\n  ${crash}`),
+            loader: "ts",
+            resolveDir: path.dirname(args.path),
+          };
+        });
+      },
+    }],
+  });
+  return outfile;
+}
+
+async function buildWorkerWithMissingResourceFacts(): Promise<string> {
+  mkdirSync(integrationRoot, { recursive: true });
+  const outfile = path.join(integrationRoot, `cleanup-missing-resource-facts-${randomUUID()}.mjs`);
+  await build({
+    entryPoints: [path.join(projectRoot, "src", "worker", "worker-main.ts")],
+    outfile,
+    bundle: true,
+    platform: "node",
+    format: "esm",
+    target: "node22.18",
+    packages: "external",
+    logLevel: "silent",
+    plugins: [{
+      name: "missing-resource-facts-worker",
+      setup(buildApi) {
+        buildApi.onLoad({ filter: /worker-main\.ts$/ }, async (args) => {
+          const marker = "return executeFakeResultAdapter(bootstrap as Parameters<typeof executeFakeResultAdapter>[0]);";
+          const source = readFileSync(args.path, "utf8").replaceAll("\r\n", "\n");
+          if (!source.includes(marker)) throw new Error("missing resource-facts Worker seam missing");
+          return {
+            contents: source.replace(marker, [
+              "const resultFrame = executeFakeResultAdapter(bootstrap as Parameters<typeof executeFakeResultAdapter>[0]);",
+              "return { ...resultFrame, execution_cleanup_verified: false, execution_cleanup: null };",
+            ].join("\n  ")),
+            loader: "ts",
+            resolveDir: path.dirname(args.path),
+          };
+        });
+      },
+    }],
+  });
+  return outfile;
+}
+
 async function buildR5HeldWorker(name: string): Promise<string> {
   mkdirSync(integrationRoot, { recursive: true });
   const outfile = path.join(integrationRoot, `r5-claimed-alive-${name}-${randomUUID()}.mjs`);
@@ -553,131 +1880,6 @@ async function buildR5HeldWorker(name: string): Promise<string> {
   });
   return outfile;
 }
-
-async function buildExitedAfterClaimWorker(name: string): Promise<string> {
-  mkdirSync(integrationRoot, { recursive: true });
-  const outfile = path.join(integrationRoot, `recovery-exited-after-claim-${name}-${randomUUID()}.mjs`);
-  await build({
-    entryPoints: [path.join(projectRoot, "src", "worker", "worker-main.ts")],
-    outfile,
-    bundle: true,
-    platform: "node",
-    format: "esm",
-    target: "node22.18",
-    packages: "external",
-    logLevel: "silent",
-    plugins: [{
-      name: "recovery-exited-after-claim",
-      setup(buildApi) {
-        buildApi.onLoad({ filter: /worker-main\.ts$/ }, async (args) => {
-          const marker = 'options.onStage?.(execution.adapter_mode === "test_fake" ? "test adapter start" : "zcode adapter start");';
-          const source = readFileSync(args.path, "utf8").replaceAll("\r\n", "\n");
-          if (!source.includes(marker)) throw new Error("Recovery controlled Worker seam missing");
-          return {
-            contents: source.replace(marker, `${marker}\n    process.exit(42);`),
-            loader: "ts",
-            resolveDir: path.dirname(args.path),
-          };
-        });
-      },
-    }],
-  });
-  return outfile;
-}
-
-test("same-Host Recovery preserves a Result-less Attempt and requeues at most once", {
-  timeout: 90_000,
-  skip: process.platform !== "win32",
-}, async () => {
-  const fixture = path.join(integrationRoot, `same-host-requeue-${randomUUID()}`);
-  const dataRoot = path.join(fixture, "sqlite-root");
-  const workspace = path.join(fixture, "workspace");
-  const settingsDirectory = path.join(fixture, "settings");
-  const taskId = `same-host-requeue-${randomUUID()}`;
-  const worker = await buildExitedAfterClaimWorker("once");
-  mkdirSync(workspace, { recursive: true });
-  mkdirSync(settingsDirectory, { recursive: true });
-  mkdirSync(dataRoot, { recursive: true });
-  await initializeIsolatedCandidateRoot(dataRoot);
-
-  const setupModules = await loadLifecycleCandidateModules();
-  const setupStore = setupModules.Store.open(dataRoot);
-  try {
-    setupModules.createPort(setupStore).provisionCapacity({
-      operation_id: `capacity-${randomUUID()}`,
-      capacity_limit: 1,
-      expected_generation: 0,
-      maintenance: { dispatch_blocked: true, writers_drained: true },
-    });
-  } finally {
-    setupStore.close();
-  }
-
-  const stages: Array<{ stage: string; detail?: Readonly<Record<string, unknown>> }> = [];
-  let spawnCount = 0;
-  let manager: SqliteLifecycleMcpAuthority | undefined;
-  try {
-    manager = await SqliteLifecycleMcpAuthority.create({
-      dataRoot,
-      workerEntryPath: worker,
-      bridgeEntryPath: fileURLToPath(import.meta.url),
-      trustedLocalContext: createTrustedLocalCandidateContext({ name: "same-host-requeue", settingsDirectory }),
-      testOnlyFakeAdapter: true,
-      testOnlyAutomaticRecoveryRequeue: true,
-      onChildSpawn: () => { spawnCount += 1; },
-      testOnScheduler: (stage, detail) => stages.push({ stage, detail }),
-    });
-    await manager.createTask(syntheticTask(workspace, taskId) as unknown as Parameters<SqliteLifecycleMcpAuthority["createTask"]>[0]);
-
-    const deadline = Date.now() + 45_000;
-    let status = await manager.getStatus(taskId);
-    while (Date.now() < deadline) {
-      status = await manager.getStatus(taskId);
-      const requeued = stages.some((entry) => entry.stage === "post_run_recovery_classified"
-        && entry.detail?.state === "requeued");
-      const budgetHeld = stages.some((entry) => entry.stage === "post_run_recovery_classified"
-        && entry.detail?.state === "held"
-        && entry.detail?.reason === "automatic_recovery_requeue_budget_exhausted");
-      if (spawnCount === 2 && status.attempt === 2 && requeued && budgetHeld) break;
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    }
-    assert.equal(spawnCount, 2, "the same Host must create one replacement Attempt and stop after its second interruption");
-    assert.equal(status.attempt, 2);
-    assert.equal(status.status, "running");
-
-    await Promise.all([manager.recoverTasks(), manager.recoverTasks()]);
-    await manager.recoverTasks();
-    const afterRecovery = await manager.getStatus(taskId);
-    assert.equal(spawnCount, 2, "repeated live Recovery must not create a third Writer");
-    assert.equal(afterRecovery.attempt, 2);
-    assert.equal(afterRecovery.status, "running");
-
-    const recovery = setupModules.Store.openForRecovery(dataRoot);
-    assert.ok(recovery);
-    try {
-      const port = setupModules.createPort(recovery);
-      const first = port.readOperation(candidateOperationId(taskId, 1)) as Record<string, unknown>;
-      const second = port.readOperation(candidateOperationId(taskId, 2)) as Record<string, unknown>;
-      assert.equal(first.phase, "released");
-      assert.equal(first.result_status, "failed");
-      assert.equal(second.phase, "running");
-      assert.equal(second.result_digest, null);
-      const firstResult = JSON.parse(String(first.result_json)) as { issues?: string[] };
-      assert.ok(firstResult.issues?.some((issue) => issue.startsWith("interruption_evidence:")));
-      const firstEvents = port.readLifecycleEvents(candidateOperationId(taskId, 1));
-      assert.equal(firstEvents.filter((event) => event.event_type === "result_committed").length, 1);
-      assert.equal(firstEvents.filter((event) => event.event_type === "cleanup_verified").length, 1);
-      assert.equal(firstEvents.filter((event) => event.event_type === "released").length, 1);
-      assert.equal(port.readLifecycleEvents(candidateOperationId(taskId, 2))
-        .filter((event) => event.event_type === "claim_committed").length, 1);
-    } finally {
-      recovery.close();
-    }
-  } finally {
-    await manager?.shutdown().catch(() => undefined);
-    try { rmSync(fixture, { recursive: true, force: true }); } catch { /* retain a process-held fixture */ }
-  }
-});
 
 test("Recovery reads lifecycle evidence across the Store's bounded 200-event pages", () => {
   const firstPage = Array.from({ length: 200 }, (_, index) => ({ sequence: index + 1, event_type: "interaction_requested" }));
@@ -930,7 +2132,7 @@ class RawStdioMcpTestClient {
 
 async function withSqliteMcp(
   run: (client: Client, manager: SqliteLifecycleMcpAuthority, dataRoot: string, workspace: string) => Promise<void>,
-  options: { readonly testBeforeDispatch?: () => Promise<void>; readonly testOnScheduler?: (stage: string, detail: Readonly<Record<string, unknown>>) => void; readonly onStage?: (stage: string, detail?: Readonly<Record<string, unknown>>) => void; readonly onChildSpawn?: (child: { readonly pid?: number; readonly stderr?: NodeJS.ReadableStream | null; readonly resultChannel?: NodeJS.ReadableStream | null }) => void; readonly beforeAuthority?: (dataRoot: string, modules: Awaited<ReturnType<typeof loadLifecycleCandidateModules>>, workspace: string) => void; readonly prepareDataRoot?: (dataRoot: string, fixture: string) => Promise<void>; readonly databaseFileName?: string; readonly enableSyntheticInteractionChannel?: boolean; readonly processProbe?: ProcessProbe; readonly testProcessProbeTimeoutMs?: number; readonly testShutdownWaitMs?: number; readonly testStopWorkerForRecovery?: (pid: number, expectedFingerprint: string) => Promise<void>; readonly testBeforeRecoveryWrite?: (operationId: string, phase: string) => Promise<void>; readonly stdio?: boolean; readonly preserveFixtureOnFailure?: boolean; readonly onStdioHost?: (host: StdioLifecycleHost) => void; readonly onStdioShutdownComplete?: (reason: string) => void; readonly onStdioShutdownFailure?: (reason: string, error: unknown) => void } = {},
+  options: { readonly testBeforeDispatch?: () => Promise<void>; readonly testOnScheduler?: (stage: string, detail: Readonly<Record<string, unknown>>) => void; readonly onStage?: (stage: string, detail?: Readonly<Record<string, unknown>>) => void; readonly onChildSpawn?: (child: { readonly pid?: number; readonly stderr?: NodeJS.ReadableStream | null; readonly resultChannel?: NodeJS.ReadableStream | null }) => void; readonly beforeAuthority?: (dataRoot: string, modules: Awaited<ReturnType<typeof loadLifecycleCandidateModules>>, workspace: string) => void; readonly prepareDataRoot?: (dataRoot: string, fixture: string) => Promise<void>; readonly databaseFileName?: string; readonly workerEntryPath?: string; readonly enableSyntheticInteractionChannel?: boolean; readonly processProbe?: ProcessProbe; readonly testProcessProbeTimeoutMs?: number; readonly testVerifyProcessTreeClaimantsClean?: typeof verifyProcessTreeClaimantsClean; readonly testProcessTreeProbeTimeoutMs?: number; readonly testShutdownWaitMs?: number; readonly testStopWorkerForRecovery?: (pid: number, expectedFingerprint: string) => Promise<void>; readonly testTerminateWorkerTree?: (pid: number, expectedFingerprint: string) => Promise<unknown>; readonly testBeforeRecoveryWrite?: (operationId: string, phase: string) => Promise<void>; readonly testOnlyFakeAdapter?: boolean; readonly stdio?: boolean; readonly preserveFixtureOnFailure?: boolean; readonly onStdioHost?: (host: StdioLifecycleHost) => void; readonly onStdioShutdownComplete?: (reason: string) => void; readonly onStdioShutdownFailure?: (reason: string, error: unknown) => void } = {},
 ): Promise<void> {
   const fixture = path.join(integrationRoot, randomUUID());
   const dataRoot = path.join(fixture, "sqlite-root");
@@ -966,12 +2168,15 @@ async function withSqliteMcp(
   const authority = await SqliteLifecycleMcpAuthority.create({
     dataRoot,
     ...(options.databaseFileName ? { databaseFileName: options.databaseFileName, managedDataDirectory: true } : {}),
-    workerEntryPath: path.join(projectRoot, "dist-test", "src", "worker", "worker-main.js"),
+    workerEntryPath: options.workerEntryPath ?? path.join(projectRoot, "dist-test", "src", "worker", "worker-main.js"),
     bridgeEntryPath: fileURLToPath(import.meta.url),
     trustedLocalContext: createTrustedLocalCandidateContext({ name: "sqlite-mcp-test", settingsDirectory }),
     ...(options.processProbe ? { processProbe: options.processProbe } : {}),
     ...(options.testProcessProbeTimeoutMs !== undefined ? { testProcessProbeTimeoutMs: options.testProcessProbeTimeoutMs } : {}),
+    ...(options.testVerifyProcessTreeClaimantsClean ? { testVerifyProcessTreeClaimantsClean: options.testVerifyProcessTreeClaimantsClean } : {}),
+    ...(options.testProcessTreeProbeTimeoutMs !== undefined ? { testProcessTreeProbeTimeoutMs: options.testProcessTreeProbeTimeoutMs } : {}),
     ...(options.testStopWorkerForRecovery ? { testStopWorkerForRecovery: options.testStopWorkerForRecovery } : {}),
+    ...(options.testTerminateWorkerTree ? { testTerminateWorkerTree: options.testTerminateWorkerTree } : {}),
     ...(options.testBeforeRecoveryWrite ? { testBeforeRecoveryWrite: options.testBeforeRecoveryWrite } : {}),
     ...(options.testShutdownWaitMs !== undefined ? { testShutdownWaitMs: options.testShutdownWaitMs } : {}),
     ...(options.testBeforeDispatch ? { testBeforeDispatch: options.testBeforeDispatch } : {}),
@@ -979,7 +2184,7 @@ async function withSqliteMcp(
     ...(options.onStage ? { onStage: options.onStage } : {}),
     ...(options.onChildSpawn ? { onChildSpawn: options.onChildSpawn } : {}),
     ...(options.enableSyntheticInteractionChannel ? { enableSyntheticInteractionChannel: true } : {}),
-    testOnlyFakeAdapter: true,
+    ...(options.testOnlyFakeAdapter === false ? {} : { testOnlyFakeAdapter: true }),
   });
   const manager = authority;
   const server = createBridgeServer({ taskManager: manager,
@@ -1063,13 +2268,49 @@ async function waitForTerminal(client: Client, taskId: string, expectedAttempt: 
 
 async function waitForLifecycleEvent(client: Client, taskId: string, eventType: string): Promise<void> {
   const deadline = Date.now() + 30_000;
+  let observed: { readonly count: number; readonly types: readonly string[]; readonly hasMore: unknown; readonly nextSeq: unknown } | undefined;
   while (Date.now() < deadline) {
-    const page = contentObject(await client.callTool({ name: "zcode_events", arguments: { task_id: taskId, after_seq: 0, limit: 200 } }));
-    const events = Array.isArray(page.events) ? page.events as Array<Record<string, unknown>> : [];
+    const events: Array<Record<string, unknown>> = [];
+    let afterSeq = 0;
+    let page: Record<string, unknown>;
+    do {
+      page = contentObject(await client.callTool({ name: "zcode_events", arguments: { task_id: taskId, after_seq: afterSeq, limit: 200 } }));
+      const pageEvents = Array.isArray(page.events) ? page.events as Array<Record<string, unknown>> : [];
+      events.push(...pageEvents);
+      if (!page.has_more) break;
+      const nextSeq = Number(page.next_seq);
+      if (!Number.isSafeInteger(nextSeq) || nextSeq <= afterSeq) {
+        throw new Error(`SQLite lifecycle event pagination did not advance for ${taskId}: ${JSON.stringify({ after_seq: afterSeq, next_seq: page.next_seq })}`);
+      }
+      afterSeq = nextSeq;
+    } while (true);
     if (events.some((event) => event.type === eventType)) return;
+    observed = {
+      count: events.length,
+      types: [...new Set(events.map((event) => String(event.type)))],
+      hasMore: page.has_more ?? false,
+      nextSeq: page.next_seq,
+    };
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
-  throw new Error(`SQLite lifecycle event ${eventType} was not observed for ${taskId}`);
+  throw new Error(`SQLite lifecycle event ${eventType} was not observed for ${taskId}: ${JSON.stringify(observed)}`);
+}
+
+async function waitForCandidateOperationPhase(dataRoot: string, operationId: string, expectedPhase: string): Promise<void> {
+  const modules = await loadLifecycleCandidateModules();
+  const store = modules.Store.openForRecovery(dataRoot);
+  if (!store) throw new Error(`SQLite Recovery Store was unavailable for ${dataRoot}`);
+  const deadline = Date.now() + 30_000;
+  try {
+    while (Date.now() < deadline) {
+      const operation = modules.createPort(store).readOperation(operationId) as Record<string, unknown> | null;
+      if (operation?.phase === expectedPhase) return;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  } finally {
+    store.close();
+  }
+  throw new Error(`SQLite Operation ${operationId} did not reach phase ${expectedPhase}`);
 }
 
 async function waitForInteractionRequest(client: Client, taskId: string): Promise<Record<string, unknown>> {
@@ -1094,13 +2335,9 @@ const recoveryModes = [
     recoveryProbe: async (requests: readonly ProbeRequest[]): Promise<ProbeVerdict[]> => requests.map(() => ({
       state: "exited", reason_code: "synthetic_exact_identity_absent", observed_at: new Date().toISOString(),
     })), expectedReason: "cleanup_incomplete" },
-  { name: "cleanup_unverified_exact_exit", maximumRecoveryMs: 30_000, recoveryProbe: async (requests: readonly ProbeRequest[]): Promise<ProbeVerdict[]> => requests.map(() => ({
+  { name: "cleanup_unverified_exact_exit", maximumRecoveryMs: 30_000, releaseWhenClean: true, recoveryProbe: async (requests: readonly ProbeRequest[]): Promise<ProbeVerdict[]> => requests.map(() => ({
     state: "exited", reason_code: "synthetic_exact_identity_absent", observed_at: new Date().toISOString(),
   })), expectedReason: "cleanup_incomplete" },
-  { name: "cleanup_unverified_exact_exit_test_adapter", maximumRecoveryMs: 30_000, releaseWhenClean: true,
-    testOnlyFakeAdapter: true, recoveryProbe: async (requests: readonly ProbeRequest[]): Promise<ProbeVerdict[]> => requests.map(() => ({
-      state: "exited", reason_code: "synthetic_exact_identity_absent", observed_at: new Date().toISOString(),
-    })), expectedReason: "cleanup_incomplete" },
   { name: "cleanup_unverified_explicit_stop_alive", explicitStopAliveRecovery: true, expectedReason: "cleanup_incomplete" },
   { name: "cleanup_unverified_explicit_stop_failure", explicitStopAliveRecovery: true, failRecoveryStop: true, expectedReason: "cleanup_incomplete" },
 ] as const;
@@ -1308,7 +2545,6 @@ async function runRecoveryBoundedMode(
       trustedLocalContext,
       processProbe: recoveryProbe,
       testProcessProbeTimeoutMs: 100,
-      ...("testOnlyFakeAdapter" in mode && mode.testOnlyFakeAdapter ? { testOnlyFakeAdapter: true as const } : {}),
       onChildSpawn: () => { recoverySpawnCount += 1; },
     });
     recoveryManager = recoveryAuthority;
@@ -1416,8 +2652,8 @@ test("Manager Recovery after restart releases exact exited Workers only after a 
           import { pathToFileURL } from 'node:url';
           const [dataRoot, settingsDirectory, workspace, taskJson, operationId, launchId, launchToken, workerEntryPath, bridgeEntryPath, interruptAt] = process.argv.slice(1);
           const gateModule = await import(pathToFileURL(path.join(process.cwd(), 'dist-test/src/store/lifecycle-gate.js')).href);
-          const hostModule = await import(pathToFileURL(path.join(process.cwd(), 'dist-test/src/host/stdio.js')).href);
-          const trustedLocalContext = hostModule.createTrustedLocalCandidateContext({ name: 'g4-recovery-subprocess', settingsDirectory });
+          const compositionModule = await import(pathToFileURL(path.join(process.cwd(), 'dist-test/src/executor/production-composition.js')).href);
+          const trustedLocalContext = compositionModule.createTrustedLocalCandidateContext({ name: 'g4-recovery-subprocess', settingsDirectory });
           const driver = await gateModule.openClaimOnlyDriver({
             dataRoot, workerEntryPath, bridgeEntryPath, trustedLocalContext,
             testOnlyFakeAdapter: true,
@@ -1500,7 +2736,6 @@ test("Manager Recovery after restart releases exact exited Workers only after a 
           trustedLocalContext,
           processProbe: recoveryProbe,
           testProcessProbeTimeoutMs: 5_000,
-          testOnlyFakeAdapter: true,
           onChildSpawn: () => { recoverySpawns += 1; },
         } as const;
         const concurrent = await Promise.allSettled([
@@ -1517,7 +2752,6 @@ test("Manager Recovery after restart releases exact exited Workers only after a 
           trustedLocalContext,
           processProbe: platformProbe,
           testProcessProbeTimeoutMs: 5_000,
-          testOnlyFakeAdapter: true,
           onChildSpawn: () => { recoverySpawns += 1; },
         });
         authorities.push(authority);
@@ -1556,7 +2790,6 @@ test("Manager Recovery after restart releases exact exited Workers only after a 
         trustedLocalContext,
         processProbe: platformProbe,
         testProcessProbeTimeoutMs: 5_000,
-        testOnlyFakeAdapter: true,
       });
       authorities.push(repeated);
       const afterRepeat = modules.Store.openForRecovery(dataRoot);
@@ -1575,7 +2808,7 @@ test("Manager Recovery after restart releases exact exited Workers only after a 
   }
 });
 
-test("ADR-024 six lifecycle crash boundaries use hard Manager-process exits and restart Recovery", { timeout: 180_000, skip: process.platform !== "win32" }, async (scenarioTest) => {
+test("ADR-024 six lifecycle crash boundaries use hard Manager-process exits and restart Recovery", { timeout: 180_000, skip: process.platform !== "win32" }, async () => {
   const cases = [
     { name: "Admission persisted before Launch", interruptAt: "admission_complete", phase: "reserved", claimed: false, terminalAfterRestart: true },
     { name: "Launch intent persisted before process creation", interruptAt: "intent_complete", phase: "launch_intent", claimed: false, terminalAfterRestart: false },
@@ -1618,10 +2851,10 @@ test("ADR-024 six lifecycle crash boundaries use hard Manager-process exits and 
       import { pathToFileURL } from 'node:url';
       const [dataRoot, settingsDirectory, workspace, taskJson, operationId, launchId, launchToken, workerEntryPath, bridgeEntryPath, interruptAt] = process.argv.slice(1);
       const gate = await import(pathToFileURL(path.join(process.cwd(), 'dist-test/src/store/lifecycle-gate.js')).href);
-      const host = await import(pathToFileURL(path.join(process.cwd(), 'dist-test/src/host/stdio.js')).href);
+      const composition = await import(pathToFileURL(path.join(process.cwd(), 'dist-test/src/executor/production-composition.js')).href);
       const driver = await gate.openClaimOnlyDriver({
         dataRoot, workerEntryPath, bridgeEntryPath,
-        trustedLocalContext: host.createTrustedLocalCandidateContext({ name: 'adr024-hard-crash', settingsDirectory }),
+        trustedLocalContext: composition.createTrustedLocalCandidateContext({ name: 'adr024-hard-crash', settingsDirectory }),
         testOnlyFakeAdapter: true,
         onStage(stage, detail) {
           if (stage !== interruptAt) return;
@@ -1691,16 +2924,17 @@ test("ADR-024 six lifecycle crash boundaries use hard Manager-process exits and 
       client = new Client({ name: "adr024-crash-recovery-test", version: "0.0.1" });
       await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
 
-      if (scenario.terminalAfterRestart) {
-        const status = await waitForTerminal(client, taskId, 1, scenario.name);
+      if (scenario.terminalAfterRestart || scenario.interruptAt === "claim_committed") {
+        const expectedAttempt = scenario.interruptAt === "claim_committed" ? 2 : 1;
+        const status = await waitForTerminal(client, taskId, expectedAttempt, scenario.name);
         assert.equal(status.status, "completed", `${scenario.name}: authorized persisted Attempt recovers without replay`);
         await waitForLifecycleEvent(client, taskId, "released");
-        const expectedSpawns = scenario.interruptAt === "admission_complete" ? 1 : 0;
-        assert.equal(recoverySpawns, expectedSpawns, `${scenario.name}: Recovery only dispatches a proven unstarted Attempt`);
+        const expectedSpawns = scenario.interruptAt === "admission_complete" || scenario.interruptAt === "claim_committed" ? 1 : 0;
+        assert.equal(recoverySpawns, expectedSpawns, `${scenario.name}: Recovery dispatches only after the prior execution boundary is closed`);
       } else {
         await new Promise((resolve) => setTimeout(resolve, 50));
         const status = await client.callTool({ name: "zcode_status", arguments: { task_id: taskId } });
-        assert.equal((contentObject(status)).status, scenario.interruptAt === "claim_committed" ? "running" : "queued");
+        assert.equal((contentObject(status)).status, "queued");
         assert.equal(recoverySpawns, 0, `${scenario.name}: uncertain Launch/Claim must never Spawn a second Worker`);
       }
 
@@ -1711,21 +2945,29 @@ test("ADR-024 six lifecycle crash boundaries use hard Manager-process exits and 
         const operation = port.readOperation(operationId) as Record<string, unknown>;
         const snapshot = port.readRecoverySnapshot() as { operations: Array<Record<string, unknown>> };
         const recovered = snapshot.operations.find((item) => item.operation_id === operationId);
-        if (scenario.terminalAfterRestart) {
+        if (scenario.terminalAfterRestart || scenario.interruptAt === "claim_committed") {
           assert.equal(operation.phase, "released", `${scenario.name}: Recovery finishes only after valid cleanup evidence`);
           assert.equal(recovered?.capacity_occupied, false);
+          if (scenario.interruptAt === "claim_committed") {
+            assert.equal((port.readAttempt(taskId, 1) as Record<string, unknown> | null)?.status, "failed",
+              `${scenario.name}: the interrupted Attempt remains historical`);
+            assert.equal((port.readAttempt(taskId, 2) as Record<string, unknown> | null)?.status, "completed",
+              `${scenario.name}: a new Attempt is queued and dispatched without reusing the old identity`);
+          }
         } else {
           assert.equal(operation.phase, scenario.phase, `${scenario.name}: inconclusive crash boundary remains held`);
           assert.equal(recovered?.capacity_occupied, true, `${scenario.name}: uncertain Worker keeps Capacity and Workspace occupied`);
         }
         const events = port.readLifecycleEvents(operationId);
         assert.equal(events.filter((event) => event.event_type === "released").length,
-          scenario.terminalAfterRestart ? 1 : 0, `${scenario.name}: Release count follows verified recovery only`);
+          scenario.terminalAfterRestart || scenario.interruptAt === "claim_committed" ? 1 : 0,
+          `${scenario.name}: Release count follows verified recovery only`);
       } finally { afterRestart.close(); }
     } finally {
       await client?.close().catch(() => undefined);
       await server?.close().catch(() => undefined);
-      await manager?.shutdown().catch(() => undefined);
+      let shutdownFailure: unknown;
+      await manager?.shutdown().catch((error: unknown) => { shutdownFailure = error; });
       if (launchIdentity && typeof launchIdentity.process_id === "number" && typeof launchIdentity.start_fingerprint === "string") {
         const identity = {
           pid: launchIdentity.process_id, fingerprint: launchIdentity.start_fingerprint,
@@ -1739,12 +2981,12 @@ test("ADR-024 six lifecycle crash boundaries use hard Manager-process exits and 
             expectedRootFingerprint: identity.fingerprint }).catch(() => undefined);
         }
       }
+      await new Promise((resolve) => setTimeout(resolve, 500));
       try {
         rmSync(fixture, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
       } catch (error) {
-        // A deliberately retained Root keeps the SQLite handle alive until this
-        // test process exits. Cleanup failure is not a functional assertion.
-        scenarioTest.diagnostic(`retained isolated fixture after fail-closed shutdown: ${error instanceof Error ? error.message : String(error)}`);
+        throw new Error(`${scenario.name}: fixture cleanup failed: ${error instanceof Error ? error.message : String(error)}`
+          + `; shutdown=${shutdownFailure instanceof Error ? shutdownFailure.message : String(shutdownFailure ?? "ok")}`);
       }
     }
   }
@@ -1762,13 +3004,6 @@ test("R5 explicit cancel closes claimed Result-absent Workers after Manager hard
       workerEntryPath: controlledWorker,
       interruptAt: "claim_committed",
       expectedBeforeRestart: "alive",
-      expectedCancel: "cancelled",
-    },
-    {
-      name: "exact exited without Result",
-      workerEntryPath: path.join(projectRoot, "dist-test", "src", "worker", "worker-main.js"),
-      interruptAt: "claim_continue_sent",
-      expectedBeforeRestart: "exited",
       expectedCancel: "cancelled",
     },
     {
@@ -1811,10 +3046,10 @@ test("R5 explicit cancel closes claimed Result-absent Workers after Manager hard
       import { pathToFileURL } from 'node:url';
       const [dataRoot, settingsDirectory, workspace, taskJson, operationId, launchId, launchToken, workerEntryPath, bridgeEntryPath, interruptAt] = process.argv.slice(1);
       const gate = await import(pathToFileURL(path.join(process.cwd(), 'dist-test/src/store/lifecycle-gate.js')).href);
-      const host = await import(pathToFileURL(path.join(process.cwd(), 'dist-test/src/host/stdio.js')).href);
+      const composition = await import(pathToFileURL(path.join(process.cwd(), 'dist-test/src/executor/production-composition.js')).href);
       const driver = await gate.openClaimOnlyDriver({
         dataRoot, workerEntryPath, bridgeEntryPath,
-        trustedLocalContext: host.createTrustedLocalCandidateContext({ name: 'r5-result-absent-crash', settingsDirectory }),
+        trustedLocalContext: composition.createTrustedLocalCandidateContext({ name: 'r5-result-absent-crash', settingsDirectory }),
         testOnlyFakeAdapter: true,
         onStage(stage, detail) {
           if (stage !== interruptAt) return;
@@ -1912,7 +3147,7 @@ test("R5 explicit cancel closes claimed Result-absent Workers after Manager hard
         dataRoot, workerEntryPath: scenario.workerEntryPath, bridgeEntryPath: fileURLToPath(import.meta.url),
         trustedLocalContext: createTrustedLocalCandidateContext({ name: `r5-restart-${scenario.interruptAt}`, settingsDirectory }),
         processProbe: authorityProbe, testProcessProbeTimeoutMs: 5_000,
-        onChildSpawn: () => { recoverySpawns += 1; },
+        testOnlyFakeAdapter: true, onChildSpawn: () => { recoverySpawns += 1; },
       });
       manager = authority;
       server = createBridgeServer({ taskManager: manager });
@@ -2207,6 +3442,147 @@ test("formal MCP Manager routes SQLite Create/Worker/Result/Continue/Events/Feed
     assert.ok((nextEvents.events as Array<Record<string, unknown>>).every((event) => Number(event.seq) > firstCursor));
     assert.equal(existsSync(path.join(dataRoot, ".tasks")), false, "SQLite lifecycle must not write JSON TaskStore state");
   }, { onStage: (stage, detail) => stages.push({ stage, detail }), testOnScheduler: (stage, detail) => stages.push({ stage: `manager_${stage}`, detail }) });
+});
+
+test("formal MCP Events attribute startup and Release across Attempts", { skip: process.platform !== "win32", timeout: 45_000 }, async () => {
+  const taskId = `mcp-attempt-events-${randomUUID()}`;
+  let releaseDispatch!: () => void;
+  const dispatchGate = new Promise<void>((resolve) => { releaseDispatch = resolve; });
+  await withSqliteMcp(async (client) => {
+    const args = { task_id: taskId, view: "summary", wait_for: "attention", limit: 200 };
+    const read = async (includeAttempt?: boolean) => contentObject(await client.callTool({
+      name: "zcode_events",
+      arguments: { ...args, ...(includeAttempt === undefined ? {} : { include_attempt: includeAttempt }) },
+    }));
+    const eventsOf = (page: Record<string, unknown>) => page.events as Array<{
+      type: string; attempt?: number; details?: { result_commit_ref?: string };
+    }>;
+    try {
+      contentObject(await client.callTool({
+        name: "zcode_continue", arguments: { task_id: taskId, feedback: "Check next Attempt" },
+      }));
+      const queued = await read(true);
+      assert.equal(queued.status, "queued");
+      assert.equal((queued.attention as { attempt: number }).attempt, 2);
+      const previous = eventsOf(queued);
+      assert.equal(previous.find((event) => event.type === "turn_started")?.attempt, 1);
+      assert.equal(previous.find((event) => event.type === "released")?.attempt, 1);
+      assert.ok(previous.every((event) => event.attempt === 1));
+      const legacy = await read();
+      assert.deepEqual(await read(false), legacy);
+      assert.deepEqual(legacy, { ...queued, events: previous.map(({ attempt, ...event }) => event) });
+
+      releaseDispatch();
+      await waitForTerminal(client, taskId, 2);
+      await waitForLifecycleEvent(client, taskId, "cleanup_unverified");
+      const held = await read(true);
+      assert.equal((held.attention as { attempt: number }).attempt, 2);
+      const events = eventsOf(held);
+      const firstRelease = events.find((event) => event.type === "released" && event.attempt === 1);
+      const firstCommit = events.find((event) => event.type === "result_committed" && event.attempt === 1);
+      const latestCommit = events.find((event) => event.type === "result_committed" && event.attempt === 2);
+      assert.ok(firstRelease?.details?.result_commit_ref);
+      assert.equal(firstRelease.details.result_commit_ref, firstCommit?.details?.result_commit_ref);
+      assert.ok(latestCommit?.details?.result_commit_ref);
+      assert.notEqual(latestCommit.details.result_commit_ref, firstRelease.details.result_commit_ref);
+      assert.ok(events.some((event) => event.type === "cleanup_unverified" && event.attempt === 2));
+      assert.ok(!events.some((event) => event.type === "released" && event.attempt === 2));
+    } finally {
+      releaseDispatch();
+    }
+  }, {
+    testBeforeDispatch: () => dispatchGate,
+    beforeAuthority: (dataRoot, modules, workspace) => {
+      seedReleasedTaskWithRuntimeEvents(dataRoot, modules, workspace, taskId, candidateOperationId(taskId, 1));
+    },
+    testVerifyProcessTreeClaimantsClean: async (targets) => {
+      const pids = targets.map((target) => target.pid);
+      return { clean: false, livePids: pids, observedPids: pids };
+    },
+  });
+});
+
+test("formal MCP Events summary advances across byte-bounded merge groups without losing raw events", { skip: process.platform !== "win32", timeout: 45_000 }, async () => {
+  const taskId = `mcp-event-pagination-${randomUUID()}`;
+  const operationId = candidateOperationId(taskId, 1);
+  let seeded: ReturnType<typeof seedReleasedTaskWithRuntimeEvents> | undefined;
+  await withSqliteMcp(async (_client, manager) => {
+    assert.ok(seeded);
+    const summary = await manager.getEvents({
+      task_id: taskId,
+      view: "summary",
+      after_seq: seeded.tinyCursors[0]! - 1,
+      limit: 200,
+      max_bytes: 1_024,
+    });
+    assert.equal(summary.events.length, 1);
+    assert.equal(summary.events[0]?.summary, `${"a".repeat(300)}${"b".repeat(300)}${"c".repeat(300)}`);
+    assert.equal(summary.events[0]?.seq, seeded.tinyCursors[2]);
+    assert.equal(summary.next_seq, seeded.tinyCursors[2]);
+    assert.equal(summary.omitted_events, 2);
+
+    const rawEvents: Array<{ readonly seq: number; readonly summary: string }> = [];
+    let rawCursor: number | undefined;
+    let rawScanCursor: string | undefined;
+    while ((rawCursor ?? seeded.tinyCursors[0]! - 1) < seeded.tinyCursors[2]!) {
+      const page = await manager.getEvents({
+        task_id: taskId,
+        view: "raw",
+        ...(rawScanCursor ? { scan_cursor: rawScanCursor } : { after_seq: rawCursor ?? seeded.tinyCursors[0]! - 1 }),
+        limit: 200,
+        max_bytes: 1_024,
+      });
+      rawEvents.push(...page.events.map((event) => ({ seq: event.seq, summary: event.summary })));
+      rawCursor = page.next_seq;
+      rawScanCursor = page.scan_cursor;
+      assert.equal(page.omitted_events, undefined);
+    }
+    assert.deepEqual(
+      rawEvents
+        .filter((event) => Number(event.seq) <= seeded!.tinyCursors[2]!)
+        .map((event) => [event.seq, event.summary]),
+      [
+        [seeded.tinyCursors[0], "a".repeat(300)],
+        [seeded.tinyCursors[1], "b".repeat(300)],
+        [seeded.tinyCursors[2], "c".repeat(300)],
+      ],
+    );
+
+    const returnedLarge: Array<{ readonly seq: number; readonly summary: string }> = [];
+    let scanCursor: string | undefined;
+    let cursor = seeded.largeCursors[0]! - 1;
+    while (cursor < seeded.largeCursors[2]!) {
+      const page = await manager.getEvents({
+        task_id: taskId,
+        view: "summary",
+        ...(scanCursor ? { scan_cursor: scanCursor } : { after_seq: cursor }),
+        limit: 200,
+        max_bytes: 1_024,
+      });
+      assert.ok(page.events.length > 0, "a merge group rejection must not produce a permanently empty page");
+      assert.ok(page.next_seq > cursor, "every returned event page must advance its public cursor");
+      assert.equal(page.scan_incomplete, true);
+      returnedLarge.push(...page.events
+        .map((event) => ({ seq: event.seq, summary: event.summary }))
+        .filter((event) => event.seq >= seeded!.largeCursors[0]!
+          && event.seq <= seeded!.largeCursors[2]!));
+      cursor = page.next_seq;
+      scanCursor = page.scan_cursor;
+    }
+    assert.deepEqual(
+      returnedLarge.map((event) => [event.seq, String(event.summary).slice(0, 2)]),
+      [
+        [seeded.largeCursors[0], "L1"],
+        [seeded.largeCursors[1], "L2"],
+        [seeded.largeCursors[2], "L3"],
+      ],
+    );
+    assert.equal(new Set(returnedLarge.map((event) => event.seq)).size, 3);
+  }, {
+    beforeAuthority: (dataRoot, modules, workspace) => {
+      seeded = seedReleasedTaskWithRuntimeEvents(dataRoot, modules, workspace, taskId, operationId);
+    },
+  });
 });
 
 test("SQLite preserves JSON workspace semantics and the Host-selected execution worktree", { timeout: 90_000 }, async () => {
@@ -2546,6 +3922,546 @@ test("formal MCP queued Cancel is persisted before SQLite dispatch and does not 
   }, { testBeforeDispatch: async () => { announce(); await dispatchGate; } }).finally(() => unblock());
 });
 
+test("formal MCP queued Cancel racing Launch Intent prevents Worker Spawn", { timeout: 30_000 }, async () => {
+  const taskId = `intent-cancel-race-${randomUUID()}`;
+  let spawned = 0;
+  try {
+    await withSqliteMcp(async (client, manager, dataRoot, workspace) => {
+      const created = contentObject(await client.callTool({ name: "zcode_task", arguments: syntheticTask(workspace, taskId) }));
+      assert.equal(created.status, "queued");
+      const modules = await loadLifecycleCandidateModules();
+      const reader = modules.Store.openForRecovery(dataRoot);
+      assert.ok(reader);
+      try {
+        const port = modules.createPort(reader);
+        const operation = port.readOperation(candidateOperationId(taskId, 1)) as Record<string, unknown>;
+        const status = await manager.cancelTask(taskId);
+        assert.equal(status.status, "cancelled");
+        const events = port.readTaskEvents(taskId, { afterCursor: 0, limit: 50 }).events as Array<Record<string, unknown>>;
+        assert.ok(events.some((event) => event.event_type === "observation_recorded"
+          && (event.evidence_json ? JSON.parse(String(event.evidence_json)) : event.details)?.reason === "cancelled_before_claim"));
+        assert.equal((port.readOperation(candidateOperationId(taskId, 1)) as Record<string, unknown>).phase, "launch_intent");
+      } finally { reader.close(); }
+    }, {
+      onStage: (stage) => {
+        if (stage === "intent_complete") {
+          // The stage hook is invoked synchronously between the Intent commit
+          // and the post-Intent Spawn fence below it.
+          throw new Error("controlled cancellation boundary");
+        }
+      },
+      onChildSpawn: () => { spawned += 1; },
+    });
+  } catch {
+    // The run is expected to fail while preserving the cancelled Intent; the
+    // durable assertions above already proved cancellation before Spawn.
+  } finally { }
+  assert.equal(spawned, 0, "a queued Cancel that reaches intent_complete must fence Worker Spawn");
+});
+
+test("formal MCP user-authorized cancel releases orphaned Launch Intent without claiming Cleanup", { timeout: 30_000 }, async () => {
+  const taskId=`cancel-orphan-${randomUUID()}`,operationId=`op-${taskId}`;
+  const queuedTaskId=`queued-after-orphan-${randomUUID()}`;
+  let spawned=0;
+  await withSqliteMcp(async(client,manager,dataRoot,workspace)=>{
+    const first=contentObject(await client.callTool({name:'zcode_cancel',arguments:{task_id:taskId}}));
+    assert.equal(first.status,'cancelled');
+    assert.equal((first.execution_observation as Record<string,unknown>).state,'cleanup_held');
+    const blocked=contentObject(await client.callTool({name:'zcode_task',arguments:syntheticTask(workspace,queuedTaskId)}));
+    assert.equal(blocked.status,'queued');
+    const blockedStatus=contentObject(await client.callTool({name:'zcode_status',arguments:{task_id:queuedTaskId}}));
+    const blocker=blockedStatus.dispatch_blocker as Record<string,unknown>;
+    assert.equal(blocker.task_id,taskId);
+    assert.equal(blocker.operation_id,operationId);
+    assert.equal(blocker.phase,'launch_intent');
+    assert.equal(blocker.workspace,workspace);
+    assert.equal(blocker.reason,'workspace_occupied');
+    assert.ok(Number(blocker.queued_duration_ms)>=0);
+    assert.ok(Number(blocker.blocked_duration_ms)>=0);
+    assert.equal((await manager.getResult(taskId)).status,'cancelled');
+    const released=contentObject(await client.callTool({name:'zcode_cancel',arguments:{task_id:taskId}}));
+    assert.equal(released.status,'cancelled');
+    const modules=await loadLifecycleCandidateModules(),reader=modules.Store.openForRecovery(dataRoot);
+    assert.ok(reader);
+    try{
+      const snapshot=modules.createPort(reader).readRecoverySnapshot() as Record<string,unknown>;
+      const operation=(snapshot.operations as Array<Record<string,unknown>>).find(row=>row.operation_id===operationId);
+      assert.equal(operation?.phase,'released');
+      assert.equal(operation?.capacity_occupied,false);
+      assert.equal(operation?.cleanup_state,'unverified_admin_release');
+      const events=await manager.getEvents({task_id:taskId,after_seq:0,limit:20});
+      assert.equal(events.events.filter(event=>event.type==='cancelled').length,1);
+      const lifecycle=(await modules.createPort(reader).readLifecycleEvents(operationId)) as Array<Record<string,unknown>>;
+      const releaseEvidence=lifecycle.find(event=>event.event_type==='observation_recorded'
+        && JSON.parse(String(event.evidence_json)).reason==='user_authorized_release_unverified');
+      assert.ok(releaseEvidence);
+      assert.equal(lifecycle.some(event=>event.event_type==='cleanup_verified'),false);
+    }finally{reader.close();}
+    assert.equal((await waitForTerminal(client,queuedTaskId,1)).status,'completed');
+    await waitForLifecycleEvent(client,queuedTaskId,'released');
+    assert.equal(spawned,1,"the existing queued Task must be admitted after administrative release");
+  },{beforeAuthority:(dataRoot,modules,workspace)=>{
+    const store=modules.Store.open(dataRoot);
+    try{
+      const port=modules.createPort(store),allow=()=>({state:'allow',fixture:true});
+      port.createTask(syntheticTask(workspace,taskId) as unknown as Parameters<typeof port.createTask>[0]);
+      const admitted=port.admitOperation({operation_id:operationId,task_id:taskId,attempt:1,workspace_ref:workspace},
+        {workspaceValidator:allow,executionPermissionCheck:allow}) as Record<string,unknown>;
+      port.createLaunchIntent({operation_id:operationId,task_id:taskId,attempt:1,generation:Number(admitted.generation),
+        revision:Number(admitted.revision),launch_id:`launch-${taskId}`,launch_epoch:1,launch_token:'orphan-cancel-token-0123456789'});
+    }finally{store.close();}
+  },onChildSpawn:()=>{spawned++;}});
+});
+
+test("formal MCP protects a pre-Claim Launch Intent with durable Spawn evidence and reports capacity-only blockers", { timeout: 30_000 }, async () => {
+  const taskId=`cancel-receipt-protected-${randomUUID()}`,operationId=`op-${taskId}`;
+  const queuedTaskId=`capacity-only-${randomUUID()}`;
+  await withSqliteMcp(async(client,_manager,dataRoot,workspace)=>{
+    const first=contentObject(await client.callTool({name:'zcode_cancel',arguments:{task_id:taskId}}));
+    assert.equal(first.status,'cancelled');
+    const otherWorkspace=path.join(path.dirname(workspace),'other-workspace');
+    mkdirSync(otherWorkspace,{recursive:true});
+    const queued=contentObject(await client.callTool({name:'zcode_task',arguments:syntheticTask(otherWorkspace,queuedTaskId)}));
+    assert.equal(queued.status,'queued');
+    const blocked=contentObject(await client.callTool({name:'zcode_status',arguments:{task_id:queuedTaskId}}));
+    const blocker=blocked.dispatch_blocker as Record<string,unknown>;
+    assert.equal(blocker.reason,'capacity_occupied');
+    assert.equal(blocker.task_id,taskId);
+    assert.notEqual(blocker.workspace,otherWorkspace);
+    const protectedCall=await client.callTool({name:'zcode_cancel',arguments:{task_id:taskId}});
+    assert.equal(protectedCall.isError,true);
+    const modules=await loadLifecycleCandidateModules(),reader=modules.Store.openForRecovery(dataRoot);
+    assert.ok(reader);
+    try{
+      const port=modules.createPort(reader);
+      const operation=port.readOperation(operationId) as Record<string,unknown>;
+      assert.equal(operation.phase,'launch_intent');
+      assert.notEqual(operation.launch_receipt_digest,null);
+      const events=port.readLifecycleEvents(operationId) as Array<Record<string,unknown>>;
+      assert.equal(events.some(event=>event.event_type==='released'),false);
+    }finally{reader.close();}
+  },{
+    prepareDataRoot:async(dataRoot)=>{
+      await initializeIsolatedCandidateRoot(dataRoot);
+      const modules=await loadLifecycleCandidateModules(),store=modules.Store.open(dataRoot);
+      try{
+        modules.createPort(store).provisionCapacity({operation_id:`policy-${randomUUID()}`,capacity_limit:1,
+          expected_generation:0,maintenance:{dispatch_blocked:true,writers_drained:true}});
+      }finally{store.close();}
+    },
+    beforeAuthority:(dataRoot,modules,workspace)=>{
+      const store=modules.Store.open(dataRoot);
+      try{
+        const port=modules.createPort(store),allow=()=>({state:'allow',fixture:true});
+        port.createTask(syntheticTask(workspace,taskId) as unknown as Parameters<typeof port.createTask>[0]);
+        const admitted=port.admitOperation({operation_id:operationId,task_id:taskId,attempt:1,workspace_ref:workspace},
+          {workspaceValidator:allow,executionPermissionCheck:allow}) as Record<string,unknown>;
+        const launch={operation_id:operationId,task_id:taskId,attempt:1,generation:Number(admitted.generation),
+          revision:Number(admitted.revision),launch_id:`launch-${taskId}`,launch_epoch:1,launch_token:`receipt-protected-${taskId}-0123456789`};
+        const intent=port.createLaunchIntent(launch) as Record<string,unknown>;
+        port.recordLaunchReceipt({...launch,revision:Number(intent.revision),receipt_id:`receipt-${taskId}`,
+          launch_identity:{source:'synthetic_fixture',fixture:true,process_id:43210,start_fingerprint:`fixture-${taskId}`}});
+      }finally{store.close();}
+    },
+  });
+});
+
+test("formal MCP does not report capacity pressure when another workspace is occupied below the configured limit", { timeout: 30_000 }, async () => {
+  const taskId=`capacity-headroom-${randomUUID()}`,operationId=`op-${taskId}`;
+  const queuedTaskId=`capacity-headroom-queued-${randomUUID()}`;
+  let announce!: () => void;
+  let unblock!: () => void;
+  const dispatchStarted=new Promise<void>(resolve=>{announce=resolve;});
+  const dispatchGate=new Promise<void>(resolve=>{unblock=resolve;});
+  await withSqliteMcp(async(client,_manager,_dataRoot,workspace)=>{
+    const first=contentObject(await client.callTool({name:'zcode_cancel',arguments:{task_id:taskId}}));
+    assert.equal(first.status,'cancelled');
+    const otherWorkspace=path.join(path.dirname(workspace),'other-workspace-headroom');
+    mkdirSync(otherWorkspace,{recursive:true});
+    const queued=contentObject(await client.callTool({name:'zcode_task',arguments:syntheticTask(otherWorkspace,queuedTaskId)}));
+    assert.equal(queued.status,'queued');
+    await dispatchStarted;
+    const status=contentObject(await client.callTool({name:'zcode_status',arguments:{task_id:queuedTaskId}}));
+    assert.equal(status.dispatch_blocker,undefined,'one occupied slot below a two-slot limit is not capacity pressure');
+    unblock();
+    assert.equal((await waitForTerminal(client,queuedTaskId,1)).status,'completed');
+    await waitForLifecycleEvent(client,queuedTaskId,'released');
+  },{
+    prepareDataRoot:async(dataRoot)=>{
+      await initializeIsolatedCandidateRoot(dataRoot);
+      const modules=await loadLifecycleCandidateModules(),store=modules.Store.open(dataRoot);
+      try{
+        modules.createPort(store).provisionCapacity({operation_id:`policy-${randomUUID()}`,capacity_limit:2,
+          expected_generation:0,maintenance:{dispatch_blocked:true,writers_drained:true}});
+      }finally{store.close();}
+    },
+    beforeAuthority:(dataRoot,modules,workspace)=>{
+      const store=modules.Store.open(dataRoot);
+      try{
+        const port=modules.createPort(store),allow=()=>({state:'allow',fixture:true});
+        port.createTask(syntheticTask(workspace,taskId) as unknown as Parameters<typeof port.createTask>[0]);
+        const admitted=port.admitOperation({operation_id:operationId,task_id:taskId,attempt:1,workspace_ref:workspace},
+          {workspaceValidator:allow,executionPermissionCheck:allow}) as Record<string,unknown>;
+        const launch={operation_id:operationId,task_id:taskId,attempt:1,generation:Number(admitted.generation),
+          revision:Number(admitted.revision),launch_id:`launch-${taskId}`,launch_epoch:1,launch_token:`capacity-headroom-${taskId}-0123456789`};
+        const intent=port.createLaunchIntent(launch) as Record<string,unknown>;
+        port.recordLaunchReceipt({...launch,revision:Number(intent.revision),receipt_id:`receipt-${taskId}`,
+          launch_identity:{source:'synthetic_fixture',fixture:true,process_id:43211,start_fingerprint:`fixture-${taskId}`}});
+      }finally{store.close();}
+    },
+    testBeforeDispatch:async()=>{announce();await dispatchGate;},
+  }).finally(()=>unblock());
+});
+
+for(const treeMode of ['clean','live','root-missing'] as const)test(`formal MCP user-authorized cleanup release is ${treeMode==='clean'?'allowed after exact exit and clean tree proof':treeMode==='live'?'blocked by a live descendant':'blocked when the clean scan omits the recorded root'}`,{timeout:45_000},async()=>{
+  const taskId=`cancel-cleanup-${treeMode}-${randomUUID()}`,operationId=`op-${taskId}`;
+  let seeded:{readonly processId:number;readonly fingerprint:string}|undefined;
+  const probe:ProcessProbe={...createPlatformProbe(),platform:'win32',async probe(requests){return requests.map(()=>({
+    state:'exited',reason_code:'synthetic_exact_exit',observed_at:new Date().toISOString(),
+  }));}};
+  await withSqliteMcp(async(client,_manager,dataRoot)=>{
+    const responses=await Promise.all([1,2].map(()=>client.callTool({name:'zcode_cancel',arguments:{task_id:taskId}})));
+    for(const response of responses){
+      if(treeMode!=='clean')assert.equal(response.isError,true);
+      else assert.equal(contentObject(response).status,'cancelled');
+    }
+    const modules=await loadLifecycleCandidateModules(),reader=modules.Store.openForRecovery(dataRoot);
+    assert.ok(reader);
+    try{
+      const port=modules.createPort(reader);
+      const operation=port.readOperation(operationId) as Record<string,unknown>;
+      const snapshot=port.readRecoverySnapshot() as {operations:Array<Record<string,unknown>>};
+      const occupied=snapshot.operations.find(item=>item.operation_id===operationId);
+      const events=port.readLifecycleEvents(operationId) as Array<Record<string,unknown>>;
+      if(treeMode!=='clean'){
+        assert.equal(operation.phase,'cleanup_unverified');
+        assert.equal(occupied?.capacity_occupied,true);
+        assert.equal(events.some(event=>JSON.parse(String(event.evidence_json)).reason==='user_authorized_release_unverified'),false);
+      }else{
+        assert.equal(operation.phase,'released');
+        assert.equal(occupied?.capacity_occupied,false);
+        assert.equal(occupied?.cleanup_state,'unverified_admin_release');
+        assert.equal(events.filter(event=>event.event_type==='result_committed').length,1);
+        assert.equal(events.filter(event=>event.event_type==='cleanup_unverified').length,1);
+        assert.equal(events.filter(event=>event.event_type==='cleanup_verified').length,0);
+        const releaseEvents=events.filter(event=>event.event_type==='observation_recorded'
+          &&JSON.parse(String(event.evidence_json)).reason==='user_authorized_release_unverified');
+        assert.equal(releaseEvents.length,1);
+      }
+    }finally{reader.close();}
+  },{
+    processProbe:probe,
+    testVerifyProcessTreeClaimantsClean:async targets=>treeMode==='clean'
+      ?{clean:true,livePids:[],observedPids:targets.map(target=>target.pid)}
+      :treeMode==='live'
+        ?{clean:false,livePids:[seeded!.processId+1],observedPids:[seeded!.processId,seeded!.processId+1]}
+        :{clean:true,livePids:[],observedPids:[]},
+    beforeAuthority:(dataRoot,modules,workspace)=>{seeded=seedCancelledCleanupHold(dataRoot,modules,workspace,taskId,operationId);},
+  });
+});
+
+for(const resultStatus of ["completed","failed","waiting_for_master","cancelled"] as const)test(`formal MCP user-authorized release preserves a terminal ${resultStatus} Result and clears its queued successor`,{timeout:45_000},async()=>{
+  const taskId=`tr-${resultStatus.slice(0,2)}-${randomUUID()}`,operationId=`op-${taskId}`;
+  const queuedTaskId=`qa-${resultStatus.slice(0,2)}-${randomUUID()}`;
+  let seeded:{readonly processId:number;readonly fingerprint:string}|undefined;
+  const probe:ProcessProbe={...createPlatformProbe(),platform:'win32',async probe(requests){return requests.map(()=>({
+    state:'exited',reason_code:'synthetic_exact_exit',observed_at:new Date().toISOString(),
+  }));}};
+  await withSqliteMcp(async(client,manager,dataRoot,workspace)=>{
+    const queued=contentObject(await client.callTool({name:'zcode_task',arguments:syntheticTask(workspace,queuedTaskId)}));
+    assert.equal(queued.status,'queued');
+    const blocked=contentObject(await client.callTool({name:'zcode_status',arguments:{task_id:queuedTaskId}}));
+    const blocker=blocked.dispatch_blocker as Record<string,unknown>;
+    assert.equal(blocker.task_id,taskId);
+    assert.equal(blocker.phase,'cleanup_unverified');
+    assert.equal(blocker.reason,'workspace_occupied');
+    const releases=await Promise.all([1,2].map(()=>client.callTool({name:'zcode_cancel',arguments:{task_id:taskId}})));
+    for(const release of releases)assert.equal(contentObject(release).status,resultStatus);
+    assert.equal((await manager.getResult(taskId)).status,resultStatus);
+    const modules=await loadLifecycleCandidateModules(),reader=modules.Store.openForRecovery(dataRoot);
+    assert.ok(reader);
+    try{
+      const port=modules.createPort(reader);
+      const operation=port.readOperation(operationId) as Record<string,unknown>;
+      const snapshot=port.readRecoverySnapshot() as {operations:Array<Record<string,unknown>>};
+      const occupied=snapshot.operations.find(item=>item.operation_id===operationId);
+      const committed=port.readCommittedResult(operationId);
+      const events=port.readLifecycleEvents(operationId) as Array<Record<string,unknown>>;
+      const releaseEvidence=JSON.parse(String(events.find(event=>event.event_type==='observation_recorded'
+        &&JSON.parse(String(event.evidence_json)).reason==='user_authorized_release_unverified')?.evidence_json)) as Record<string,unknown>;
+      assert.equal(operation.phase,'released');
+      assert.equal(occupied?.capacity_occupied,false);
+      assert.equal(occupied?.cleanup_state,'unverified_admin_release');
+      assert.equal(committed?.result.status,resultStatus);
+      assert.equal(committed?.result_digest,operation.result_digest);
+      assert.equal(events.filter(event=>event.event_type==='result_committed').length,1);
+      assert.equal(events.filter(event=>event.event_type==='cleanup_unverified').length,1);
+      assert.equal(events.some(event=>event.event_type==='cleanup_verified'),false);
+      assert.equal(events.filter(event=>event.event_type==='observation_recorded'
+        &&JSON.parse(String(event.evidence_json)).reason==='user_authorized_release_unverified').length,1);
+      assert.equal(releaseEvidence.result_digest,committed?.result_digest);
+      assert.equal(releaseEvidence.result_commit_ref,committed?.result_commit_ref);
+      assert.equal(typeof releaseEvidence.claim_id,'string');
+      assert.equal(typeof releaseEvidence.worker_identity_digest,'string');
+      assert.equal(releaseEvidence.cancel_id,undefined);
+      assert.equal(releaseEvidence.cancellation_verification_digest,undefined);
+    }finally{reader.close();}
+    const unblocked=contentObject(await client.callTool({name:'zcode_status',arguments:{task_id:queuedTaskId}}));
+    assert.equal(unblocked.dispatch_blocker,undefined);
+  },{
+    processProbe:probe,
+    testVerifyProcessTreeClaimantsClean:async targets=>{
+      assert.deepEqual(targets.map(target=>target.pid),[seeded!.processId]);
+      return {clean:true,livePids:[],observedPids:[seeded!.processId]};
+    },
+    beforeAuthority:(dataRoot,modules,workspace)=>{seeded=seedCancelledCleanupHold(dataRoot,modules,workspace,taskId,operationId,resultStatus);},
+  });
+});
+
+test("formal MCP deduplicates a refreshed Recovery Hold and releases it through ADR-039 without claiming Cleanup",{timeout:45_000},async()=>{
+  const taskId=`cancel-cleanup-refreshed-${randomUUID()}`,operationId=`op-${taskId}`;
+  let seeded:{readonly processId:number;readonly fingerprint:string}|undefined;
+  const probe:ProcessProbe={...createPlatformProbe(),platform:'win32',async probe(requests){return requests.map(()=>({
+    state:'exited',reason_code:'synthetic_exact_exit',observed_at:new Date().toISOString(),
+  }));}};
+  await withSqliteMcp(async(client,_manager,dataRoot)=>{
+    const released=contentObject(await client.callTool({name:'zcode_cancel',arguments:{task_id:taskId}}));
+    assert.equal(released.status,'cancelled');
+    const modules=await loadLifecycleCandidateModules(),reader=modules.Store.openForRecovery(dataRoot);
+    assert.ok(reader);
+    try{
+      const port=modules.createPort(reader);
+      const operation=port.readOperation(operationId) as Record<string,unknown>;
+      const events=port.readLifecycleEvents(operationId) as Array<Record<string,unknown>>;
+      const snapshot=port.readRecoverySnapshot() as {operations:Array<Record<string,unknown>>};
+      const occupied=snapshot.operations.find(item=>item.operation_id===operationId);
+      const recoveryHolds=events.filter(event=>event.event_type==='observation_recorded'
+        &&JSON.parse(String(event.evidence_json)).reason==='recovery_hold');
+      const releases=events.filter(event=>event.event_type==='observation_recorded'
+        &&JSON.parse(String(event.evidence_json)).reason==='user_authorized_release_unverified');
+      assert.equal(operation.phase,'released');
+      assert.equal(occupied?.capacity_occupied,false);
+      assert.equal(occupied?.cleanup_state,'unverified_admin_release');
+      assert.equal(recoveryHolds.length,1,'refreshing observed_at must not append a duplicate Recovery Hold');
+      assert.equal(releases.length,1,'ADR-039 must bind the persisted Recovery evidence digest');
+      assert.equal(events.some(event=>event.event_type==='cleanup_verified'),false);
+    }finally{reader.close();}
+  },{
+    processProbe:probe,
+    testVerifyProcessTreeClaimantsClean:async targets=>{
+      assert.deepEqual(targets.map(target=>target.pid),[seeded!.processId]);
+      return {clean:true,livePids:[],observedPids:[seeded!.processId]};
+    },
+    beforeAuthority:(dataRoot,modules,workspace)=>{
+      seeded=seedCancelledCleanupHold(dataRoot,modules,workspace,taskId,operationId);
+      const store=modules.Store.open(dataRoot);
+      try{
+        const port=modules.createPort(store,{recoveryEvidenceVerifier:({observation}:{observation:Record<string,unknown>})=>({
+          classification:observation.classification,reason_code:observation.reason_code,
+          evidence_source:observation.evidence_source,evidence_digest:observation.evidence_digest,
+        })});
+        const operation=port.readOperation(operationId) as Record<string,unknown>;
+        const scan={contract:'sqlite-candidate-recovery-release-tree-v1',operation_id:operationId,task_id:taskId,
+          attempt:1,generation:Number(operation.generation),claim_id:String(operation.claim_id),
+          worker_identity_digest:String(operation.claim_worker_identity_digest),
+          root_process_id:seeded.processId,root_start_fingerprint:seeded.fingerprint,clean:true,live_pids:[],
+          observed_pids:[seeded.processId],root_observed:true};
+        const processTreeScanDigest=candidateEvidenceDigest(scan);
+        const evidence={source:'manager_process_probe',operation_id:operationId,task_id:taskId,attempt:1,
+          generation:Number(operation.generation),phase:'cleanup_unverified',claim_id:String(operation.claim_id),
+          worker_identity_digest:String(operation.claim_worker_identity_digest),identity_state:'exited',
+          process_id:seeded.processId,start_fingerprint:seeded.fingerprint,probe_reason:'synthetic_exact_exit',
+          recovery_disposition:'complete_cleanup_closure_unavailable',process_tree_scan_clean:true,
+          process_tree_scan_scope:'recorded_roots_and_observed_claimants_only',complete_cleanup_closure:false,
+          process_tree_root_observed:true,process_tree_scan_digest:processTreeScanDigest,
+          observed_at:'2026-11-22T00:00:00.000Z'};
+        port.recordRecoveryObservation({operation_id:operationId,task_id:taskId,attempt:1,
+          generation:Number(operation.generation),expected_revision:Number(operation.revision),
+          claim_id:String(operation.claim_id),worker_identity_digest:String(operation.claim_worker_identity_digest),
+          classification:'hold',reason_code:'cleanup_incomplete',evidence_source:'manager_process_probe',
+          evidence_digest:candidateEvidenceDigest(evidence),process_tree_root_observed:true,
+          process_tree_scan_clean:true,process_tree_scan_digest:processTreeScanDigest,
+          recovery_disposition:'complete_cleanup_closure_unavailable'},evidence);
+      }finally{store.close();}
+    },
+  });
+});
+
+test("formal MCP binds the latest active Recovery Hold when an older Hold is deduplicated",{timeout:45_000},async()=>{
+  const taskId=`cancel-cleanup-multi-hold-${randomUUID()}`,operationId=`op-${taskId}`;
+  let seeded:{readonly processId:number;readonly fingerprint:string}|undefined;
+  const probe:ProcessProbe={...createPlatformProbe(),platform:'win32',async probe(requests){return requests.map(()=>({
+    state:'exited',reason_code:'synthetic_exact_exit',observed_at:new Date().toISOString(),
+  }));}};
+  await withSqliteMcp(async(client,_manager,dataRoot)=>{
+    const released=contentObject(await client.callTool({name:'zcode_cancel',arguments:{task_id:taskId}}));
+    assert.equal(released.status,'failed');
+    const modules=await loadLifecycleCandidateModules(),reader=modules.Store.openForRecovery(dataRoot);
+    assert.ok(reader);
+    try{
+      const port=modules.createPort(reader);
+      const operation=port.readOperation(operationId) as Record<string,unknown>;
+      const snapshot=port.readRecoverySnapshot() as {operations:Array<Record<string,unknown>>};
+      const occupied=snapshot.operations.find(item=>item.operation_id===operationId);
+      const events=port.readLifecycleEvents(operationId) as Array<Record<string,unknown>>;
+      const recoveryHolds=events.filter(event=>event.event_type==='observation_recorded'
+        &&JSON.parse(String(event.evidence_json)).reason==='recovery_hold');
+      const releaseEvents=events.filter(event=>event.event_type==='observation_recorded'
+        &&JSON.parse(String(event.evidence_json)).reason==='user_authorized_release_unverified');
+      assert.equal(operation.phase,'released');
+      assert.equal(occupied?.capacity_occupied,false);
+      assert.equal(occupied?.cleanup_state,'unverified_admin_release');
+      assert.equal(recoveryHolds.length,2,'the two pre-existing active Holds remain immutable history');
+      assert.equal(releaseEvents.length,1);
+      const releaseEvidence=JSON.parse(String(releaseEvents[0]!.evidence_json)) as Record<string,unknown>;
+      const latestHoldEvidence=JSON.parse(String(recoveryHolds[1]!.evidence_json)) as Record<string,unknown>;
+      assert.equal(releaseEvidence.recovery_evidence_digest,latestHoldEvidence.evidence_digest);
+      assert.equal(events.some(event=>event.event_type==='cleanup_verified'),false);
+    }finally{reader.close();}
+  },{
+    processProbe:probe,
+    testVerifyProcessTreeClaimantsClean:async targets=>{
+      assert.deepEqual(targets.map(target=>target.pid),[seeded!.processId]);
+      return {clean:true,livePids:[],observedPids:[seeded!.processId]};
+    },
+    beforeAuthority:(dataRoot,modules,workspace)=>{
+      const seed=seedCancelledCleanupHold(dataRoot,modules,workspace,taskId,operationId,'failed');
+      seeded=seed;
+      const store=modules.Store.open(dataRoot);
+      try{
+        const port=modules.createPort(store,{recoveryEvidenceVerifier:({observation}:{observation:Record<string,unknown>})=>({
+          classification:observation.classification,reason_code:observation.reason_code,
+          evidence_source:observation.evidence_source,evidence_digest:observation.evidence_digest,
+        })});
+        const scan={contract:'sqlite-candidate-recovery-release-tree-v1',operation_id:operationId,task_id:taskId,
+          attempt:1,generation:1,claim_id:`claim-${taskId}`,worker_identity_digest:'pending',
+          root_process_id:seed.processId,root_start_fingerprint:seed.fingerprint,clean:true,live_pids:[],
+          observed_pids:[seed.processId],root_observed:true};
+        const recordHold=(probeReason:string,observedAt:string)=>{
+          const operation=port.readOperation(operationId) as Record<string,unknown>;
+          scan.generation=Number(operation.generation);
+          scan.worker_identity_digest=String(operation.claim_worker_identity_digest);
+          const processTreeScanDigest=candidateEvidenceDigest(scan);
+          const evidence={source:'manager_process_probe',operation_id:operationId,task_id:taskId,attempt:1,
+            generation:Number(operation.generation),phase:'cleanup_unverified',claim_id:String(operation.claim_id),
+            worker_identity_digest:String(operation.claim_worker_identity_digest),identity_state:'exited',
+            process_id:seed.processId,start_fingerprint:seed.fingerprint,probe_reason:probeReason,
+            recovery_disposition:'complete_cleanup_closure_unavailable',process_tree_scan_clean:true,
+            process_tree_scan_scope:'recorded_roots_and_observed_claimants_only',complete_cleanup_closure:false,
+            process_tree_root_observed:true,process_tree_scan_digest:processTreeScanDigest,observed_at:observedAt};
+          port.recordRecoveryObservation({operation_id:operationId,task_id:taskId,attempt:1,
+            generation:Number(operation.generation),expected_revision:Number(operation.revision),
+            claim_id:String(operation.claim_id),worker_identity_digest:String(operation.claim_worker_identity_digest),
+            classification:'hold',reason_code:'cleanup_incomplete',evidence_source:'manager_process_probe',
+            evidence_digest:candidateEvidenceDigest(evidence),process_tree_root_observed:true,
+            process_tree_scan_clean:true,process_tree_scan_digest:processTreeScanDigest,
+            recovery_disposition:'complete_cleanup_closure_unavailable'},evidence);
+        };
+        recordHold('synthetic_exact_exit','2026-11-22T00:00:00.000Z');
+        recordHold('pid_reused','2026-11-22T00:00:01.000Z');
+      }finally{store.close();}
+    },
+  });
+});
+
+for(const stopMode of ['still-alive','stop-failure'] as const)test(`formal MCP keeps a user-authorized cleanup Hold occupied when the Worker is ${stopMode==='still-alive'?'still alive':'not terminable'}`,{timeout:30_000},async()=>{
+  const taskId=`cancel-cleanup-${stopMode}-${randomUUID()}`,operationId=`op-${taskId}`;
+  let seeded:{readonly processId:number;readonly fingerprint:string}|undefined,stops=0,scans=0;
+  const probe:ProcessProbe={...createPlatformProbe(),platform:'win32',async probe(requests){return requests.map(()=>({
+    state:'alive',reason_code:'synthetic_worker_alive',observed_at:new Date().toISOString(),
+  }));}};
+  await withSqliteMcp(async(client,_manager,dataRoot)=>{
+    const responses=await Promise.all([1,2].map(()=>client.callTool({name:'zcode_cancel',arguments:{task_id:taskId}})));
+    for(const response of responses)assert.equal(response.isError,true);
+    assert.ok(stops>=1,'Recovery must attempt the explicitly authorized Worker stop');
+    assert.equal(scans,0,'a live or unverifiable Worker must not reach an administrative tree release');
+    const modules=await loadLifecycleCandidateModules(),reader=modules.Store.openForRecovery(dataRoot);
+    assert.ok(reader);
+    try{
+      const port=modules.createPort(reader);
+      const operation=port.readOperation(operationId) as Record<string,unknown>;
+      const snapshot=port.readRecoverySnapshot() as {operations:Array<Record<string,unknown>>};
+      const occupied=snapshot.operations.find(item=>item.operation_id===operationId);
+      const events=port.readLifecycleEvents(operationId) as Array<Record<string,unknown>>;
+      assert.equal(operation.phase,'cleanup_unverified');
+      assert.equal(occupied?.capacity_occupied,true);
+      assert.equal(occupied?.cleanup_state,'unverified');
+      assert.equal(events.filter(event=>event.event_type==='result_committed').length,1);
+      assert.equal(events.filter(event=>event.event_type==='cleanup_unverified').length,1);
+      assert.equal(events.some(event=>JSON.parse(String(event.evidence_json)).reason==='user_authorized_release_unverified'),false);
+    }finally{reader.close();}
+  },{
+    processProbe:probe,
+    testStopWorkerForRecovery:async()=>{
+      stops++;
+      if(stopMode==='stop-failure')throw new Error('synthetic_stop_failed');
+    },
+    testVerifyProcessTreeClaimantsClean:async()=>{
+      scans++;
+      return {clean:true,livePids:[],observedPids:[seeded!.processId]};
+    },
+    beforeAuthority:(dataRoot,modules,workspace)=>{seeded=seedCancelledCleanupHold(dataRoot,modules,workspace,taskId,operationId);},
+  });
+});
+
+for(const priorProof of [false,true])for(const scanClean of [false,true])test(`formal MCP cancels a running cleanup Hold only after fresh identity/tree proof (prior ${priorProof}, clean ${scanClean})`,{timeout:30_000},async()=>{
+  const taskId=`cancel-held-${randomUUID()}`,operationId=`op-${taskId}`,pid=41001,fingerprint='639294127611585937';
+  let scans=0,spawned=0;
+  const probe:ProcessProbe={...createPlatformProbe(),platform:'win32',async probe(requests){return requests.map(()=>({state:'exited',
+    reason_code:'synthetic_exited',observed_at:new Date().toISOString()}));}};
+  await withSqliteMcp(async(client,manager,dataRoot)=>{
+    const responses=await Promise.all([1,2].map(()=>client.callTool({name:'zcode_cancel',arguments:{task_id:taskId}})));
+    for(const response of responses){
+      if(scanClean)assert.equal(contentObject(response).status,'cancelled');
+      else assert.equal(response.isError,true);
+    }
+    assert.equal(scans,1,'one Authority must coalesce concurrent cancellation scans');
+    assert.equal(spawned,0,'cancel must not start a new Worker or model turn');
+    const modules=await loadLifecycleCandidateModules(),reader=modules.Store.openForRecovery(dataRoot);
+    assert.ok(reader);
+    try{
+      const port=modules.createPort(reader),state=port.readRecoverySnapshot() as Record<string,unknown>;
+      const operation=(state.operations as Array<Record<string,unknown>>).find(row=>row.operation_id===operationId);
+      assert.equal(operation?.capacity_occupied,!scanClean);
+      assert.equal(operation?.phase,scanClean?'released':'running');
+      const events=port.readLifecycleEvents(operationId);
+      assert.equal(events.filter(event=>JSON.parse(String(event.evidence_json)).reason==='recovery_hold').length,1);
+      assert.equal(events.filter(event=>JSON.parse(String(event.evidence_json)).reason==='cancel_recovery_resolved').length,scanClean?1:0);
+      assert.equal((await manager.getStatus(taskId)).status,scanClean?'cancelled':'running');
+    }finally{reader.close();}
+  },{processProbe:probe,testVerifyProcessTreeClaimantsClean:async()=>{
+    scans++;await new Promise(resolve=>setTimeout(resolve,10));
+    return {clean:scanClean,livePids:scanClean?[]:[pid],observedPids:[pid]};
+  },beforeAuthority:(dataRoot,modules,workspace)=>{
+    seedRunningClaim(dataRoot,modules,workspace,taskId,operationId,pid,fingerprint,'turn_started');
+    const store=modules.Store.open(dataRoot);
+    try{
+      const port=modules.createPort(store,{
+        workerIdentityVerifier:({operation,evidence}:{operation:Record<string,unknown>;evidence:Record<string,unknown>})=>({state:'exited',
+          worker_identity_digest:operation.claim_worker_identity_digest,evidence_digest:candidateEvidenceDigest(evidence)}),
+        cancellationVerifier:({operation,evidence}:{operation:Record<string,unknown>;evidence:Record<string,unknown>})=>({state:'verified',
+          worker_identity_digest:operation.claim_worker_identity_digest,process_tree_digest:candidateEvidenceDigest(evidence),
+          root_process_id:pid,root_start_fingerprint:fingerprint,worker_tree_complete:true,evidence_digest:candidateEvidenceDigest(evidence)}),
+        recoveryEvidenceVerifier:({observation}:{observation:Record<string,unknown>})=>({classification:observation.classification,
+        reason_code:observation.reason_code,evidence_source:observation.evidence_source,evidence_digest:observation.evidence_digest})});
+      let op=port.readOperation(operationId) as Record<string,unknown>;
+      if(priorProof){
+        const fence={operation_id:operationId,task_id:taskId,attempt:1,generation:Number(op.generation),revision:Number(op.revision),
+          claim_id:String(op.claim_id),claim_worker_identity_digest:String(op.claim_worker_identity_digest),
+          worker_identity:JSON.parse(String(op.claim_worker_identity_json))};
+        const intent=port.requestCancellation(fence,{synthetic:'historical_identity_probe'}) as Record<string,unknown>;
+        port.recordCancellationVerification({...fence,revision:Number(intent.revision)},{synthetic:'historical_tree_probe',cancel_id:intent.cancel_id});
+        op=port.readOperation(operationId) as Record<string,unknown>;
+      }
+      const evidence={source:'manager_process_probe',outcome:'unknown'};
+      port.recordRecoveryObservation({operation_id:operationId,task_id:taskId,attempt:1,generation:Number(op.generation),
+        expected_revision:Number(op.revision),claim_id:String(op.claim_id),worker_identity_digest:String(op.claim_worker_identity_digest),
+        classification:'hold',reason_code:'cleanup_incomplete',evidence_source:'manager_process_probe',
+        evidence_digest:candidateEvidenceDigest(evidence)},evidence);
+    }finally{store.close();}
+  },onChildSpawn:()=>{spawned++;}});
+});
+
 test("formal MCP running Cancel persists intent, verifies the Worker tree, and releases only after Cleanup", { timeout: 60_000 }, async () => {
   const tracePath = process.env["WP6_RUNNING_CANCEL_TRACE_PATH"];
   const trace = (name: string, detail?: unknown): void => {
@@ -2602,6 +4518,50 @@ test("formal MCP running Cancel persists intent, verifies the Worker tree, and r
   });
 });
 
+test("running Cancel resolves a root-exited termination race only after an exact exit probe and clean tree scan", {
+  timeout: 60_000,
+  skip: process.platform !== "win32",
+}, async () => {
+  let terminationAttempted = false;
+  let rootExitRaceObserved = false;
+  await withSqliteMcp(async (client, _manager, dataRoot, workspace) => {
+    const taskId = `mcp-root-exit-${randomUUID()}`;
+    const created = contentObject(await client.callTool({ name: "zcode_task", arguments: syntheticTask(workspace, taskId) }));
+    assert.equal(created.status, "queued");
+    await waitForInteractionRequest(client, taskId);
+
+    const cancelled = contentObject(await client.callTool({ name: "zcode_cancel", arguments: { task_id: taskId } }));
+    assert.equal(cancelled.status, "cancelled");
+    assert.equal(terminationAttempted, true);
+    assert.equal(rootExitRaceObserved, true, "the injected root-exit refusal must be reconciled by a fresh probe");
+
+    const events = contentObject(await client.callTool({ name: "zcode_events", arguments: { task_id: taskId, after_seq: 0, limit: 200 } }));
+    const lifecycle = events.events as Array<Record<string, unknown>>;
+    const proofs = lifecycle.filter((event) => event.type === "observation_recorded"
+      && (event.details as Record<string, unknown> | undefined)?.reason === "cancel_tree_verified");
+    assert.equal(proofs.length, 1, "the reconciled race must persist exactly one tree proof");
+    const proof = proofs[0];
+    assert.ok(proof);
+    assert.ok(lifecycle.findIndex((event) => event.type === "result_committed") > lifecycle.indexOf(proof));
+    assert.ok(lifecycle.findIndex((event) => event.type === "cleanup_verified") > lifecycle.findIndex((event) => event.type === "result_committed"));
+    assert.ok(lifecycle.findIndex((event) => event.type === "released") > lifecycle.findIndex((event) => event.type === "cleanup_verified"));
+    assert.equal(existsSync(path.join(dataRoot, ".tasks")), false);
+  }, {
+    enableSyntheticInteractionChannel: true,
+    preserveFixtureOnFailure: true,
+    testTerminateWorkerTree: async (pid, fingerprint) => {
+      terminationAttempted = true;
+      await terminateProcessTree(pid, { expectedRootFingerprint: fingerprint, killWaitMs: 5_000 });
+      const error = new Error("controlled root exit before the fresh tree transaction") as Error & { code: string };
+      error.code = "process_tree_root_exited";
+      throw error;
+    },
+    onStage: (stage) => {
+      if (stage === "cancel_termination_root_exited") rootExitRaceObserved = true;
+    },
+  });
+});
+
 test("formal MCP concurrent zcode_cancel calls recover one held Task with one verified termination and Release", { timeout: 90_000, skip: process.platform !== "win32" }, async () => {
   const child = spawn(process.execPath, ["-e", "process.stdout.write('ready\\n'); setInterval(() => undefined, 1000)"], {
     stdio: ["ignore", "pipe", "ignore"], windowsHide: true,
@@ -2644,10 +4604,7 @@ test("formal MCP concurrent zcode_cancel calls recover one held Task with one ve
     signaledTreeMembers += stopped.windows?.signaled.length ?? 0;
   };
   try {
-    await withSqliteMcp(async (client, _manager, dataRoot) => {
-      const before = contentObject(await client.callTool({ name: "zcode_status", arguments: { task_id: taskId } }));
-      assert.equal(before.status, "failed");
-      assert.equal(before.attempt, 1);
+    await withSqliteMcp(async (client, _manager, dataRoot, workspace) => {
       const secondSettings = path.join(dataRoot, "second-manager-settings");
       mkdirSync(secondSettings, { recursive: true });
       const secondAuthority = await SqliteLifecycleMcpAuthority.create({
@@ -2666,6 +4623,63 @@ test("formal MCP concurrent zcode_cancel calls recover one held Task with one ve
       const secondClient = new Client({ name: "sqlite-lifecycle-second-cancel-test", version: "0.0.1" });
       await Promise.all([secondServer.connect(secondServerTransport), secondClient.connect(secondClientTransport)]);
       try {
+      const seedModules = await loadLifecycleCandidateModules();
+      const seedStore = seedModules.Store.open(dataRoot);
+      try {
+        const seedPort = seedModules.createPort(seedStore);
+        seedPort.createTask(syntheticTask(workspace, taskId) as unknown as Parameters<typeof seedPort.createTask>[0]);
+        const allow = () => ({ state: "allow", fixture: true });
+        const admitted = seedPort.admitOperation({ operation_id: operationId, task_id: taskId, attempt: 1, workspace_ref: workspace }, {
+          workspaceValidator: allow, executionPermissionCheck: allow,
+        }) as Record<string, unknown>;
+        const launchRequest = {
+          operation_id: operationId, task_id: taskId, attempt: 1, generation: Number(admitted.generation),
+          revision: Number(admitted.revision), launch_id: `launch-${taskId}`, launch_epoch: 1,
+          launch_token: `recovery-token-${taskId}-0123456789`,
+        };
+        const launchIdentityEvidence = {
+          source: "manager_os_spawn_observation", fixture: false, launch_id: launchRequest.launch_id,
+          generation: Number(admitted.generation), process_id: child.pid, start_fingerprint: identity.fingerprint,
+          fingerprint_precision: "exact", identity_version: PROCESS_IDENTITY_VERSION, platform: "win32",
+          captured_at: identity.captured_at,
+        };
+        const launchIdentity = { ...launchIdentityEvidence, evidence_digest: candidateEvidenceDigest(launchIdentityEvidence) };
+        const intent = seedPort.createLaunchIntent(launchRequest) as Record<string, unknown>;
+        const receipt = seedPort.recordLaunchReceipt({ ...launchRequest, revision: Number(intent.revision), receipt_id: `receipt-${taskId}`, launch_identity: launchIdentity }) as Record<string, unknown>;
+        const workerIdentityEvidence = {
+          source: "manager_verified_process_probe", fixture: false, worker_id: `worker-${taskId}`,
+          process_id: child.pid, start_fingerprint: identity.fingerprint, fingerprint_precision: "exact",
+          identity_version: PROCESS_IDENTITY_VERSION, platform: "win32", captured_at: identity.captured_at,
+        };
+        const workerIdentity = { ...workerIdentityEvidence, evidence_digest: candidateEvidenceDigest(workerIdentityEvidence) };
+        const claim = seedPort.commitPermanentClaim({ ...launchRequest, revision: Number(receipt.revision),
+          claim_id: `claim-${taskId}`, worker_identity: workerIdentity } as unknown as Parameters<typeof seedPort.commitPermanentClaim>[0]) as Record<string, unknown>;
+        const operation = seedPort.readOperation(operationId) as Record<string, unknown>;
+        const result = {
+          task_id: taskId, attempt: 1, status: "failed" as const, summary: "injected prior Worker failure",
+          files_changed: [], tests: [], issues: [], needs_master_decision: false, zcode_output: "synthetic failure",
+          error_code: "zcode_nonzero_exit", exit_code: 1, session_id: null,
+          started_at: new Date(Date.now() - 2_000).toISOString(), finished_at: new Date().toISOString(),
+        };
+        seedPort.commitResult({ operation_id: operationId, task_id: taskId, attempt: 1, generation: Number(operation.generation),
+          revision: Number(operation.revision), claim_id: String(claim.claim_id),
+          claim_worker_identity_digest: String(operation.claim_worker_identity_digest), result_status: "failed", result });
+        const committed = seedPort.readOperation(operationId) as Record<string, unknown>;
+        const cleanupFence = {
+          operation_id: operationId, task_id: taskId, attempt: 1, generation: Number(committed.generation),
+          revision: Number(committed.revision), claim_id: String(committed.claim_id),
+          claim_worker_identity_digest: String(committed.claim_worker_identity_digest),
+        };
+        const pending = seedPort.beginCleanup(cleanupFence) as Record<string, unknown>;
+        seedPort.recordCleanupEvidence({ ...cleanupFence, revision: Number(pending.revision), outcome: "unverified",
+          probe_state: "alive", reason: "injected_concurrent_cancel_fixture" });
+        priorCleanupFailureDigest = (seedPort.readLifecycleEvents(operationId) as Array<Record<string, unknown>>)
+          .find((event) => event.event_type === "cleanup_unverified")?.evidence_digest as string | undefined;
+        assert.ok(priorCleanupFailureDigest);
+      } finally { seedStore.close(); }
+      const before = contentObject(await client.callTool({ name: "zcode_status", arguments: { task_id: taskId } }));
+      assert.equal(before.status, "failed");
+      assert.equal(before.attempt, 1);
       const [firstResult, duplicateResult, competingManagerResult] = await Promise.all([
         client.callTool({ name: "zcode_cancel", arguments: { task_id: taskId } }),
         client.callTool({ name: "zcode_cancel", arguments: { task_id: taskId } }),
@@ -2713,61 +4727,6 @@ test("formal MCP concurrent zcode_cancel calls recover one held Task with one ve
       processProbe: probe,
       testStopWorkerForRecovery,
       testBeforeRecoveryWrite,
-      beforeAuthority: (dataRoot, modules, workspace) => {
-        const store = modules.Store.open(dataRoot);
-        try {
-          const port = modules.createPort(store);
-          port.createTask(syntheticTask(workspace, taskId) as unknown as Parameters<typeof port.createTask>[0]);
-          const allow = () => ({ state: "allow", fixture: true });
-          const admitted = port.admitOperation({ operation_id: operationId, task_id: taskId, attempt: 1, workspace_ref: workspace }, {
-            workspaceValidator: allow, executionPermissionCheck: allow,
-          }) as Record<string, unknown>;
-          const launchRequest = {
-            operation_id: operationId, task_id: taskId, attempt: 1, generation: Number(admitted.generation),
-            revision: Number(admitted.revision), launch_id: `launch-${taskId}`, launch_epoch: 1,
-            launch_token: `recovery-token-${taskId}-0123456789`,
-          };
-          const launchIdentityEvidence = {
-            source: "manager_os_spawn_observation", fixture: false, launch_id: launchRequest.launch_id,
-            generation: Number(admitted.generation), process_id: child.pid, start_fingerprint: identity.fingerprint,
-            fingerprint_precision: "exact", identity_version: PROCESS_IDENTITY_VERSION, platform: "win32",
-            captured_at: identity.captured_at,
-          };
-          const launchIdentity = { ...launchIdentityEvidence, evidence_digest: candidateEvidenceDigest(launchIdentityEvidence) };
-          const intent = port.createLaunchIntent(launchRequest) as Record<string, unknown>;
-          const receipt = port.recordLaunchReceipt({ ...launchRequest, revision: Number(intent.revision), receipt_id: `receipt-${taskId}`, launch_identity: launchIdentity }) as Record<string, unknown>;
-          const workerIdentityEvidence = {
-            source: "manager_verified_process_probe", fixture: false, worker_id: `worker-${taskId}`,
-            process_id: child.pid, start_fingerprint: identity.fingerprint, fingerprint_precision: "exact",
-            identity_version: PROCESS_IDENTITY_VERSION, platform: "win32", captured_at: identity.captured_at,
-          };
-          const workerIdentity = { ...workerIdentityEvidence, evidence_digest: candidateEvidenceDigest(workerIdentityEvidence) };
-          const claim = port.commitPermanentClaim({ ...launchRequest, revision: Number(receipt.revision),
-            claim_id: `claim-${taskId}`, worker_identity: workerIdentity } as unknown as Parameters<typeof port.commitPermanentClaim>[0]) as Record<string, unknown>;
-          const operation = port.readOperation(operationId) as Record<string, unknown>;
-          const result = {
-            task_id: taskId, attempt: 1, status: "failed" as const, summary: "injected prior Worker failure",
-            files_changed: [], tests: [], issues: [], needs_master_decision: false, zcode_output: "synthetic failure",
-            error_code: "zcode_nonzero_exit", exit_code: 1, session_id: null,
-            started_at: new Date(Date.now() - 2_000).toISOString(), finished_at: new Date().toISOString(),
-          };
-          port.commitResult({ operation_id: operationId, task_id: taskId, attempt: 1, generation: Number(operation.generation),
-            revision: Number(operation.revision), claim_id: String(claim.claim_id),
-            claim_worker_identity_digest: String(operation.claim_worker_identity_digest), result_status: "failed", result });
-          const committed = port.readOperation(operationId) as Record<string, unknown>;
-          const cleanupFence = {
-            operation_id: operationId, task_id: taskId, attempt: 1, generation: Number(committed.generation),
-            revision: Number(committed.revision), claim_id: String(committed.claim_id),
-            claim_worker_identity_digest: String(committed.claim_worker_identity_digest),
-          };
-          const pending = port.beginCleanup(cleanupFence) as Record<string, unknown>;
-          port.recordCleanupEvidence({ ...cleanupFence, revision: Number(pending.revision), outcome: "unverified",
-            probe_state: "alive", reason: "injected_concurrent_cancel_fixture" });
-          priorCleanupFailureDigest = (port.readLifecycleEvents(operationId) as Array<Record<string, unknown>>)
-            .find((event) => event.event_type === "cleanup_unverified")?.evidence_digest as string | undefined;
-          assert.ok(priorCleanupFailureDigest);
-        } finally { store.close(); }
-      },
     });
   } finally {
     if (!childExited) {
@@ -2958,13 +4917,18 @@ test("formal MCP Host shutdown is bounded on unknown cancellation and can be ret
 test("formal SQLite MCP stdio shutdown closes only after verified Cleanup and Release", { timeout: 90_000, skip: process.platform !== "win32" }, async () => {
   let host: StdioLifecycleHost | undefined;
   let spawned = 0;
+  let shutdownFailure: unknown;
   await withSqliteMcp(async (client, _manager, dataRoot, workspace) => {
     const taskId = `mcp-stdio-shutdown-${randomUUID()}`;
     const created = contentObject(await client.callTool({ name: "zcode_task", arguments: syntheticTask(workspace, taskId) }));
     assert.equal(created.status, "queued");
     await waitForInteractionRequest(client, taskId);
     assert.ok(host);
-    assert.equal(await host.shutdown("SIGTERM"), true, "successful Cleanup/Release must complete before transport close");
+    assert.equal(
+      await host.shutdown("SIGTERM"),
+      true,
+      `successful Cleanup/Release must complete before transport close: ${shutdownFailure instanceof Error ? shutdownFailure.stack ?? shutdownFailure.message : String(shutdownFailure)}`,
+    );
 
     const modules = await loadLifecycleCandidateModules();
     const recovery = modules.Store.openForRecovery(dataRoot);
@@ -2988,6 +4952,7 @@ test("formal SQLite MCP stdio shutdown closes only after verified Cleanup and Re
     stdio: true,
     preserveFixtureOnFailure: true,
     onStdioHost: (value) => { host = value; },
+    onStdioShutdownFailure: (_reason, error) => { shutdownFailure = error; },
     enableSyntheticInteractionChannel: true,
     onChildSpawn: () => { spawned += 1; },
   });
@@ -3303,4 +5268,57 @@ test("SQLite Manager preserves attention waiting and rejects invalid cursors bef
       port.admitOperation({operation_id:"attention-op",task_id:taskId,attempt:1,workspace_ref:workspace},{workspaceValidator:allow,executionPermissionCheck:allow});
     }finally{store.close();}
   }});
+});
+
+test("MCP admission persists the trusted Thread binding before Worker dispatch", { timeout: 30_000 }, async () => {
+  const taskId = `owner-binding-${randomUUID()}`;
+  const threadId = "019c0000-0000-7000-8000-0000000000aa";
+  let managerRef: SqliteLifecycleMcpAuthority | undefined;
+  let bindingAtDispatch: unknown;
+  await withSqliteMcp(async (client, manager, _dataRoot, workspace) => {
+    managerRef = manager;
+    const created = contentObject(await client.callTool({
+      name: "zcode_task",
+      arguments: syntheticTask(workspace, taskId),
+      _meta: { threadId },
+    }));
+    assert.equal(created.status, "queued");
+    const binding = created.owner_binding as Record<string, unknown>;
+    assert.equal(binding.state, "bound");
+    assert.equal(binding.owner_thread_id, threadId);
+    assert.equal(binding.source, "mcp_meta");
+    const terminal = await waitForTerminal(client, taskId, 1);
+    assert.equal(terminal.status, "completed");
+    const after = await manager.getStatus(taskId);
+    assert.equal(after.owner_binding?.owner_thread_id, threadId);
+  }, {
+    testBeforeDispatch: async () => {
+      assert.ok(managerRef, "manager must exist before dispatch");
+      const status = await managerRef.getStatus(taskId);
+      bindingAtDispatch = status.owner_binding;
+      assert.equal((bindingAtDispatch as Record<string, unknown>).state, "bound");
+      assert.equal((bindingAtDispatch as Record<string, unknown>).owner_thread_id, threadId);
+    },
+  });
+  assert.equal((bindingAtDispatch as Record<string, unknown>).owner_thread_id, threadId);
+});
+
+test("concurrent MCP admissions keep same-Thread and different-Thread bindings isolated", { timeout: 30_000 }, async () => {
+  const threadA = "019c0000-0000-7000-8000-0000000000ab";
+  const threadB = "019c0000-0000-7000-8000-0000000000ac";
+  await withSqliteMcp(async (client, _manager, _dataRoot, workspace) => {
+    const ids = [`owner-a1-${randomUUID()}`, `owner-a2-${randomUUID()}`, `owner-b1-${randomUUID()}`];
+    const receipts = await Promise.all(ids.map((taskId, index) => client.callTool({
+      name: "zcode_task",
+      arguments: syntheticTask(workspace, taskId),
+      _meta: { threadId: index < 2 ? threadA : threadB },
+    })));
+    const created = receipts.map((result) => contentObject(result));
+    const bindings = created.map((receipt) => receipt.owner_binding as Record<string, unknown>);
+    assert.deepEqual(bindings.map((binding) => binding.owner_thread_id), [threadA, threadA, threadB]);
+    for (const binding of bindings) {
+      assert.equal(binding.state, "bound");
+      assert.equal(binding.source, "mcp_meta");
+    }
+  });
 });

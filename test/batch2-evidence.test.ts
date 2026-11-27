@@ -104,8 +104,8 @@ const b2Task = {
 async function runScenario(scenario: FakeRuntimeOptions["scenario"], requestedModel?: FakeRuntimeOptions["requestedModel"]) {
   const runtime = await makeScenarioRuntime({ scenario, requestedModel, sessionModel: requestedModel ? { providerId: requestedModel.providerId, modelId: requestedModel.modelId } : undefined });
   const events: Array<{ type: string; summary: string; details?: Record<string, unknown> }> = [];
-  const { ZCodeAppServerAdapter } = await import("../src/adapters/zcode-app-server-adapter.js");
-  const adapter = new ZCodeAppServerAdapter({
+  const { ZCodeAppServerTestAdapter } = await import("../src/adapters/zcode-app-server-adapter.js");
+  const adapter = new ZCodeAppServerTestAdapter({
     resolver: { resolve: async () => runtime.config },
     onEvent: (event) => events.push(event),
     timeoutMs: 15_000,
@@ -123,6 +123,10 @@ async function runScenario(scenario: FakeRuntimeOptions["scenario"], requestedMo
 }
 
 test("B2-01: normal, completion-before-start, and completion-then-start all settle exactly once", async () => {
+  // P1 §3.1: only a native turn.started establishes Started. The ACK publishes
+  // turn_accepted instead, so a fresh session whose runtime completes without
+  // ever emitting turn.started settles truthfully with zero start events.
+  const expectedStarts: Record<string, number> = { normal: 1, "complete-before-start": 0, "completion-then-start": 0 };
   for (const scenario of ["normal", "complete-before-start", "completion-then-start"] as const) {
     const run = await runScenario(scenario);
     try {
@@ -130,15 +134,20 @@ test("B2-01: normal, completion-before-start, and completion-then-start all sett
       assert.equal(run.outcome!.errorCode, null, `${scenario}: ${run.outcome!.reportError ?? ""}`);
       assert.equal(run.outcome!.cancelled, false);
       assert.ok(run.outcome!.agentReport, `${scenario}: report parsed`);
-      // Exactly one turn_started published event, one completion.
       const starts = run.events.filter((event) => event.type === "turn_started").length;
       const completions = run.events.filter((event) => event.type === "turn_completed").length;
-      assert.ok(starts >= 1, `${scenario}: at least one start event`);
+      const accepted = run.events.filter((event) => event.type === "turn_accepted").length;
+      assert.equal(starts, expectedStarts[scenario], `${scenario}: exactly the native start events publish`);
+      // The ACK acceptance fact is published once, except when a coalesced
+      // ACK + turn.started chunk settles the native start before the ACK
+      // microtask runs — then the acceptance event is redundant by contract
+      // and stays unemitted (P1 §3.1).
+      assert.ok(accepted <= 1, `${scenario}: the send ACK publishes turn_accepted at most once`);
+      assert.ok(accepted === 1 || starts === 1, `${scenario}: acceptance or the native start must record the send`);
       assert.ok(completions <= 1, `${scenario}: at most one completion event`);
     } finally { run.cleanup(); }
   }
 });
-
 test("B2-02: foreign-turn and duplicate-sequence events never settle the current turn early", async () => {
   const run = await runScenario("foreign-turn");
   try {
@@ -219,6 +228,52 @@ test("B4-02: usage normalization matrix (synonyms, zero, missing, invalid, confl
   assert.equal(empty?.input_tokens, null);
 });
 
+test("B4-02b: official cache read/write usage is preserved without conflating fields", () => {
+  const usage = normalizeUsage({
+    inputTokens: 100,
+    outputTokens: 20,
+    totalTokens: 120,
+    cacheReadTokens: 40,
+    cacheWriteTokens: 0,
+    source: "official_runtime",
+    scope: "session:sess_1",
+    observed_at: "2026-11-15T10:00:00.000Z",
+    finality: "reported",
+  });
+  assert.equal(usage?.cached_input_tokens, 40);
+  assert.equal(usage?.cached_write_input_tokens, 0, "a real cache-write zero survives");
+  assert.equal(usage?.total_tokens, 120, "cache fields are not added to the reported total");
+  assert.equal(usage?.source, "official_runtime");
+  assert.equal(usage?.scope, "session:sess_1");
+  assert.equal(usage?.observed_at, "2026-11-15T10:00:00.000Z");
+  assert.equal(usage?.finality, "reported");
+
+  const aliases = normalizeUsage({
+    cacheReadTokens: 7,
+    cache_read_tokens: 8,
+    cacheWriteTokens: null,
+    cached_write_input_tokens: null,
+  });
+  assert.equal(aliases?.cached_input_tokens, 7);
+  assert.equal(aliases?.cached_write_input_tokens, null);
+  assert.ok(aliases?.conflicts.includes("duplicate_synonyms"));
+  assert.equal(aliases?.dropped_unknown_keys, 0);
+
+  const missing = normalizeUsage({ input_tokens: 2 });
+  assert.equal(missing?.cached_input_tokens, null);
+  assert.equal(missing?.cached_write_input_tokens, null);
+
+  const unsafeMetadata = normalizeUsage({
+    total_tokens: 2,
+    scope: "</script>",
+    observed_at: "not-a-date",
+    conflicts: ["safe_conflict", "unsafe conflict"],
+  });
+  assert.equal(unsafeMetadata?.scope, null);
+  assert.equal(unsafeMetadata?.observed_at, null);
+  assert.deepEqual(unsafeMetadata?.conflicts, ["safe_conflict"]);
+});
+
 test("B4-03: replayed executions never add usage; session totals never sum per run without non-overlap proof", () => {
   const a = normalizeUsage({ input_tokens: 1, output_tokens: 1, total_tokens: 2 }, { source: "zcode_runtime_turn" });
   // The same attempt's usage read twice stays one consumption item.
@@ -272,28 +327,3 @@ test("B4-10/11/12: requested vs default vs unreported model paths; push/replay i
     assert.equal(defaulted.outcome?.modelProfile?.selection_source, "zcode_default");
   } finally { defaulted.cleanup(); }
 });
-
-test("B4-13: private provider configuration and reasoning text never enter results or feedback", () => {
-  const feedback = renderFeedbackSafely({
-    objective: "task with SECRET-KEY sk-abc123 and <reasoning>hidden thought</reasoning>",
-    model: { executor: "zcode", provider_id: "prov", model_id: "m", requested_model: null, requested_reasoning_level: null, effective_reasoning_level: null, effective_reasoning_level_source: "not_reported", selection_source: null, effective_at: null, session_id: SESSION_ID, turn_id: null },
-  });
-  assert.ok(!feedback.includes("sk-abc123"), "the objective body is not rendered raw");
-  assert.ok(!feedback.includes("<reasoning>"));
-});
-
-import { renderFeedback } from "../src/feedback/template.js";
-function renderFeedbackSafely(input: { objective: string; model: import("../src/interfaces.js").ExecutionProfile | null }): string {
-  return renderFeedback({
-    objective: "见任务详情（正文不入反馈）",
-    task_id: "t",
-    attempt: 1,
-    bridge_status: "completed",
-    delivered: [],
-    model: input.model,
-    codex_tokens: { state: "unavailable", note: "未取得：当前宿主未提供本次调用统计" },
-    blockers: [],
-    decisions: [],
-    next_steps: [],
-  });
-}

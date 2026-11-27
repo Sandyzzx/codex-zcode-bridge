@@ -34,9 +34,19 @@ export function buildSqliteDoctorChecks(value: unknown, managerFence: string | n
       : { name: "recovery_lock", status: "ok", summary: "SQLite snapshot has no persisted Recovery Hold/Quarantine; this Manager has no recovery fence" };
   const details = active.slice(0, 32).map((task) => {
     const operation = byAttempt.get(`${task.task_id}#${task.current_attempt}`);
+    const blocker = operation ? null : occupied.find((candidate) => {
+      const workspace = typeof candidate.workspace_ref === "string" ? candidate.workspace_ref : null;
+      const taskWorkspace = typeof task.workspace === "string" ? task.workspace : null;
+      return workspace !== null && taskWorkspace !== null && sameExecutionPath(workspace, taskWorkspace);
+    }) ?? (operation ? undefined : occupied.find((candidate) => candidate.task_id !== task.task_id));
+    const now = Date.now();
+    const queuedDuration = nonNegativeDuration(now, task.created_at);
+    const blockedDuration = blocker ? nonNegativeDuration(now, blocker.created_at) : null;
     return `${task.task_id}#${task.current_attempt}: ${task.status}${operation
       ? ` (operation ${operation.operation_id}, phase ${operation.phase}, result ${operation.result_digest ? "committed" : "absent"}, cleanup ${operation.cleanup_state}, recovery ${operation.recovery_classification ?? "none"})`
-      : " (no Operation)"}`;
+      : blocker
+        ? ` (blocked by ${blocker.task_id}#${blocker.attempt} operation ${blocker.operation_id}, phase ${blocker.phase}, workspace ${blocker.workspace_ref}, queued ${queuedDuration}ms, blocked ${blockedDuration}ms)`
+        : " (no Operation)"}`;
   }).join("; ");
   return [
     { name: "active_tasks", status: durableHolds.length > 0 || managerFence || queued.length > 0 || cleanupPending.length > 0 ? "warning" : "ok",
@@ -51,3 +61,15 @@ function record(value: unknown): Record<string, unknown> {
 }
 
 function bounded(value: string): string { return value.replace(/[\r\n\0]/gu, " ").slice(0, 1_200); }
+function nonNegativeDuration(now: number, createdAt: unknown): number {
+  const created = typeof createdAt === "string" ? Date.parse(createdAt) : Number.NaN;
+  return Number.isFinite(created) ? Math.max(0, now - created) : 0;
+}
+
+function sameExecutionPath(left: string, right: string): boolean {
+  const normalize = (value: string): string => {
+    const resolved = value.replace(/[\\/]+$/gu, "");
+    return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+  };
+  return normalize(left) === normalize(right);
+}

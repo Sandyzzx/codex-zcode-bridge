@@ -1,11 +1,12 @@
 # Bridge 运行时事实与边界
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-11
-> Last verified: 2026-11-12，核对 Stable 1.7.0 SQLite-only 架构、当前接口/项目状态、固定本机 profile 与模型路由幂等；跨平台真实运行 NOT RUN。
-> Verified against: 372e90622772b070357a278f1da3dea58fa42dee（基线；本候选离线证据见 docs/research/master-skill-simplification-20261111.md）
+> Last updated: 2026-11-22
+> Last verified: 2026-11-22，核对 Async Executor、Thin MCP、Executor Wake 与既有 SQLite/Worker/Result/Cleanup/Recovery 合同；真实 Desktop 关闭 NOT RUN。
+> Verified against: 3a95e47b2688d06e29f3bca441d1c9bcaaca2e4f + Preview.5 version/documentation changes
 
 - 生产只有 SQLite v14 Task Authority、一个 Lifecycle Manager 和 Worker→官方 app-server 链。旧 JSON TaskStore/Manager/Worker、CLI Adapter、GitWorktreeProvider 和恢复 roster 已退役；旧 `.tasks`/JSON 锁不是恢复源，不扫描、导入或手工删除。
+- Async Executor candidate 将 Manager/SQLite Authority 移出 MCP stdio 生命周期。MCP 请求断开、Codex Stop、Turn 结束或 UI 关闭只结束客户端等待，不取消已受理 Task；显式 `zcode_cancel` 仍是唯一任务取消入口。该能力在真实 Desktop 关闭 E2E 前保持 `PARTIAL / BLOCKED`，不能从 CLI 进程存在或 Queue ACK 推断。
 - Capacity、永久 Claim 和路径互斥以 SQLite 为准；Result、进程退出、树 Cleanup 和 Release 是独立事实。无 Result 的 running 在重启后仍占用；缺 Receipt、句柄、超时或回调异常都不授权重派。
 - 启动 Recovery 只读核对，不因 alive/exited/unknown 写持久 Hold。未知 Hold 不按时间或 PID 消失清除；当前没有 release-intent 回收合同，也不引入新状态机。
 - 单次执行预算为 Task override > Host 持久配置/环境 > 60 分钟，范围 60 秒至 4 小时；清理另有独立预算。超时后保留 Attempt 证据，清理未确认不宣称资源已释放。

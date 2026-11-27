@@ -1,19 +1,24 @@
 # TaskPackage 与派发
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-11
-> Last verified: 2026-11-11，核对当前 MCP zcode_task schema、TaskPackage 接口、ADR-031 模型路由与 Prompt Builder 限制；真实 Worker 派发 NOT RUN。
-> Verified against: 372e90622772b070357a278f1da3dea58fa42dee（基线；本候选离线证据见 docs/research/master-skill-simplification-20261111.md）
+> Last updated: 2026-11-23
+> Last verified: 2026-11-23，核对 TaskPackage、实际执行根、AgentReport 与 Async Handoff 提交边界。真实 Worker 派发 NOT RUN。
+> Verified against: `origin/preview@89ca334802f6e5c1e88b8284863f8151bf4be134`（审计基线；本候选待验收）
 
-本文件假设入口授权已确认。提交前先完成 Ready Gate：确认目标、Codex 项目根目录、实际执行目录、修改边界、必要输入、验收标准、适用测试要求和预算是否充分；不适用项可为空或说明原因，不强行虚构。提交前另读 [监控与审批](monitoring-and-approval.md)，任务返回后立即跟踪事件。
+本文件假设入口授权已确认。提交前先完成 Ready Gate：确认目标、Codex 项目根目录、实际执行目录、修改边界、必要输入、验收标准、适用测试要求和预算是否充分；不适用项可为空或说明原因，不强行虚构。提交前另读 [监控与审批](monitoring-and-approval.md)。提交后默认采用 Async Handoff：只做必要的有界受理核对，不等待 `turn_started`，随后结束 Turn；仅 Thread/Wake 绑定不可用时说明 Web Notify 回退。回执未知、启动错误、清理未决或安全边界无法确认时留在当前 Turn 或保持未决。
+
+提交后先判定回执是否可靠。只有收到可归属的原 `task_id` 受理回执，且 Task 状态
+为 `queued`/`running` 等已受理事实时，才可交接；回执未知先按下方
+幂等规则对账。受理后的记录、Turn 结束、Wake 恢复和交互边界见
+[async-handoff.md](async-handoff.md)。
 
 ## 公开字段
 
-`zcode_task` 只接受现有 schema：`task_id`、绝对 `workspace`，以及可选 `worktree_path`、`model`、`timeout_ms`；正文为 `objective`，五个数组 `requirements`、`allowed_paths`、`forbidden_paths`、`acceptance_criteria`、`test_commands` 必须存在且可为空，`context` 可选。`whole_task`、`staged` 和 `auto` 都不是额外字段。
+`zcode_task` 只接受现有 schema：`task_id`、绝对 `workspace`，以及可选 `worktree_path`、`model`、`timeout_ms`；正文为 `objective`，五个数组 `requirements`、`allowed_paths`、`forbidden_paths`、`acceptance_criteria`、`test_commands` 必须存在且可为空，`context` 可选。`whole_task`、`staged` 和 Single Dispatch 都不是额外字段。
 
 - `task_id` 最长 64 字符，仅字母数字、下划线和连字符，且以字母数字开头。同一完整交付复用同一 ID；按下面的幂等规则处理调用异常，不换 ID 掩盖不确定结果。
 - `workspace` 始终是 Codex 项目根目录。需要隔离时 Codex 先创建并确认 worktree，再传其现存绝对路径；未传 `worktree_path` 则直接在项目根执行。Bridge 不创建、选择或删除 worktree。
-- 必须遵守的约束、非目标、权限和停止条件写入 `requirements` 或路径字段；`context` 只保留必要决策背景和相关文件，Builder 只保留前 2,000 个字符。
+- 必须遵守的约束、非目标、权限和停止条件写入 `requirements` 或路径字段；`context` 只保留必要决策背景和相关文件。Builder 在整条 Prompt 的总容量内完整保留已接受字段；超过容量时显式失败，不静默截断。
 - 路径数组是 Worker 指令，不是 OS 沙箱。空 `allowed_paths` 表示不额外限定，不表示禁止写入；需要专属限制时才填写实际执行目录内路径。
 - 测试命令来自当前项目权威说明、测试清单或已核实存在的适用入口；没有适用命令时用空数组，并在验收标准中说明验证方式或不适用原因。不要把通用命令名当成所有项目的默认要求。
 
@@ -37,8 +42,16 @@
 
 ## 内容模板
 
-`whole_task`：`objective` 写用户可观察的最终状态；`requirements` 写已批准合同、兼容要求、非目标、权限限制和升级边界，并声明局部可逆选择由 Worker 自主决定；`acceptance_criteria` 覆盖端到端行为和必要回归；`test_commands` 列适用入口。不列无必要的函数、命令或实现顺序。
+`whole_task`：默认策略。`objective` 写用户可观察的最终状态；`requirements` 写已批准合同、兼容要求、非目标、权限限制和升级边界，并声明局部可逆选择由 Worker 自主决定；`acceptance_criteria` 覆盖端到端行为和必要回归；`test_commands` 列适用入口。不列无必要的函数、命令或实现顺序。
 
-`staged`：`objective` 只写当前阶段的一个可独立验收成果；`requirements` 写已冻结决定、前置输入、本阶段范围、后续非目标、可自主局部事项和必须提交 Master 的具体问题；`acceptance_criteria` 覆盖阶段成果、验证和交接证据；`context` 可用 `PROJECT DECISIONS`、`RELEVANT FILES`、`OPEN DECISIONS — DO NOT CHOOSE` 组织。当前阶段完成后停止。
+`staged`：只在真实阶段门存在时使用。`objective` 只写当前阶段的一个可独立验收成果；`requirements` 写已冻结决定、前置输入、本阶段范围、后续非目标、可自主局部事项和必须提交 Master 的具体问题；`acceptance_criteria` 覆盖阶段成果、验证和交接证据；`context` 可用 `PROJECT DECISIONS`、`RELEVANT FILES`、`OPEN DECISIONS — DO NOT CHOOSE` 组织。当前阶段完成后停止；下一独立阶段使用新的 `task_id`，不得通过 `zcode_continue` 推进。
 
 只读调查在 `requirements` 写明“不创建、修改或删除任何文件”；若允许研究文档交付，则列出其写入范围并保护实现文件。重大未决项可以成为研究阶段的问题，不能是当前实施成立所必需却缺失的决定。
+
+## 工作区工件引用
+
+- Master 在 `context` 中直接传必要的短事实和已有文件的相对路径，注明每份证据的用途。长日志、报告和 diff 保留在原处。必需的约束、权限和停止条件写在现有 `requirements` 或路径字段。
+- 派发前在将要执行的目录确认输入可读。验收时以任务事件核实的实际执行根为准，传了 `worktree_path` 时以该 worktree 为根，否则以项目根为根。实际执行根不确定时先核对。解析 `live` 路径时核实实际文件仍位于该根内，拒绝越界路径和指向根外的链接。
+- 将可变文件标为 `live` 并检查当前内容。引用已提交证据时用明确的 `<commit SHA>:<相对路径>`，从同一执行仓库读取该快照。引用含 SHA-256 等内容摘要时核对实际字节。
+- 将任务证据与原 `task_id`、实际执行根、Attempt 以及可核实的 Operation/generation 对照。文件缺失、变化、不可读或 Attempt 已推进时报告具体原因，指明哪些原证据仍能核实。同名文件的归属须有证据。
+- 短结果直接保留文本。按需读取原始文件、已提交的 Result 和 Raw Events 做独立验收，保留原始证据。TaskPackage 沿用现有字段，由 Worker 按现有五字段 AgentReport 交付。

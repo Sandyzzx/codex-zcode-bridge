@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { TaskProgressEvent, TaskResult, TaskStatusRecord } from "../src/interfaces.js";
 import { buildTaskFeedbackSnapshotV01 } from "../src/feedback/task-feedback.js";
-import { renderTaskFeedback } from "../src/feedback/renderer.js";
 import { taskFeedbackSnapshotV01Schema } from "../src/mcp/schemas.js";
 
 const START = "2026-10-05T12:00:00.000Z";
@@ -78,10 +77,6 @@ test("snapshot uses runtime-selected model and last-observed tool activity only"
   assert.equal(snapshot.progress, null);
   assert.deepEqual(snapshot.interaction, { state: "not_observed", kind: null });
   assert.doesNotMatch(JSON.stringify(snapshot), /historical-request|interaction\/requestPermission|900|"9"|Review/iu);
-  const rendered = renderTaskFeedback(snapshot);
-  assert.match(rendered, /Model: runtime-model · Reasoning: max/u);
-  assert.match(rendered, /Last observed: Tool update · shellInjected/u);
-  assert.doesNotMatch(rendered, /Tool running|Current:|No interaction required/iu);
   assert.doesNotMatch(JSON.stringify(snapshot), /requested_model/u);
   assert.equal(snapshot.activity?.summary.includes("\n"), false);
 });
@@ -116,65 +111,7 @@ test("snapshot exposes report claims only after report_ready and computes Bridge
   assert.equal(snapshot.result?.duration_ms, 222_000);
 });
 
-test("renderer labels report claims and avoids unsupported activity or verification statements", () => {
-  const snapshot = buildTaskFeedbackSnapshotV01({
-    status: status({ status: "completed", finished_at: FINISH }),
-    events: [event("report_ready")],
-    result: result(),
-  });
-  const output = renderTaskFeedback(snapshot);
-  assert.match(output, /Bridge task completed/);
-  assert.match(output, /Agent report:/);
-  assert.match(output, /Changed: 1 file/u);
-  assert.match(output, /npm test · reported passed/);
-  assert.match(output, /Duration: 3m 42s/);
-  assert.doesNotMatch(output, /\bverified\b|\baccepted\b|host acceptance|review pass|must not leak/iu);
-});
-
-test("renderer shortens wrapped test commands and long report text", () => {
-  const longSummary = "Monotonic cleanup deadline implemented. ".repeat(12);
-  const snapshot = buildTaskFeedbackSnapshotV01({
-    status: status({ status: "completed", finished_at: FINISH }),
-    events: [event("report_ready")],
-    result: result({
-      summary: longSummary,
-      tests: [{
-        command: 'cmd.exe /d /s /c "set HOME=C:\\Users\\Sandy&& set TEMP=C:\\Temp&& dotnet test tests\\LumeCAE.RadianceAdapter.Tests\\LumeCAE.RadianceAdapter.Tests.csproj --no-restore --filter FullyQualifiedName~RadianceDeadlineTests"',
-        status: "passed",
-        details: "9/9 passed",
-      }],
-      issues: ["Git Bash rewrites cmd.exe switches; the command was rerun with MSYS_NO_PATHCONV=1."],
-    }),
-  });
-
-  const output = renderTaskFeedback(snapshot);
-  assert.match(output, /dotnet test LumeCAE\.RadianceAdapter\.Tests · filter RadianceDeadlineTests · reported passed/u);
-  assert.match(output, /! 1 reported issue · Git Bash rewrites cmd\.exe switches/u);
-  assert.match(output, /…/u);
-  assert.doesNotMatch(output, /cmd\.exe \/d|HOME=|TEMP=|9\/9 passed/u);
-  assert.ok(output.length < 600, `expected concise output, got ${output.length} characters`);
-});
-
-test("renderer has Bridge-derived text for every task lifecycle status", () => {
-  const cases = [
-    ["queued", "○ Queued"],
-    ["running", "→ Running"],
-    ["completed", "✓ Bridge task completed"],
-    ["failed", "✗ Bridge task failed"],
-    ["cancelled", "Task cancellation confirmed by Bridge"],
-    ["waiting_for_master", "Agent report requires a master decision."],
-  ] as const;
-  for (const [taskStatus, expected] of cases) {
-    const snapshot = buildTaskFeedbackSnapshotV01({
-      status: status({ status: taskStatus, started_at: taskStatus === "queued" ? null : START }),
-      events: [],
-      result: null,
-    });
-    assert.match(renderTaskFeedback(snapshot), new RegExp(expected.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")));
-  }
-});
-
-test("unapproved runtime fields never enter the snapshot or rendered text", () => {
+test("unapproved runtime fields never enter the snapshot", () => {
   const snapshot = buildTaskFeedbackSnapshotV01({
     status: status(),
     events: [event("model_tool_call", {
@@ -188,5 +125,4 @@ test("unapproved runtime fields never enter the snapshot or rendered text", () =
   });
   const serialized = JSON.stringify(snapshot);
   assert.doesNotMatch(serialized, /private reasoning|secret body|authorization|private\.invalid/iu);
-  assert.doesNotMatch(renderTaskFeedback(snapshot), /private reasoning|secret body|authorization|private\.invalid/iu);
 });

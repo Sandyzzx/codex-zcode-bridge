@@ -1,10 +1,8 @@
 # ADR-024：SQLite Hold 工作区化与本机清理恢复
 
 > Status: DECISION
-> Date: 2026-11-04
+> Date: 2026-11-04；修订 2026-11-22
 > Decision: Accepted for this worktree; production integration remains a separate authorization
-> Partially superseded: ADR-037 replaces the startup-only Recovery assumption and
-> narrows the OS-scan-only Cleanup closure for the Stable 1.7.1 Host hotfix.
 
 ## Context
 
@@ -54,7 +52,10 @@ Worker、终态和审计不可覆盖。
    cleanup verified 都 Release；只有 Worker 可能仍在写入而身份、进程树或
    interaction 状态不能验证时，才将 Hold 限定到 Operation/重叠路径。PID 与
    start fingerprint 不匹配、probe/scan 失败、终止失败、未解决 interaction、
-   Observation 上限 8 或 Recovery CAS 竞争均不释放；CAS 冲突必须重读权威状态。
+   Recovery CAS 竞争均不释放；CAS 冲突必须重读权威状态。重复 Recovery
+   Observation 使用稳定材料事实去重，动态观察时间不单独制造新事件，也不再以
+   Operation 固定 8 条作为恢复资格。材料事实包括身份状态、probe 原因、进程/树
+   证据和 phase；任一材料事实变化都必须保留为新事件，不能被去重隐藏。
    Admission 路径重叠和 Capacity 满只排队。SQLite root 完整性损坏才进入全局只读。
 8. `zcode_cancel` 对 held Operation 是可能终止仍存活 Worker 的显式动作。Master
    必须先报告 Task/Attempt/workspace/原因并取得用户明确授权；接口仍为
@@ -64,6 +65,14 @@ Worker、终态和审计不可覆盖。
    `attribution.statusCode` 不足以证明未接受。故 HTTP 429、5xx、网络错误或接受状态
    unknown 均不自动重发。只有未来协议提供可信未接受证据时，才允许同一
    Worker/Attempt 有限重试并遵守有界 `Retry-After`；观察到 turn-start 后始终不重试。
+
+2026-11-22 修订取消 Observation、Cleanup Reverification、Cancel Resolution
+和 Cancellation History 的固定 8 条上限。超过 8 条的 Cleanup/Cancel 消解使用
+`resolved_recovery_event_count` 与 `resolved_recovery_event_root` 承诺完整事件
+集合；旧 `resolved_recovery_event_digests` 数组仍可读取和校验。此修订不提升
+SQLite Schema Version、不迁移表、不改变 Result/Cleanup/Release 语义。既有 v14
+只读 Recovery 按精确 DDL 接受旧 `cleanup_reverified_binding_guard` 且不修改
+数据库；实际可写打开时才对该精确匹配执行幂等 Trigger DDL 升级。
 
 ## Hold 触发矩阵
 
@@ -78,7 +87,8 @@ Worker、终态和审计不可覆盖。
 | identity probe 失败/超时，或 tree termination 失败 | Hold |
 | recorded-tree scan 不干净/失败，或 interaction unresolved | Hold |
 | Recovery CAS 冲突 | 不释放；重读 snapshot，确认当前状态后才返回 |
-| Operation Observation 达到 8 | 停止自动 Recovery，保持 Hold 并报告诊断 |
+| 重复且材料事实不变的 Recovery Observation | 不新增 Revision/Event，返回既有持久 Evidence Digest |
+| Recovery 材料事实变化 | 追加不可覆盖事件；不因固定条数阻止恢复 |
 | Admission 路径重叠 / Capacity 满 | 保持 queued，稍后重试；不是 Hold |
 | SQLite root 一致性损坏 | Root Quarantine / 全局只读 |
 
@@ -121,3 +131,8 @@ Hold，可通过普通 cancel 在不重启 Bridge/Codex/Windows 的情况下释�
 Claimant scan 不能观察未记录的中间祖先。该残留风险只在单用户可信本机
 接受；不得把该证据宣传为对抗性进程谱系的完整证明。行政 abandon 保留为
 scan 长期失败、证据损坏或人工决策的最后手段。
+
+旧 v14 Hold 缺少 `material_digest` 时，兼容比较必须使用该事件实际包含的全部
+材料字段，不能退化为仅比较 Claim/Generation 等身份绑定；否则真实身份或进程树
+变化可能被误去重。固定条数上限的移除只解决事件累积，不降低任何身份、树、
+Cleanup 或 Release 门槛。

@@ -59,10 +59,17 @@ function affectedDomains(changedFiles, map) {
   return { domains: [...domains].sort(), reasonsByDomain };
 }
 
-export function selectAffectedTests({ changedFiles, map, includeStress = true, platform = process.platform }) {
+export function selectAffectedTests({
+  changedFiles,
+  map,
+  includeStress = true,
+  platform = process.platform,
+  forceFull = false,
+}) {
   const normalizedFiles = [...new Set(changedFiles.map(toPosixPath))].sort((left, right) => left.localeCompare(right, "en"));
   const { domains, reasonsByDomain } = affectedDomains(normalizedFiles, map);
   const fullSuiteReasons = [];
+  if (forceFull) fullSuiteReasons.push("forced-full");
   for (const file of normalizedFiles) {
     if (pathMatchesAny(file, map.full_suite_paths)) fullSuiteReasons.push(`full-suite-path:${file}`);
   }
@@ -78,6 +85,18 @@ export function selectAffectedTests({ changedFiles, map, includeStress = true, p
   for (const file of normalizedFiles) {
     const isSource = pathMatchesAny(file, sourceCandidatePatterns);
     if (isSource && !mappedSourceFiles.has(file)) fullSuiteReasons.push(`unknown-source:${file}`);
+  }
+
+  // Executable repository scripts are part of the test/build contract. A new
+  // or renamed unmapped script must not silently select zero tests.
+  const executableScriptPatterns = ["scripts/**"];
+  const knownContractPaths = [
+    ...map.domains.flatMap((domain) => domain.paths),
+    ...map.full_suite_paths,
+  ];
+  for (const file of normalizedFiles) {
+    if (!pathMatchesAny(file, executableScriptPatterns)) continue;
+    if (!pathMatchesAny(file, knownContractPaths)) fullSuiteReasons.push(`unknown-executable-script:${file}`);
   }
 
   // A file under test/ that is neither a mapped executable test nor a named
@@ -102,6 +121,29 @@ export function selectAffectedTests({ changedFiles, map, includeStress = true, p
     if (stressInfo) record.stress = stressInfo;
     if (!record.reasons.includes(reason)) record.reasons.push(reason);
   };
+  const developmentSelected = new Map();
+  const addDevelopment = (entry, reason, { direct = false } = {}) => {
+    if (!entry || entry.stress || !isAutomaticTest(entry, platform)) return;
+    if (!developmentSelected.has(entry.file)) {
+      const deferredFullSuite = fullSuiteReasons.length > 0;
+      if (deferredFullSuite && !direct && entry.type !== "Unit") return;
+      developmentSelected.set(entry.file, { ...entry, reasons: [] });
+    }
+    const record = developmentSelected.get(entry.file);
+    if (!record.reasons.includes(reason)) record.reasons.push(reason);
+  };
+  for (const file of normalizedFiles) {
+    const direct = testByFile.get(file);
+    if (direct) addDevelopment(direct, `changed-test:${file}`, { direct: true });
+  }
+  for (const domain of domains) {
+    for (const entry of map.tests) {
+      if (!entry.domains.includes(domain)) continue;
+      addDevelopment(entry, `domain:${domain}`);
+    }
+  }
+  const developmentTests = [...developmentSelected.values()]
+    .sort((left, right) => left.file.localeCompare(right.file, "en"));
 
   if (fullSuiteReasons.length > 0) {
     for (const entry of map.tests) {
@@ -118,6 +160,7 @@ export function selectAffectedTests({ changedFiles, map, includeStress = true, p
       domain_reasons: Object.fromEntries([...reasonsByDomain].map(([key, value]) => [key, value])),
       full_suite_reasons: fullSuiteReasons.sort(),
       selected_tests: [...selected.values()],
+      development_tests: developmentTests,
       stress_tests: [],
       stress_mode: "SEPARATE_STRESS_GATE",
     };
@@ -144,6 +187,7 @@ export function selectAffectedTests({ changedFiles, map, includeStress = true, p
     domain_reasons: Object.fromEntries([...reasonsByDomain].map(([key, value]) => [key, value])),
     full_suite_reasons: [],
     selected_tests: selectedTests,
+    development_tests: developmentTests,
     stress_tests: includeStress ? selectedStress : [],
     stress_mode: selectedStress.length > 0 ? "STRESS_TEST_REQUIRED" : "STRESS_TESTS_NOT_APPLICABLE",
   };

@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { IsolatedAdmissionStore, AdmissionError, digest } from '../../../src/sqlite-candidate/wp6b2b1/store.mjs';
+import { IsolatedAdmissionStore, AdmissionError, canonical, digest } from '../../../src/sqlite-candidate/wp6b2b1/store.mjs';
 import { createSqliteLifecyclePort } from '../../../src/sqlite-candidate/wp6b2b1/lifecycle-port.mjs';
 
 const HERE=path.dirname(fileURLToPath(import.meta.url));
@@ -22,7 +22,7 @@ function child(mode,r,payload={},fault){return new Promise((resolve,reject)=>{
   p.on('close',code=>{try{resolve({code,out:JSON.parse(out),err});}catch(e){reject(new Error(`child output parse failed: ${out}; stderr=${err}; ${e}`));}});
 });}
 function capture(fn,code){assert.throws(fn,e=>e instanceof AdmissionError&&e.code===code);}
-function makeRunning(label='running',{intentOnly=false,reservedOnly=false}={}){
+function makeRunning(label='running',{intentOnly=false,reservedOnly=false,stopAfterReceipt=false}={}){
   const r=root(label);const s=IsolatedAdmissionStore.initialize(r);openStores.add(s);
   const taskPackage={task_id:'task-result',workspace:path.join(TEMP,'workspace'),objective:'synthetic WP6C result fixture',requirements:[],allowed_paths:[],forbidden_paths:[],acceptance_criteria:[],test_commands:[]};
   s.createTask(taskPackage,'2026-10-23T00:00:00.000Z');
@@ -38,6 +38,7 @@ function makeRunning(label='running',{intentOnly=false,reservedOnly=false}={}){
   if(intentOnly)return {root:r,store:s,request:null};
   const receipt={...intent,revision:intent.revision,receipt_id:'receipt-result',launch_identity:{source:'synthetic_fixture',fixture:true,process_id:41001,start_fingerprint:'synthetic-start-result'}};
   s.recordLaunchReceipt(receipt);
+  if(stopAfterReceipt)return {root:r,store:s,request:null,receipt};
   const claim={...intent,revision:intent.revision+1,claim_id:'claim-result',worker_identity:{source:'synthetic_fixture',fixture:true,worker_id:'worker-result',incarnation:'incarnation-result',process_id:41001,start_fingerprint:'synthetic-start-result'}};
   s.commitPermanentClaim(claim);
   const operation=s.readOperation('operation-result');
@@ -102,9 +103,9 @@ function verifiedCleanupEvidence(store,request){
 }
 function recoveryEvidence(input){return {source:input.evidence_source,operation_id:input.operation_id,task_id:input.task_id,attempt:input.attempt,
   generation:input.generation,claim_id:input.claim_id,worker_identity_digest:input.worker_identity_digest,observation:'unknown'}};
-function recoveryInput(store,{classification='hold',reason_code='cleanup_identity_unknown',evidence_source='manager_process_probe',evidence}={}){
+function recoveryInput(store,{classification='hold',reason_code='cleanup_identity_unknown',evidence_source='manager_process_probe',evidence,material={}}={}){
   const o=store.readOperation('operation-result'),ev=evidence??{source:evidence_source,operation_id:o.operation_id,task_id:o.task_id,attempt:o.attempt,
-    generation:o.generation,claim_id:o.claim_id,worker_identity_digest:o.claim_worker_identity_digest,observation:'unknown'};
+    generation:o.generation,claim_id:o.claim_id,worker_identity_digest:o.claim_worker_identity_digest,observation:'unknown',...material};
   return {input:{operation_id:o.operation_id,task_id:o.task_id,attempt:o.attempt,generation:o.generation,expected_revision:o.revision,claim_id:o.claim_id,
     worker_identity_digest:o.claim_worker_identity_digest,classification,reason_code,evidence_source,evidence_digest:digest(ev)},evidence:ev};
 }
@@ -115,6 +116,180 @@ function verifiedRecoveryPort(store){return createSqliteLifecyclePort(store,{rec
     &&(observation.classification==='hold'?observation.reason_code!=='operation_projection_conflict':observation.reason_code==='operation_projection_conflict');
   return valid?{classification:observation.classification,reason_code:observation.reason_code,evidence_source:observation.evidence_source,evidence_digest:observation.evidence_digest}:false;
 }});}
+function cancelledCleanupFixture(label,status='cancelled'){
+  const {root:r,store,request}=makeRunning(label),cancel=cancellationFixture(store);
+  let intent,verification,revision;
+  if(status==='cancelled'){
+    intent=cancel.port.requestCancellation(cancel.fence(),cancel.identityEvidence);
+    verification=cancel.port.recordCancellationVerification(cancel.fence(intent.revision),
+      {...cancel.cancellationEvidence,cancel_id:intent.cancel_id});
+    revision=verification.revision;
+  }else{
+    revision=store.readOperation('operation-result').revision;
+  }
+  store.commitResult({...request,revision,result_status:status,result:resultPayload(status),
+    ...(verification?{cancel_verification_digest:verification.cancellation_verification_digest}:{})});
+  const cleanup=cleanupFence(store,request),pending=store.beginCleanup(cleanup);
+  store.recordCleanupEvidence({...cleanup,revision:pending.revision,outcome:'unverified',probe_state:'incomplete',reason:'adapter_cleanup_unverified'});
+  return {root:r,store,request,cancel,intent,verification};
+}
+function cleanupReleaseRecovery(store){
+  const o=store.readOperation('operation-result');
+  const evidence={source:'manager_process_probe',operation_id:o.operation_id,task_id:o.task_id,attempt:o.attempt,generation:o.generation,
+    phase:o.phase,claim_id:o.claim_id,worker_identity_digest:o.claim_worker_identity_digest,identity_state:'exited',process_id:41001,
+    start_fingerprint:'synthetic-start-result',probe_reason:'synthetic_exact_exit',recovery_disposition:'complete_cleanup_closure_unavailable',
+    process_tree_root_observed:true,process_tree_scan_clean:true,process_tree_scan_digest:'d'.repeat(64),complete_cleanup_closure:false,
+    observed_at:new Date().toISOString()};
+  return {evidence,input:{operation_id:o.operation_id,task_id:o.task_id,attempt:o.attempt,generation:o.generation,
+    expected_revision:o.revision,claim_id:o.claim_id,worker_identity_digest:o.claim_worker_identity_digest,classification:'hold',
+    reason_code:'cleanup_incomplete',evidence_source:'manager_process_probe',evidence_digest:digest(evidence),
+    process_tree_root_observed:true,process_tree_scan_clean:true,process_tree_scan_digest:'d'.repeat(64),
+    recovery_disposition:'complete_cleanup_closure_unavailable'}};
+}
+for(const priorProof of [false,true])test(`explicit cancellation resolves cleanup-only Hold with fresh tree proof (prior proof ${priorProof})`,()=>{
+  const {root:r,store,request}=makeRunning(`cancel-held-${priorProof}`),cancel=cancellationFixture(store);
+  const intent=cancel.port.requestCancellation(cancel.fence(),cancel.identityEvidence);
+  const tree={...cancel.cancellationEvidence,cancel_id:intent.cancel_id};
+  let original;
+  if(priorProof)original=cancel.port.recordCancellationVerification(cancel.fence(),tree);
+  const held=recoveryInput(store,{reason_code:'cleanup_incomplete'});
+  verifiedRecoveryPort(store).recordRecoveryObservation(held.input,held.evidence);
+  const before=readRows(r);
+  capture(()=>store.commitResult({...request,revision:store.readOperation(request.operation_id).revision,
+    result_status:'cancelled',result:resultPayload('cancelled'),cancel_verification_digest:original?.cancellation_verification_digest??'0'.repeat(64)}),'operation_recovery_latched');
+  const fresh={...tree,probe_round:2};
+  const reject=createSqliteLifecyclePort(store,{cancellationVerifier:()=>false});
+  capture(()=>reject.recordCancellationVerification(cancel.fence(),fresh),'cancellation_verification_unverified');
+  assert.deepEqual(readRows(r),before,'rejected evidence cannot clear the Hold');
+  const verified=cancel.port.recordCancellationVerification(cancel.fence(),fresh);
+  const afterProof=readRows(r),proofEvents=afterProof.events.filter(event=>JSON.parse(event.evidence_json).reason==='cancel_tree_verified');
+  const resolution=afterProof.events.find(event=>JSON.parse(event.evidence_json).reason==='cancel_recovery_resolved');
+  assert.ok(resolution);
+  assert.equal(proofEvents.length,priorProof?2:1,'fresh proof is durably represented by a new verification event');
+  const resolvedEvidence=JSON.parse(resolution.evidence_json);
+  const freshProofEvent=proofEvents.at(-1);
+  assert.ok(freshProofEvent.sequence>held.input.expected_revision,'fresh proof follows the Hold');
+  assert.equal(resolvedEvidence.cancellation_verification_digest,freshProofEvent.evidence_digest);
+  assert.equal(resolvedEvidence.proof_digest,JSON.parse(freshProofEvent.evidence_json).proof_digest);
+  assert.equal(readRows(r).events.filter(event=>JSON.parse(event.evidence_json).reason==='recovery_hold').length,1,'history is preserved');
+  if(priorProof)assert.notEqual(verified.cancellation_verification_digest,original.cancellation_verification_digest,
+    'resolution and Result must use the fresh proof rather than the historical proof');
+  const committed=store.commitResult({...request,revision:verified.revision,result_status:'cancelled',result:resultPayload('cancelled'),
+    cancel_verification_digest:verified.cancellation_verification_digest});
+  const pending=store.beginCleanup(cleanupFence(store,request));
+  const cleanup=store.recordCleanupEvidence({...cleanupFence(store,request),revision:pending.revision,outcome:'verified',
+    cleanup_evidence:verifiedCleanupEvidence(store,request)});
+  const released=store.releaseCapacity({...cleanupFence(store,request),cleanup_digest:cleanup.cleanup_digest});
+  assert.equal(committed.result_status,'cancelled');assert.equal(released.phase,'released');
+  const reopened=IsolatedAdmissionStore.openForRecovery(r);
+  try{
+    const op=reopened.readRecoverySnapshot().operations.find(op=>op.operation_id===request.operation_id);
+    assert.equal(op.capacity_occupied,false);assert.equal(op.recovery_classification,'normal');
+    assert.equal(reopened.readTaskLifecycle(request.task_id).result.status,'cancelled');
+  }finally{reopened.close();}
+});
+
+test('the same material Recovery facts become a new active Hold after an earlier resolution',()=>{
+  const {root:r,store}=makeRunning('cancel-resolved-fact-recurs'),cancel=cancellationFixture(store),recovery=verifiedRecoveryPort(store);
+  const first=recoveryInput(store,{reason_code:'cleanup_incomplete'});
+  const recorded=recovery.recordRecoveryObservation(first.input,first.evidence);
+  assert.equal(recorded.duplicate,false);
+  const intent=cancel.port.requestCancellation(cancel.fence(),cancel.identityEvidence);
+  cancel.port.recordCancellationVerification(cancel.fence(intent.revision),
+    {...cancel.cancellationEvidence,cancel_id:intent.cancel_id});
+  const beforeStaleReplay=readRows(r);
+  assert.throws(()=>recovery.recordRecoveryObservation(first.input,first.evidence),
+    e=>e instanceof AdmissionError&&e.code==='stale_recovery_cas',
+    'an exact historical envelope must not bypass the current Revision CAS after its Hold was resolved');
+  assert.deepEqual(readRows(r),beforeStaleReplay,'a stale replay must not mutate events or projections');
+  const recurred=recoveryInput(store,{reason_code:'cleanup_incomplete'});
+  const repeated=recovery.recordRecoveryObservation(recurred.input,recurred.evidence);
+  assert.equal(repeated.duplicate,false,'a resolved fact must not suppress a later active obstruction');
+  const reopened=IsolatedAdmissionStore.openForRecovery(r);
+  try{
+    const snapshot=reopened.readRecoverySnapshot();
+    assert.equal(snapshot.root_status,'consistent_read_only');
+    assert.equal(snapshot.operations[0].recovery_classification,'hold');
+    assert.equal(snapshot.operations[0].recovery_observation_count,2);
+  }finally{reopened.close();store.close();}
+});
+
+test('explicit cancellation resolves more than eight cleanup Holds with a bounded evidence commitment',()=>{
+  const {root:r,store,request}=makeRunning('cancel-many-holds'),cancel=cancellationFixture(store),recovery=verifiedRecoveryPort(store);
+  for(let index=0;index<12;index++){
+    const held=recoveryInput(store,{reason_code:'cleanup_incomplete',
+      material:{identity_state:'unknown',probe_reason:`cancel-hold-${index}`}});
+    const recorded=recovery.recordRecoveryObservation(held.input,held.evidence);
+    assert.equal(recorded.duplicate,false);
+  }
+  const intent=cancel.port.requestCancellation(cancel.fence(),cancel.identityEvidence);
+  const verification=cancel.port.recordCancellationVerification(cancel.fence(intent.revision),
+    {...cancel.cancellationEvidence,cancel_id:intent.cancel_id});
+  const resolution=readRows(r).events.find(event=>JSON.parse(event.evidence_json).reason==='cancel_recovery_resolved');
+  const resolutionEvidence=JSON.parse(resolution.evidence_json);
+  assert.equal(resolutionEvidence.resolved_recovery_event_digests,undefined);
+  assert.equal(resolutionEvidence.resolved_recovery_event_count,12);
+  assert.match(resolutionEvidence.resolved_recovery_event_root,/^[0-9a-f]{64}$/u);
+  const committed=store.commitResult({...request,revision:verification.revision,result_status:'cancelled',
+    result:resultPayload('cancelled'),cancel_verification_digest:verification.cancellation_verification_digest});
+  assert.equal(committed.result_status,'cancelled');
+  assert.equal(readRows(r).events.filter(event=>JSON.parse(event.evidence_json).reason==='recovery_hold').length,12);
+  store.close();
+  const reopened=IsolatedAdmissionStore.openForRecovery(r);
+  try{
+    const snapshot=reopened.readRecoverySnapshot();
+    assert.equal(snapshot.root_status,'consistent_read_only');
+    assert.equal(snapshot.operations[0].recovery_observation_count,12);
+  }finally{reopened.close();}
+});
+
+test('reopen rejects a resolution that mixes the historical verification with the fresh proof',()=>{
+  const {root:r,store,request}=makeRunning('cancel-resolution-proof-binding'),cancel=cancellationFixture(store);
+  const intent=cancel.port.requestCancellation(cancel.fence(),cancel.identityEvidence);
+  const tree={...cancel.cancellationEvidence,cancel_id:intent.cancel_id};
+  const historical=cancel.port.recordCancellationVerification(cancel.fence(),tree);
+  const held=recoveryInput(store,{reason_code:'cleanup_incomplete'});
+  verifiedRecoveryPort(store).recordRecoveryObservation(held.input,held.evidence);
+  const fresh=cancel.port.recordCancellationVerification(cancel.fence(),{...tree,probe_round:2});
+  assert.notEqual(fresh.cancellation_verification_digest,historical.cancellation_verification_digest);
+  const before=readRows(r);
+  capture(()=>store.commitResult({...request,revision:fresh.revision,result_status:'cancelled',result:resultPayload('cancelled'),
+    cancel_verification_digest:historical.cancellation_verification_digest}),'cancel_verification_required');
+  assert.deepEqual(readRows(r),before,'a Result cannot fall back to the historical proof');
+  store.close();
+  const db=new DatabaseSync(path.join(r,'operations.sqlite3'));
+  try{
+    const row=db.prepare("SELECT sequence,evidence_json FROM manager_operation_events WHERE operation_id=? AND event_type='observation_recorded'").all(request.operation_id)
+      .map(value=>({...value,evidence:JSON.parse(value.evidence_json)})).find(value=>value.evidence.reason==='cancel_recovery_resolved');
+    const tampered={...row.evidence,cancellation_verification_digest:historical.cancellation_verification_digest};
+    tampered.evidence_digest=digest(canonical(Object.fromEntries(Object.entries(tampered).filter(([key])=>key!=='evidence_digest'))));
+    const trigger=db.prepare("SELECT sql FROM sqlite_schema WHERE type='trigger' AND name='events_no_update'").get().sql;
+    db.exec('DROP TRIGGER events_no_update');
+    db.prepare('UPDATE manager_operation_events SET evidence_json=?,evidence_digest=? WHERE operation_id=? AND sequence=?')
+      .run(canonical(tampered),digest(canonical(tampered)),request.operation_id,row.sequence);
+    db.exec(trigger);
+  }finally{db.close();}
+  const reopened=IsolatedAdmissionStore.openForRecovery(r);
+  try{
+    const snapshot=reopened.readRecoverySnapshot();
+    assert.equal(snapshot.root_status,'unavailable_read_only',JSON.stringify(snapshot));
+    assert.ok(snapshot.root_blockers.includes('cancellation_resolution_binding_mismatch'));
+    assert.equal(snapshot.writes_allowed,false);
+  }finally{reopened.close();}
+});
+
+test('explicit cancellation cannot resolve quarantine or unknown Hold reasons',()=>{
+  for(const details of [{classification:'quarantine',reason_code:'operation_projection_conflict'},
+    {classification:'hold',reason_code:'worker_identity_unknown'}]){
+    const {root:r,store}=makeRunning(`cancel-reject-${details.reason_code}`),cancel=cancellationFixture(store);
+    const intent=cancel.port.requestCancellation(cancel.fence(),cancel.identityEvidence);
+    const held=recoveryInput(store,details);verifiedRecoveryPort(store).recordRecoveryObservation(held.input,held.evidence);
+    const before=readRows(r);
+    capture(()=>cancel.port.recordCancellationVerification(cancel.fence(),{...cancel.cancellationEvidence,cancel_id:intent.cancel_id}),'operation_recovery_latched');
+    assert.deepEqual(readRows(r),before);
+  }
+});
+
 async function retryBusyResult(r,request){
   let latest;
   for(let i=0;i<8;i++){
@@ -220,6 +395,150 @@ test('running cancellation persists exact Worker identity, is idempotent, and bi
     e=>e instanceof AdmissionError&&e.code==='cleanup_not_verified');
   assert.equal(readRows(r).active,1);store.close();
   const reopened=IsolatedAdmissionStore.open(r);assert.equal(reopened.readOperation('operation-result').phase,'cleanup_unverified');reopened.close();
+});
+
+test('enriched cleanup Recovery release is idempotent and survives SQLite reopen validation',()=>{
+  const f=cancelledCleanupFixture('cleanup-admin-release'),proof=cleanupReleaseRecovery(f.store);
+  const recovery=verifiedRecoveryPort(f.store);
+  recovery.recordRecoveryObservation(proof.input,proof.evidence);
+  const refreshed={...proof.evidence,observed_at:'2026-10-23T00:10:00.000Z'};
+  const repeated=recovery.recordRecoveryObservation({...proof.input,evidence_digest:digest(refreshed)},refreshed);
+  assert.equal(repeated.duplicate,true);
+  const operation=f.store.readOperation('operation-result');
+  assert.equal(operation.phase,'cleanup_unverified');
+  const request={operation_id:operation.operation_id,task_id:operation.task_id,attempt:operation.attempt,generation:operation.generation,
+    revision:operation.revision,cancel_id:f.intent.cancel_id,cancellation_verification_digest:f.verification.cancellation_verification_digest,
+    recovery_evidence_digest:repeated.evidence_digest,release_reason:'user_authorized_release_unverified'};
+  const first=f.store.userAuthorizedReleaseUnverifiedOperation(request);
+  const duplicate=f.store.userAuthorizedReleaseUnverifiedOperation(request);
+  assert.equal(first.duplicate,false);assert.equal(first.cleanup_verified,false);
+  assert.equal(duplicate.duplicate,true);assert.equal(duplicate.revision,first.revision);
+  assert.equal(readRows(f.root).events.filter(event=>event.event_type==='observation_recorded'
+    &&JSON.parse(event.evidence_json).reason==='user_authorized_release_unverified').length,1);
+  f.store.close();
+  const reopened=IsolatedAdmissionStore.openForRecovery(f.root);
+  try{
+    const snapshot=reopened.readRecoverySnapshot(),recoveryOperation=snapshot.operations.find(item=>item.operation_id===operation.operation_id);
+    assert.equal(snapshot.root_status,'consistent_read_only');
+    assert.equal(recoveryOperation.phase,'released');assert.equal(recoveryOperation.capacity_occupied,false);
+    assert.equal(recoveryOperation.cleanup_state,'unverified_admin_release');
+    assert.equal(readRows(f.root).events.filter(event=>event.event_type==='result_committed').length,1);
+    assert.equal(readRows(f.root).events.filter(event=>event.event_type==='cleanup_unverified').length,1);
+    assert.equal(readRows(f.root).events.filter(event=>event.event_type==='cleanup_verified').length,0);
+  }finally{reopened.close();}
+});
+
+test('forced cleanup binds a launch Receipt, accepts workspace risk, and preserves launch history',()=>{
+  const f=makeRunning('forced-launch-release',{stopAfterReceipt:true});
+  const cancelled=f.store.cancelQueuedAttempt({task_id:'task-result',expected_attempt:1});
+  const operation=f.store.readOperation('operation-result');
+  const request={operation_id:operation.operation_id,task_id:operation.task_id,attempt:operation.attempt,
+    generation:operation.generation,revision:operation.revision,cancel_id:cancelled.cancel_id,
+    accept_worker_risk:true,launch_receipt_digest:operation.launch_receipt_digest,
+    release_reason:'user_authorized_release_unverified'};
+  capture(()=>f.store.userAuthorizedReleaseUnverifiedOperation({
+    ...request,launch_receipt_digest:'0'.repeat(64)}),
+    'user_authorized_release_spawn_evidence_mismatch');
+  assert.equal(f.store.readOperation('operation-result').phase,'launch_intent');
+  const first=f.store.userAuthorizedReleaseUnverifiedOperation(request);
+  const duplicate=f.store.userAuthorizedReleaseUnverifiedOperation(request);
+  assert.equal(first.duplicate,false);assert.equal(first.phase,'released');
+  assert.equal(first.cleanup_verified,false);assert.equal(duplicate.duplicate,true);
+  const rows=readRows(f.root);
+  assert.equal(rows.operation.phase,'released');assert.equal(rows.active,0);
+  assert.equal(rows.task.status,'cancelled');assert.equal(rows.attempt.status,'cancelled');
+  assert.equal(rows.events.filter(event=>event.event_type==='launch_receipt').length,1);
+  assert.equal(rows.events.filter(event=>event.event_type==='result_committed').length,0);
+  assert.equal(rows.events.filter(event=>event.event_type==='cleanup_verified').length,0);
+  const release=rows.events.filter(event=>event.event_type==='observation_recorded'
+    &&JSON.parse(event.evidence_json).reason==='user_authorized_release_unverified').at(-1);
+  assert.equal(JSON.parse(release.evidence_json).worker_risk_accepted,true);
+  f.store.close();
+  const reopened=IsolatedAdmissionStore.openForRecovery(f.root);
+  try{
+    const snapshot=reopened.readRecoverySnapshot();
+    const released=snapshot.operations.find(item=>item.operation_id===operation.operation_id);
+    assert.equal(snapshot.root_status,'consistent_read_only');
+    assert.equal(released.phase,'released');assert.equal(released.capacity_occupied,false);
+    assert.equal(released.cleanup_state,'unverified_admin_release');
+  }finally{reopened.close();}
+});
+
+test('a newer live Hold prevents authorized release from falling back to stale eligible Recovery evidence',()=>{
+  const f=cancelledCleanupFixture('cleanup-admin-release-stale-proof'),proof=cleanupReleaseRecovery(f.store);
+  verifiedRecoveryPort(f.store).recordRecoveryObservation(proof.input,proof.evidence);
+  const live=recoveryInput(f.store,{reason_code:'cleanup_incomplete'});
+  verifiedRecoveryPort(f.store).recordRecoveryObservation(live.input,live.evidence);
+  const operation=f.store.readOperation('operation-result');
+  capture(()=>f.store.userAuthorizedReleaseUnverifiedOperation({
+    operation_id:operation.operation_id,task_id:operation.task_id,attempt:operation.attempt,generation:operation.generation,
+    revision:operation.revision,cancel_id:f.intent.cancel_id,cancellation_verification_digest:f.verification.cancellation_verification_digest,
+    recovery_evidence_digest:digest(proof.evidence),release_reason:'user_authorized_release_unverified',
+  }),'user_authorized_release_recovery_evidence_mismatch');
+  const after=f.store.readOperation('operation-result');
+  assert.equal(after.phase,'cleanup_unverified');assert.equal(readRows(f.root).active,1);
+  assert.equal(readRows(f.root).events.filter(event=>event.event_type==='observation_recorded'
+    &&JSON.parse(event.evidence_json).reason==='user_authorized_release_unverified').length,0);
+});
+
+test('terminal non-cancelled Result release binds the original Result, CAS, idempotency, and reopen history',()=>{
+  const f=cancelledCleanupFixture('terminal-admin-release','completed'),proof=cleanupReleaseRecovery(f.store);
+  verifiedRecoveryPort(f.store).recordRecoveryObservation(proof.input,proof.evidence);
+  const operation=f.store.readOperation('operation-result');
+  const request={operation_id:operation.operation_id,task_id:operation.task_id,attempt:operation.attempt,
+    generation:operation.generation,revision:operation.revision,
+    release_reason:'user_authorized_release_unverified',
+    claim_id:operation.claim_id,result_commit_ref:operation.result_commit_ref,
+    result_digest:operation.result_digest,recovery_evidence_digest:proof.input.evidence_digest,
+    worker_identity_digest:operation.claim_worker_identity_digest};
+  capture(()=>f.store.userAuthorizedReleaseUnverifiedOperation({...request,revision:operation.revision-1}),
+    'stale_user_authorized_release_cas');
+  capture(()=>f.store.userAuthorizedReleaseUnverifiedOperation(
+    {...request,extra_field:'rejected'}),'invalid_user_authorized_release');
+  capture(()=>f.store.userAuthorizedReleaseUnverifiedOperation(
+    {...request,worker_identity_digest:'not-a-digest'}),'invalid_user_authorized_release');
+  capture(()=>f.store.userAuthorizedReleaseUnverifiedOperation(
+    {...request,result_digest:'0'.repeat(64)}),'user_authorized_release_result_identity_mismatch');
+  const first=f.store.userAuthorizedReleaseUnverifiedOperation(request);
+  const duplicate=f.store.userAuthorizedReleaseUnverifiedOperation(request);
+  assert.equal(first.duplicate,false);assert.equal(first.cleanup_verified,false);
+  assert.equal(duplicate.duplicate,true);assert.equal(duplicate.revision,first.revision);
+  assert.equal(readRows(f.root).events.filter(event=>event.event_type==='observation_recorded'
+    &&JSON.parse(event.evidence_json).reason==='user_authorized_release_unverified').length,1);
+  f.store.close();
+  const reopened=IsolatedAdmissionStore.openForRecovery(f.root);
+  try{
+    const snapshot=reopened.readRecoverySnapshot(),released=snapshot.operations.find(item=>item.operation_id===operation.operation_id);
+    assert.equal(snapshot.root_status,'consistent_read_only');
+    assert.equal(released.phase,'released');assert.equal(released.capacity_occupied,false);
+    assert.equal(released.cleanup_state,'unverified_admin_release');
+    assert.equal(readRows(f.root).events.filter(event=>event.event_type==='result_committed').length,1);
+    assert.equal(readRows(f.root).events.filter(event=>event.event_type==='cleanup_verified').length,0);
+    assert.equal(readRows(f.root).task.status,'completed');
+  }finally{reopened.close();}
+});
+
+test('terminal release accepts the persisted Recovery event digest across reopen',()=>{
+  const f=cancelledCleanupFixture('terminal-admin-release-event-digest','completed'),proof=cleanupReleaseRecovery(f.store);
+  verifiedRecoveryPort(f.store).recordRecoveryObservation(proof.input,proof.evidence);
+  const operation=f.store.readOperation('operation-result');
+  const recoveryEvent=readRows(f.root).events.filter(event=>event.operation_id===operation.operation_id
+    &&event.event_type==='observation_recorded'&&JSON.parse(event.evidence_json).reason==='recovery_hold').at(-1);
+  const request={operation_id:operation.operation_id,task_id:operation.task_id,attempt:operation.attempt,
+    generation:operation.generation,revision:operation.revision,release_reason:'user_authorized_release_unverified',
+    claim_id:operation.claim_id,result_commit_ref:operation.result_commit_ref,
+    result_digest:operation.result_digest,recovery_evidence_digest:recoveryEvent.evidence_digest,
+    worker_identity_digest:operation.claim_worker_identity_digest};
+  const first=f.store.userAuthorizedReleaseUnverifiedOperation(request);
+  const duplicate=f.store.userAuthorizedReleaseUnverifiedOperation(request);
+  assert.equal(first.duplicate,false);assert.equal(duplicate.duplicate,true);
+  f.store.close();
+  const reopened=IsolatedAdmissionStore.openForRecovery(f.root);
+  try{
+    const snapshot=reopened.readRecoverySnapshot(),released=snapshot.operations.find(item=>item.operation_id===operation.operation_id);
+    assert.equal(snapshot.root_status,'consistent_read_only');assert.equal(released.phase,'released');
+    assert.equal(released.cleanup_state,'unverified_admin_release');
+  }finally{reopened.close();}
 });
 
 test('cancellation identity and tree verification fail closed; unverified cancellation cannot commit Result',()=>{
@@ -435,7 +754,10 @@ test('C3B Recovery CAS records a verified phase-preserving Hold and fences Resul
   const recovery=IsolatedAdmissionStore.openForRecovery(r);try{const op=recovery.readRecoverySnapshot().operations.find(x=>x.operation_id===input.operation_id);
     assert.equal(op.recovery_classification,'hold');assert.equal(op.recovery_observation_count,1);assert.equal(op.capacity_occupied,true);assert.equal(op.claim_permanent,true);
   }finally{recovery.close();}
-  const repeated=port.recordRecoveryObservation(input,evidence);assert.equal(repeated.duplicate,true);
+  const refreshed={...evidence,observed_at:'2026-10-23T00:00:09.000Z'};
+  const refreshedInput={...input,evidence_digest:digest(refreshed)};
+  const repeated=port.recordRecoveryObservation(refreshedInput,refreshed);assert.equal(repeated.duplicate,true);
+  assert.equal(repeated.evidence_digest,eventEvidence.evidence_digest);
   assert.equal(readRows(r).events.filter(x=>x.event_type==='observation_recorded').length,1);store.close();
 });
 
@@ -533,7 +855,7 @@ test('C3B cannot persist an observation before permanent Claim and trusted Worke
   assert.equal(store.readLifecycleEvents('operation-result').some(e=>e.event_type==='observation_recorded'),false);store.close();
 });
 
-test('C3B Recovery classification is monotonic, quarantine cannot downgrade, and the per-operation cap is bounded',()=>{
+test('C3B Recovery classification is monotonic, quarantine cannot downgrade, and unchanged facts do not consume an observation budget',()=>{
   const {root:r,store,request}=makeRunning('c3b-monotonic');const port=verifiedRecoveryPort(store);
   const first=recoveryInput(store);const one=port.recordRecoveryObservation(first.input,first.evidence);
   const second=recoveryInput(store,{classification:'quarantine',reason_code:'operation_projection_conflict',evidence_source:'manager_projection_validator'});
@@ -545,19 +867,66 @@ test('C3B Recovery classification is monotonic, quarantine cannot downgrade, and
   lower.input.expected_revision=two.revision;lower.input.evidence_digest=digest(lower.evidence);
   assert.throws(()=>port.recordRecoveryObservation(lower.input,lower.evidence),e=>e instanceof AdmissionError&&e.code==='recovery_classification_downgrade');
   let current=two;
-  for(let i=2;i<8;i++){
+  for(let i=2;i<16;i++){
     const next=recoveryInput(store,{classification:'quarantine',reason_code:'operation_projection_conflict',evidence_source:'manager_projection_validator',
       evidence:{source:'manager_projection_validator',operation_id:'operation-result',task_id:'task-result',attempt:1,generation:current.generation,
-        claim_id:current.claim_id,worker_identity_digest:current.worker_identity_digest,observation:`conflict-${i}`}});
+        claim_id:current.claim_id,worker_identity_digest:current.worker_identity_digest,identity_state:'unknown',probe_reason:`conflict-${i}`}});
     next.input.expected_revision=current.revision;next.input.evidence_digest=digest(next.evidence);current=port.recordRecoveryObservation(next.input,next.evidence);
   }
-  const ninth=recoveryInput(store,{classification:'quarantine',reason_code:'operation_projection_conflict',evidence_source:'manager_projection_validator',
+  const unchanged=recoveryInput(store,{classification:'quarantine',reason_code:'operation_projection_conflict',evidence_source:'manager_projection_validator',
     evidence:{source:'manager_projection_validator',operation_id:'operation-result',task_id:'task-result',attempt:1,generation:current.generation,
-      claim_id:current.claim_id,worker_identity_digest:current.worker_identity_digest,observation:'ninth'}});
-  ninth.input.expected_revision=current.revision;ninth.input.evidence_digest=digest(ninth.evidence);
-  assert.throws(()=>port.recordRecoveryObservation(ninth.input,ninth.evidence),e=>e instanceof AdmissionError&&e.code==='recovery_observation_limit');
+      claim_id:current.claim_id,worker_identity_digest:current.worker_identity_digest,identity_state:'unknown',probe_reason:'conflict-15',
+      observed_at:'2026-10-23T00:01:00.000Z'}});
+  unchanged.input.expected_revision=current.revision;unchanged.input.evidence_digest=digest(unchanged.evidence);
+  const repeated=port.recordRecoveryObservation(unchanged.input,unchanged.evidence);
+  assert.equal(repeated.duplicate,true);assert.equal(repeated.revision,current.revision);
+  const changed=recoveryInput(store,{classification:'quarantine',reason_code:'operation_projection_conflict',evidence_source:'manager_projection_validator',
+    evidence:{source:'manager_projection_validator',operation_id:'operation-result',task_id:'task-result',attempt:1,generation:current.generation,
+      claim_id:current.claim_id,worker_identity_digest:current.worker_identity_digest,identity_state:'unknown',probe_reason:'conflict-16'}});
+  changed.input.expected_revision=current.revision;changed.input.evidence_digest=digest(changed.evidence);
+  const afterChange=port.recordRecoveryObservation(changed.input,changed.evidence);
+  assert.equal(afterChange.duplicate,false);
   const recovery=IsolatedAdmissionStore.openForRecovery(r);try{const op=recovery.readRecoverySnapshot().operations[0];
-    assert.equal(op.recovery_classification,'quarantine');assert.equal(op.recovery_observation_count,8);assert.equal(op.capacity_occupied,true);assert.equal(op.claim_permanent,true);
+    assert.equal(op.recovery_classification,'quarantine');assert.equal(op.recovery_observation_count,17);assert.equal(op.capacity_occupied,true);assert.equal(op.claim_permanent,true);
+  }finally{recovery.close();store.close();}
+});
+
+test('C3B eight material Holds stay stable across twenty fresh unchanged probes',()=>{
+  const {root:r,store}=makeRunning('c3b-eight-old-holds');
+  let verifierCalls=0;
+  const port=createSqliteLifecyclePort(store,{recoveryEvidenceVerifier:({operation,observation,evidence})=>{
+    verifierCalls++;
+    const valid=evidence?.source===observation.evidence_source&&evidence?.operation_id===operation.operation_id
+      &&evidence?.task_id===operation.task_id&&evidence?.attempt===operation.attempt
+      &&evidence?.generation===operation.generation&&evidence?.claim_id===operation.claim_id
+      &&evidence?.worker_identity_digest===operation.worker_identity_digest
+      &&observation.evidence_digest===digest(evidence)
+      &&(observation.classification==='hold'?observation.reason_code!=='operation_projection_conflict':observation.reason_code==='operation_projection_conflict');
+    return valid?{classification:observation.classification,reason_code:observation.reason_code,
+      evidence_source:observation.evidence_source,evidence_digest:observation.evidence_digest}:false;
+  }});
+  for(let index=0;index<8;index++){
+    const held=recoveryInput(store,{material:{identity_state:'unknown',probe_reason:`hold-${index}`}});
+    const recorded=port.recordRecoveryObservation(held.input,held.evidence);
+    assert.equal(recorded.duplicate,false);
+  }
+  const before=store.readOperation('operation-result');
+  for(let index=0;index<20;index++){
+    const unchanged=recoveryInput(store,{material:{identity_state:'unknown',probe_reason:'hold-7',
+      observed_at:`2026-10-23T00:00:${String(index).padStart(2,'0')}.000Z`}});
+    const repeated=port.recordRecoveryObservation(unchanged.input,unchanged.evidence);
+    assert.equal(repeated.duplicate,true,`fresh probe ${index+1} must deduplicate without skipping verification`);
+    assert.equal(repeated.revision,before.revision);
+  }
+  assert.equal(verifierCalls,28,'every observation, including each duplicate, must execute the verifier');
+  assert.equal(store.readLifecycleEvents('operation-result')
+    .filter(event=>event.event_type==='observation_recorded'&&JSON.parse(event.evidence_json).reason==='recovery_hold').length,8);
+  const recovery=IsolatedAdmissionStore.openForRecovery(r);
+  try{
+    const operation=recovery.readRecoverySnapshot().operations.find(item=>item.operation_id==='operation-result');
+    assert.equal(operation.recovery_classification,'hold');
+    assert.equal(operation.recovery_observation_count,8);
+    assert.equal(operation.capacity_occupied,true);
   }finally{recovery.close();store.close();}
 });
 
@@ -599,18 +968,21 @@ test('C3B different-Workspace Operations remain independent after one Operation 
   assert.equal(readRows(r).active,2);store.close();
 });
 
-test('C3B two independent Managers produce one Recovery CAS winner without overwriting stale evidence',async()=>{
+test('C3B two independent Managers deduplicate one unchanged Recovery fact without overwriting evidence',async()=>{
   const {root:r,store}=makeRunning('c3b-manager-race'),base=recoveryInput(store);store.close();
   const secondEvidence={...base.evidence,observation:'manager-b-different-observation'};
   const secondInput={...base.input,evidence_digest:digest(secondEvidence)};
   const [a,b]=await Promise.all([recoveryChild(r,base.input,base.evidence),recoveryChild(r,secondInput,secondEvidence)]);
-  const successes=[a,b].filter(x=>x.exitCode===0&&x.result.ok);assert.equal(successes.length,1,JSON.stringify([a,b]));
-  const failed=[a,b].filter(x=>x.exitCode===0&&!x.result.ok);assert.equal(failed.length,1,JSON.stringify([a,b]));
-  assert.ok(['recovery_observation_conflict','stale_recovery_cas','root_writer_busy'].includes(failed[0].result.code));
+  const successes=[a,b].filter(x=>x.exitCode===0&&x.result.ok);assert.ok(successes.length>=1,JSON.stringify([a,b]));
+  const failed=[a,b].filter(x=>x.exitCode===0&&!x.result.ok);
+  assert.ok(failed.length<=1,JSON.stringify([a,b]));
+  if(failed.length)assert.equal(failed[0].result.code,'root_writer_busy',JSON.stringify([a,b]));
   const writer=IsolatedAdmissionStore.open(r);try{
-    const loser=failed[0]===a?{input:base.input,evidence:base.evidence}:{input:secondInput,evidence:secondEvidence};
     const port=verifiedRecoveryPort(writer);
-    if(failed[0].result.code==='root_writer_busy')assert.throws(()=>port.recordRecoveryObservation(loser.input,loser.evidence),e=>e.code==='recovery_observation_conflict');
+    const loser=failed[0]===a?{input:base.input,evidence:base.evidence}:{input:secondInput,evidence:secondEvidence};
+    const retried=failed.length?port.recordRecoveryObservation(loser.input,loser.evidence):null;
+    if(retried)assert.equal(retried.duplicate,true);
+    assert.ok([...successes.map(x=>x.result.out),...(retried?[retried]:[])].filter(result=>result.duplicate).length>=1);
     const rows=readRows(r);assert.equal(rows.events.filter(x=>x.event_type==='observation_recorded'&&JSON.parse(x.evidence_json).reason.startsWith('recovery_')).length,1);
     assert.equal(rows.operation.phase,'running');assert.equal(rows.operation.claim_id,base.input.claim_id);assert.equal(rows.active,1);
   }finally{writer.close();}

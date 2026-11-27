@@ -45,17 +45,36 @@ checkedTest("missing authority config selects the default SQLite production Auth
   assert.equal(selection.configuredDataRoot, "");
 });
 
-checkedTest("legacy JSON authority configuration selects SQLite without reading task history", () => {
+checkedTest("legacy JSON authority configuration is rejected without modifying task or SQLite state", () => {
   const fx = fixture("legacy-json-config");
   const legacyTasks = path.join(fx.root, ".tasks", "old-task");
   mkdirSync(legacyTasks, { recursive: true });
   const historyFile = path.join(legacyTasks, "result.json");
   writeFileSync(historyFile, "legacy history remains byte-for-byte unchanged", "utf8");
-  writeAuthority(fx.settingsDirectory, { schema_version: 1, authority: "json" });
+  const stateDirectory = path.join(fx.root, "state");
+  mkdirSync(stateDirectory, { recursive: true });
+  const database = path.join(stateDirectory, "bridge.sqlite");
+  const databaseBytes = Buffer.from("existing synthetic v14 database bytes");
+  writeFileSync(database, databaseBytes);
+  const configPath = writeAuthority(fx.settingsDirectory, { schema_version: 1, authority: "json" });
+  const configBytes = readFileSync(configPath);
 
-  const selection = loadInstallAuthoritySelection(fx.host);
-  assert.deepEqual(selection, { state: "sqlite", configPath: path.join(fx.settingsDirectory, "authority.json"), configuredDataRoot: "" });
+  assert.throws(() => loadInstallAuthoritySelection(fx.host), (error: unknown) =>
+    typeof error === "object" && error !== null && "code" in error
+      && (error as { code: unknown }).code === "authority_config_json_unsupported");
+  assert.deepEqual(readFileSync(configPath), configBytes);
   assert.equal(readFileSync(historyFile, "utf8"), "legacy history remains byte-for-byte unchanged");
+  assert.deepEqual(readFileSync(database), databaseBytes);
+});
+
+checkedTest("an arbitrary unsupported authority is rejected without modifying the config", () => {
+  const fx = fixture("unsupported-authority");
+  const configPath = writeAuthority(fx.settingsDirectory, { schema_version: 1, authority: "legacy-json" });
+  const configBytes = readFileSync(configPath);
+  assert.throws(() => loadInstallAuthoritySelection(fx.host), (error: unknown) =>
+    typeof error === "object" && error !== null && "code" in error
+      && (error as { code: unknown }).code === "authority_config_invalid_contract");
+  assert.deepEqual(readFileSync(configPath), configBytes);
 });
 
 checkedTest("an explicit malformed authority config rejects instead of falling back to JSON", () => {

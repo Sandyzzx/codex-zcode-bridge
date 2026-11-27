@@ -1,5 +1,5 @@
 // ADR-011 Adapter integration tests: the frozen FailureFactsV1 contract exercised
-// through the real ZCodeAppServerAdapter against fake app-server runtimes, the
+// through the real ZCodeAppServerTestAdapter against fake app-server runtimes, the
 // direct private facts callback and shared Result normalization — never pure
 // functions alone. Covers the VALIDATION_PLAN A/S/R/P/F/L/D scenarios; the
 // Q/T/D2 classifier matrix lives in test/failure-facts.test.ts.
@@ -12,9 +12,9 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 import { buildTaskResult } from "../src/manager/normalize.js";
-import { ZCodeAppServerAdapter } from "../src/adapters/zcode-app-server-adapter.js";
+import { ZCodeAppServerTestAdapter } from "../src/adapters/zcode-app-server-adapter.js";
 import { type FailureFactsV1 } from "../src/diagnostics/failure-facts.js";
-import { formatWorkerFailureFactsLine } from "../src/host/stdio.js";
+import { formatWorkerFailureFactsLine } from "../src/executor/production-composition.js";
 import { BridgeError } from "../src/runtime/errors.js";
 import type { TaskPackage, ZCodeRuntimeConfig } from "../src/interfaces.js";
 import type { ZCodeRunOutcome } from "../src/adapters/run-outcome.js";
@@ -61,6 +61,7 @@ interface FakeRuntimeOptions {
   accountSyncError?: unknown;
   accountSyncExitCode?: number;
   preSendReject?: { method: "session/create" | "session/resume"; code?: number; dataCode?: string | null; dataMessage?: string };
+  setModelReject?: { code?: number; dataCode?: string | null; dataMessage?: string; stack?: string };
   sendAck?: boolean;
   sendRpcError?: { code?: number; dataCode?: string | null };
   sideEffectFile?: string;
@@ -139,6 +140,17 @@ input.on("line", (line) => {
     if (opts.accountSyncExitCode !== undefined) process.exit(opts.accountSyncExitCode);
     else if (opts.accountSyncError) process.stdout.write(JSON.stringify({ id: message.id, error: opts.accountSyncError }) + "\n");
     else process.stdout.write(JSON.stringify({ id: message.id, result: { status: "ok" } }) + "\n");
+  } else if (message.method === "session/setModel" && opts.setModelReject) {
+    process.stdout.write(JSON.stringify({ id: message.id, error: {
+      code: opts.setModelReject.code === undefined ? -32603 : opts.setModelReject.code,
+      message: opts.setModelReject.dataMessage === undefined ? "model rejected" : opts.setModelReject.dataMessage,
+      data: {
+        name: "ModelProtocolError",
+        code: opts.setModelReject.dataCode === undefined ? "model_not_found" : opts.setModelReject.dataCode,
+        message: opts.setModelReject.dataMessage === undefined ? "model rejected" : opts.setModelReject.dataMessage,
+        ...(opts.setModelReject.stack ? { stack: opts.setModelReject.stack } : {}),
+      },
+    } }) + "\n");
   } else if (message.method === "session/setModel" || message.method === "session/setMode" || message.method === "session/subscribe") {
     process.stdout.write(JSON.stringify({ id: message.id, result: message.method === "session/setModel" ? snapshot() : {} }) + "\n");
   } else if (message.method === "session/events") {
@@ -278,18 +290,16 @@ function makeAdapterFixture(workspace: string): AdapterFixture {
 async function runAdapter(options: {
   fixture: AdapterFixture;
   resolver: import("../src/interfaces.js").RuntimeResolver;
-  startPlanProviderEntitled?: boolean;
   resolveStartPlanRuntimeAuth?: () => Promise<never>;
 }) {
   const fixture=options.fixture;
   const startedAt=new Date().toISOString();
   let outcome: ZCodeRunOutcome | null=null;
   let failure: {code:string;message:string} | null=null;
-  const adapter=new ZCodeAppServerAdapter({resolver:options.resolver, timeoutMs:fixture.task.timeout_ms,
+  const adapter=new ZCodeAppServerTestAdapter({resolver:options.resolver, timeoutMs:fixture.task.timeout_ms,
     childEnvBase:{PATH:process.env.PATH},homeDir:fixture.task.workspace,
     onEvent:event=>fixture.events.push(event),onFailureFacts:facts=>{fixture.facts=facts;},
     onOutcomeCheckpoint:value=>{outcome=value;},
-    startPlanProviderEntitled:options.startPlanProviderEntitled,
     resolveStartPlanRuntimeAuth:options.resolveStartPlanRuntimeAuth});
   try {
     const handle=await adapter.startTask({task:fixture.task,attempt:fixture.attempt,workspace:{requestedPath:fixture.task.workspace,canonicalPath:fixture.task.workspace,mode:"direct"}});
@@ -379,7 +389,7 @@ test("A1: a pre-send session/create rejection records accepted=no with the RPC c
   const fixture = makeAdapterFixture(runtime.root);
   const events: Array<{ type: string; summary: string; details?: Record<string, unknown> }> = [];
   try {
-    const adapter = new ZCodeAppServerAdapter({
+    const adapter = new ZCodeAppServerTestAdapter({
       resolver: { resolve: async () => runtime.config },
       onEvent: (event) => events.push(event),
       onFailureFacts: (facts) => {
@@ -411,6 +421,149 @@ test("A1: a pre-send session/create rejection records accepted=no with the RPC c
   }
 });
 
+test("A0a: an early session/setModel rejection persists its RPC evidence and Session ID", { timeout: 30_000 }, async () => {
+  const sentinel = "SENTINEL_A0A_setmodel_secret";
+  const runtime = await makeFakeRuntime({
+    setModelReject: {
+      code: -32603,
+      dataCode: "model_not_found",
+      dataMessage: `Provider Registry 中不存在 Model: account:example/GLM-5.4 (Bearer ${sentinel})`,
+      stack: "Error: Provider Registry 中不存在 Model\n    at ModelRegistry.resolve (C:\\secret\\runtime.js:12:3)",
+    },
+  });
+  const fixture = makeAdapterFixture(runtime.root);
+  fixture.task = {
+    ...fixture.task,
+    model: { provider_id: "provider-default", model_id: "model-rejected", reasoning_level: "max" },
+  };
+  try {
+    const adapter = new ZCodeAppServerTestAdapter({
+      resolver: { resolve: async () => runtime.config },
+      onEvent: (event) => fixture.events.push(event),
+      timeoutMs: 20_000,
+      childEnvBase: { PATH: process.env.PATH },
+      homeDir: runtime.root,
+    });
+    const handle = await adapter.startTask({
+      task: fixture.task,
+      workspace: { requestedPath: runtime.root, canonicalPath: runtime.root, mode: "direct" },
+      attempt: 1,
+    });
+    const error = await adapter.getResult(handle).then(() => null, (value: unknown) => value);
+    assert.ok(error instanceof BridgeError, String(error));
+    assert.equal(error.code, "provider_config_invalid");
+    assert.equal(error.sessionId, SESSION_ID);
+    const diagnostic = error.rpcDiagnostics?.[0];
+    assert.equal(diagnostic?.method, "session/setModel");
+    assert.equal(diagnostic?.code, -32603);
+    assert.equal(diagnostic?.data_name, "ModelProtocolError");
+    assert.equal(diagnostic?.data_code, "model_not_found");
+    assert.match(diagnostic?.message ?? "", /GLM-5\.4/u);
+    assert.match(diagnostic?.stack ?? "", /runtime\.js:12:3/u);
+    assert.ok(!JSON.stringify(diagnostic).includes("secret"));
+    assert.ok(!JSON.stringify(diagnostic).includes(sentinel));
+    assert.ok(!error.message.includes(sentinel));
+    assertNoSentinel(fixture.events, sentinel);
+    const result = buildTaskResult({
+      task: fixture.task,
+      attempt: 1,
+      startedAt: new Date().toISOString(),
+      finishedAt: new Date().toISOString(),
+      outcome: null,
+      sessionId: error.sessionId,
+      failure: {
+        code: error.code,
+        message: error.message,
+        rpcDiagnostics: error.rpcDiagnostics,
+      },
+    });
+    assert.equal(result.status, "failed");
+    assert.equal(result.session_id, SESSION_ID);
+    assert.equal(result.rpc_diagnostics?.[0]?.method, "session/setModel");
+    const requests = await readRequestLog(runtime.requestLog);
+    assert.equal(requests.filter((request) => request["method"] === "session/send").length, 0);
+    assert.equal(requests.filter((request) => request["method"] === "session/setModel").length, 1);
+  } finally {
+    await runtime.cleanup();
+  }
+});
+
+test("A0b: a rejected session/resume is explicit and never creates a replacement Session", { timeout: 30_000 }, async () => {
+  const runtime = await makeFakeRuntime({
+    preSendReject: {
+      method: "session/resume",
+      code: -32603,
+      dataCode: "project.session-lineage-invalid",
+      dataMessage: "session lineage invalid",
+    },
+  });
+  const fixture = makeAdapterFixture(runtime.root);
+  const previousResult = {
+    task_id: fixture.task.task_id,
+    status: "failed" as const,
+    summary: "initialization failed",
+    files_changed: [],
+    tests: [],
+    issues: [],
+    needs_master_decision: false,
+    zcode_output: "",
+    exit_code: null,
+    session_id: "sess_dead_beef",
+    attempt: 1,
+    started_at: null,
+    finished_at: null,
+  };
+  try {
+    const adapter = new ZCodeAppServerTestAdapter({
+      resolver: { resolve: async () => runtime.config },
+      onEvent: (event) => fixture.events.push(event),
+      timeoutMs: 20_000,
+      childEnvBase: { PATH: process.env.PATH },
+      homeDir: runtime.root,
+    });
+    const handle = await adapter.continueTask({
+      task: fixture.task,
+      workspace: { requestedPath: runtime.root, canonicalPath: runtime.root, mode: "direct" },
+      attempt: 2,
+      feedback: "continue the task",
+      additionalRequirements: [],
+      previousSessionId: "sess_dead_beef",
+      previousResult,
+    });
+    const error = await adapter.getResult(handle).then(() => null, (value: unknown) => value);
+    assert.ok(error instanceof BridgeError, String(error));
+    assert.equal(error.code, "session_not_resumable");
+    assert.equal(error.sessionId, "sess_dead_beef");
+    assert.equal(error.rpcDiagnostics?.[0]?.method, "session/resume");
+    assert.equal(error.rpcDiagnostics?.[0]?.code, -32603);
+    assert.equal(error.rpcDiagnostics?.[0]?.data_code, "project.session-lineage-invalid");
+    const result = buildTaskResult({
+      task: fixture.task,
+      attempt: 2,
+      startedAt: new Date().toISOString(),
+      finishedAt: new Date().toISOString(),
+      outcome: null,
+      sessionId: error.sessionId,
+      failure: {
+        code: error.code,
+        message: error.message,
+        rpcDiagnostics: error.rpcDiagnostics,
+      },
+    });
+    assert.equal(result.status, "failed");
+    assert.equal(result.error_code, "session_not_resumable");
+    assert.equal(result.session_id, "sess_dead_beef");
+    assert.equal(result.rpc_diagnostics?.[0]?.method, "session/resume");
+    const requests = await readRequestLog(runtime.requestLog);
+    assert.equal(requests.filter((request) => request["method"] === "session/resume").length, 1);
+    assert.equal(requests.filter((request) => request["method"] === "session/create").length, 0,
+      "a rejected resume must not be replaced by a new Session that drops its context");
+    assert.equal(requests.filter((request) => request["method"] === "session/send").length, 0);
+  } finally {
+    await runtime.cleanup();
+  }
+});
+
 test("A1b: Start Plan registration RPC rejection preserves structured private facts without upstream text", { timeout: 30_000 }, async () => {
   const sentinel = "SENTINEL_A1B_registration_message";
   const modelId = "GLM-5.3-Flash";
@@ -431,7 +584,7 @@ test("A1b: Start Plan registration RPC rejection preserves structured private fa
     const run = await runAdapter({
       fixture,
       resolver: { resolve: async () => config },
-      startPlanProviderEntitled: true,
+
       resolveStartPlanRuntimeAuth: async () => { throw new Error("registration failure must precede private auth"); },
     });
     assert.equal(run.result.status, "failed");
@@ -477,7 +630,7 @@ test("A1c: Start Plan registration app-server exit is distinct from an RPC rejec
     const run = await runAdapter({
       fixture,
       resolver: { resolve: async () => config },
-      startPlanProviderEntitled: true,
+
       resolveStartPlanRuntimeAuth: async () => { throw new Error("registration failure must precede private auth"); },
     });
     assert.equal(run.result.status, "failed");
@@ -516,7 +669,7 @@ test("A1d: an unstructured RPC error frame remains a rejection without invented 
     const run = await runAdapter({
       fixture,
       resolver: { resolve: async () => config },
-      startPlanProviderEntitled: true,
+
       resolveStartPlanRuntimeAuth: async () => { throw new Error("registration failure must precede private auth"); },
     });
     assert.equal(run.result.status, "failed");
@@ -591,7 +744,7 @@ test("A3: the fixture-verified native correlation upgrade reaches yes, and stays
 
     let correlationId: string | null = null;
     try {
-      const adapter = new ZCodeAppServerAdapter({
+      const adapter = new ZCodeAppServerTestAdapter({
         resolver: { resolve: async () => runtime.config },
         timeoutMs: 20_000,
         childEnvBase: { PATH: process.env.PATH },
@@ -685,7 +838,7 @@ test("A6: late unbound turn events after an unacknowledged send never upgrade ac
   const fixture = makeAdapterFixture(runtime.root);
   const events: Array<{ type: string; summary: string; details?: Record<string, unknown> }> = [];
   try {
-    const adapter = new ZCodeAppServerAdapter({
+    const adapter = new ZCodeAppServerTestAdapter({
       resolver: { resolve: async () => runtime.config },
       onEvent: (event) => events.push(event),
       onFailureFacts: (facts) => {
@@ -792,7 +945,7 @@ test("P1: a denied permission does not fabricate failure facts; success continue
 
     const events: Array<{ type: string }> = [];
     try {
-      const adapter = new ZCodeAppServerAdapter({
+      const adapter = new ZCodeAppServerTestAdapter({
         resolver: { resolve: async () => runtime.config },
         onEvent: (event) => events.push({ type: event.type }),
         resolveInteraction: async () => ({ decision: "deny" }),
@@ -854,7 +1007,7 @@ test("F1b: a degraded session/events replay before a successful turn never creat
 
   const events: Array<{ type: string }> = [];
   try {
-    const adapter = new ZCodeAppServerAdapter({
+    const adapter = new ZCodeAppServerTestAdapter({
       resolver: { resolve: async () => runtime.config },
       onEvent: (event) => events.push({ type: event.type }),
       onFailureFacts: (facts) => {
@@ -915,7 +1068,7 @@ test("F3: private callback failures (sync throw, async reject) never alter the o
 
     let events = 0;
     try {
-      const adapter = new ZCodeAppServerAdapter({
+      const adapter = new ZCodeAppServerTestAdapter({
         resolver: { resolve: async () => runtime.config },
         onEvent: () => { events += 1; },
         onFailureFacts: sink,
@@ -1104,7 +1257,7 @@ test("L3c2: network failure with unknown acceptance does not resend", { timeout:
     turnFailureOnSends: [1],
   });
   const fixture = makeAdapterFixture(runtime.root);
-  const adapter = new ZCodeAppServerAdapter({
+  const adapter = new ZCodeAppServerTestAdapter({
     resolver: { resolve: async () => runtime.config },
     timeoutMs: 15_000,
     childEnvBase: { PATH: process.env.PATH },

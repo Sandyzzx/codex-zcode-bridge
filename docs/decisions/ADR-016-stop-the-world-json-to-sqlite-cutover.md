@@ -5,12 +5,14 @@
 > Date: 2026-10-30（2026-11-01、2026-11-02 修订）
 > Version: 3
 > Scope: Task Authority only；Settings 与 Ledger 保持各自既有权威边界
+> Preview.6 applicability: SQLite-only authority and byte-preservation rules remain active. ADR-038 retires the remaining JSON import/read APIs; v14 historical tables stay present and validated, but migrated JSON Tasks are no longer queryable business objects. The Ledger exception is retired. The temporary `authority:"json"` upgrade hint is itself retired by the 2026-11-21 legacy-retirement decision.
 
 ## Version History
 
 - **v1（2026-10-30）：** 冻结停机切换、staging 回读、空 SQLite Authority 与失败保护；曾计划导入并校验历史 Task 生命周期。
 - **v2（2026-11-01）：** Owner 收缩迁移范围。旧 JSON 仅完整归档，不导入 SQLite；SQLite 从空数据库管理切换后的新任务。历史 Result、Interaction、`respawn.claim` 与 Workspace 数据不再作为 SQLite 转换阻断项。保留停机确认、活动进程清理、归档完整性、Authority 唯一性、原子发布和切换失败保护。
 - **v3（2026-11-02，OD）：** 取消 JSON → SQLite 迁移。所有没有可验证 SQLite 生产数据库的安装统一使用 Fresh SQLite Bootstrap；旧 JSON 数据完全脱离启动判定和 SQLite 运行，不读取、迁移、归档、修改或删除。只有 Bootstrap 成功后才发布 SQLite Authority。既有有效 SQLite 原样恢复；SQLite 残留损坏或状态不明时 fail closed。
+- **v4（2026-11-21，Owner legacy retirement）：** `authority:"json"` 不再作为隐式 SQLite 升级提示。配置解析以稳定错误 `authority_config_json_unsupported` 拒绝该配置，不修改配置、不创建数据库、不读取旧 `.tasks`；无配置文件的默认 SQLite 启动和合法 SQLite 配置不变。
 
 ## Context
 
@@ -21,7 +23,7 @@ Owner 于 2026-11-02 接受 OD：从本版本起 SQLite 是唯一生产 Task Aut
 ## Runtime Gate
 
 - 产品安装范围仍由 `package.json` 与 `launch-node24.mjs` 的已发布运行时合同决定。SQLite 启动必须在加载 SQLite 模块前检查其 Node 版本门槛；不支持的版本明确失败，不回退 JSON。
-- Authority 选择不再提供 JSON 生产模式。没有 `authority.json` 时使用默认 SQLite 数据根；历史合法 `authority:"json"` 配置只作为升级兼容输入，不得使 Bridge 读取或启动 JSON Task Authority。有效 SQLite 自定义 data root 配置继续用于定位已有 SQLite 数据库。
+- Authority 选择不再提供 JSON 生产模式。没有 `authority.json` 时使用默认 SQLite 数据根；历史 `authority:"json"` 配置现在明确拒绝（`authority_config_json_unsupported`），不静默转换为 SQLite，也不得使 Bridge 读取或启动 JSON Task Authority。有效 SQLite 自定义 data root 配置继续用于定位已有 SQLite 数据库。
 - 本 ADR 不自行扩大 Node 引擎范围；README/manifest 的发布要求必须与最终验证过的 Launcher 和 SQLite 运行时一致。
 
 ## Decision

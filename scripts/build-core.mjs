@@ -1,4 +1,4 @@
-import { copyFileSync, mkdtempSync, mkdirSync, existsSync, realpathSync, renameSync, rmSync } from "node:fs";
+import { copyFileSync, cpSync, mkdtempSync, mkdirSync, existsSync, realpathSync, renameSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -41,10 +41,35 @@ try {
     path.join(staging, "src", "sqlite-candidate", "wp6b2b1", "schema.sql"),
   );
   copyFileSync(
+    path.join(root, "src", "sqlite-candidate", "wp6b2b1", "runtime-events.sql"),
+    path.join(staging, "src", "sqlite-candidate", "wp6b2b1", "runtime-events.sql"),
+  );
+  copyFileSync(
+    path.join(root, "src", "sqlite-candidate", "wp6b2b1", "runtime-event-channel.mjs"),
+    path.join(staging, "src", "sqlite-candidate", "wp6b2b1", "runtime-event-channel.mjs"),
+  );
+  copyFileSync(
+    path.join(root, "src", "sqlite-candidate", "wp6b2b1", "runtime-event-channel.d.mts"),
+    path.join(staging, "src", "sqlite-candidate", "wp6b2b1", "runtime-event-channel.d.mts"),
+  );
+  mkdirSync(path.join(staging, "src", "feedback"), { recursive: true });
+  copyFileSync(
+    path.join(root, "src", "feedback", "task-feedback-projection.mjs"),
+    path.join(staging, "src", "feedback", "task-feedback-projection.mjs"),
+  );
+  copyFileSync(
+    path.join(root, "src", "feedback", "task-feedback-projection.d.mts"),
+    path.join(staging, "src", "feedback", "task-feedback-projection.d.mts"),
+  );
+  cpSync(
+    path.join(root, "plugins", "codex-zcode-bridge", "worker", "vendor", "official-host"),
+    path.join(staging, "src", "adapters", "vendor", "official-host"),
+    { recursive: true },
+  );
+  copyFileSync(
     path.join(root, "src", "sqlite-candidate", "wp6b2b1", "admin-abandonment.sql"),
     path.join(staging, "src", "sqlite-candidate", "wp6b2b1", "admin-abandonment.sql"),
   );
-  copyFileSync(path.join(root,'src/sqlite-candidate/wp6b2b1/schema-v13.sql'),path.join(staging,'src/sqlite-candidate/wp6b2b1/schema-v13.sql'));
   mkdirSync(output, { recursive: true });
   // Reject an output junction escaping the named workspace before any move.
   if (realpathSync(output) !== output || (existsSync(target) && realpathSync(target) !== target)) throw new Error("core output must be a real directory inside the repository");

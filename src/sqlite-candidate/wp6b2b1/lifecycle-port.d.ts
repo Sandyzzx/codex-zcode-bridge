@@ -13,6 +13,20 @@ export interface CandidateTaskPackage {
   readonly context?: string;
 }
 
+export interface CandidateTaskAdmission {
+  readonly owner_thread_id: string | null;
+  readonly source: 'mcp_meta' | 'mcp_meta_missing' | 'mcp_meta_invalid' | 'non_host_admission';
+}
+
+export interface CandidateTaskOwnerBinding {
+  readonly task_id: string;
+  readonly state: 'bound' | 'unavailable';
+  readonly owner_thread_id: string | null;
+  readonly source: 'mcp_meta' | 'mcp_meta_missing' | 'mcp_meta_invalid' | 'non_host_admission' | 'legacy_unavailable';
+  readonly bound_at: string | null;
+  readonly reason_code: 'owner_thread_unavailable' | null;
+}
+
 export interface CandidateOperationIdentity {
   readonly operation_id: string;
   readonly task_id: string;
@@ -45,6 +59,8 @@ export interface CandidateTaskResult {
   readonly usage?: Readonly<Record<string, unknown>> | null;
   readonly model?: Readonly<Record<string, unknown>> | null;
   readonly timing?: Readonly<Record<string, unknown>> | null;
+  /** ADR-066 additive: bounded redacted RPC rejections; failed Results only. */
+  readonly rpc_diagnostics?: readonly Readonly<Record<string, unknown>>[];
 }
 
 export interface CandidateResultCommitInput {
@@ -105,9 +121,33 @@ export interface CandidateTaskLifecycleEventsPage {
   readonly hasMore: boolean;
 }
 
+export interface CandidateRuntimeTaskEvent {
+  readonly worker_sequence: number;
+  readonly event_type: 'session_ready' | 'model_selected' | 'turn_started' | 'model_tool_call'
+    | 'tool_status' | 'model_output' | 'turn_completed' | 'turn_failed' | 'report_ready';
+  readonly at: string;
+  readonly summary: string;
+  readonly details?: Readonly<Record<string, unknown>>;
+}
+
+export interface CandidateRuntimeEventChannel {
+  readonly binding: Readonly<{
+    readonly operation_id: string;
+    readonly task_id: string;
+    readonly attempt: number;
+    readonly generation: number;
+    readonly claim_id: string;
+    readonly worker_identity_digest: string;
+    readonly process_id: number;
+    readonly start_fingerprint: string;
+  }>;
+  receiveEvent(): Promise<Readonly<{ binding: CandidateRuntimeEventChannel["binding"]; event: CandidateRuntimeTaskEvent }>>;
+}
+
 export interface CandidateTaskLifecycleSnapshot {
   readonly task: CandidateTaskPackage;
   readonly projection: Readonly<{ task_id: string; status: string; current_attempt: number; created_at: string }>;
+  readonly owner_binding: CandidateTaskOwnerBinding;
   readonly attempt: Readonly<{ task_id: string; attempt: number; generation: number | null; status: string; created_at: string }>;
   readonly operation: Readonly<Record<string, unknown>> | null;
   readonly result: CandidateTaskResult | null;
@@ -176,37 +216,7 @@ export interface CandidateContinueAttemptOutcome {
   readonly attempt: number;
   readonly status: 'queued';
   readonly created_at: string;
-}
-
-export interface CandidateInterruptionRequeueInput {
-  readonly operation_id: string;
-  readonly task_id: string;
-  readonly attempt: number;
-  readonly generation: number;
-  readonly revision: number;
-  readonly claim_id: string;
-  readonly claim_worker_identity_digest: string;
-  readonly reason: 'worker_exited_without_result' | 'worker_terminated_without_result';
-  readonly interruption_evidence: Readonly<Record<string, unknown>>;
-  readonly process_tree_digest: string;
-  readonly resources_digest: string;
-  readonly adapter_cleanup: CandidateAdapterCleanupEvidence;
-  readonly continuation_operation_id: string;
-}
-
-export interface CandidateInterruptionRequeueOutcome {
-  readonly duplicate: boolean;
-  readonly operation_id: string;
-  readonly task_id: string;
-  readonly previous_attempt: number;
-  readonly attempt: number;
-  readonly next_operation_id: string;
-  readonly status: 'queued';
-  readonly created_at: string;
-  readonly result_digest: string;
-  readonly cleanup_digest: string;
-  readonly interruption_reason: CandidateInterruptionRequeueInput['reason'];
-  readonly evidence_digest: string;
+  readonly owner_binding: CandidateTaskOwnerBinding;
 }
 
 export interface CandidateInteractionRequestInput {
@@ -248,7 +258,7 @@ export interface CandidateCommittedResult {
 }
 
 export type CandidateRecoveryDecision = 'hold' | 'complete' | 'blocked_read_only' | 'quarantine_read_only';
-export type CandidateRecoveryCleanupState = 'not_applicable' | 'unknown' | 'unverified' | 'verified';
+export type CandidateRecoveryCleanupState = 'not_applicable' | 'unknown' | 'unverified' | 'unverified_admin_release' | 'verified';
 
 export interface CandidateRecoveryOperation {
   readonly operation_id: string;
@@ -358,23 +368,10 @@ export type CandidateCleanupEvidence = Readonly<{
   readonly worker_tree_complete: true;
   readonly operation_resources_complete: true;
   readonly workspace_touched: false;
-  readonly adapter_cleanup?: CandidateAdapterCleanupEvidence;
 }> & (
   | Readonly<{ readonly source: 'synthetic_fixture'; readonly fixture: true }>
   | Readonly<{ readonly source: 'manager_os_cleanup_verification'; readonly fixture: false }>
 );
-
-export interface CandidateAdapterCleanupEvidence {
-  readonly contract: 'adapter-cleanup-v1';
-  readonly close: Readonly<{
-    readonly stage: 'direct_close' | 'not_started';
-    readonly status: 'resolved' | 'rejected';
-    readonly treeScanStatus: 'verified' | 'live' | 'incomplete' | 'not_applicable';
-    readonly errorName?: string;
-    readonly errorCode?: string;
-  }>;
-  readonly treeScanStatus: 'verified' | 'live' | 'incomplete' | 'not_applicable';
-}
 
 export type CandidateCleanupOutcome =
   | Readonly<{ readonly outcome: 'verified'; readonly cleanup_evidence: CandidateCleanupEvidence }>
@@ -392,6 +389,10 @@ export interface CandidateRecoveryObservationInput {
   readonly reason_code: 'worker_identity_unknown' | 'launch_outcome_unknown' | 'cleanup_identity_unknown' | 'cleanup_incomplete' | 'claim_identity_conflict' | 'operation_projection_conflict';
   readonly evidence_source: 'manager_process_probe' | 'manager_launch_probe' | 'manager_cleanup_probe' | 'manager_projection_validator';
   readonly evidence_digest: string;
+  readonly process_tree_root_observed?: true;
+  readonly process_tree_scan_clean?: true;
+  readonly process_tree_scan_digest?: string;
+  readonly recovery_disposition?: 'complete_cleanup_closure_unavailable';
 }
 
 export interface CandidateRecoveryEvidenceVerificationContext {
@@ -408,12 +409,78 @@ export type CandidateRecoveryEvidenceVerifier = (context: CandidateRecoveryEvide
   readonly evidence_digest: string;
 }> | false;
 
+export interface CandidateInterruptAndRequeueInput {
+  readonly operation_id: string;
+  readonly task_id: string;
+  readonly attempt: number;
+  readonly generation: number;
+  readonly revision: number;
+  readonly claim_id: string;
+  readonly claim_worker_identity_digest: string;
+  readonly reason: 'interrupted_by_upgrade' | 'worker_exited_without_result' | 'worker_terminated_without_result';
+  readonly interruption_evidence: Readonly<Record<string, unknown> & { readonly reason: CandidateInterruptAndRequeueInput['reason'] }>;
+  readonly process_tree_digest: string;
+  readonly resources_digest: string;
+  readonly continuation_operation_id: string;
+  readonly adapter_cleanup: Readonly<Record<string, unknown>>;
+}
+
+export interface CandidateInterruptAndRequeueOutcome {
+  readonly duplicate: boolean;
+  readonly operation_id: string;
+  readonly task_id: string;
+  readonly previous_attempt: number;
+  readonly attempt: number;
+  readonly next_operation_id: string;
+  readonly status: 'queued';
+  readonly created_at: string;
+  readonly result_digest: string;
+  readonly cleanup_digest: string | null;
+  readonly interruption_reason: CandidateInterruptAndRequeueInput['reason'];
+  readonly evidence_digest: string;
+}
+
+export type CandidateExecutorWakeState = 'intent' | 'queued' | 'submission_unknown' | 'turn_started' | 'web_notify';
+
+export interface CandidateExecutorWakeObservationInput {
+  readonly operation_id: string;
+  readonly task_id: string;
+  readonly attempt: number;
+  readonly generation: number;
+  readonly state: CandidateExecutorWakeState;
+  readonly thread_id: string | null;
+  readonly delivery_id: string;
+  readonly policy_digest: string;
+  readonly authorization_digest: string;
+  readonly reason_code: string;
+  readonly queue_message_id?: string;
+}
+
+export interface CandidateExecutorWakeObservationOutcome {
+  readonly duplicate: boolean;
+  readonly operation_id: string;
+  readonly task_id: string;
+  readonly attempt: number;
+  readonly generation: number;
+  readonly revision: number;
+  readonly event_sequence: number;
+  readonly state: CandidateExecutorWakeState;
+  readonly delivery_id: string;
+  readonly desktop_visible: 'UNKNOWN';
+}
+
 export interface SqliteLifecyclePort {
-  createTask(task: CandidateTaskPackage, createdAt?: string): { task_id: string; current_attempt: 1; status: 'queued'; created_at: string };
+  createTask(task: CandidateTaskPackage, admission?: CandidateTaskAdmission): {
+    task_id: string; current_attempt: 1; status: 'queued'; created_at: string; owner_binding: CandidateTaskOwnerBinding;
+  };
   readTask(taskId: string): CandidateTaskPackage | null;
   readTaskProjection(taskId: string): { task_id: string; status: string; current_attempt: number; created_at: string } | null;
   readAttempt(taskId: string, attempt: number): { task_id: string; attempt: number; generation: number | null; status: string; created_at: string } | null;
   readTaskLifecycle(taskId: string): CandidateTaskLifecycleSnapshot | null;
+  readTaskConsoleProjection(
+    taskId: string,
+    options?: { readonly includeAttempts?: boolean },
+  ): Readonly<Record<string, unknown>> | null;
   readTaskAttention(taskId: string): CandidateTaskAttentionSnapshot | null;
   readRecoverableQueuedAttempts(): readonly Readonly<{
     readonly task: CandidateTaskPackage;
@@ -435,7 +502,7 @@ export interface SqliteLifecyclePort {
   recordLaunchReceipt(input: CandidateOperationIdentity & { readonly receipt_id: string; readonly launch_identity: unknown }): unknown;
   commitPermanentClaim(input: CandidateOperationIdentity & { readonly claim_id: string; readonly worker_identity: unknown }): unknown;
   createNextAttempt(input: CandidateContinueAttemptInput, gates: { readonly workspaceValidator: (input: { readonly requestedPath: string; readonly canonicalPath: string }) => unknown; readonly executionPermissionCheck: (context: { readonly workspace: string; readonly task: CandidateContinueAttemptInput & { readonly task: CandidateTaskPackage } }) => unknown }): CandidateContinueAttemptOutcome;
-  interruptAndRequeue(input: CandidateInterruptionRequeueInput, gates: { readonly workspaceValidator: (input: { readonly requestedPath: string; readonly canonicalPath: string }) => unknown; readonly executionPermissionCheck: (context: Readonly<Record<string, unknown>>) => unknown }): CandidateInterruptionRequeueOutcome;
+  interruptAndRequeue(input: CandidateInterruptAndRequeueInput, gates: { readonly workspaceValidator: (input: { readonly requestedPath: string; readonly canonicalPath: string }) => unknown; readonly executionPermissionCheck: (context: { readonly workspace: string; readonly task: CandidateTaskPackage }) => unknown }): CandidateInterruptAndRequeueOutcome;
   readLifecycleEvents(operationId: string, options?: { readonly afterSequence?: number; readonly limit?: number }): CandidateLifecycleEvent[];
   appendLifecycleEvent(...args: never[]): never;
   readLifecycleStatus(...args: never[]): never;
@@ -446,12 +513,23 @@ export interface SqliteLifecyclePort {
   recordCleanupEvidence(input: CandidateCleanupFence & CandidateCleanupOutcome): { readonly duplicate: boolean; readonly operation_id: string; readonly generation: number; readonly revision: number; readonly phase: 'cleanup_verified' | 'cleanup_unverified' | 'released'; readonly cleanup_verified: boolean; readonly cleanup_digest?: string };
   reverifyCleanup(input: CandidateCleanupFence & { readonly cleanup_evidence: CandidateCleanupEvidence }): { readonly duplicate: boolean; readonly operation_id: string; readonly task_id: string; readonly attempt: number; readonly generation: number; readonly claim_id: string; readonly revision: number; readonly event_sequence: number; readonly phase: 'cleanup_verified' | 'released'; readonly cleanup_verified: true; readonly cleanup_digest: string; readonly resolved_recovery_event_digests: readonly string[] };
   releaseCapacity(input: CandidateCleanupFence & { readonly cleanup_digest: string }): { readonly duplicate: boolean; readonly operation_id: string; readonly generation: number; readonly revision: number; readonly phase: 'released'; readonly capacity_released: true };
+  recordExecutorWakeObservation(input: CandidateExecutorWakeObservationInput): CandidateExecutorWakeObservationOutcome;
   requestCancellation(input: CandidateCancellationFence, evidence: Readonly<Record<string, unknown>>): CandidateCancellationOutcome;
   recordCancellationVerification(input: CandidateCancellationFence, evidence: Readonly<Record<string, unknown>>): CandidateCancellationOutcome;
   cancelQueuedAttempt(input: CandidateQueuedCancelInput): CandidateQueuedCancelOutcome;
+  userAuthorizedReleaseUnverifiedOperation(input: {
+    readonly operation_id: string; readonly task_id: string; readonly attempt: number; readonly generation: number;
+    readonly revision: number; readonly cancel_id?: string; readonly release_reason: 'user_authorized_release_unverified';
+    readonly cancellation_verification_digest?: string; readonly recovery_evidence_digest?: string;
+    readonly claim_id?: string;
+    readonly result_commit_ref?: string; readonly result_digest?: string;
+    readonly worker_identity_digest?: string;
+  }): { readonly duplicate: boolean; readonly operation_id: string; readonly task_id: string; readonly attempt: number; readonly generation: number; readonly revision: number; readonly phase: 'released'; readonly cleanup_verified: false; readonly release_reason: 'user_authorized_release_unverified' };
   openInteractionChannel(child: object, operation: Readonly<Record<string, unknown>>, verifyProcessIdentity: (context: unknown) => Promise<unknown>): Promise<CandidateInteractionChannel>;
   receiveInteractionRequest(channel: CandidateInteractionChannel): Promise<Readonly<Record<string, unknown>>>;
   replyToInteractionRequest(input: CandidateInteractionReplyInput, channel: CandidateInteractionChannel): Promise<Readonly<Record<string, unknown>>>;
+  openRuntimeEventChannel(child: object, operation: Readonly<Record<string, unknown>>, verifyProcessIdentity: (context: unknown) => Promise<unknown>): Promise<CandidateRuntimeEventChannel>;
+  receiveRuntimeTaskEvent(channel: CandidateRuntimeEventChannel): Promise<Readonly<Record<string, unknown>>>;
   readInteractionRequest(taskId: string, requestId: string): Readonly<Record<string, unknown>> | null;
   readRecoverySnapshot(): CandidateRecoverySnapshot;
   recordRecoveryObservation(input: CandidateRecoveryObservationInput, evidence: Readonly<Record<string, unknown>>): unknown;

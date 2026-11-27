@@ -21,6 +21,21 @@ export interface CandidateTaskResult {
   readonly usage?: Readonly<Record<string, unknown>> | null;
   readonly model?: Readonly<Record<string, unknown>> | null;
   readonly timing?: Readonly<Record<string, unknown>> | null;
+  /** ADR-066 additive: bounded redacted RPC rejections; failed Results only. */
+  readonly rpc_diagnostics?: readonly Readonly<Record<string, unknown>>[];
+}
+
+export interface CandidateAdapterCleanupEvidence {
+  readonly contract: "adapter-cleanup-v1";
+  readonly close: Readonly<{
+    readonly status: "resolved" | "rejected";
+    readonly stage: string;
+    readonly errorName?: string;
+    readonly errorCode?: string;
+    readonly managerProcessCountAfter?: number;
+    readonly treeScanStatus: "verified" | "live" | "incomplete" | "not_applicable";
+  }>;
+  readonly treeScanStatus: "verified" | "live" | "incomplete" | "not_applicable";
 }
 
 export type CandidateExecutionCleanupProof =
@@ -44,6 +59,7 @@ export type CandidateExecutionCleanupProof =
       readonly process_tree_receipt_digest: string;
       readonly process_tree_member_count: number;
       readonly managed_browser_cleanup_verified: true;
+      readonly adapter_cleanup: CandidateAdapterCleanupEvidence;
     }
   | {
       readonly contract: "candidate-execution-cleanup-proof-v1";
@@ -56,6 +72,7 @@ export type CandidateExecutionCleanupProof =
       readonly process_tree_scan_digest: string;
       readonly process_tree_member_count: number;
       readonly managed_browser_cleanup_verified: true;
+      readonly adapter_cleanup: CandidateAdapterCleanupEvidence;
     }
   | {
       readonly contract: "candidate-execution-cleanup-proof-v1";

@@ -4,44 +4,82 @@
 
 当前版本以 `package.json` 和 Release Please manifest 为准。提交推送到 `master` 后，Release Please 会在有待发布变更时创建发布 PR，并同步更新版本文件与本日志；合并发布 PR 后会生成对应 Git tag 和 GitHub Release。
 
-## [1.7.2](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-v1.7.1...codex-zcode-bridge-v1.7.2) (2026-11-13)
+## [2.0.0](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-v1.7.2...codex-zcode-bridge-v2.0.0) (2026-11-27)
 
-
-### Bug Fixes
-
-* **sqlite:** add Host-native Recovery hotfix for Stable 1.7.1 ([0c54a51](https://github.com/Sandyzzx/codex-zcode-bridge/commit/0c54a510e346cf57ac32fe70da21ccd856c62987))
-* **sqlite:** make admin abandon preflight read-only ([26f7173](https://github.com/Sandyzzx/codex-zcode-bridge/commit/26f71732fae591c16c1235a6824ccde078932afe))
-* **sqlite:** recover safe lifecycle facts while host is live ([d9e24a0](https://github.com/Sandyzzx/codex-zcode-bridge/commit/d9e24a0f242a4ca80be601c6727b053704c5109a))
-
-## [1.7.1](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-v1.7.0...codex-zcode-bridge-v1.7.1) (2026-11-12)
-
-
-### Bug Fixes
-
-* **plugin:** ship v14 administrative recovery CLI ([b716ceb](https://github.com/Sandyzzx/codex-zcode-bridge/commit/b716cebefbe867c7ef9b21a52a94a451316838ea))
-* **plugin:** ship v14 administrative recovery CLI ([e153a61](https://github.com/Sandyzzx/codex-zcode-bridge/commit/e153a61d6f9773bb1d14d8a7f03622e477d5996c))
-
-## [1.7.0](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-v1.6.0...codex-zcode-bridge-v1.7.0) (2026-11-12)
-
-将 Preview `2.0.0-preview.4` 的功能集提升到稳定版本线。
+Stable 2.0.0 将已验证的 Preview.20 `d2644817` 提升为新的稳定基线。发布身份、README、作者维护说明、真实脱敏截图与 Marketplace 名称统一为 Stable；运行时代码基线保持不变。
 
 ### Features
 
-* 统一 SQLite-only 生产架构：使用单一 SQLite Authority、Lifecycle Manager 和 Worker→ZCode AppServer 执行链。
-* 集成 Z.ai Start Plan：只读发现官方凭据、实时 Billing 权益检查、Provider 注册前置校验和单任务私有凭据 Lease。
-* 使用官方 Desktop Host 启动身份，兼容 Start Plan 多轮运行时认证和工具调用后的后续模型请求。
-* 引入 ADR-031 Model Routing v1，并保留任务级 Provider、Model 与 Reasoning Level 选择边界。
-* 首次启动自动完成 SQLite v13→v14 副本迁移；保留原库作为显式回滚备份。
+* 独立 Executor 与 Lifetime Lease 持有任务 Authority；Thin MCP、Task CLI 和单页 Task Workspace 共享同一控制面。
+* SQLite v14-only Authority，持久化 Task、Attempt、Operation、Result、Usage、Cleanup、Release 与 Wake 事实；旧 JSON Authority 与 v13 升级路径已退役。
+* Worker 通过已安装的官方 ZCode AppServer 执行；模型目录、Provider 选择与运行期 Registry 从官方当前安装和账户配置动态发现。
+* 持久 Owner Binding 与安装即生效 Auto Wake；Queue ACK、新 Turn、Master 验收和资源释放保持独立事实。
+* Master 独立验收与验收驱动 `zcode_continue` 返工；任务续作与 ZCode Session 恢复分离，用户选择的 Provider、Model 和 Reasoning 不被静默改写。
+* Task Workspace、Diagnostics、有界脱敏 RPC 失败诊断，以及精确身份、写者意图和用户授权清理保护。
 
-### Bug Fixes
+### Validation
 
-* 修复 Task Model Routing 幂等缺陷：同一 `task_id` 的冲突模型、Provider 或 Reasoning Level 不再被首次解析缓存掩盖。
-* 损坏或非 v13 数据库继续走既有 fail-closed 校验路径；不伪造 Release 或清除 Hold。
+* Preview.20 的 Windows/Ubuntu Release Gate、SQLite 资源矩阵、Cost Lab、1199 项本地回归与真实 Coding Plan `GLM-5.4 / low` 任务通过。
+* Stable 发布验证另行覆盖版本/制品一致性、Typecheck、Build、Plugin Validation、Generated Artifact、定向测试、Markdown 链接、`git diff --check`、PR Release Gate 与 master push CI；具体运行结果以发布报告为准。
 
 ### Compatibility
 
-* 旧 JSON TaskStore、CLI Adapter 与 GitWorktreeProvider 不在当前生产执行链中。
-* Start Plan 真实验收仍仅覆盖 Windows、官方 AppServer `0.17.1` 和 `GLM-5.3-Flash`；其他平台与模型未被该证据推广为已认证。
+* 支持 Windows x64 与 Node.js `24.16.0`。ZCode Desktop `3.18.2.10443`、`3.19.0.10774` 和 `4.0.0.10870` 的验证范围不同；其他安全安装可尝试运行，但不保证兼容。
+* 当前真实 Continue、Start Plan 权益与执行、Desktop 完全退出恢复、notLoaded Wake 和 Windows 重启恢复仍为 `NOT_RUN`，不得从离线测试或 CI 推断为已通过。
+
+## [2.0.0-preview.15](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-preview-v2.0.0-preview.14...codex-zcode-bridge-preview-v2.0.0-preview.15) (2026-11-24)
+
+Preview 2.0.0-preview.15（EXPERIMENTAL / PREVIEW ONLY；发布目标为 `preview` 分支）。
+
+### Features
+
+* Whole Task / Staged 派发与 Worker Prompt 合同（ADR-055，PR #135）：删除 Auto 派发，首派与 Continue 共用一份任务合同与 60k 容量界限，Continue 反馈有界投影，Report Repair 独立分流。
+* ZCode Desktop 4.0.0 适配（ADR-054）：安装安全是唯一执行门禁；未验证版本不再阻断调用，Manifest/能力静态事实降为诊断（`officialProviderCapabilityWarning`），实验授权机制与环境变量退役。
+* Turn Lifecycle 事实边界：仅原生 turn.started 建立 Started；ACK 发布 turn_accepted，不再伪造 Started；终态事件不再因等待绑定被丢弃，完成只结算一次。
+* Executor Lease Spawn Fence：Lease 所有权未知时禁止一切新 Worker Spawn（pump/定时器/恢复重派同一围栏），在途 Result 与 Release 通知照常收尾。
+* Release→Wake 恢复：启动 Recovery 为「已 Release 且无任何 Wake 观察」的 Operation 重跑一次通知；已有 Wake 事实的 Operation 保持去重合同。
+* ADR-056 Result 回读合同：`view=summary` 投影下沉 Executor；`zcode_result` 新增 `offset_bytes`/`max_bytes` 分页（码点安全 next_offset，拼接页 SHA-256 等于 result_digest）；MCP 大响应文本通道有界引用。
+* Status `updated_at` 读取最新持久事件（专用单行查询），超过 200 条事件的任务不再显示过期时间。
+
+### Removed
+
+* `LeaseGuardedTaskManager`（生产无调用者）、空 `#acceptRunOutcome`、`authorize-official-runtime` 工具、`ZCODE_BRIDGE_EXPERIMENTAL_RUNTIME_AUTHORIZATION_FILE` 传递、`RUNTIME_PROBE_AUTHORIZATION_REQUIRED` 死错误码、冗余 windows-shard-experiment workflow。
+
+### Validation
+
+* 零模型 Protocol Smoke（安装版 4.0.0.10870 / build 3bc8a247）：PASS。
+* 真实任务 E2E（随包制品、真实 Coding Plan/GLM-5.3 回合）：Result/Cleanup/Release 闭环与工程产物逐字节核对 PASS。
+* 新增故障注入测试：Turn Lifecycle（8）、Lease Fence（4）、Wake Recovery（6）、Result 分页完整性（4）、Status 时间（1）、Prompt 容量与中段错误信号（17）、MCP 分页/有界通道（29）。
+* 完整矩阵（Windows 双分片、Ubuntu、SQLite 资源矩阵、压力）由 Release Gate 承担，见发布记录。
+## [2.0.0-preview.14](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-preview-v2.0.0-preview.13...codex-zcode-bridge-preview-v2.0.0-preview.14) (2026-11-23)
+
+Preview 2.0.0-preview.14（EXPERIMENTAL / PREVIEW ONLY；发布目标为 `preview` 分支）。
+
+### Features
+
+* Independent Executor with Authority Root lifetime lease, exact process ownership, Idle-only Shutdown and bounded Named Pipe control IPC.
+* Thin MCP, Control-only Task CLI and loopback Task Web Console reuse the same Executor Authority; MCP disconnect and Turn end do not cancel accepted Tasks.
+* Trusted-local one-shot Queue Wake for loaded/idle Codex Threads, with Web Notify fallback, durable Wake evidence and no automatic retry.
+* Async Master Handoff contract: report reliable acceptance, end the current Master Turn, and resume independent acceptance only after Wake.
+* Operations Console includes Dashboard, Tasks, Cost Lab, Runtime and Settings on one loopback origin.
+
+### Validation
+
+* PR #131 merged to Preview as `c7bfc28b1112dead95ae4179a00962de76051920`.
+* Post-merge CI `45124466655`: Ubuntu, both Windows shards, both SQLite resource matrices and Cost Lab passed.
+* Isolated real Host E2E: Queue ACK, new Turn, native MCP Result readback, Result digest, Cleanup verified, Operation released, Master lifecycle acceptance and Desktop visibility passed once without duplicate Worker, Queue, Turn or Result.
+* Synthetic Worker and real-process tests verify shipped MCP Host exit does not interrupt the original Attempt Result/Cleanup/Release.
+
+### Compatibility
+
+* SQLite v14 remains the only supported Schema; public MCP tool names and schema remain unchanged.
+* Supported release boundary remains Windows x64, Node.js `24.16.0` and ZCode Desktop `3.18.2.10443`.
+
+### Not verified
+
+* Strict Wake C (`notLoaded`) and strict Wake D / Desktop fully exited remain `NOT_RUN`.
+* Official Runtime provenance for the current installed `3.19.0.10774` remains `NOT_RUN`.
+* A non-empty real engineering deliverable and real-model Async Master Skill adherence A/B remain `NOT_RUN`.
 
 ## [2.0.0-preview.4](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-preview-v2.0.0-preview.3...codex-zcode-bridge-preview-v2.0.0-preview.4) (2026-11-11)
 

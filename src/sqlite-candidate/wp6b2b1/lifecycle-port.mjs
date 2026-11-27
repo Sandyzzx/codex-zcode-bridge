@@ -5,6 +5,7 @@
  */
 import { IsolatedAdmissionStore } from './store.mjs';
 import { createCandidateInteractionChannel, isCandidateInteractionChannel } from './interaction-channel.mjs';
+import { createCandidateRuntimeEventChannel, isCandidateRuntimeEventChannel } from './runtime-event-channel.mjs';
 
 export class UnsupportedLifecycleOperationError extends Error {
   constructor(operation) {
@@ -16,7 +17,7 @@ export class UnsupportedLifecycleOperationError extends Error {
 }
 
 const B1_METHODS = Object.freeze([
-  'createTask', 'readTask', 'readTaskProjection', 'readAttempt', 'readTaskLifecycle', 'readTaskAttention', 'readRecoverableQueuedAttempts', 'readTaskEvents', 'readTaskFeedback',
+  'createTask', 'readTask', 'readTaskProjection', 'readTaskProjections', 'readAttempt', 'readTaskLifecycle', 'readTaskConsoleProjection', 'readTaskAttention', 'readRecoverableQueuedAttempts', 'readTaskEvents', 'readTaskFeedback', 'readTaskResultPage', 'readTaskLatestEventAt',
   'provisionCapacity', 'assertCapacityPolicy', 'admitOperation', 'readOperation',
   'createLaunchIntent', 'recordLaunchReceipt', 'commitPermanentClaim',
 ]);
@@ -25,7 +26,10 @@ const C2_METHODS = Object.freeze(['beginCleanup','recordCleanupEvidence','reveri
 const C3_READ_METHODS = Object.freeze(['readRecoverySnapshot']);
 const CANCEL_METHODS = Object.freeze(['requestCancellation','recordCancellationVerification']);
 const QUEUED_CANCEL_METHODS = Object.freeze(['cancelQueuedAttempt']);
+const USER_RELEASE_METHODS = Object.freeze(['userAuthorizedReleaseUnverifiedOperation']);
+const EXECUTOR_WAKE_METHODS = Object.freeze(['recordExecutorWakeObservation']);
 const INTERACTION_METHODS = Object.freeze(['recordInteractionRequest','readInteractionRequest','beginInteractionReply','commitInteractionReply','completeInteractionReply']);
+const RUNTIME_EVENT_METHODS = Object.freeze(['appendRuntimeTaskEvent']);
 
 export function createSqliteLifecyclePort(store,{recoveryEvidenceVerifier,workerIdentityVerifier,cancellationVerifier}={}) {
   if (!(store instanceof IsolatedAdmissionStore)) throw new TypeError('IsolatedAdmissionStore required');
@@ -47,7 +51,16 @@ export function createSqliteLifecyclePort(store,{recoveryEvidenceVerifier,worker
   for (const method of QUEUED_CANCEL_METHODS) {
     if (typeof store[method] !== 'function') throw new TypeError(`candidate SQLite Store missing ${method}`);
   }
+  for (const method of USER_RELEASE_METHODS) {
+    if (typeof store[method] !== 'function') throw new TypeError(`candidate SQLite Store missing ${method}`);
+  }
+  for (const method of EXECUTOR_WAKE_METHODS) {
+    if (typeof store[method] !== 'function') throw new TypeError(`candidate SQLite Store missing ${method}`);
+  }
   for (const method of INTERACTION_METHODS) {
+    if (typeof store[method] !== 'function') throw new TypeError(`candidate SQLite Store missing ${method}`);
+  }
+  for (const method of RUNTIME_EVENT_METHODS) {
     if (typeof store[method] !== 'function') throw new TypeError(`candidate SQLite Store missing ${method}`);
   }
   if(typeof store.compareAndSwapRecoveryObservation!=='function')throw new TypeError('candidate SQLite Store missing compareAndSwapRecoveryObservation');
@@ -89,6 +102,18 @@ export function createSqliteLifecyclePort(store,{recoveryEvidenceVerifier,worker
     enumerable:true,
     value:input=>store.cancelQueuedAttempt(input),
   });
+  for (const method of USER_RELEASE_METHODS) {
+    Object.defineProperty(port, method, {
+      enumerable:true,
+      value:(...args)=>store[method](...args),
+    });
+  }
+  for (const method of EXECUTOR_WAKE_METHODS) {
+    Object.defineProperty(port, method, {
+      enumerable:true,
+      value:(...args)=>store[method](...args),
+    });
+  }
   Object.defineProperty(port,'readInteractionRequest',{
     enumerable:true,
     value:(taskId,requestId)=>store.readInteractionRequest(taskId,requestId),
@@ -128,6 +153,19 @@ export function createSqliteLifecyclePort(store,{recoveryEvidenceVerifier,worker
       const commit=store.commitInteractionReply(prepared);
       const accepted=await channel.commitReply(reply,commit);
       return store.completeInteractionReply(accepted);
+    },
+  });
+  Object.defineProperty(port,'openRuntimeEventChannel',{
+    enumerable:true,
+    value:(child,operation,verifyProcessIdentity)=>createCandidateRuntimeEventChannel(child,operation,verifyProcessIdentity),
+  });
+  Object.defineProperty(port,'receiveRuntimeTaskEvent',{
+    enumerable:true,
+    value:async(channel)=>{
+      if(!isCandidateRuntimeEventChannel(channel))throw Object.assign(new Error('runtime event channel required'),{code:'runtime_event_channel_unavailable'});
+      const received=await channel.receiveEvent();
+      const {operation_id,task_id,attempt,generation,claim_id}=received.binding;
+      return store.appendRuntimeTaskEvent({operation_id,task_id,attempt,generation,claim_id,...received.event});
     },
   });
   Object.defineProperty(port,'recordRecoveryObservation',{

@@ -5,82 +5,43 @@
 // Additive optional output fields (observation, scan cursor/metrics, usage)
 // keep old clients working: they may ignore unknown optional keys.
 import * as z from "zod/v4";
+import {
+  TASK_ID_PATTERN,
+  taskIdSchema,
+  zcodeContinueInputSchema,
+  zcodeDefaultModelInputSchema,
+  zcodeEventsInputSchema,
+  zcodeInteractionReplyInputSchema,
+  zcodeModelCatalogInputSchema,
+  zcodeTaskInputSchema,
+  taskIdOnlyInputSchema,
+} from "../api-schemas.js";
 
-export const TASK_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
-
-export const taskIdSchema = z
-  .string()
-  .regex(TASK_ID_PATTERN, `task_id must match ${TASK_ID_PATTERN.source}`);
+export {
+  TASK_ID_PATTERN,
+  taskIdSchema,
+  taskIdOnlyInputSchema,
+  zcodeTaskInputSchema,
+  zcodeContinueInputSchema,
+  zcodeEventsInputSchema,
+  zcodeInteractionReplyInputSchema,
+  zcodeModelCatalogInputSchema,
+  zcodeDefaultModelInputSchema,
+};
 
 const stringArray = z.array(z.string());
 
-export const zcodeTaskInputSchema = z
-  .strictObject({
-    task_id: taskIdSchema,
-    workspace: z.string().min(1),
-    worktree_path: z.string().min(1).optional(),
-    model: z.strictObject({
-      // ADR-031: provider_id is optional so a plain model (or a
-      // `<ModelId>-StartPlan` alias) is routed once at task creation via
-      // ZCODE_BRIDGE_PREFER_STARTPLAN; an explicit provider stays mandatory
-      // when supplied.
-      provider_id: z.string().trim().min(1).optional(),
-      model_id: z.string().trim().min(1),
-      reasoning_level: z.string().trim().min(1).optional(),
-    }).optional(),
-    timeout_ms: z.number().int().min(60_000).max(14_400_000).optional(),
-    objective: z.string().min(1),
-    requirements: stringArray,
-    allowed_paths: stringArray,
-    forbidden_paths: stringArray,
-    acceptance_criteria: stringArray,
-    test_commands: stringArray,
-    context: z.string().optional(),
-  })
-  .describe("Full TaskPackage; workspace is the the calling host project root. Optional worktree_path is an existing execution directory selected and prepared by the calling host; the Bridge never creates or selects worktrees. The five array fields must be present (empty allowed), context is optional.");
-
-export const taskIdOnlyInputSchema = z.strictObject({
-  task_id: z.string().min(1),
+export const zcodeResultInputSchema = taskIdOnlyInputSchema.extend({
+  view: z.enum(["summary", "full"]).optional(),
+  expected_attempt: z.number().int().positive().optional(),
+  // P1 §3.4 / ADR-056: bounded page over the stored canonical Result JSON.
+  // Both must be provided together and cannot be combined with view=summary.
+  offset_bytes: z.number().int().nonnegative().optional(),
+  max_bytes: z.number().int().min(1_024).max(4_194_304).optional(),
 });
 
 export const zcodeFeedbackInputSchema = z.strictObject({
   task_id: taskIdSchema,
-});
-
-export const zcodeContinueInputSchema = z.strictObject({
-  task_id: z.string().min(1),
-  feedback: z.string().min(1),
-  additional_requirements: z.array(z.string()).optional(),
-  operation_id: z.string().trim().min(1).max(128).optional(),
-});
-
-export const zcodeEventsInputSchema = z.strictObject({
-  task_id: taskIdSchema,
-  after_seq: z.number().int().nonnegative().optional(),
-  limit: z.number().int().min(1).max(200).optional(),
-  wait_ms: z.number().int().min(0).max(25_000).optional(),
-  view: z.enum(["raw", "summary"]).optional(),
-  scan_cursor: z.string().max(2_048).optional(),
-  max_bytes: z.number().int().min(1_024).max(33_554_432).optional(),
-  wait_for: z.literal("attention").optional(),
-});
-
-export const zcodeInteractionReplyInputSchema = z.strictObject({
-  task_id: taskIdSchema,
-  request_id: z.string().trim().min(1).max(512),
-  decision: z.enum(["allow", "deny", "accept", "decline"]),
-  answers: z.record(z.string(), z.string()).optional(),
-  reason: z.string().max(2_000).optional(),
-});
-
-export const zcodeModelCatalogInputSchema = z.strictObject({
-  workspace: z.string().trim().min(1),
-});
-
-export const zcodeDefaultModelInputSchema = z.strictObject({
-  provider_id: z.string().trim().min(1),
-  model_id: z.string().trim().min(1),
-  reasoning_level: z.string().trim().min(1).optional(),
 });
 
 // ---- output schemas (structured content validation) ----
@@ -91,10 +52,29 @@ const testReportSchema = z.object({
   details: z.string().optional(),
 });
 
+const taskOwnerBindingSchema = z.object({
+  task_id: z.string(),
+  state: z.enum(["bound", "unavailable"]),
+  owner_thread_id: z.string().nullable(),
+  source: z.enum(["mcp_meta", "mcp_meta_missing", "mcp_meta_invalid", "non_host_admission", "legacy_unavailable"]),
+  bound_at: z.string().nullable(),
+  reason_code: z.literal("owner_thread_unavailable").nullable(),
+});
+
+const taskConsoleLinkSchema = z.object({
+  available: z.boolean(),
+  web_url: z.string().nullable(),
+  console_id: z.string().nullable(),
+  console_reused: z.boolean().nullable(),
+  reason_code: z.string().nullable(),
+});
+
 export const taskReceiptSchema = z.object({
   task_id: z.string(),
   status: z.enum(["queued", "running"]),
   created_at: z.string(),
+  owner_binding: taskOwnerBindingSchema.optional(),
+  console_link: taskConsoleLinkSchema.optional(),
 });
 
 const taskObservationSchema = z.object({
@@ -128,6 +108,16 @@ const executionObservationSchema = z.object({
   evidence_ref: z.string(),
 });
 
+const dispatchBlockerSchema = z.object({
+  reason: z.enum(["capacity_occupied", "workspace_occupied"]),
+  task_id: z.string(),
+  operation_id: z.string(),
+  phase: z.string(),
+  workspace: z.string(),
+  queued_duration_ms: z.number().int().nonnegative(),
+  blocked_duration_ms: z.number().int().nonnegative(),
+});
+
 export const taskStatusRecordSchema = z.object({
   task_id: z.string(),
   status: z.enum([
@@ -150,6 +140,8 @@ export const taskStatusRecordSchema = z.object({
   error: z.string().optional(),
   observation: taskObservationSchema.optional(),
   execution_observation: executionObservationSchema.optional(),
+  dispatch_blocker: dispatchBlockerSchema.optional(),
+  owner_binding: taskOwnerBindingSchema.optional(),
 });
 
 export const taskAttentionSnapshotSchema = z.strictObject({
@@ -175,6 +167,7 @@ const normalizedUsageSchema = z.object({
   output_tokens: z.number().int().nullable(),
   total_tokens: z.number().int().nullable(),
   cached_input_tokens: z.number().int().nullable(),
+  cached_write_input_tokens: z.number().int().nullable().optional(),
   reasoning_tokens: z.number().int().nullable(),
   conflicts: z.array(z.string()),
   dropped_unknown_keys: z.number().int(),
@@ -204,6 +197,16 @@ const attemptTimingSchema = z.object({
   notes: z.array(z.string()),
 });
 
+/** ADR-066: bounded, redacted rejection of one official RPC (failed Results only). */
+const rpcDiagnosticSchema = z.object({
+  method: z.string(),
+  code: z.number().int().nullable(),
+  message: z.string(),
+  data_name: z.string().nullable(),
+  data_code: z.string().nullable(),
+  stack: z.string().optional(),
+});
+
 export const taskResultSchema = z.object({
   task_id: z.string(),
   status: z.enum(["completed", "failed", "cancelled", "waiting_for_master"]),
@@ -229,6 +232,41 @@ export const taskResultSchema = z.object({
   usage: normalizedUsageSchema.nullable().optional(),
   model: executionProfileSchema.nullable().optional(),
   timing: attemptTimingSchema.nullable().optional(),
+  rpc_diagnostics: z.array(rpcDiagnosticSchema).optional(),
+});
+
+// A union at the root would cause older MCP protocol codecs to wrap the result.
+/** P1 §3.4 / ADR-056: one bounded page of the stored canonical Result JSON.
+ * Concatenating every page's data reproduces bytes whose SHA-256 is
+ * `result_content_digest`; `result_digest` remains the stored Result-envelope digest. */
+const zcodeResultPageSchema = z.object({
+  offset_bytes: z.number().int().nonnegative(),
+  next_offset: z.number().int().positive().nullable(),
+  total_bytes: z.number().int().nonnegative(),
+  result_content_digest: z.string(),
+  data: z.string(),
+});
+
+export const zcodeResultOutputSchema = taskResultSchema.extend({
+  zcode_output: taskResultSchema.shape.zcode_output.optional(),
+  projection: z.object({
+    omitted_fields: z.array(z.string()),
+    test_counts: z.object({
+      passed: z.number().int().nonnegative(),
+      failed: z.number().int().nonnegative(),
+      not_run: z.number().int().nonnegative(),
+    }),
+  }).optional(),
+  page: zcodeResultPageSchema.optional(),
+  result_status: z.string().optional(),
+  result_digest: z.string().optional(),
+  result_content_digest: z.string().optional(),
+  result_commit_ref: z.string().optional(),
+}).refine(
+  (result) => (result.zcode_output !== undefined ? 1 : 0) + (result.projection !== undefined ? 1 : 0) + (result.page !== undefined ? 1 : 0) === 1,
+  "Result must contain exactly one of zcode_output, projection, or page",
+).meta({
+  oneOf: [{ required: ["zcode_output"] }, { required: ["projection"] }, { required: ["page"] }],
 });
 
 const taskProgressEventSchema = z.object({
@@ -236,6 +274,7 @@ const taskProgressEventSchema = z.object({
   at: z.string(),
   type: z.string(),
   summary: z.string(),
+  attempt: z.number().int().positive().optional(),
   details: z.record(z.string(), z.unknown()).optional(),
 });
 

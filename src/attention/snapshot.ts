@@ -1,5 +1,5 @@
 import type { TaskAttentionSnapshot, TaskStatus } from "../interfaces.js";
-import { TaskManagerError } from "../manager/errors.js";
+import { TaskManagerError } from "../task-errors.js";
 
 const TASK_STATUSES = new Set<TaskStatus>([
   "queued",

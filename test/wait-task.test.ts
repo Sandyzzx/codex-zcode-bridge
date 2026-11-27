@@ -369,6 +369,7 @@ test("documented installed-plugin layout starts without a development package.js
   mkdirSync(stateRoot, { recursive: true });
   copyFileSync(path.join(process.cwd(), "plugins", "codex-zcode-bridge", "dist", "wait-task.mjs"), path.join(pluginRoot, "dist", "wait-task.mjs"));
   copyFileSync(path.join(process.cwd(), "plugins", "codex-zcode-bridge", "dist", "schema.sql"), path.join(pluginRoot, "dist", "schema.sql"));
+  copyFileSync(path.join(process.cwd(), "plugins", "codex-zcode-bridge", "dist", "runtime-events.sql"), path.join(pluginRoot, "dist", "runtime-events.sql"));
   copyFileSync(path.join(process.cwd(), "plugins", "codex-zcode-bridge", "dist", "admin-abandonment.sql"), path.join(pluginRoot, "dist", "admin-abandonment.sql"));
   copyFileSync(path.join(process.cwd(), "plugins", "codex-zcode-bridge", "launch-node24.mjs"), path.join(pluginRoot, "launch-node24.mjs"));
   copyFileSync(path.join(process.cwd(), "plugins", "codex-zcode-bridge", ".codex-plugin", "plugin.json"), path.join(pluginRoot, ".codex-plugin", "plugin.json"));
@@ -489,17 +490,19 @@ test("thin waiter rejects invalid arguments before opening storage", () => {
   assert.match(result.stderr, /usage: node wait-task\.mjs/u);
 });
 
-test("an explicit JSON upgrade hint still resolves SQLite and never falls back to JSON", { skip: !sqliteCapable }, () => {
+test("an explicit JSON authority config rejects instead of resolving a data root", { skip: !sqliteCapable }, () => {
   const home = fixtureRoot();
   const appRoot = mkdtempSync(path.join(systemTempRoot(), "bridge-waiter-config-app-"));
   try {
     const settings = path.join(home, ".codex", "codex-zcode-bridge");
     mkdirSync(settings, { recursive: true });
-    writeFileSync(path.join(settings, "authority.json"), JSON.stringify({ schema_version: 1, authority: "json" }), "utf8");
-    const resolved = resolveWaitDataRoot(null, { LOCALAPPDATA: appRoot }, home);
-    assert.equal(path.basename(resolved.databaseFileName), "bridge.sqlite");
-    assert.equal(resolved.dataRoot.endsWith(`${path.sep}state`), true);
-    assert.equal(existsSync(path.join(resolved.dataRoot, ".tasks")), false, "waiter resolution must not choose a legacy JSON task root");
+    const configPath = path.join(settings, "authority.json");
+    writeFileSync(configPath, JSON.stringify({ schema_version: 1, authority: "json" }), "utf8");
+    const configBytes = readFileSync(configPath);
+    assert.throws(() => resolveWaitDataRoot(null, { LOCALAPPDATA: appRoot }, home), (error: unknown) =>
+      typeof error === "object" && error !== null && "code" in error
+        && (error as { code: unknown }).code === "authority_config_json_unsupported");
+    assert.deepEqual(readFileSync(configPath), configBytes);
   } finally {
     rmSync(home, { recursive: true, force: true });
   }

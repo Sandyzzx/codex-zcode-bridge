@@ -1,184 +1,113 @@
-# Codex ZCode Bridge
+<p align="center">
+  <img src="plugins/codex-zcode-bridge/assets/logo.png" width="96" alt="Codex ZCode Bridge logo" />
+</p>
+<h1 align="center">Codex ZCode Bridge</h1>
+<p align="center"><strong>Codex plans and reviews. ZCode executes. Bridge keeps the workflow moving.</strong></p>
+<p align="center">
+  <img src="docs/assets/bridge-codex-console.png" width="1100" alt="Redacted real Bridge Task Console with a task running" />
+</p>
+<p align="center"><sub>Redacted screenshot of a real Bridge Task Console while a task was running. The interface still shows the <em>Experimental</em> badge; the project name, task ID, task name, prompt, task goal and workspace path are redacted.</sub></p>
+<p align="center">
+  <a href="README.zh-CN.md">简体中文</a> · <a href="https://github.com/Sandyzzx/codex-zcode-bridge/releases">Releases</a> · <a href="docs/WEB_CONSOLE.md">Task Workspace</a> · <a href="docs/ZCODE_RUNTIME.md">Troubleshooting</a>
+</p>
 
-**Connect Codex to the official ZCode Agent Runtime, delegate a bounded development task, and review the result before accepting it.**
+Codex ZCode Bridge is a local, asynchronous agent orchestration plugin. Delegate a development task to the official ZCode runtime, let it work while Codex is free to do other things, and return to the original Codex conversation for review when execution finishes.
 
-[简体中文](README.zh-CN.md) · [Repository](https://github.com/Sandyzzx/codex-zcode-bridge) · [Releases](https://github.com/Sandyzzx/codex-zcode-bridge/releases)
+## Why Bridge?
 
-> **Release status.** This branch promotes Preview `2.0.0-preview.4` to the Stable `v1.7.0` line. The `preview` channel remains the integration branch for subsequent work.
+- **Delegate outcomes, not just commands.** Codex defines the goal, scope and acceptance checks; ZCode implements and tests the task through its own AppServer.
+- **Work asynchronously.** A separate Executor owns accepted work. The Codex conversation need not keep polling while ZCode executes.
+- **Keep task history.** SQLite records attempts, progress, results and cleanup; reconnect and inspect work rather than starting over blindly.
+- **Return to the original conversation.** Auto Wake requests a new turn after release, allowing Codex to read the result, independently review changes and request rework when necessary.
+- **Use the models available to your runtime.** Discover current models from the official AppServer, select a plan and reasoning level, or set a default. Bridge does not maintain a model whitelist.
 
-## What this is
+## Quick start
 
-Codex ZCode Bridge is a task-orchestration plugin that connects Codex to the official ZCode Agent Runtime on the same computer. It is not a model API proxy and it is not a wrapper around a shell command.
+**Requirements:** Windows x64; Node.js 24.16.0 (verified); Git; Codex with plugin support; a separately installed, signed-in official ZCode Desktop with authorized model access.
 
-| Component | Responsibility |
-| --- | --- |
-| **Codex** | Defines the task, handles host interaction, follows progress, and performs final review and acceptance. |
-| **Bridge** | Exposes MCP tools, orchestrates tasks and attempts, persists state in SQLite, and manages Worker lifecycle and recovery. |
-| **ZCode AppServer** | Executes the model turn and owns context construction, tools, streaming, and provider transport. |
-| **SQLite Authority** | Stores the authoritative task, result, cleanup, and release lifecycle for the current production architecture. |
+### Install
 
-Codex does not automatically hand every coding request to ZCode. Delegation happens when the user explicitly asks to use ZCode Bridge, or when an existing explicit session/goal authorization covers the task.
-
-## Model plan support
-
-| Plan | Availability | Authentication and runtime path |
-| --- | --- | --- |
-| **Z.ai Start Plan** | Stable `v1.7.0` and Preview | Discovers the official logged-in account credential, performs the required entitlement check for the selected model, and supplies the official runtime through a per-task private credential lease. |
-| **Z.ai Coding Plan** | Stable `v1.7.0` and Preview | Uses the existing official Coding Plan account/API-key path through the ZCode Runtime. |
-
-Start Plan and Coding Plan are different account and authentication paths. Bridge selects the path from the task's provider, model, and plan selection; both paths ultimately execute through the official ZCode AppServer.
-
-### Verified Start Plan path
-
-The `v1.7.0` line includes one real Windows acceptance run with these facts:
-
-- Official ZCode AppServer `0.17.1`.
-- Provider `account:bigmodel-start-plan`.
-- Model `GLM-5.3-Flash`.
-- Three main-turn model iterations, all with HTTP `200`.
-- Successful `Write` and `Read` tool calls.
-- Valid AgentReport schema.
-- Result committed, Worker exited, process tree cleaned up, and private lease released.
-- One Billing GET was observed for the task.
-- No HTTP `405`, provider code `3012`, or unusual-activity response was observed.
-
-This evidence covers **only `GLM-5.3-Flash` on Windows**. It does not prove every Start Plan model, every ZCode runtime version, or every platform. Other models remain subject to the official provider registry and the live entitlement of the signed-in account.
-
-## Core capabilities
-
-- **Task dispatch:** submit one bounded, independently reviewable development task with `zcode_task`; Codex's Master skill can choose a whole-task or staged delivery strategy.
-- **Persistent orchestration:** SQLite records operations, attempts, claims, results, cleanup, release, and restart recovery state.
-- **Worker lifecycle:** Bridge starts and observes an isolated Worker, verifies the ZCode process tree, and keeps an explicit Hold when cleanup cannot be verified.
-- **Progress and interaction:** use `zcode_status`, `zcode_feedback`, `zcode_events`, `zcode_result`, and `zcode_interaction_reply` to follow a task and answer a surfaced permission or user-input request.
-- **Model selection:** read available provider/model combinations, choose a model per task, or configure a Bridge default.
-- **Provider integration:** route Start Plan or Coding Plan through the official runtime without turning Bridge into a second request builder.
-- **Independent acceptance:** `completed` means execution and report normalization finished; it does not mean Codex accepted the code.
-
-## MCP tool surface
-
-| Area | Tools |
-| --- | --- |
-| Setup and model discovery | `zcode_doctor`, `zcode_model_catalog`, `zcode_default_model`, `zcode_set_default_model`, `zcode_clear_default_model` |
-| Task lifecycle | `zcode_task`, `zcode_status`, `zcode_feedback`, `zcode_events`, `zcode_result`, `zcode_continue`, `zcode_cancel` |
-| Interaction | `zcode_interaction_reply` |
-
-`zcode_continue` is for evidence-driven rework, a required decision, controlled recovery, or report repair. It is not a general scheduler for the next implementation step.
-
-## Requirements
-
-- **Windows** is the currently validated local deployment target for the production SQLite path and the real Start Plan acceptance run. Linux and macOS have synthetic/CI coverage only.
-- **Stable 1.7.0:** Node.js `>=24.16.0` and `<25`.
-- Git, Codex with plugin/marketplace support, and a working local ZCode installation.
-- A signed-in official ZCode account with the plan and model entitlement required by the selected task.
-- A **single-user, trusted-local** environment. This is not a multi-user isolation boundary or a remote sandbox.
-
-Node.js and ZCode are not installed by the marketplace plugin.
-
-## Installation
-
-Use one release channel per Codex installation. Branch refs move with later commits; tags are fixed snapshots.
-
-### Stable
-
-Stable `v1.7.0` includes SQLite-only orchestration plus Start Plan and Coding Plan integration:
+Install the Stable 2.0.0 release:
 
 ```sh
-codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-v1.7.0
+codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-v2.0.0
 codex plugin add codex-zcode-bridge@codex-zcode-bridge
 ```
 
-### Preview
+This pins the installation to a published release. Enable only one installation of Bridge at a time.
 
-Preview remains the integration channel for post-1.7 work. Marketplace ID: `codex-zcode-bridge-preview`.
+Start a new Codex conversation, review the plugin's `SessionStart` hook, and ask Codex to run `zcode_doctor` if setup needs diagnosis. Marketplace installation does not require cloning the source or running `npm install`.
 
-```sh
-codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref preview
-codex plugin add codex-zcode-bridge@codex-zcode-bridge-preview
+## Your first task
+
+Open a project in Codex and ask:
+
+> Use ZCode Bridge with Coding Plan to fix the failing parser test. Only edit the parser and its tests. Run the focused tests, then independently review the diff and test results. Do not commit or push.
+
+You can explicitly name a model and reasoning level, for example `GLM-5.4 / low` when your runtime offers it. Bridge delegates only when you request it or have already explicitly authorized delegation for the goal.
+
+## How it works
+
+```mermaid
+flowchart LR
+    C["Codex\nPlan · Review"] -->|MCP task| E["Bridge Executor"]
+    E --> W["Worker"]
+    W --> Z["Official ZCode AppServer\nModel · Tools"]
+    E <-->|Task lifecycle| S[(SQLite)]
+    U["Local Task Workspace"] <-->|Inspect · Act| E
+    Z -->|Result| W
+    W --> E
+    E -->|Release · Auto Wake| C
 ```
 
-Update the moving Preview marketplace with:
+Bridge coordinates execution rather than proxying model API requests. Codex remains responsible for independent acceptance; a Worker reporting `completed` is not an acceptance decision.
 
-```sh
-codex plugin marketplace upgrade codex-zcode-bridge-preview
-```
+## Task Workspace
 
-To pin the accepted Preview snapshot instead of following the branch:
+Open the local console link in a task receipt to inspect task status, attempt history, results, observed token usage and failure reasons. The console provides supported task actions, search, English/Chinese and light/dark themes. Runtime checks and cost evidence live under Diagnostics. Opening the page does not send model requests.
 
-```sh
-codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-preview-v2.0.0-preview.4
-```
+The console uses the same Executor and SQLite authority; it is not a second task system. If cleanup cannot be verified, an explicit user-authorized release is available for eligible abnormal tasks. This releases Bridge occupancy only, not necessarily a live process; a Worker might still write to the workspace.
 
-To switch an existing marketplace between branch and tag refs, re-run `marketplace add` with the desired `--ref` or remove and add the marketplace. Verify the command with `codex plugin marketplace add --help` if your Codex version differs.
+## Models and plans
 
-After installation, start a new Codex conversation so the plugin and MCP tools are loaded. Review and trust the plugin's `SessionStart` hook, then run `zcode_doctor` if setup needs diagnosis.
+| Plan | Support in 2.x |
+| --- | --- |
+| Individual Coding Plan | Authorized execution through the installed official AppServer. Real GLM-5.4 / low execution verified on Windows before Stable release. |
+| Start Plan | Technical adaptation retained, including the `-StartPlan` selection alias. Current real-account availability is unverified; official access restrictions apply. |
 
-## Use it
+Bridge discovers models from the official runtime using its current local provider configuration. It does not grant plan entitlements, bypass provider restrictions or guarantee promotional discounts.
 
-1. Open the project in Codex.
-2. Explicitly ask Codex to use ZCode Bridge for the task.
-3. Provide the goal, relevant files, constraints, allowed scope, and acceptance checks.
-4. Let Codex's Master workflow select a whole-task or staged strategy and dispatch the task.
-5. Follow progress with `zcode_status`, `zcode_feedback`, and `zcode_events`; answer a surfaced permission request only when the requested action is actually authorized.
-6. Inspect the workspace diff, test evidence, and `zcode_result` independently before accepting the work.
+Explicit plan/model choices take priority. When a model is available in both plans and you specify only the model, Start Plan is preferred; when only one offers it, that plan is selected. An unavailable or rejected selection is reported, not silently replaced with a different model or plan.
 
-Example prompt:
+## What has been verified?
 
-```text
-Use ZCode Bridge to run this task with Start Plan GLM-5.3-Flash.
-Fix the failing parser test in this repository. Keep the change limited to
-the parser and its tests, run the focused test command, and return a valid
-AgentReport. Do not commit or push.
-```
+The Stable runtime baseline (Preview.20) passed the Windows and Ubuntu release test matrix and a real Windows Coding Plan task using GLM-5.4 / low, including file creation, Result, Cleanup, Release and Auto Wake. GLM-5.4 / max model selection and readback also passed without a model turn. The Stable packaging candidate adds release identity and documentation only and does not repeat real model execution. Earlier real Host tests demonstrated completion Wake and acceptance-driven rework.
 
-For planning, inspection, or an independent second opinion, ask Codex not to delegate and keep the work in the current Host.
+Historical verified ZCode Desktop installations: 3.18.2.10443, 3.19.0.10774 and 4.0.0.10870, with different verification scopes. Other safe installations may be attempted without a static version whitelist; compatibility is not guaranteed. See [runtime notes](docs/ZCODE_RUNTIME.md).
 
-### Workspace and worktree boundary
+Real end-to-end Continue against the Stable 2.0.0 release, current Start Plan entitlement and execution, fully exited Desktop recovery, not-loaded Host Wake and Windows reboot recovery are not established by the latest release evidence. CI on Ubuntu does not establish real production support on Linux or macOS.
 
-The calling host chooses the project workspace and, if needed, creates and prepares a Git worktree. Bridge validates and uses the supplied paths but never creates, selects, or deletes a worktree. A worktree is a filesystem layout choice, not an operating-system security sandbox.
+## Safety and updates
 
-## SQLite startup and upgrades
-
-New installations create and validate:
-
-```text
-${LOCALAPPDATA}\CodexZCodeBridge\state\bridge.sqlite
-```
-
-The database must pass integrity and lifecycle checks before MCP requests are accepted. Bridge does not fall back to JSON storage.
-
-When startup finds a valid Schema v13 Authority, Bridge performs a guarded copy upgrade to v14 under the existing cross-process bootstrap lock. The original database is retained as a sibling v13 backup, the published v14 Authority is verified before the durable upgrade marker is cleared, and occupied Operations, Holds, and Recovery evidence remain intact:
-
-```powershell
-node ./dist/upgrade-sqlite-v14.mjs --help
-```
-
-The offline upgrade tool remains available for explicit operator workflows. Corrupt or non-v13 databases stay on the existing fail-closed validation path. Do not edit lifecycle tables or clear a Hold to force an upgrade. See [ZCODE_RUNTIME.md](docs/ZCODE_RUNTIME.md) for the full contract.
-
-## Security boundary
-
-The `v1.7.0` line runs on the current Windows account with the fixed trusted-local `yolo` profile. Ordinary reads, edits, builds, tests, and task-scoped cleanup can run without per-step approval. Push, merge, tag, release, production Authority changes, deletion outside the task scope, credential changes, and production task-data access still require explicit user authorization.
-
-Prompts, Skills, path lists, and worktree selection do not create those permissions. Do not put credentials, JWTs, private keys, or sensitive account data into a task prompt. A task's `allowed_paths` and `forbidden_paths` are instructions, not an OS-enforced sandbox.
-
-## Current limits
-
-- **Start Plan real E2E:** Windows only; one model (`GLM-5.3-Flash`) has published evidence.
-- **Other Start Plan models:** dependent on the official registry and live account entitlement; not individually certified here.
-- **Linux/macOS:** synthetic/CI coverage only; no real Start Plan certification.
-- **CAPTCHA and unusual activity:** Bridge does not solve CAPTCHA or bypass account controls. Entitlement failures fail closed and may require the user to resolve the condition in the official ZCode client.
-- **Host Portability and Companion Service:** architecture research only; they are not delivered features in `v1.7.0`.
-- **JSON storage and the retired CLI execution chain:** not current production paths. Old JSON task histories are not imported into SQLite.
-- **A worker can exit without committing a Result.** Bridge intentionally retains cleanup evidence and a Hold rather than guessing that resources were released.
+- **Trusted local use only.** ZCode operates with your OS user permissions. Task path constraints and Git worktrees are not security sandboxes. Do not include credentials in task prompts.
+- **Auto Wake is enabled by installing and enabling the 2.x plugin.** It may consume Codex usage. Turn it off in Task Workspace Diagnostics. Queue acknowledgement does not guarantee a new turn starts in every Host state.
+- **Upgrade carefully.** Stop or finish active work before upgrading. The 2.x runtime supports SQLite v14 only; older schemas are rejected without destructive conversion. Back up task data and follow the [runtime and upgrade guide](docs/ZCODE_RUNTIME.md). Do not assume rollback to an older plugin can read newer Result fields.
+- **Billing is controlled by providers.** No guaranteed multiplier, free usage or savings. Missing provider settlement is displayed as not observed.
 
 ## Documentation
 
-- [Architecture](docs/ARCHITECTURE.md)
-- [Interfaces and lifecycle contracts](docs/INTERFACES.md)
-- [Runtime and SQLite upgrade details](docs/ZCODE_RUNTIME.md)
-- [Plugin safety notes](plugins/codex-zcode-bridge/SECURITY.md)
-- [Master skill](plugins/codex-zcode-bridge/skills/zcode-bridge/SKILL.md)
-- [`v1.7.0` release](https://github.com/Sandyzzx/codex-zcode-bridge/releases/tag/codex-zcode-bridge-v1.7.0)
+[Architecture](docs/ARCHITECTURE.md) · [Task Workspace](docs/WEB_CONSOLE.md) · [Runtime and upgrades](docs/ZCODE_RUNTIME.md) · [MCP interfaces](docs/INTERFACES.md) · [Security](plugins/codex-zcode-bridge/SECURITY.md) · [Developer documentation](docs/README.md)
 
 ## License
 
-Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE). This project is an independent integration, not an official Codex or ZCode product.
+
+## A note from the author
+
+This project began as a way to make Codex and ZCode work together more efficiently. I am glad to have brought that idea to life.
+
+However, GLM-5.4's performance in my own development work fell short of my expectations. In my experience, ZCode's former 0.67 billing multiplier is no longer available and Start Plan allocations have become less frequent. I no longer find ZCode compelling enough for my workflow and have stopped using it.
+
+The project remains open source, but I will no longer maintain it on a regular basis. Please do not expect timely fixes, compatibility updates, or responses to issues. If you find the project useful, you are welcome to fork it and continue its development.
+
+Thank you to everyone who has used or supported this project.

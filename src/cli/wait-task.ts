@@ -9,8 +9,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { openReadOnlyAttention } from "../attention/read-only.js";
 import { waitForAttentionSnapshot, type AttentionWakeReason } from "../attention/wait.js";
-import { TaskManagerError } from "../manager/errors.js";
-import { codexHostProfile } from "../host/profile.js";
+import { TaskManagerError } from "../task-errors.js";
+import { codexHostProfile } from "../runtime/host-profile.js";
 import {
   FRESH_SQLITE_DATABASE_FILE,
   loadInstallAuthoritySelection,

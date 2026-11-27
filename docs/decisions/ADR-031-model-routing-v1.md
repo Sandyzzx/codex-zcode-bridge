@@ -3,6 +3,7 @@
 > Applicability: ACTIVE — 下文对 ADR-030 的 prepare/issue 实时授权引用，以该 ADR 页首 Preview.3 修订为准：每任务一次权威 Billing verdict；路由本身不增加 Billing 请求。原设计正文保留用于追溯。
 
 > Status: DECISION
+> Applicability (2026-11-24, ADR-058): Verdict-based routing remains a dispatch-time preference only; verdicts never gate execution and no provider switch happens after an official rejection.
 > Date: 2026-11-09
 > Decision: ACCEPTED — Owner 授权 Model Routing v1 合同冻结与最小实施
 > Revision: 2026-11-12 — 任务幂等细化（Issue #79）：路由缓存以归一化后的原始模型请求内容为身份，仅重放首次已持久化接受的选择；内容变化按当前输入重新选路并交由 SQLite Authority 判定；持久化前的失败不留缓存占用。

@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import type { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
@@ -18,6 +19,7 @@ export interface ClaimOnlyWorkerProcess extends ChildProcess {
   readonly privateAuthResponseChannel: Writable | null;
   readonly privateAuthAcknowledgementChannel: Readable | null;
   readonly privateAuthLifetimeChannel: Writable | null;
+  readonly runtimeEventChannel: Readable | null;
   readonly exitSeen: boolean;
 }
 
@@ -31,33 +33,51 @@ export function spawnClaimOnlyWorker(
   workerPath: string,
   provenance: RuntimeBuildProvenance,
   options: { readonly interactionChannel?: boolean; readonly dropAfterPrepared?: boolean; readonly privateAuthChannel?: boolean;
-    /** Bounded private diagnostics: complete Worker stderr lines matching the
-     * ADR-011 failure-facts marker are forwarded for validated handling;
+    readonly runtimeEventChannel?: boolean;
+    /** Bounded private diagnostics: recognized Worker stderr lines are
+     * forwarded for validated handling;
      * every other byte stays discarded. */
-    readonly onWorkerDiagnosticLine?: (line: string) => void } = {},
+    readonly onWorkerDiagnosticLine?: (line: string) => void;
+    readonly onSpawnError?: (error: Error) => void;
+  } = {},
 ): ClaimOnlyWorkerProcess {
   if (!path.isAbsolute(workerPath)) throw new TypeError("claim-only worker path must be absolute");
   if (options.dropAfterPrepared && !options.interactionChannel) throw new TypeError("interaction channel is required for drop-after-prepared");
   if (options.privateAuthChannel && !options.interactionChannel) throw new TypeError("private auth requires interaction channel allocation");
+  if (options.runtimeEventChannel && !options.interactionChannel) throw new TypeError("runtime events require interaction channel allocation");
   const env = {
     ...createWorkerEnv(process.env),
     ZCODE_BRIDGE_RUNTIME_PROVENANCE: JSON.stringify(provenance),
   };
   const args = [workerPath, ...(options.interactionChannel ? ["--bridge-sqlite-interaction-v1"] : []),
     ...(options.privateAuthChannel ? ["--bridge-sqlite-private-auth-v1"] : []),
-    ...(options.dropAfterPrepared ? ["--bridge-sqlite-interaction-drop-after-prepared-v1"] : []), BRIDGE_WORKER_LAUNCH_MARKER];
+    ...(options.runtimeEventChannel ? ["--bridge-sqlite-runtime-events-v1"] : []),
+    ...(options.dropAfterPrepared ? ["--bridge-sqlite-interaction-drop-after-prepared-v1"] : []),
+    BRIDGE_WORKER_LAUNCH_MARKER];
+  const stdioLength = options.runtimeEventChannel
+    ? 15
+    : options.privateAuthChannel
+      ? 14
+      : options.interactionChannel
+        ? 10
+        : 7;
+  const stdio = Array<"ignore" | "pipe">(stdioLength).fill("ignore");
+  for (let fd = 2; fd <= 6; fd += 1) stdio[fd] = "pipe";
+  if (options.interactionChannel) for (let fd = 7; fd <= 9; fd += 1) stdio[fd] = "pipe";
+  if (options.privateAuthChannel) for (let fd = 10; fd <= 13; fd += 1) stdio[fd] = "pipe";
+  if (options.runtimeEventChannel) stdio[14] = "pipe";
   const child = spawn(process.execPath, args, {
     detached: true,
     shell: false,
-    stdio: options.privateAuthChannel
-      ? ["ignore", "ignore", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe"]
-      : options.interactionChannel
-      ? ["ignore", "ignore", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe"]
-      : ["ignore", "ignore", "pipe", "pipe", "pipe", "pipe", "pipe"],
+    stdio,
     windowsHide: true,
     cwd: path.dirname(workerPath),
     env,
   }) as ClaimOnlyWorkerProcess;
+  // An OS-level spawn failure is emitted asynchronously. Retain the handle and
+  // let the bounded report/bootstrap paths turn it into a durable unknown;
+  // an unhandled error event must not crash the Manager.
+  child.once("error", (error) => options.onSpawnError?.(error));
   // Workers synchronously write diagnostics to fd 2. Always drain it, including
   // when no diagnostic observer is installed, so a full OS pipe cannot block
   // the Worker before Result/exit. Observers may still subscribe to data;
@@ -79,7 +99,11 @@ export function spawnClaimOnlyWorker(
         if (index < 0) break;
         const line = pending.slice(0, index);
         pending = pending.slice(index + 1);
-        if (line.startsWith("[bridge-worker] failure-facts ")) diagnosticSink(line);
+        if (line.startsWith("[bridge-worker] failure-facts ") ||
+            line.startsWith("[bridge-worker] runtime-auth ") ||
+            /^\[bridge-worker\] installed-runtime [a-zA-Z0-9][a-zA-Z0-9_-]{0,63} [1-9]\d{0,8} [0-9a-f]{64}$/u.test(line)) {
+          diagnosticSink(line);
+        }
       }
     });
   } else {
@@ -99,6 +123,7 @@ export function spawnClaimOnlyWorker(
     privateAuthResponseChannel: { enumerable: false, get: () => pipes[11] as Writable | null },
     privateAuthAcknowledgementChannel: { enumerable: false, get: () => pipes[12] as Readable | null },
     privateAuthLifetimeChannel: { enumerable: false, get: () => pipes[13] as Writable | null },
+    runtimeEventChannel: { enumerable: false, get: () => pipes[14] as Readable | null },
     exitSeen: { enumerable: false, get: () => exitSeen },
   });
   child.once("exit", () => { exitSeen = true; });
@@ -109,5 +134,7 @@ export function workerEntryPath(): string {
   if (process.env["ZCODE_BRIDGE_PLUGIN_MODE"] === "1") {
     return fileURLToPath(new URL("../worker/worker-main.mjs", import.meta.url));
   }
+  const bundled = fileURLToPath(new URL("../worker/worker-main.mjs", import.meta.url));
+  if (existsSync(bundled)) return bundled;
   return fileURLToPath(new URL("../worker/worker-main.js", import.meta.url));
 }

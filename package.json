@@ -1,6 +1,6 @@
 {
   "name": "codex-zcode-bridge",
-  "version": "1.7.2",
+  "version": "2.0.0",
   "private": true,
   "description": "本地 Codex 插件与 MCP 服务，用于委派和审查 ZCode 开发任务。",
   "type": "module",
@@ -21,25 +21,34 @@
     "NOTICE"
   ],
   "engines": {
-    "node": ">=22.18"
+    "node": ">=24.16.0 <25"
   },
   "scripts": {
     "build": "npm run build:core && npm run build:plugin",
     "build:test": "tsc --project tsconfig.test.json && node scripts/copy-test-assets.mjs",
     "build:core": "node scripts/build-core.mjs",
     "build:plugin": "node scripts/build-plugin.mjs",
+    "build:official-host": "node scripts/build-official-host-runtime.mjs",
     "typecheck": "tsc --noEmit",
     "test": "npm run build:test && node scripts/test-isolated.mjs",
     "test:affected": "node scripts/run-affected-tests.mjs",
+    "test:shard": "node scripts/test-shard.mjs",
     "test:stress": "node scripts/run-stress-tests.mjs",
     "test:full": "npm run typecheck && npm run build && npm test && npm run validate:plugin",
     "test:inventory": "node scripts/generate-test-inventory.mjs",
     "test:clean-entrypoints": "npm run build:test && node scripts/test-clean-entrypoints.mjs",
     "validate:plugin": "node scripts/validate-plugin.mjs",
+    "check:generated": "node scripts/check-generated-artifacts.mjs",
+    "bridge:cli": "node dist/src/cli/main.js",
+    "web:console": "node dist/src/web/main.js",
+    "cost-lab:web": "node tools/cost-lab/web-server.mjs",
+    "cost-lab:test": "node --test --test-concurrency=1 tools/cost-lab/test/*.test.mjs",
     "admin:abandon-held-operation": "node plugins/codex-zcode-bridge/dist/admin-abandon-held-operation.mjs",
     "bridge:mcp": "node dist/src/mcp/main.js"
   },
   "bin": {
+    "zcode-bridge": "dist/src/cli/main.js",
+    "zcode-bridge-console": "dist/src/web/main.js",
     "zcode-bridge-mcp": "dist/src/mcp/main.js"
   },
   "devDependencies": {

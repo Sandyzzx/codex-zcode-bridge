@@ -11,14 +11,16 @@ import type {
   RuntimeResolver,
   TaskPackage,
   TaskResult,
+  RpcDiagnostic,
   WorkspaceRef,
   ZCodeInteractionRequest,
   ZCodeRuntimeConfig,
 } from "../interfaces.js";
 import { parseAgentReport } from "./agent-report.js";
 import type { ZCodeRunOutcome } from "./run-outcome.js";
+import { appendRpcDiagnostic, extractRpcDiagnostic, redactDiagnosticText } from "./rpc-diagnostics.js";
 import { buildContinuePrompt, buildTaskPrompt } from "../prompts/task-prompt.js";
-import { BridgeError } from "../runtime/errors.js";
+import { BridgeError, SESSION_NOT_RESUMABLE } from "../runtime/errors.js";
 import { loadPersistedRuntimeEnvironment, NodeRuntimeResolver } from "../runtime/resolver.js";
 import { captureSpawnGenerationIdentity, childStillOnSpawnGeneration, isProcessRunning, terminateProcessTree, verifyProcessTreeClaimantsClean, type TerminateProcessTree, type TreeClaimantTarget } from "./process-spawn.js";
 import { createPlatformProbe, type ProcessProbe } from "../runtime/process-probe.js";
@@ -43,19 +45,19 @@ import {
 import { createHash, randomUUID } from "node:crypto";
 import { createMinimalOsEnv } from "../runtime/child-env.js";
 import { buildZCodeAppServerLaunch } from "../runtime/desktop-host-launch.js";
+import { forwardOfficialEndpointEnv } from "../runtime/official-builtin-registry.js";
 import {
   accountProviderRuleFacts,
   BIGMODEL_START_PLAN_PROVIDER_ID,
   buildAccountProviderPayload,
   catalogProviderId,
-  runtimeAuthReply,
+  currentBuiltinRegistryRevision,
+  testOnlyRuntimeAuthReply,
   zcodeDataBaseDir,
-  zcodeTasksIndexPath,
 } from "../runtime/account-provider.js";
-import { resolveSessionPreferences } from "../runtime/session-preferences.js";
+import { resolveSessionPreferences, type ResolvedSessionPreferences } from "../runtime/session-preferences.js";
 import { ADAPTER_CLEANUP_TIMEOUT_MS, resolveTaskTimeout } from "../runtime/task-timeout.js";
-import { registerDesktopTask, updateDesktopTaskStatus, type DesktopTaskIndexEntry, type DesktopTaskStatus } from "./task-index-sync.js";
-import { codexHostProfile, validateHostProfile, type BridgeHostProfile } from "../host/profile.js";
+import { codexHostProfile, validateHostProfile, type BridgeHostProfile } from "../runtime/host-profile.js";
 import { browserListParamsSchema, browserExecuteParamsSchema, type BrowserListParams, type BrowserExecuteParams } from "../browser/params.js";
 import { createBrowserHost, type BrowserHost, type BrowserHostMode, type BrowserHostOptions } from "../browser/host.js";
 import { createDefaultBrowserBackendFactory } from "../browser/load-backend.js";
@@ -77,9 +79,25 @@ type JsonRecord = Record<string, unknown>;
 function publicUsage(value: unknown): Record<string, unknown> | null {
   if (!isRecord(value)) return null;
   const result: Record<string, unknown> = {};
-  for (const key of ["inputTokens", "outputTokens", "totalTokens", "cachedInputTokens", "reasoningTokens", "input_tokens", "output_tokens", "total_tokens", "cost"]) {
+  for (const key of [
+    "inputTokens", "outputTokens", "totalTokens", "cachedInputTokens",
+    "cacheReadTokens", "cachedWriteInputTokens", "cacheWriteInputTokens",
+    "cacheWriteTokens", "reasoningTokens", "input_tokens", "output_tokens",
+    "total_tokens", "cached_input_tokens", "cache_read_tokens",
+    "cached_write_input_tokens", "cache_write_input_tokens", "cache_write_tokens",
+  ]) {
     const item = value[key];
     if (typeof item === "number" && Number.isFinite(item) && item >= 0) result[key] = item;
+  }
+  for (const key of ["source", "usage_source", "scope", "observed_at", "finality"]) {
+    const item = value[key];
+    if (typeof item === "string" && item.trim()) result[key] = item.trim();
+  }
+  if (Array.isArray(value.conflicts)) {
+    const conflicts = value.conflicts
+      .filter((item): item is string => typeof item === "string" && /^[A-Za-z][A-Za-z0-9_.:-]{0,127}$/u.test(item))
+      .slice(0, 32);
+    if (conflicts.length) result.conflicts = conflicts;
   }
   return Object.keys(result).length ? result : null;
 }
@@ -99,13 +117,80 @@ interface PendingInteraction {
   resolving: boolean;
 }
 
+type UnknownDisposable = { dispose(): void } | (() => void) | undefined;
+
+export interface AdapterClientProcess {
+  readonly pid?: number | undefined;
+  readonly exitCode: number | null;
+  readonly signalCode: NodeJS.Signals | null;
+}
+
+export interface AdapterRecordedTreeScan {
+  readonly rootPid: number;
+  readonly rootFingerprint: string;
+  readonly evidenceDigest: string;
+  readonly observedMemberCount: number;
+}
+
+export interface AdapterCloseDiagnostic {
+  readonly status: "resolved" | "rejected";
+  readonly stage: string;
+  readonly errorName?: string;
+  readonly errorCode?: string;
+  readonly errorMessage?: string;
+  readonly managerProcessCountAfter?: number;
+  readonly treeScanStatus?: "verified" | "live" | "incomplete" | "not_applicable";
+}
+
+export interface AppServerCloseResult {
+  readonly owner: "direct_app_server" | "official_host";
+  readonly receipt: WindowsTerminationReceipt | null;
+  readonly recordedTreeScan?: AdapterRecordedTreeScan;
+  readonly error?: unknown;
+  readonly close: AdapterCloseDiagnostic;
+}
+
+export interface ExternalHostClientHandle {
+  readonly child: AdapterClientProcess;
+  readonly runtimeRootIdentity?: {
+    readonly pid: number;
+    readonly fingerprint: string;
+    readonly generation: number;
+  } | null;
+  request(method: string, params: Record<string, unknown>): Promise<unknown>;
+  respond(message: Record<string, unknown>): Promise<void>;
+  replayEvents(events: unknown[]): void;
+  prewarmCleanup(): void;
+  close(): Promise<AppServerCloseResult>;
+  readonly stderr: string;
+  onNotification?(listener: (message: unknown) => void): UnknownDisposable;
+  onRequest?(listener: (message: unknown) => void): UnknownDisposable;
+  onClose?(listener: (event: unknown) => void): UnknownDisposable;
+  onRuntimeRestarted?(listener: (event: unknown) => void): UnknownDisposable;
+}
+
+export interface ExternalHostClientFactoryContext {
+  readonly config: ZCodeRuntimeConfig;
+  readonly workspace: WorkspaceRef;
+  readonly cwd: string;
+  readonly env: NodeJS.ProcessEnv;
+  readonly launch: Readonly<{ args: readonly string[]; env: NodeJS.ProcessEnv }>;
+  readonly requestTimeoutMs: number;
+  readonly probe: ProcessProbe;
+  readonly verifyTreeClean: NonNullable<ZCodeAppServerAdapterOptions["verifyTreeClean"]>;
+}
+
+export type ExternalHostClientFactory = (
+  context: ExternalHostClientFactoryContext,
+) => Promise<ExternalHostClientHandle> | ExternalHostClientHandle;
+
 interface AppServerClient {
-  child: ChildProcessWithoutNullStreams;
+  child: AdapterClientProcess;
   request(method: string, params: JsonRecord): Promise<unknown>;
   replayEvents(events: unknown[]): void;
   /** Start the ADR-009 helper during completion processing; it holds no PID. */
   prewarmCleanup(): void;
-  close(): Promise<WindowsTerminationReceipt | null>;
+  close(): Promise<AppServerCloseResult>;
   readonly stderr: string;
 }
 
@@ -138,6 +223,19 @@ function withFactsCandidate<T extends Error>(error: T, candidate: FactsCandidate
 function readFactsCandidate(error: unknown): FactsCandidate | null {
   if (!(error instanceof Error)) return null;
   return (error as MarkedError)[FACTS_CANDIDATE] ?? null;
+}
+
+/** ADR-066: keep the redacted rejection of one RPC with its Attempt. */
+function recordRpcDiagnostic(entry: RunEntry, method: string, error: unknown): void {
+  try {
+    const diagnostic = extractRpcDiagnostic(method, error);
+    if (diagnostic) entry.rpcDiagnostics = appendRpcDiagnostic(entry.rpcDiagnostics, diagnostic);
+  } catch { /* diagnostics can never change the failure itself */ }
+}
+
+/** Diagnostics of a failed Attempt; a Bridge timeout or cancellation is not an RPC verdict. */
+function failedRpcDiagnostics(entry: RunEntry): readonly RpcDiagnostic[] | undefined {
+  return entry.timedOut || entry.cancelRequested || entry.rpcDiagnostics.length === 0 ? undefined : entry.rpcDiagnostics;
 }
 
 /** Safe registration diagnostics: only controlled enums and registry-backed
@@ -183,7 +281,7 @@ function registrationFailure(error: unknown): {
 
 interface RunEntry {
   handle: AgentHandle;
-  child: ChildProcessWithoutNullStreams | null;
+  child: AdapterClientProcess | null;
   /** ADR-009: spawn-generation identity of `child`, captured while the
    * libuv-held native handle keeps the PID unrecyclable (before 'exit'). */
   childIdentity: { pid: number; fingerprint: string } | null;
@@ -198,6 +296,8 @@ interface RunEntry {
   outcome: ZCodeRunOutcome | null;
   error: unknown;
   runPromise: Promise<ZCodeRunOutcome>;
+  /** ADR-066: redacted rejections of official RPCs, in order of occurrence. */
+  rpcDiagnostics: readonly RpcDiagnostic[];
   resolveTurn: (value: TurnResult) => void;
   rejectTurn: (error: Error) => void;
   onEvent: ProgressSink;
@@ -228,13 +328,14 @@ interface RunEntry {
   browserCleanupError: string | null;
   browserNoticeEmitted: boolean;
   browserScope: { workspacePath: string; workspaceKey: string } | null;
+  closeResult: AppServerCloseResult | null;
   // B2 correlation state: one pending completion at most, settled only after
   // the turn binding exists or the bounded compat window expires.
   rpcAcceptedAt: string | null;
   turnStartedAt: string | null;
   turnCompletedAt: string | null;
   turnBinding: "strict" | "compat" | "pending";
-  pendingCompletion: { payload: JsonRecord; event: JsonRecord; heldAt: number } | null;
+  pendingCompletion: { payload: JsonRecord; event: JsonRecord; turnId: string | null; heldAt: number } | null;
   bindingTimer: NodeJS.Timeout | null;
   pendingTimer: NodeJS.Timeout | null;
   replayConsecutiveFailures: number;
@@ -273,8 +374,29 @@ interface ResolvedBrowserConfig {
 }
 
 export interface ZCodeAppServerAdapterOptions {
+  /**
+   * Test-only harness gate. Production composition must provide an external
+   * Official Host client factory; an unguarded default spawn is forbidden.
+   */
+  testOnlyAllowDirectAppServer?: true;
   /** Internal opt-in credential broker. It is not a TaskPackage field. */
   resolveStartPlanRuntimeAuth?: (scope: { readonly sessionId: string; readonly turnId: string; readonly providerId: string; readonly modelId: string }, signal: AbortSignal) => Promise<{ readonly apiKey: string; readonly expiresAt: number; readonly isValid: () => boolean }>;
+  /** Official account runtime-header resolver; production absence fails closed. */
+  resolveProviderRuntimeAuth?: (
+    request: Record<string, unknown>,
+    config: ZCodeRuntimeConfig,
+    signal: AbortSignal,
+  ) => Promise<Record<string, unknown>>;
+  /** Credential-free runtime-auth correlation for Worker stderr diagnostics. */
+  onRuntimeAuthDiagnostic?: (
+    facts: Readonly<Record<string, string | number | boolean | null>>,
+  ) => void;
+  /** Verify the capability gate after the runtime reports its actual Provider/Model. */
+  verifySelectedProviderCapability?: (
+    selection: { readonly providerId: string; readonly modelId: string },
+    config: ZCodeRuntimeConfig,
+    signal: AbortSignal,
+  ) => Promise<void>;
   /** Task-scoped live Billing verdict delivered by the SQLite authority. */
   startPlanProviderEntitled?: boolean;
   /** Internal output sanitizers owned by the same credential broker. */
@@ -299,6 +421,7 @@ export interface ZCodeAppServerAdapterOptions {
   host?: BridgeHostProfile;
   /** Candidate-only execution profile; omitted JSON path behavior is unchanged. */
   executionProfileId?: string;
+  sessionPreferences?: ResolvedSessionPreferences;
   now?: () => Date;
   resolveInteraction?: (request: ZCodeInteractionRequest, signal: AbortSignal) => Promise<Record<string, unknown>>;
   onOutcomeCheckpoint?: (outcome: ZCodeRunOutcome) => void;
@@ -338,6 +461,12 @@ export interface ZCodeAppServerAdapterOptions {
    * to simulate a verified native echo. Production leaves it unset.
    */
   onSendBoundary?: (boundary: { submitCorrelationId: string }) => void;
+  /**
+   * Internal composition seam used by the Official Host session factory. The
+   * factory supplies an already-owned official ProcessManager/ProtocolClient;
+   * this adapter keeps the protocol, interaction, result, and cleanup semantics.
+   */
+  externalHostClientFactory?: ExternalHostClientFactory;
 }
 
 const RPC_TIMEOUT_MS = 30_000;
@@ -356,6 +485,10 @@ const MAX_FRAME_BYTES = 16 * 1024 * 1024;
  */
 export class ZCodeAppServerAdapter implements CodingAgentAdapter {
   readonly #resolveStartPlanRuntimeAuth: ZCodeAppServerAdapterOptions["resolveStartPlanRuntimeAuth"];
+  readonly #resolveProviderRuntimeAuth: ZCodeAppServerAdapterOptions["resolveProviderRuntimeAuth"];
+  readonly #onRuntimeAuthDiagnostic: ZCodeAppServerAdapterOptions["onRuntimeAuthDiagnostic"];
+  readonly #verifySelectedProviderCapability: ZCodeAppServerAdapterOptions["verifySelectedProviderCapability"];
+  readonly #allowTestOnlyStaticRuntimeAuthReply: boolean;
   readonly #startPlanProviderEntitled: boolean;
   readonly #sanitizeStartPlanFrame: ZCodeAppServerAdapterOptions["sanitizeStartPlanFrame"];
   readonly #sanitizeStartPlanText: ZCodeAppServerAdapterOptions["sanitizeStartPlanText"];
@@ -368,6 +501,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
   readonly #homeDir: string;
   readonly #host: BridgeHostProfile;
   readonly #executionProfileId: string | undefined;
+  readonly #sessionPreferences: ResolvedSessionPreferences | undefined;
   readonly #now: () => Date;
   readonly #resolveInteraction: ZCodeAppServerAdapterOptions["resolveInteraction"];
   readonly #onOutcomeCheckpoint: ZCodeAppServerAdapterOptions["onOutcomeCheckpoint"];
@@ -384,11 +518,21 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
   readonly #onSendBoundary: ZCodeAppServerAdapterOptions["onSendBoundary"];
   readonly #browser: AdapterBrowserOptions | undefined;
   readonly #probe: ProcessProbe;
+  readonly #externalHostClientFactory: ExternalHostClientFactory | undefined;
+  #externalHostClientUsed = false;
   readonly #runs = new Map<AgentHandle, RunEntry>();
   readonly #workspaceByTask = new Map<string, string>();
 
   constructor(options: ZCodeAppServerAdapterOptions = {}) {
+    if (!options.externalHostClientFactory && options.testOnlyAllowDirectAppServer !== true) {
+      throw new Error("ZCodeAppServerAdapter requires the Official Host client factory outside the test-only direct harness");
+    }
     this.#resolveStartPlanRuntimeAuth = options.resolveStartPlanRuntimeAuth;
+    this.#resolveProviderRuntimeAuth = options.resolveProviderRuntimeAuth;
+    this.#onRuntimeAuthDiagnostic = options.onRuntimeAuthDiagnostic;
+    this.#verifySelectedProviderCapability = options.verifySelectedProviderCapability;
+    this.#allowTestOnlyStaticRuntimeAuthReply =
+      options.testOnlyAllowDirectAppServer === true && options.externalHostClientFactory === undefined;
     this.#startPlanProviderEntitled = options.startPlanProviderEntitled === true;
     this.#sanitizeStartPlanFrame = options.sanitizeStartPlanFrame;
     this.#sanitizeStartPlanText = options.sanitizeStartPlanText;
@@ -402,6 +546,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     this.#homeDir = options.homeDir ?? homedir();
     this.#host = validateHostProfile(options.host ?? codexHostProfile(this.#homeDir));
     this.#executionProfileId = options.executionProfileId;
+    this.#sessionPreferences = options.sessionPreferences;
     this.#now = options.now ?? (() => new Date());
     this.#probe = options.probe ?? createPlatformProbe();
     this.#resolveInteraction = options.resolveInteraction;
@@ -418,6 +563,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     this.#providerRetryLimit = options.providerRetryLimit ?? PROVIDER_RETRY_LIMIT;
     this.#onSendBoundary = options.onSendBoundary;
     this.#browser = options.browser;
+    this.#externalHostClientFactory = options.externalHostClientFactory;
   }
 
   async startTask(input: { task: TaskPackage; workspace: WorkspaceRef; attempt: number }): Promise<AgentHandle> {
@@ -518,6 +664,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       outcome: null,
       error: null,
       runPromise: Promise.resolve(null as unknown as ZCodeRunOutcome),
+      rpcDiagnostics: [],
       resolveTurn,
       rejectTurn,
       onEvent: this.#onEvent,
@@ -561,6 +708,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       browserCleanupError: null,
       browserNoticeEmitted: false,
       browserScope: null,
+      closeResult: null,
     };
     this.#runs.set(handle, entry);
     this.#workspaceByTask.set(task.task_id, workspace.canonicalPath);
@@ -584,7 +732,6 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     const projectPath = workspace.sourcePath ?? workspace.canonicalPath;
     let timer: NodeJS.Timeout | undefined;
     let warningTimer: NodeJS.Timeout | undefined;
-    let desktopTask: DesktopTaskIndexEntry | null = null;
     try {
       const runtimeEnv = loadPersistedRuntimeEnvironment(this.#childEnvBase, this.#homeDir, this.#host);
       const timeoutMs = this.#timeoutMs ?? resolveTaskTimeout(task, runtimeEnv);
@@ -609,34 +756,16 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         void this.#resolver.resolve().then(resolve, reject).finally(() => entry.abort.signal.removeEventListener("abort", aborted));
       });
       entry.abort.signal.throwIfAborted();
-      const taskProviderId = task.model?.provider_id;
+      const taskProviderId = this.#sessionPreferences?.model?.provider_id ?? task.model?.provider_id;
+      // ADR-058: plan entitlement and provider-registry facts no longer gate
+      // execution. The session starts with whatever official authentication is
+      // wired; the official server enforces plan scope, model registration and
+      // entitlement, and its rejection surfaces as the real error with the
+      // normal Cleanup and Release path.
       const taskProviderFacts = accountProviderRuleFacts(taskProviderId, config);
-      const otherStartPlanSelected = taskProviderFacts?.planKind === "start-plan"
-        && taskProviderId !== BIGMODEL_START_PLAN_PROVIDER_ID;
-      if (otherStartPlanSelected) {
-        return this.#startPlanReadinessFailure(
-          entry,
-          "Only the BigModel Start Plan provider has a supported Bridge credential binding; no ZCode session was started.",
-        );
-      }
       const exactStartPlanRegistryValid = taskProviderFacts?.planKind === "start-plan"
         && taskProviderFacts.accountType === "bigmodel";
-      if (taskProviderId === BIGMODEL_START_PLAN_PROVIDER_ID && !exactStartPlanRegistryValid) {
-        return this.#startPlanReadinessFailure(
-          entry,
-          "The BigModel Start Plan provider is missing or invalid in the official provider registry; no ZCode session was started.",
-        );
-      }
       const startPlanSelected = taskProviderId === BIGMODEL_START_PLAN_PROVIDER_ID && exactStartPlanRegistryValid;
-      if (startPlanSelected && !this.#resolveStartPlanRuntimeAuth) {
-        return this.#startPlanReadinessFailure(
-          entry,
-          "Start Plan runtime authorization is unavailable; no ZCode session was started.",
-        );
-      }
-      if (startPlanSelected && !this.#startPlanProviderEntitled) {
-        return this.#startPlanReadinessFailure(entry, "Start Plan live entitlement was not verified; no ZCode session was started.");
-      }
       let accountProviderPayload: ReturnType<typeof buildAccountProviderPayload>;
       try {
         accountProviderPayload = buildAccountProviderPayload(
@@ -651,26 +780,23 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         if (startPlanSelected) {
           return this.#startPlanReadinessFailure(entry, error instanceof Error && error.message === "start_plan_model_not_registered"
             ? "The requested Start Plan model is not present in the official provider registry."
-            : "Start Plan provider snapshot could not be prepared after live entitlement verification.");
+            : "Start Plan provider snapshot could not be prepared.");
         }
         throw error;
       }
-      if (startPlanSelected && (!accountProviderPayload?.providers[BIGMODEL_START_PLAN_PROVIDER_ID]
-        || accountProviderPayload.providers[BIGMODEL_START_PLAN_PROVIDER_ID].access.entitled !== true)) {
-        return this.#startPlanReadinessFailure(entry, "Start Plan provider snapshot could not be prepared after live entitlement verification.");
-      }
-      const preferences = resolveSessionPreferences(task.model, runtimeEnv, this.#executionProfileId);
+      const preferences = this.#sessionPreferences ?? resolveSessionPreferences(task.model, runtimeEnv, this.#executionProfileId);
       const childEnv = this.#buildChildEnv(config, runtimeEnv);
       // This retry setting is limited to the explicitly brokered Start Plan
       // attempt and does not change the Coding Plan default environment.
       if (startPlanSelected) childEnv.ZCODE_MODEL_RETRY_MAX_RETRIES = "0";
       entry.onEvent({ type: "zcode_starting", summary: "Starting ZCode streaming runtime" });
-      const client = this.#startAppServer(config, workspace.canonicalPath, childEnv, entry);
+      const client = await this.#startAppServer(config, workspace, childEnv, entry);
       entry.client = client;
       entry.child = client.child;
       entry.onEvent({ type: "app_server_started", summary: "ZCode app-server process started", details: { pid: client.child.pid } });
 
       if (accountProviderPayload) {
+        this.#assertRegistryUnchanged(config, accountProviderPayload.basedOnZCodeBuiltinRevision);
         try {
           const syncResult = asRecord(await client.request(
             "provider/updateAccountConfig",
@@ -709,12 +835,30 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
 
       let snapshot: JsonRecord;
       if (resumeSessionId) {
-        snapshot = asRecord(await client.request("session/resume", {
-          sessionId: resumeSessionId,
-          workspace: { workspacePath: workspace.canonicalPath, workspaceKey: projectPath },
-        }));
+        try {
+          snapshot = asRecord(await client.request("session/resume", {
+            sessionId: resumeSessionId,
+            workspace: { workspacePath: workspace.canonicalPath, workspaceKey: projectPath },
+          }));
+        } catch (error) {
+          // ADR-066: the Manager resumes only a Session with real turn
+          // history. Its rejection is reported and never replaced by a new
+          // Session, which would silently drop that context. A transport
+          // failure says nothing about the Session and keeps its own code.
+          const candidate = readFactsCandidate(error);
+          if (candidate?.kind !== "rpc" || !candidate.rejected) throw error;
+          throw withFactsCandidate(new BridgeError(
+            SESSION_NOT_RESUMABLE,
+            `ZCode rejected resuming session ${resumeSessionId} (session/resume, code ${candidate.code}); `
+              + "its context was not restored and no new Session was created",
+            { cause: error },
+          ), candidate);
+        }
         const returnedId = nestedString(snapshot, ["session", "sessionId"]);
-        if (returnedId && returnedId !== resumeSessionId) {
+        if (!returnedId) {
+          throw new Error("ZCode app-server resume snapshot did not contain session.sessionId");
+        }
+        if (returnedId !== resumeSessionId) {
           throw new Error(`resume session mismatch: requested ${resumeSessionId}, runtime returned ${returnedId}`);
         }
         await client.request("session/setMode", { sessionId: resumeSessionId, mode: preferences.mode });
@@ -773,9 +917,12 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
           requestedProviderId,
           preferences.model.model_id,
         );
-        const modelState = current?.providerId === requestedProviderId && current.modelId === preferences.model.model_id && !preferences.model.reasoning_level
-          ? snapshot
-          : asRecord(await client.request("session/setModel", {
+        let modelState: JsonRecord;
+        if (current?.providerId === requestedProviderId && current.modelId === preferences.model.model_id && !preferences.model.reasoning_level) {
+          modelState = snapshot;
+        } else {
+          try {
+            modelState = asRecord(await client.request("session/setModel", {
               sessionId,
               model: {
                 providerId: requestedProviderId,
@@ -788,6 +935,27 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
               // user's project-wide last-used model.
               persistAsWorkspaceLastUsed: false,
             }));
+          } catch (error) {
+            // ADR-066: the upstream message is evidence, not a credential
+            // channel; keep one redacted, bounded line.
+            const reason = redactDiagnosticText(error instanceof Error ? error.message : String(error))
+              .replace(/\s+/gu, " ").trim().slice(0, 500);
+            entry.onEvent({
+              type: "model_setup_failed",
+              summary: `ZCode rejected ${requestedProviderId}/${preferences.model.model_id}; the Attempt was stopped before Worker dispatch.`,
+              details: {
+                requested_model: { provider_id: requestedProviderId, model_id: preferences.model.model_id },
+                requested_reasoning_level: preferences.model.reasoning_level ?? null,
+                error_message: reason.slice(0, 1000),
+              },
+            });
+            throw new BridgeError(
+              "provider_config_invalid",
+              `ZCode model setup failed for ${requestedProviderId}/${preferences.model.model_id}: ${reason}`,
+              { cause: error },
+            );
+          }
+        }
         const selected = readSelectedModelSelection(modelState);
         if (!selected) {
           throw new Error(`ZCode accepted model override ${requested} but did not report the selected model`);
@@ -839,6 +1007,16 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
           "ZCode runtime did not report its selected model; refusing to start a task whose model cannot be identified.",
         );
       }
+      if (this.#verifySelectedProviderCapability) {
+        const selected = entry.selectedModelSelection;
+        if (!selected) {
+          throw new BridgeError(
+            "provider_config_invalid",
+            "ZCode runtime did not report its selected Provider/Model; refusing to start a task whose capability cannot be verified.",
+          );
+        }
+        await this.#verifySelectedProviderCapability(selected, config, entry.abort.signal);
+      }
       if (!preferences.model) {
         const selected = readSelectedModelSelection(snapshot);
         selectedReasoningLevel = readEffectiveReasoningLevel(snapshot);
@@ -870,32 +1048,6 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
           ...(selectedReasoningLevel ? { reasoning_level: selectedReasoningLevel, reasoning_level_source: "runtime" } : {}),
         },
       });
-      const indexPath = zcodeTasksIndexPath(config.providerPersonalConfigFile);
-      if (indexPath) {
-        const selected = readSelectedModelSelection(snapshot);
-        desktopTask = {
-          databasePath: indexPath,
-          workspaceKey: projectPath,
-          workspacePath: workspace.canonicalPath,
-          sessionId,
-          bridgeTaskId: task.task_id,
-          title: task.task_id,
-          model: selected ? `${selected.providerId}/${selected.modelId}` : null,
-          provider: "glm",
-          mode: preferences.mode,
-        };
-        try {
-          await registerDesktopTask(desktopTask);
-          entry.onEvent({
-            type: "desktop_task_registered",
-            summary: "ZCode session registered in Desktop task index; refresh the task list to see it",
-            details: { session_id: sessionId, project_path: projectPath, execution_path: workspace.canonicalPath },
-          });
-        } catch (error) {
-          reportDesktopIndexIssue(entry.onEvent, error);
-          desktopTask = null;
-        }
-      }
       const runtimeSeq = nestedNumber(snapshot, ["runtime", "eventSeq"]) ?? 0;
       entry.lastEventSeq = runtimeSeq;
       entry.awaitingTurnStart = runtimeSeq > 0;
@@ -910,11 +1062,13 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       entry.providerSendNumber = 1;
       await client.request("session/send", { sessionId, content: prompt });
       entry.rpcAcceptedAt = this.#now().toISOString();
-      // A coalesced ACK + turn.started chunk can settle this send microtask
-      // after the runtime's stronger turn.started event was already published.
-      // Do not emit a second turn-start event for that same accepted turn.
+      // Request acceptance is not Turn Start. Only the native turn.started
+      // event may establish the Started fact; the ACK publishes a distinct
+      // acceptance fact. A coalesced ACK + turn.started chunk can settle this
+      // send microtask after the native turn.started already published, in
+      // which case the acceptance event is redundant and stays unemitted.
       if (!entry.turnStartedAt) {
-        entry.onEvent({ type: "turn_started", summary: "ZCode accepted the task and started a turn", details: { rpc_accepted: true, ...(entry.turnId ? { turn_id: entry.turnId } : {}) } });
+        entry.onEvent({ type: "turn_accepted", summary: "ZCode accepted the task request; the turn is not yet observed started", details: { ...(entry.turnId ? { turn_id: entry.turnId } : {}) } });
       }
       // B2: if the runtime does not deliver turn.started for the accepted
       // send within a bounded window, degrade to the documented compat path
@@ -972,9 +1126,6 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       if (timer) { clearTimeout(timer); timer = undefined; }
       if (warningTimer) { clearTimeout(warningTimer); warningTimer = undefined; }
       entry.turnCompletedAt = turnResult.completedAt;
-      const desktopStatus: DesktopTaskStatus = turnResult.resultType === "cancelled"
-        ? null
-        : turnResult.resultType && turnResult.resultType !== "success" ? "error" : "completed";
       let outcome: ZCodeRunOutcome;
       if (turnResult.resultType && turnResult.resultType !== "success") {
         // R1: an execution-terminal resultType is an established root cause;
@@ -1105,12 +1256,11 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       catch (error) {
         entry.onEvent({ type: "outcome_checkpoint_failed", summary: error instanceof Error ? error.message : String(error) });
       }
-      try {
-        await syncDesktopStatus(desktopTask, desktopStatus, entry.onEvent);
-      } catch (error) {
-        entry.onEvent({ type: "desktop_status_sync_failed", summary: error instanceof Error ? error.message : String(error) });
-      }
-      return await this.#completeCleanup(entry, outcome);
+      const completed = await this.#completeCleanup(entry, outcome);
+      const diagnostics = completed.cleanupVerified ? undefined : failedRpcDiagnostics(entry);
+      // A turn that ran but whose cleanup is unverified is still a failed
+      // Result; it keeps the diagnostics of any earlier RPC rejection.
+      return diagnostics ? { ...completed, rpcDiagnostics: diagnostics } : completed;
     } catch (error) {
       // Runtime timeout bounds an active ZCode turn. Once the turn has failed
       // or been cancelled, cleanup follows its own bounded process-tree
@@ -1122,7 +1272,6 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       // whose 60s bound dwarfs the completion-path budget and delays the
       // Result frame (PR #67 CI evidence: r3-timeout kept running past 45s).
       if (process.platform === "win32") entry.client?.prewarmCleanup();
-      await syncDesktopStatus(desktopTask, entry.cancelRequested ? null : "error", entry.onEvent);
       entry.abort.abort();
       // ADR-011 M1: the root-cause slot is filled only here, after this error
       // is established as the attempt's termination (never on timeout,
@@ -1149,7 +1298,14 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       let cleanupFailure: unknown;
       let failureCleanupReceipt: WindowsTerminationReceipt | null = null;
       try {
-        if (entry.client) failureCleanupReceipt = await entry.client.close();
+        if (entry.client) {
+          const closeResult = await entry.client.close();
+          failureCleanupReceipt = closeResult.receipt;
+          cleanupFailure = closeResult.error;
+          if (closeResult.owner === "official_host" && closeResult.recordedTreeScan) {
+            cleanupFailure = null;
+          }
+        }
         else if (entry.child?.pid) await this.#terminateOwnedChild(entry);
       } catch (cleanupError) {
         cleanupFailure = cleanupError;
@@ -1175,6 +1331,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
           throw new BridgeError("cleanup_failed", `ZCode process termination could not be verified; workspace remains occupied.${browserSuffix}`, {
             cause: cleanupFailure,
             memberPids,
+            ...(failedRpcDiagnostics(entry) ? { rpcDiagnostics: failedRpcDiagnostics(entry) } : {}),
           });
         }
       }
@@ -1182,7 +1339,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         throw new BridgeError(
           "cleanup_failed",
           `ZCode process termination was verified, but the managed browser cleanup could not be verified: ${entry.browserCleanupError}`,
-          { cause: error },
+          { cause: error, ...(failedRpcDiagnostics(entry) ? { rpcDiagnostics: failedRpcDiagnostics(entry) } : {}) },
         );
       }
       if (failureCleanupReceipt && !cleanupFailure) {
@@ -1204,13 +1361,33 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         exitCode: null, signal: null, sessionId: entry.sessionId, response: "", usage: null,
         agentReport: null, reportCandidate: null, reportError: message,
         errorCode: code as ZCodeRunOutcome["errorCode"], cleanupVerified: false,
+        ...(failedRpcDiagnostics(entry) ? { rpcDiagnostics: failedRpcDiagnostics(entry) } : {}),
       };
       const cleaned = await this.#completeCleanup(entry, failedOutcome);
-      if (!cleaned.cleanupVerified) throw new BridgeError("cleanup_failed", `${message}; cleanup: ${cleaned.cleanupError ?? "unverified"}`, { cause: error, memberPids: cleaned.cleanupMemberPids });
+      if (!cleaned.cleanupVerified) throw new BridgeError("cleanup_failed", `${message}; cleanup: ${cleaned.cleanupError ?? "unverified"}`, {
+        cause: error, memberPids: cleaned.cleanupMemberPids, ...(failedRpcDiagnostics(entry) ? { rpcDiagnostics: failedRpcDiagnostics(entry) } : {}),
+      });
       entry.onEvent({ type: "error", summary: message.slice(0, 1_500), details: { error_code: code } });
       if (spawnRecovery) throw new BridgeError("spawn_failed", message);
-      if (error instanceof BridgeError) throw error;
-      throw new BridgeError(code, message);
+      // ADR-066: a throw still hands over the RPC rejections and the Session
+      // ID observed before it; the Worker persists them on the failed Result.
+      const diagnostics = error instanceof BridgeError
+        ? error.rpcDiagnostics ?? failedRpcDiagnostics(entry)
+        : failedRpcDiagnostics(entry);
+      const sessionId = (error instanceof BridgeError ? error.sessionId : undefined) ?? entry.sessionId ?? undefined;
+      if (error instanceof BridgeError
+        && diagnostics === error.rpcDiagnostics
+        && sessionId === error.sessionId) throw error;
+      throw new BridgeError(
+        error instanceof BridgeError ? error.code : code,
+        error instanceof BridgeError ? error.message : message,
+        {
+          cause: error,
+          ...(error instanceof BridgeError && error.memberPids ? { memberPids: error.memberPids } : {}),
+          ...(diagnostics ? { rpcDiagnostics: diagnostics } : {}),
+          ...(sessionId ? { sessionId } : {}),
+        },
+      );
     } finally {
       if (timer) clearTimeout(timer);
       if (warningTimer) clearTimeout(warningTimer);
@@ -1232,19 +1409,30 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       if (expired) return timeoutOutcome;
       let receipt: WindowsTerminationReceipt | null = null;
       let error: unknown;
+      let closeResult: AppServerCloseResult | null = null;
+      let officialTreeScan: AdapterRecordedTreeScan | undefined;
       try {
-        if (entry.client) receipt = await entry.client.close();
+        if (entry.client) {
+          closeResult = await entry.client.close();
+          receipt = closeResult.receipt;
+          error = closeResult.error;
+          officialTreeScan = closeResult.recordedTreeScan;
+        }
         else if (entry.child?.pid) await this.#terminateOwnedChild(entry);
       } catch (failure) { error = failure; }
       if (expired) return timeoutOutcome;
       let scan: { clean: boolean; memberPids: number[] } | null = null;
-      if (error && entry.client) scan = await this.#scanRootExitedCleanup(entry.client, entry, error);
+      if (error && entry.client && closeResult?.owner !== "official_host") {
+        scan = await this.#scanRootExitedCleanup(entry.client, entry, error);
+      }
       if (expired) return timeoutOutcome;
       // An asynchronous spawn error before 'spawn', with no allocated PID,
       // proves that this app-server child never existed. An unknown generation
       // or an exited PID still requires the existing tree evidence.
       const noSpawn = entry.spawnFailure !== null && !entry.child?.pid;
-      const treeVerified = noSpawn || (error ? scan?.clean === true : !!receipt || process.platform !== "win32" || !entry.child);
+      const treeVerified = noSpawn || (closeResult?.owner === "official_host"
+        ? officialTreeScan !== undefined
+        : error ? scan?.clean === true : !!receipt || process.platform !== "win32" || !entry.child);
       const cleanupVerified = treeVerified && !entry.browserCleanupError;
       const reason = entry.browserCleanupError ? "Managed browser cleanup could not be verified: " + entry.browserCleanupError
         : error instanceof Error ? error.message : "Identity-bound Windows process-tree cleanup receipt was unavailable";
@@ -1252,7 +1440,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       const scanRootPid = entry.client?.child.pid;
       const scanRootFingerprint = scanRootPid && entry.childIdentity?.pid === scanRootPid
         ? entry.childIdentity.fingerprint : null;
-      const cleanupTreeScan = scan?.clean && cleanupVerified && scanRootPid && scanRootFingerprint
+      const cleanupTreeScan = officialTreeScan ?? (scan?.clean && cleanupVerified && scanRootPid && scanRootFingerprint
         ? {
           rootPid: scanRootPid,
           rootFingerprint: scanRootFingerprint,
@@ -1263,7 +1451,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
           }), "utf8").digest("hex"),
           observedMemberCount: scan.memberPids.length,
         }
-        : undefined;
+        : undefined);
       if (scan?.clean && cleanupVerified) entry.onEvent({ type: "cleanup_verified",
         summary: "The captured app-server generation had exited; an ADR-009 recorded-tree claimant scan found no live claimants",
         details: { pid: entry.child?.pid ?? null, evidence: "recorded_tree_claimant_scan" } });
@@ -1272,6 +1460,17 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         ...(cleanupVerified && !error ? {} : { cleanupError: cleanupVerified ? null : reason }),
         ...(receipt ? { cleanupTreeReceipt: receipt } : {}),
         ...(cleanupTreeScan ? { cleanupTreeScan } : {}),
+        adapterCleanup: {
+          contract: "adapter-cleanup-v1",
+          close: closeResult?.close ?? {
+            status: "resolved",
+            stage: "not_started",
+            treeScanStatus: "not_applicable",
+          },
+          treeScanStatus: officialTreeScan ? "verified" as const
+            : scan?.clean && cleanupVerified ? "verified" as const
+              : closeResult?.close.treeScanStatus ?? "not_applicable" as const,
+        },
         ...(members.length ? { cleanupMemberPids: members } : {}) };
     })();
     try {
@@ -1318,7 +1517,130 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     }
   }
 
-  #startAppServer(
+  async #startAppServer(
+    config: ZCodeRuntimeConfig,
+    workspace: WorkspaceRef,
+    env: NodeJS.ProcessEnv,
+    entry: RunEntry,
+  ): Promise<AppServerClient> {
+    if (!this.#externalHostClientFactory) {
+      return this.#startDirectAppServer(config, workspace.canonicalPath, env, entry);
+    }
+    if (this.#externalHostClientUsed) {
+      throw new Error("an external host factory is limited to one execution runtime per adapter");
+    }
+    this.#externalHostClientUsed = true;
+    const launch = buildZCodeAppServerLaunch(config.zcodeEntrypoint, env);
+    const handle = await this.#externalHostClientFactory({
+      config,
+      workspace,
+      cwd: workspace.canonicalPath,
+      env,
+      launch,
+      requestTimeoutMs: RPC_TIMEOUT_MS,
+      probe: this.#probe,
+      verifyTreeClean: this.#verifyTreeClean,
+    });
+    if (handle.runtimeRootIdentity) {
+      entry.childIdentity = {
+        pid: handle.runtimeRootIdentity.pid,
+        fingerprint: handle.runtimeRootIdentity.fingerprint,
+      };
+    }
+    const pending = new Map<string | number, PendingRpc>();
+    let transportClosed = false;
+    const reply = (message: JsonRecord): void => {
+      if (transportClosed || entry.abort.signal.aborted) return;
+      void handle.respond(message).catch((error: unknown) => {
+        entry.rejectTurn(withFactsCandidate(
+          error instanceof Error ? error : new Error("External host reverse RPC reply failed"),
+          { kind: "transport", method: typeof message.id === "string" || typeof message.id === "number" ? "reply" : "reply" },
+        ));
+      });
+    };
+    const dispatch = (message: unknown): void => {
+      if (transportClosed || !isRecord(message)) return;
+      const sanitized = this.#sanitizeStartPlanFrame ? this.#sanitizeStartPlanFrame(message) : message;
+      try {
+        this.#handleMessage(sanitized, entry, pending, config, reply);
+      } catch (error) {
+        entry.rejectTurn(error instanceof Error ? error : new Error(String(error)));
+      }
+    };
+    const invalidateRuntime = (event: unknown): void => {
+      if (transportClosed) return;
+      transportClosed = true;
+      const message = "ZCode official runtime changed while the current attempt was active; the attempt will not be resent";
+      for (const call of pending.values()) {
+        clearTimeout(call.timer);
+        call.reject(withFactsCandidate(new Error(message), { kind: "transport", method: call.method }));
+      }
+      pending.clear();
+      entry.onEvent({
+        type: "runtime_generation_changed",
+        summary: message,
+        details: { reason: sanitizedRuntimeLifecycleReason(event) },
+      });
+      entry.rejectTurn(withFactsCandidate(new Error(message), { kind: "process_exit" }));
+    };
+    handle.onNotification?.(dispatch);
+    handle.onRequest?.(dispatch);
+    handle.onClose?.(invalidateRuntime);
+    handle.onRuntimeRestarted?.(invalidateRuntime);
+    const request = async (method: string, params: JsonRecord): Promise<unknown> => {
+      if (entry.abort.signal.aborted) throw new Error("ZCode task attempt ended");
+      if (transportClosed) throw withFactsCandidate(
+        new Error(`ZCode official runtime is closed before ${method}`),
+        { kind: "rpc", method, code: null, dataCode: null, rejected: false },
+      );
+      if (method === "session/send") this.#beginSendBoundary(entry);
+      try {
+        return await handle.request(method, params);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (/transport closed|client disposed|protocol close/iu.test(message)) {
+          throw withFactsCandidate(new Error(`ZCode official runtime transport failed during ${method}`), {
+            kind: "transport",
+            method,
+          });
+        }
+        const code = typeof (error as { code?: unknown } | null)?.code === "number"
+          ? (error as { code: number }).code : null;
+        const data = asRecord((error as { data?: unknown } | null)?.data);
+        const dataCode = registeredCode(data.code, RPC_DATA_CODE_REGISTRY);
+        recordRpcDiagnostic(entry, method, error);
+        throw withFactsCandidate(
+          new Error(`ZCode official runtime request failed for ${method}${code === null ? "" : ` (code ${code})`}`),
+          { kind: "rpc", method, code, dataCode, rejected: code !== null },
+        );
+      }
+    };
+    const close = async (): Promise<AppServerCloseResult> => {
+      if (entry.closeResult) return entry.closeResult;
+      transportClosed = true;
+      try {
+        entry.closeResult = await handle.close();
+      } catch (error) {
+        entry.closeResult = {
+          owner: "official_host",
+          receipt: null,
+          error,
+          close: closeDiagnostic("official_manager_dispose", error, "incomplete"),
+        };
+      }
+      return entry.closeResult;
+    };
+    return {
+      child: handle.child,
+      request,
+      replayEvents: (events) => handle.replayEvents(events),
+      prewarmCleanup: () => handle.prewarmCleanup(),
+      close,
+      get stderr() { return handle.stderr; },
+    };
+  }
+
+  #startDirectAppServer(
     config: ZCodeRuntimeConfig,
     cwd: string,
     env: NodeJS.ProcessEnv,
@@ -1627,7 +1949,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         throw error;
       }
     };
-    const close = async (): Promise<WindowsTerminationReceipt | null> => {
+    const closeDirect = async (): Promise<WindowsTerminationReceipt | null> => {
       if (closed) {
         if (child.pid) {
           if (process.platform === "win32") {
@@ -1670,6 +1992,29 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         });
       }
       return null;
+    };
+    const close = async (): Promise<AppServerCloseResult> => {
+      if (entry.closeResult) return entry.closeResult;
+      try {
+        const receipt = await closeDirect();
+        entry.closeResult = {
+          owner: "direct_app_server",
+          receipt,
+          close: {
+            status: "resolved",
+            stage: "direct_close",
+            treeScanStatus: "not_applicable",
+          },
+        };
+      } catch (error) {
+        entry.closeResult = {
+          owner: "direct_app_server",
+          receipt: null,
+          error,
+          close: closeDiagnostic("direct_close", error, "incomplete"),
+        };
+      }
+      return entry.closeResult;
     };
     const sanitizeStderr = this.#sanitizeStartPlanText;
     return { child, request, replayEvents, prewarmCleanup, close, get stderr() { return sanitizeStderr ? sanitizeStderr(stderr) : stderr; } };
@@ -1745,7 +2090,72 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
             });
           return;
         }
-        write({ id, result: runtimeAuthReply(providerId, config) });
+        if (providerId?.startsWith("account:") && this.#resolveProviderRuntimeAuth) {
+          const replySafely = (result: JsonRecord): void => {
+            try { write({ id, result }); } catch { entry.rejectTurn(new Error("Provider runtime authorization transport failed.")); }
+          };
+          const sessionId = typeof params.sessionId === "string" ? params.sessionId : "";
+          const turnId = typeof params.turnId === "string" ? params.turnId : null;
+          const modelId = typeof selection.modelId === "string" ? selection.modelId : "";
+          const selected = entry.selectedModelSelection;
+          const accountAccess = asRecord(params.accountAccess);
+          this.#reportRuntimeAuthDiagnostic({
+            stage: "request_received",
+            provider_id: providerId,
+            selection_provider_id: typeof selection.providerId === "string" ? selection.providerId : null,
+            model_id: modelId,
+            selected_provider_id: selected?.providerId ?? null,
+            selected_model_id: selected?.modelId ?? null,
+            session_match: Boolean(entry.sessionId && sessionId === entry.sessionId),
+            turn_match: turnId === null ? null : Boolean(entry.turnId && turnId === entry.turnId),
+            accepting_turn: entry.acceptingTurn,
+            account_access_type: typeof accountAccess.type === "string" ? accountAccess.type : null,
+            account_access_account_type: typeof accountAccess.accountType === "string"
+              ? accountAccess.accountType
+              : null,
+            account_access_mode: typeof accountAccess.mode === "string" ? accountAccess.mode : null,
+            account_access_entitled: accountAccess.entitled === true,
+          });
+          if (!entry.acceptingTurn || !entry.sessionId || sessionId !== entry.sessionId
+            || (turnId !== null && (!entry.turnId || turnId !== entry.turnId))
+            || (typeof selection.providerId === "string" && selection.providerId !== providerId)
+            || (typeof params.providerId === "string" && params.providerId !== providerId)
+            || !modelId || !selected || selected.providerId !== providerId || selected.modelId !== modelId
+            || entry.abort.signal.aborted) {
+            this.#reportRuntimeAuthDiagnostic({ stage: "identity_rejected" });
+            replySafely({ headersApplied: false, errorMessage: "Provider runtime identity is not verified." });
+            return;
+          }
+          this.#reportRuntimeAuthDiagnostic({ stage: "resolver_started" });
+          void this.#resolveProviderRuntimeAuth(params, config, entry.abort.signal)
+            .then((result) => {
+              this.#reportRuntimeAuthDiagnostic({
+                stage: "resolver_completed",
+                headers_applied: result.headersApplied === true,
+              });
+              if (!entry.abort.signal.aborted) replySafely(result);
+            })
+            .catch((error) => {
+              const errorClass = error instanceof Error
+                && /^[A-Za-z][A-Za-z0-9_]{0,63}$/u.test(error.name)
+                ? error.name
+                : "unknown";
+              this.#reportRuntimeAuthDiagnostic({ stage: "resolver_failed", error_class: errorClass });
+              if (!entry.abort.signal.aborted) {
+                replySafely({ headersApplied: false, errorMessage: "Provider runtime authorization is unavailable." });
+              }
+            });
+          return;
+        }
+        write({
+          id,
+          result: this.#allowTestOnlyStaticRuntimeAuthReply
+            ? testOnlyRuntimeAuthReply(providerId, config)
+            : {
+                headersApplied: false,
+                errorMessage: "Provider runtime authorization is unavailable.",
+              },
+        });
       }
       return;
     }
@@ -1770,6 +2180,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         const data = asRecord(error.data);
         const rpcCode = typeof error.code === "number" && Number.isSafeInteger(error.code) ? error.code : null;
         const dataCode = registeredCode(data.code, RPC_DATA_CODE_REGISTRY);
+        recordRpcDiagnostic(entry, call.method, error);
         call.reject(withFactsCandidate(
           new Error(`ZCode app-server request failed for ${call.method}${typeof error.code === "number" ? ` (code ${error.code})` : ""}`),
           { kind: "rpc", method: call.method, code: rpcCode, dataCode, rejected: true },
@@ -1817,8 +2228,22 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         if (upgrade === "yes") entry.acceptedEvidence = "yes";
       }
       if (turnId) entry.boundTurnIds.add(turnId);
-      if (!entry.acceptingTurn) return;
-      if (entry.awaitingTurnStart && type !== "turn.started") return;
+      // Terminal events and the binding turn.started must survive the progress
+      // filters below once this attempt's send has been acknowledged. Dropping
+      // a terminal while turn binding is still pending (a session with prior
+      // events, or a runtime that emits completed/failed before started) would
+      // strand a finished turn until timeout whenever replay cannot backfill
+      // turn.started; dropping a late turn.started would make the
+      // held-completion strict settle path unreachable. The discriminator is
+      // the observed send ACK, not merely a written send: the runtime answers
+      // session/send before any turn activity for that send, so a terminal
+      // processed before the ACK — a subscribe snapshot or replay baseline
+      // from a previous turn — keeps the old drop semantics regardless of
+      // chunk timing. Holding such a pre-ACK event would bind this attempt to
+      // a stale completion and its seq could shadow the real turn.started.
+      const terminalTurnEvent = (type === "turn.completed" || type === "turn.failed") && entry.sendAcknowledged;
+      if (!entry.acceptingTurn && !(type === "turn.started" && entry.pendingCompletion)) return;
+      if (entry.awaitingTurnStart && type !== "turn.started" && !terminalTurnEvent) return;
       if (entry.turnId && turnId && entry.turnId !== turnId) return;
       if (typeof params.seq === "number") {
         if (!Number.isSafeInteger(params.seq) || params.seq <= entry.lastEventSeq) return;
@@ -1828,7 +2253,12 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       if (type === "turn.started") {
         // Strict binding wins: the send-accepted turn is now identified. A
         // completion held in the pending boundary settles only after this
-        // binding is in place (B2-01).
+        // binding is in place (B2-01). A foreign late started (a different
+        // turnId than the held completion) must not bind this attempt.
+        if (entry.pendingCompletion && turnId && entry.pendingCompletion.turnId !== null
+          && entry.pendingCompletion.turnId !== turnId) {
+          return;
+        }
         if (turnId) entry.turnId = turnId;
         entry.awaitingTurnStart = false;
         entry.turnStartedAt = this.#now().toISOString();
@@ -1837,7 +2267,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       if (type === "turn.completed") {
         if (entry.awaitingTurnStart) {
           // Completion before binding: hold a bounded pending boundary.
-          entry.pendingCompletion = { payload, event: params, heldAt: Date.now() };
+          entry.pendingCompletion = { payload, event: params, turnId, heldAt: Date.now() };
           entry.acceptingTurn = false;
           if (!entry.pendingTimer) {
             entry.pendingTimer = setTimeout(() => this.#settlePendingCompletion(entry), this.#turnBindingCompatMs);
@@ -1856,6 +2286,11 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       }
       if (type === "turn.failed") {
         entry.acceptingTurn = false;
+        // A failure observed before turn.started is still a terminal fact for
+        // this attempt; stop the binding window instead of letting it fire a
+        // confusing compat degradation after the run already settled.
+        entry.awaitingTurnStart = false;
+        if (entry.bindingTimer) { clearTimeout(entry.bindingTimer); entry.bindingTimer = null; }
         entry.turnCompletedAt = this.#now().toISOString();
         // ADR-011: evidence-strength adjudication replaces the old text-only
         // quota boolean. Structured rate-limit codes defeat quota-flavored
@@ -1918,6 +2353,16 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     }
     if (message.id !== undefined && typeof message.method === "string") {
       write({ id: message.id, error: { code: -32601, message: `Unsupported ZCode app-server request: ${message.method}` } });
+    }
+  }
+
+  #reportRuntimeAuthDiagnostic(
+    facts: Readonly<Record<string, string | number | boolean | null>>,
+  ): void {
+    try {
+      this.#onRuntimeAuthDiagnostic?.(facts);
+    } catch {
+      // Observation must not alter authentication or turn lifecycle.
     }
   }
 
@@ -2172,6 +2617,9 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       });
     }
     entry.turnCompletedAt = this.#now().toISOString();
+    // Publish the completion like the direct settle path so the worker and the
+    // event log see the same terminal fact exactly once (P1 §3.1).
+    this.#publishSessionEvent("turn.completed", held.payload, entry, held.event);
     this.#resolveTurnCompleted(entry, held.payload, held.event);
   }
 
@@ -2486,7 +2934,24 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     if (source.ZCODE_HOME) env.ZCODE_HOME = source.ZCODE_HOME;
     const dataBaseDir = zcodeDataBaseDir(config.providerPersonalConfigFile);
     if (dataBaseDir) env.ZCODE_DATA_BASE_DIR = dataBaseDir;
+    // ADR-066: the registry was selected for this Endpoint; the AppServer must
+    // resolve the same Endpoint.
+    forwardOfficialEndpointEnv(env, source);
     return env;
+  }
+
+  /**
+   * ADR-066: the Overlay and the started AppServer must have read the same
+   * official registry. A Desktop refresh between the two reads would leave
+   * the account providers unregistered, so stop before registration.
+   */
+  #assertRegistryUnchanged(config: ZCodeRuntimeConfig, basedOnZCodeBuiltinRevision: string): void {
+    if (currentBuiltinRegistryRevision(config) === basedOnZCodeBuiltinRevision) return;
+    throw new BridgeError(
+      "provider_config_invalid",
+      "The official Built-in Provider registry changed while the ZCode AppServer was starting; "
+        + "the Attempt was stopped before account provider registration and no model request was sent",
+    );
   }
 
   #require(handle: AgentHandle, method: string): RunEntry {
@@ -2494,6 +2959,47 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     if (!entry) throw new Error(`${method}: unknown agent handle (task ${handle.taskId})`);
     return entry;
   }
+}
+
+/**
+ * Explicit test harness for protocol fixtures that need direct stdio.
+ * Production and Core never import this class.
+ */
+export class ZCodeAppServerTestAdapter extends ZCodeAppServerAdapter {
+  constructor(options: ZCodeAppServerAdapterOptions = {}) {
+    super({ ...options, testOnlyAllowDirectAppServer: true });
+  }
+}
+
+function closeDiagnostic(
+  stage: string,
+  error: unknown,
+  treeScanStatus: AdapterCloseDiagnostic["treeScanStatus"],
+): AdapterCloseDiagnostic {
+  const value = error instanceof Error ? error : new Error(String(error));
+  const code = typeof (error as { code?: unknown } | null)?.code === "string"
+    ? (error as { code: string }).code
+    : undefined;
+  return {
+    status: "rejected",
+    stage,
+    errorName: value.name.slice(0, 120),
+    ...(code ? { errorCode: code.slice(0, 120) } : {}),
+    errorMessage: value.message.slice(0, 1_000),
+    ...(treeScanStatus ? { treeScanStatus } : {}),
+  };
+}
+
+function sanitizedRuntimeLifecycleReason(event: unknown): string {
+  const value = asRecord(event);
+  if (typeof value.reason === "string" && /^[A-Za-z][A-Za-z0-9_.:-]{0,127}$/u.test(value.reason)) {
+    return value.reason;
+  }
+  if (typeof value.code === "number" && Number.isSafeInteger(value.code)) return `exit_${value.code}`;
+  if (typeof value.signal === "string" && /^[A-Za-z0-9+.-]{1,32}$/u.test(value.signal)) {
+    return `signal_${value.signal}`;
+  }
+  return "runtime_closed";
 }
 
 function retryAfterMilliseconds(value: unknown): number | null {
@@ -2666,27 +3172,6 @@ function extractTurnFailureEvidence(value: unknown): {
     retryableBooleans,
     quotaText: matchesExplicitQuotaText(error),
   };
-}
-
-async function syncDesktopStatus(
-  entry: DesktopTaskIndexEntry | null,
-  status: DesktopTaskStatus,
-  onEvent: ProgressSink,
-): Promise<void> {
-  if (!entry) return;
-  try {
-    await updateDesktopTaskStatus(entry, status);
-  } catch (error) {
-    reportDesktopIndexIssue(onEvent, error);
-  }
-}
-
-function reportDesktopIndexIssue(onEvent: ProgressSink, error: unknown): void {
-  const message = error instanceof Error ? error.message : String(error);
-  onEvent({
-    type: "desktop_task_index_warning",
-    summary: `ZCode Desktop task index could not be updated: ${message.slice(0, 500)}`,
-  });
 }
 
 function isRecord(value: unknown): value is JsonRecord {

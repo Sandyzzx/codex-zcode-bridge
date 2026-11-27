@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { ZCodeAppServerAdapter } from "../src/adapters/zcode-app-server-adapter.js";
+import { ZCodeAppServerTestAdapter } from "../src/adapters/zcode-app-server-adapter.js";
 import { createPlatformProbe, isProcessRunning, verifyProcessTreeClaimantsClean, terminateProcessTree } from "../src/adapters/process-spawn.js";
 import { BridgeError } from "../src/runtime/errors.js";
 import type { TaskPackage, ZCodeRuntimeConfig } from "../src/interfaces.js";
@@ -71,6 +71,8 @@ async function makeFakeRuntime(
   descendantControl?: { readonly pidPath: string; readonly releasePath: string },
   turnDelayMs = 0,
   runtimeAuth = false,
+  runtimeAuthModel?: { readonly providerId: string; readonly modelId: string },
+  turnUsage: Record<string, unknown> = { totalTokens: 4 },
 ): Promise<{ root: string; config: ZCodeRuntimeConfig; requestLog: string; launchLog: string }> {
   const root = await mkdtemp(path.join(tmpdir(), "bridge-app-server-test-"));
   const entrypoint = path.join(root, "fake-app-server.cjs");
@@ -91,6 +93,7 @@ const requestLog = ${JSON.stringify(requestLog)};
 const launchLog = ${JSON.stringify(launchLog)};
 const descendantControl = ${JSON.stringify(descendantControl ?? null)};
 let selected = ${JSON.stringify(selectedModel)};
+  const runtimeAuthSelection = ${JSON.stringify(runtimeAuthModel ?? selectedModel)};
 let accountProviders = {};
 let accountStates = {};
 const turnFailure = ${JSON.stringify(turnFailure ?? null)};
@@ -107,12 +110,13 @@ if (descendantControl) {
 }
 const available = [selected, ${includeRequestedModel ? '{ providerId: "provider-123", modelId: "model-x" }, { providerId: "provider-123", modelId: "reasoning-model" }' : ""}];
 const report = ${JSON.stringify(validReport())};
+const turnUsage = ${JSON.stringify(turnUsage)};
 let turnFinished = false;
 function finishTurn() {
   if (turnFinished) return;
   turnFinished = true;
   const params = turnFailure === null
-    ? { seq: 1, type: "turn.completed", payload: { response: JSON.stringify(report), usage: { totalTokens: 4 }, resultType: "success" } }
+    ? { seq: 1, type: "turn.completed", payload: { response: JSON.stringify(report), usage: turnUsage, resultType: "success" } }
     : { seq: 1, type: "turn.failed", payload: { error: turnFailure } };
   process.stdout.write(JSON.stringify({ method: "session/event", params: ${runtimeAuth} ? { ...params, seq: 2, sessionId, turnId: "turn-fixture" } : params }) + "\n");
 }
@@ -135,6 +139,10 @@ input.on("line", (line) => {
     process.stdout.write(JSON.stringify({ id: message.id, result: snapshot() }) + "\n");
   } else if (message.method === "session/setModel") {
     const requestedProviderId = message.params && message.params.model ? message.params.model.providerId : "";
+    if (requestedProviderId === "reject-provider") {
+      process.stdout.write(JSON.stringify({ id: message.id, error: { code: -32602, message: "model rejected" } }) + "\n");
+      return;
+    }
     if (typeof requestedProviderId === "string" && requestedProviderId.startsWith("account:")) {
       const provider = accountProviders[requestedProviderId];
       const state = accountStates[requestedProviderId];
@@ -152,7 +160,20 @@ input.on("line", (line) => {
     process.stdout.write(JSON.stringify({ id: message.id, result: {} }) + "\n");
     if (${runtimeAuth}) {
       process.stdout.write(JSON.stringify({ method: "session/event", params: { sessionId, seq: 1, turnId: "turn-fixture", type: "turn.started", payload: { turnId: "turn-fixture" } } }) + "\n");
-      process.stdout.write(JSON.stringify({ id: "auth-rpc", method: "interaction/requestProviderRuntimeHeaders", params: { sessionId, turnId: "turn-fixture", modelSelection: selected } }) + "\n");
+      process.stdout.write(JSON.stringify({ id: "auth-rpc", method: "interaction/requestProviderRuntimeHeaders", params: {
+        sessionId,
+        turnId: "turn-fixture",
+        workspace: { workspacePath: process.cwd(), workspaceKey: "fixture-workspace" },
+        modelSelection: runtimeAuthSelection,
+        providerId: runtimeAuthSelection.providerId,
+        accountAccess: {
+          type: "zhipu-account",
+          accountType: "bigmodel",
+          mode: selected.providerId.includes("start-plan") ? "start-plan" : "individual-coding-plan",
+          entitled: true,
+        },
+        reason: "model-request",
+      } }) + "\n");
       return;
     }
     const reportTurn = () => {
@@ -210,10 +231,10 @@ test("runtime auth refuses a lease revoked before its reply is written", async (
       providerPersonalConfigFile: personalConfig,
       zcodeDataRoot: path.join(runtime.root, ".zcode"),
     };
-    const adapter = new ZCodeAppServerAdapter({
+    const adapter = new ZCodeAppServerTestAdapter({
       resolver: { resolve: async () => runtimeConfig }, timeoutMs: 10_000,
       childEnvBase: { PATH: process.env.PATH },
-      startPlanProviderEntitled: true,
+
       resolveStartPlanRuntimeAuth: async () => {
         const credential = { apiKey: "synthetic-revoked-marker", expiresAt: Date.now() + 10_000, isValid: () => valid };
         queueMicrotask(() => { valid = false; });
@@ -241,7 +262,7 @@ test("runtime auth dispatcher injects a verified Start Plan lease only into the 
     }] } } }));
     await writeFile(personalConfig, JSON.stringify({ config: { providerConfigRules: { providerRules: [] } } }));
     let authCalls = 0;
-    const adapter = new ZCodeAppServerAdapter({
+    const adapter = new ZCodeAppServerTestAdapter({
       resolver: { resolve: async () => ({
         ...runtime.config,
         providerPersonalConfigFile: personalConfig,
@@ -250,7 +271,7 @@ test("runtime auth dispatcher injects a verified Start Plan lease only into the 
       timeoutMs: 10_000,
       childEnvBase: { PATH: process.env.PATH },
       homeDir: runtime.root,
-      startPlanProviderEntitled: true,
+
       onEvent: (event) => events.push(event),
       resolveStartPlanRuntimeAuth: async (scope) => {
         authCalls += 1;
@@ -307,7 +328,7 @@ test("runtime auth dispatcher preserves Coding Plan API key injection", async ()
       entryStatus: { items: { "builtin:bigmodel-coding-plan": { status: "available" } } },
     }));
     let startPlanAuthCalls = 0;
-    const adapter = new ZCodeAppServerAdapter({
+    const adapter = new ZCodeAppServerTestAdapter({
       resolver: { resolve: async () => ({ ...runtime.config, providerPersonalConfigFile: personalConfig, zcodeDataRoot }) },
       timeoutMs: 10_000,
       childEnvBase: { PATH: process.env.PATH },
@@ -339,6 +360,204 @@ test("runtime auth dispatcher preserves Coding Plan API key injection", async ()
       requestAuth: { apiKey: "synthetic-coding-plan-api-key" },
     });
   } finally { await rm(runtime.root, { recursive: true, force: true }); }
+});
+
+test("runtime auth dispatcher forwards eligible account requests to the async provider resolver", async () => {
+  const runtime = await makeFakeRuntime(
+    { providerId: "account:bigmodel-individual-coding-plan", modelId: "GLM-5.2" },
+    true,
+    false,
+    undefined,
+    true,
+    null,
+    undefined,
+    0,
+    true,
+  );
+  try {
+    const zcodeDataRoot = path.join(runtime.root, ".zcode");
+    const personalConfig = path.join(zcodeDataRoot, "v2", "provider_config.json");
+    await mkdir(path.dirname(personalConfig), { recursive: true });
+    await writeFile(runtime.config.providerBuiltinConfigFile, JSON.stringify({
+      config: { providerConfigRules: { providerRules: [{
+        providerId: "account:bigmodel-individual-coding-plan",
+        config: {
+          builtinModelIds: ["GLM-5.2"],
+          access: {
+            type: "zhipu-account",
+            mode: "individual-coding-plan",
+            accountType: "bigmodel",
+          },
+        },
+      }] } },
+    }));
+    await writeFile(
+      personalConfig,
+      JSON.stringify({ config: { providerConfigRules: { providerRules: [] } } }),
+    );
+    let startPlanAuthCalls = 0;
+    let providerAuthCalls = 0;
+    const diagnostics: Array<Readonly<Record<string, string | number | boolean | null>>> = [];
+    const adapter = new ZCodeAppServerTestAdapter({
+      resolver: {
+        resolve: async () => ({
+          ...runtime.config,
+          providerPersonalConfigFile: personalConfig,
+          zcodeDataRoot,
+        }),
+      },
+      timeoutMs: 10_000,
+      childEnvBase: { PATH: process.env.PATH },
+      homeDir: runtime.root,
+      resolveStartPlanRuntimeAuth: async () => {
+        startPlanAuthCalls += 1;
+        throw new Error("Coding Plan must not enter the Start Plan lease dispatcher");
+      },
+      resolveProviderRuntimeAuth: async (request, config, signal) => {
+        providerAuthCalls += 1;
+        assert.equal(request.providerId, "account:bigmodel-individual-coding-plan");
+        assert.deepEqual(request.accountAccess, {
+          type: "zhipu-account",
+          accountType: "bigmodel",
+          mode: "individual-coding-plan",
+          entitled: true,
+        });
+        assert.equal(config.providerPersonalConfigFile, personalConfig);
+        assert.equal(signal.aborted, false);
+        return {
+          headersApplied: true,
+          requestAuth: { apiKey: "synthetic-async-runtime-auth-marker" },
+        };
+      },
+      onRuntimeAuthDiagnostic: (facts) => diagnostics.push(facts),
+    });
+    const handle = await adapter.startTask({
+      task: {
+        ...task,
+        model: {
+          provider_id: "account:bigmodel-individual-coding-plan",
+          model_id: "GLM-5.2",
+        },
+      },
+      workspace: makeWorkspace(runtime.root),
+      attempt: 1,
+    });
+    const result = await adapter.getResult(handle);
+    assert.equal(result.exitCode, 0);
+    assert.equal(startPlanAuthCalls, 0);
+    assert.equal(providerAuthCalls, 1);
+    const messages = (await readFile(runtime.requestLog, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    assert.deepEqual(messages.find((message) => message.id === "auth-rpc")?.result, {
+      headersApplied: true,
+      requestAuth: { apiKey: "synthetic-async-runtime-auth-marker" },
+    });
+    assert.deepEqual(diagnostics.map((facts) => facts.stage), [
+      "request_received",
+      "resolver_started",
+      "resolver_completed",
+    ]);
+    assert.equal(diagnostics[0]?.session_match, true);
+    assert.equal(diagnostics[0]?.turn_match, true);
+    assert.equal(diagnostics[2]?.headers_applied, true);
+    assert.doesNotMatch(JSON.stringify(diagnostics), /synthetic-async-runtime-auth-marker/u);
+  } finally {
+    await rm(runtime.root, { recursive: true, force: true });
+  }
+});
+
+test("runtime auth rejects an account request whose model differs from the selected task model", async () => {
+  const selected = { providerId: "account:bigmodel-individual-coding-plan", modelId: "GLM-5.2" };
+  const runtime = await makeFakeRuntime(
+    selected,
+    true,
+    false,
+    undefined,
+    true,
+    null,
+    undefined,
+    0,
+    true,
+    { providerId: selected.providerId, modelId: "different-model" },
+  );
+  try {
+    const zcodeDataRoot = path.join(runtime.root, ".zcode");
+    const personalConfig = path.join(zcodeDataRoot, "v2", "provider_config.json");
+    await mkdir(path.dirname(personalConfig), { recursive: true });
+    await writeFile(runtime.config.providerBuiltinConfigFile, JSON.stringify({
+      config: { providerConfigRules: { providerRules: [{
+        providerId: selected.providerId,
+        config: {
+          builtinModelIds: [selected.modelId],
+          access: {
+            type: "zhipu-account",
+            mode: "individual-coding-plan",
+            accountType: "bigmodel",
+          },
+        },
+      }] } },
+    }));
+    await writeFile(personalConfig, JSON.stringify({
+      config: { providerConfigRules: { providerRules: [] } },
+    }));
+    await writeFile(path.join(zcodeDataRoot, "v2", "config.json"), JSON.stringify({
+      provider: {
+        "builtin:bigmodel-coding-plan": {
+          enabled: true,
+          options: { apiKey: "synthetic-coding-plan-api-key" },
+        },
+      },
+    }));
+    await writeFile(path.join(zcodeDataRoot, "v2", "coding-plan-cache.json"), JSON.stringify({
+      entryStatus: { items: { "builtin:bigmodel-coding-plan": { status: "available" } } },
+    }));
+    let providerAuthCalls = 0;
+    const adapter = new ZCodeAppServerTestAdapter({
+      resolver: {
+        resolve: async () => ({
+          ...runtime.config,
+          providerPersonalConfigFile: personalConfig,
+          zcodeDataRoot,
+        }),
+      },
+      timeoutMs: 10_000,
+      childEnvBase: { PATH: process.env.PATH },
+      homeDir: runtime.root,
+      resolveProviderRuntimeAuth: async () => {
+        providerAuthCalls += 1;
+        return {
+          headersApplied: true,
+          requestAuth: { apiKey: "must-not-be-used" },
+        };
+      },
+    });
+    const handle = await adapter.startTask({
+      task: {
+        ...task,
+        model: {
+          provider_id: selected.providerId,
+          model_id: selected.modelId,
+        },
+      },
+      workspace: makeWorkspace(runtime.root),
+      attempt: 1,
+    });
+    const result = await adapter.getResult(handle);
+    assert.equal(result.exitCode, 0);
+    assert.equal(providerAuthCalls, 0);
+    const messages = (await readFile(runtime.requestLog, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    assert.deepEqual(messages.find((message) => message.id === "auth-rpc")?.result, {
+      headersApplied: false,
+      errorMessage: "Provider runtime identity is not verified.",
+    });
+  } finally {
+    await rm(runtime.root, { recursive: true, force: true });
+  }
 });
 
 test("verified Start Plan receives task-scoped current while Desktop selects Coding Plan", async () => {
@@ -377,12 +596,12 @@ test("verified Start Plan receives task-scoped current while Desktop selects Cod
     await writeFile(path.join(zcodeDataRoot, "v2", "setting.json"), JSON.stringify({
       providerFamilyConnectionSelections: { bigmodel: { kind: "individual-coding-plan" } },
     }));
-    const adapter = new ZCodeAppServerAdapter({
+    const adapter = new ZCodeAppServerTestAdapter({
       resolver: { resolve: async () => ({ ...runtime.config, providerPersonalConfigFile: personalConfig, zcodeDataRoot }) },
       timeoutMs: 10_000,
       childEnvBase: { PATH: process.env.PATH },
       homeDir: runtime.root,
-      startPlanProviderEntitled: true,
+
       resolveStartPlanRuntimeAuth: async () => ({
         apiKey: "synthetic-start-plan-jwt-marker",
         expiresAt: Date.now() + 10_000,
@@ -417,6 +636,7 @@ test("explicit Coding Plan receives task-scoped current when Desktop selects Sta
     undefined,
     0,
     true,
+    { providerId: "account:bigmodel-individual-coding-plan", modelId: "GLM-5.3-Flash" },
   );
   try {
     const zcodeDataRoot = path.join(runtime.root, ".zcode");
@@ -443,7 +663,7 @@ test("explicit Coding Plan receives task-scoped current when Desktop selects Sta
       providerFamilyConnectionSelections: { bigmodel: { kind: "start-plan" } },
     }));
     let startPlanAuthCalls = 0;
-    const adapter = new ZCodeAppServerAdapter({
+    const adapter = new ZCodeAppServerTestAdapter({
       resolver: { resolve: async () => ({ ...runtime.config, providerPersonalConfigFile: personalConfig, zcodeDataRoot }) },
       timeoutMs: 10_000,
       childEnvBase: { PATH: process.env.PATH },
@@ -473,7 +693,7 @@ test("explicit Coding Plan receives task-scoped current when Desktop selects Sta
   } finally { await rm(runtime.root, { recursive: true, force: true }); }
 });
 
-test("unsupported or malformed Start Plan registry bindings fail before Session creation", async () => {
+test("unsupported or malformed Start Plan registry bindings stay diagnostic and no longer block the session (ADR-058)", async () => {
   for (const scenario of [
     {
       providerId: "account:zai-start-plan",
@@ -508,11 +728,11 @@ test("unsupported or malformed Start Plan registry bindings fail before Session 
         config: { providerConfigRules: { providerRules: scenario.rule ? [scenario.rule] : [] } },
       }));
       const events: Array<{ type: string }> = [];
-      const adapter = new ZCodeAppServerAdapter({
+      const adapter = new ZCodeAppServerTestAdapter({
         resolver: { resolve: async () => runtime.config },
         timeoutMs: 10_000,
         childEnvBase: { PATH: process.env.PATH },
-        startPlanProviderEntitled: true,
+
         resolveStartPlanRuntimeAuth: async () => ({
           apiKey: "synthetic-start-plan-jwt-marker",
           expiresAt: Date.now() + 10_000,
@@ -525,9 +745,12 @@ test("unsupported or malformed Start Plan registry bindings fail before Session 
         workspace: makeWorkspace(runtime.root),
         attempt: 1,
       });
+      // ADR-058: registry/plan-kind mismatches are no longer a Bridge
+      // execution gate. The session starts; the official server enforces the
+      // real plan scope and its rejection would surface as the turn failure.
       const result = await adapter.getResult(handle);
-      assert.equal(result.exitCode, 1);
-      assert.equal(events.some((event) => event.type === "app_server_started"), false);
+      assert.equal(result.exitCode, 0);
+      assert.equal(events.some((event) => event.type === "app_server_started"), true);
     } finally {
       await rm(runtime.root, { recursive: true, force: true });
     }
@@ -544,7 +767,7 @@ test("applies a per-task model override, verifies the selection, and does not pe
   );
   const events: Array<{ type: string; summary: string; details?: Record<string, unknown> }> = [];
   try {
-    const adapter = new ZCodeAppServerAdapter({
+    const adapter = new ZCodeAppServerTestAdapter({
       resolver: { resolve: async () => runtime.config },
       onEvent: (event) => events.push(event),
       timeoutMs: 10_000,
@@ -581,7 +804,7 @@ test("maps an identity-bound Windows tree receipt into the Adapter outcome", { t
   const platformProbe = createPlatformProbe();
   let terminatedPid = 0;
   try {
-    const adapter = new ZCodeAppServerAdapter({
+    const adapter = new ZCodeAppServerTestAdapter({
       resolver: { resolve: async () => runtime.config },
       timeoutMs: 10_000,
       childEnvBase: { PATH: process.env.PATH },
@@ -635,7 +858,7 @@ test("failed turn exposes only an actual identity-bound cleanup receipt to the i
   let terminatedPid = 0;
   let receiptPid = 0;
   try {
-    const adapter = new ZCodeAppServerAdapter({
+    const adapter = new ZCodeAppServerTestAdapter({
       resolver: { resolve: async () => runtime.config }, timeoutMs: 10_000,
       childEnvBase: { PATH: process.env.PATH },
       onVerifiedFailureCleanup: (receipt) => { receiptPid = receipt.rootPid; },
@@ -665,7 +888,7 @@ test("failed turn exposes only an actual identity-bound cleanup receipt to the i
 test("trusted local execution profile is bound to the actual app-server session mode", async () => {
   const runtime = await makeFakeRuntime();
   try {
-    const adapter = new ZCodeAppServerAdapter({
+    const adapter = new ZCodeAppServerTestAdapter({
       resolver: { resolve: async () => runtime.config },
       homeDir: runtime.root,
       timeoutMs: 10_000,
@@ -690,7 +913,7 @@ test("a root-exited termination race is verified only by a clean recorded-tree s
   // root-exited race; only the subsequent claimant scan supplies a verdict.
   const runtime = await makeFakeRuntime(undefined, true, false, undefined, false, null, undefined, 1_200);
   try {
-    const adapter = new ZCodeAppServerAdapter({
+    const adapter = new ZCodeAppServerTestAdapter({
       resolver: { resolve: async () => runtime.config },
       timeoutMs: 10_000,
       childEnvBase: { PATH: process.env.PATH },
@@ -726,7 +949,7 @@ test("Windows cleanup waits for identity before terminating a live runtime", { t
   let terminatorCalls = 0;
   let terminatedPid = 0;
   try {
-    const adapter = new ZCodeAppServerAdapter({
+    const adapter = new ZCodeAppServerTestAdapter({
       resolver: { resolve: async () => runtime.config },
       probe,
       timeoutMs: 8_000,
@@ -774,7 +997,7 @@ for (const missingIdentity of [true, false]) test(`observed Windows child exit s
   const platformProbe = createPlatformProbe();
   const trace = observeScan(missingIdentity ? "missing-identity" : "scan-throws", async () => { scans += 1; throw Object.assign(new Error("fixture scan rejected after observing a descendant"), { memberPids: [987_654] }); });
   try {
-    const adapter = new ZCodeAppServerAdapter({
+    const adapter = new ZCodeAppServerTestAdapter({
       resolver: { resolve: async () => runtime.config },
       probe: missingIdentity ? { ...platformProbe, identityOf: async () => { throw new Error("fixture identity unavailable"); } } : platformProbe,
       timeoutMs: 5_000,
@@ -802,41 +1025,53 @@ for (const missingIdentity of [true, false]) test(`observed Windows child exit s
 
 test("a controlled Windows root exit with no descendants passes the real claimant scan", { timeout: 60_000 }, async (t) => {
   if (process.platform !== "win32") return t.skip("Windows-only native process identity and claimant scan");
-  const runtime = await makeFakeRuntime(undefined, true, false, undefined, false, null, undefined, 1_200);
-  const scanTargets: Array<readonly { pid: number; fingerprint: string | null }[]> = [];
-  const events: Array<{ type: string; summary: string; details?: Record<string, unknown> }> = [];
-  const trace = observeScan("real-clean");
-  try {
-    const adapter = new ZCodeAppServerAdapter({
-      resolver: { resolve: async () => runtime.config },
-      onEvent: (event) => events.push(event),
-      timeoutMs: 10_000,
-      childEnvBase: { PATH: process.env.PATH },
-      terminateProcessTreeImpl: async (pid) => {
-        await exitOwnedProcessForRootRace(pid);
-        const error = new Error("process_tree_root_exited: process tree cleanup refused") as Error & { code: string };
-        error.code = "process_tree_root_exited";
-        throw error;
-      },
-      verifyTreeClean: async (targets) => {
-        scanTargets.push(targets);
-        return trace.verify(targets);
-      },
-    });
-    const handle = await adapter.startTask({ task, workspace: makeWorkspace(runtime.root), attempt: 1 });
-    const result = await adapter.getResult(handle);
-    trace.observation.final_cleanup_verdict = result.cleanupVerified ? "verified" : "unverified";
-    assert.equal(result.exitCode, 0);
-    assert.equal(result.cleanupVerified, true, result.cleanupError ?? "recorded-tree scan did not verify clean");
-    assert.equal(result.cleanupError, null);
-    assert.equal(scanTargets.length, 1, "the natural root exit reaches the native recorded-tree scanner");
-    const root = scanTargets[0]?.[0];
-    assert.ok(root && root.pid > 0 && root.fingerprint, "the scan is bound to the captured root generation");
-    assert.ok(events.some((event) => event.type === "cleanup_verified" && event.details?.["evidence"] === "recorded_tree_claimant_scan"));
-  } finally {
-    t.diagnostic(JSON.stringify(trace.observation));
-    await rm(runtime.root, { recursive: true, force: true });
+  let lastFailure = "recorded-tree scan did not verify clean";
+  // The production scanner intentionally fails closed when a dead recorded
+  // PID is reused or still appears as another live process's parent. Retry
+  // with a fresh controlled root so this positive test does not mistake that
+  // conservative verdict for permission to weaken the scan.
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const runtime = await makeFakeRuntime(undefined, true, false, undefined, false, null, undefined, 1_200);
+    const scanTargets: Array<readonly { pid: number; fingerprint: string | null }[]> = [];
+    const events: Array<{ type: string; summary: string; details?: Record<string, unknown> }> = [];
+    const trace = observeScan(`real-clean-${String(attempt)}`);
+    try {
+      const adapter = new ZCodeAppServerTestAdapter({
+        resolver: { resolve: async () => runtime.config },
+        onEvent: (event) => events.push(event),
+        timeoutMs: 10_000,
+        childEnvBase: { PATH: process.env.PATH },
+        terminateProcessTreeImpl: async (pid) => {
+          await exitOwnedProcessForRootRace(pid);
+          const error = new Error("process_tree_root_exited: process tree cleanup refused") as Error & { code: string };
+          error.code = "process_tree_root_exited";
+          throw error;
+        },
+        verifyTreeClean: async (targets) => {
+          scanTargets.push(targets);
+          return trace.verify(targets);
+        },
+      });
+      const handle = await adapter.startTask({ task, workspace: makeWorkspace(runtime.root), attempt: 1 });
+      const result = await adapter.getResult(handle);
+      trace.observation.final_cleanup_verdict = result.cleanupVerified ? "verified" : "unverified";
+      if (!result.cleanupVerified) {
+        lastFailure = result.cleanupError ?? lastFailure;
+        t.diagnostic(JSON.stringify({ attempt, ...trace.observation }));
+        continue;
+      }
+      assert.equal(result.exitCode, 0);
+      assert.equal(result.cleanupError, null);
+      assert.equal(scanTargets.length, 1, "the natural root exit reaches the native recorded-tree scanner");
+      const root = scanTargets[0]?.[0];
+      assert.ok(root && root.pid > 0 && root.fingerprint, "the scan is bound to the captured root generation");
+      assert.ok(events.some((event) => event.type === "cleanup_verified" && event.details?.["evidence"] === "recorded_tree_claimant_scan"));
+      return;
+    } finally {
+      await rm(runtime.root, { recursive: true, force: true });
+    }
   }
+  assert.fail(lastFailure);
 });
 
 test("a root-exited termination race stays failed when claimant scan sees a live descendant", { timeout: 8_000 }, async (t) => {
@@ -844,7 +1079,7 @@ test("a root-exited termination race stays failed when claimant scan sees a live
   const runtime = await makeFakeRuntime(undefined, true, false, undefined, false, null, undefined, 1_200);
   let appServerPid = 0;
   try {
-    const adapter = new ZCodeAppServerAdapter({
+    const adapter = new ZCodeAppServerTestAdapter({
       resolver: { resolve: async () => runtime.config },
       onEvent: (event) => {
         if (event.type === "app_server_started" && typeof event.details?.["pid"] === "number") appServerPid = event.details["pid"] as number;
@@ -896,7 +1131,7 @@ test("a controlled Windows root exit still scans its live descendant before clea
     throw new Error(`Timed out waiting for ${description}`);
   };
   try {
-    const adapter = new ZCodeAppServerAdapter({
+    const adapter = new ZCodeAppServerTestAdapter({
       resolver: { resolve: async () => runtime.config },
       onEvent: (event) => events.push(event),
       timeoutMs: 10_000,
@@ -948,7 +1183,7 @@ test("classifies explicit provider usage exhaustion without publishing its raw e
   }, false, null, undefined, 1_200);
   const events: Array<{ type: string; summary: string; details?: Record<string, unknown> }> = [];
   try {
-    const adapter = new ZCodeAppServerAdapter({
+    const adapter = new ZCodeAppServerTestAdapter({
       resolver: { resolve: async () => runtime.config },
       onEvent: (event) => events.push(event),
       timeoutMs: 10_000,
@@ -995,7 +1230,7 @@ test("does not misclassify request rate limits or generic 429s as exhausted usag
     const runtime = await makeFakeRuntime(undefined, true, false, providerError, false, null, undefined, 1_200);
     const events: Array<{ type: string; summary: string; details?: Record<string, unknown> }> = [];
     try {
-      const adapter = new ZCodeAppServerAdapter({
+      const adapter = new ZCodeAppServerTestAdapter({
         resolver: { resolve: async () => runtime.config },
         onEvent: (event) => events.push(event),
         timeoutMs: 10_000,
@@ -1030,7 +1265,7 @@ test("a Windows provider failure preserves its code only after a real root-exite
   const events: Array<{ type: string; summary: string; details?: Record<string, unknown> }> = [];
   const trace = observeScan("provider-failure-real-scan");
   try {
-    const adapter = new ZCodeAppServerAdapter({
+    const adapter = new ZCodeAppServerTestAdapter({
       resolver: { resolve: async () => runtime.config },
       onEvent: (event) => events.push(event),
       timeoutMs: 60_000,
@@ -1067,7 +1302,7 @@ for (const scenario of ["unknown", "threw", "callback-throws"] as const) test(`r
     ? async (targets) => ({ clean: false, livePids: [], observedPids: targets.map((target) => target.pid) })
     : scenario === "threw" ? async () => { throw new Error("synthetic scan failure"); } : verifyProcessTreeClaimantsClean);
   try {
-    const adapter = new ZCodeAppServerAdapter({
+    const adapter = new ZCodeAppServerTestAdapter({
       resolver: { resolve: async () => runtime.config }, timeoutMs: 60_000,
       childEnvBase: { PATH: process.env.PATH }, verifyTreeClean: trace.verify,
       onCleanupDecisionTrace: () => { trace.observation.root_exit_observed = true; if (scenario === "callback-throws") throw new Error("synthetic trace failure"); },
@@ -1099,7 +1334,7 @@ test("real live claimant preserves cleanup_failed on provider failure", { timeou
   let descendantPid = 0;
   let scanIncludesDescendant = false;
   try {
-    const adapter = new ZCodeAppServerAdapter({
+    const adapter = new ZCodeAppServerTestAdapter({
       resolver: { resolve: async () => runtime.config }, timeoutMs: 60_000,
       childEnvBase: { PATH: process.env.PATH },
       onCleanupDecisionTrace: () => { trace.observation.root_exit_observed = true; },
@@ -1144,7 +1379,7 @@ test("a provider failure remains cleanup_failed when the root-exited scan retain
   const runtime = await makeFakeRuntime(undefined, true, false, { code: "provider_error", message: "safe synthetic provider failure" }, false, null, undefined, 1_200);
   const claimantPid = 98_765;
   try {
-    const adapter = new ZCodeAppServerAdapter({
+    const adapter = new ZCodeAppServerTestAdapter({
       resolver: { resolve: async () => runtime.config },
       timeoutMs: 10_000,
       childEnvBase: { PATH: process.env.PATH },
@@ -1173,24 +1408,107 @@ test("a provider failure remains cleanup_failed when the root-exited scan retain
   }
 });
 
-test("lets the app-server resolve a requested model omitted from the initial catalog", async () => {
-  const runtime = await makeFakeRuntime({ providerId: "provider-default", modelId: "model-default" }, false);
+test("selects a newly advertised runtime model that Bridge has never listed", async () => {
+  const runtime = await makeFakeRuntime({ providerId: "provider-default", modelId: "model-default" }, true);
   try {
-    const adapter = new ZCodeAppServerAdapter({
+    const adapter = new ZCodeAppServerTestAdapter({
       resolver: { resolve: async () => runtime.config },
       timeoutMs: 10_000,
       childEnvBase: { PATH: process.env.PATH },
     });
     const handle = await adapter.startTask({
-      task: { ...task, model: { provider_id: "account:zai-start-plan", model_id: "GLM-5.3-Flash" } },
+      task: { ...task, model: { provider_id: "provider-123", model_id: "model-x" } },
       workspace: makeWorkspace(runtime.root),
       attempt: 1,
     });
     assert.equal((await adapter.getResult(handle)).exitCode, 0);
     const requests = (await readFile(runtime.requestLog, "utf8"))
       .trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
-    assert.equal(requests.some((request) => request.method === "session/setModel"), true);
+    const setModel = requests.find((request) => request.method === "session/setModel");
+    assert.deepEqual((setModel?.params as Record<string, unknown>)?.["model"], {
+      providerId: "provider-123",
+      modelId: "model-x",
+    });
     assert.equal(requests.some((request) => request.method === "session/send"), true);
+  } finally {
+    await rm(runtime.root, { recursive: true, force: true });
+  }
+});
+
+test("a session/setModel failure stops before send and preserves the exact selection", async () => {
+  const runtime = await makeFakeRuntime({ providerId: "provider-default", modelId: "model-default" }, true);
+  const events: Array<{ type: string; summary: string; details?: Record<string, unknown> }> = [];
+  try {
+    const adapter = new ZCodeAppServerTestAdapter({
+      resolver: { resolve: async () => runtime.config },
+      timeoutMs: 10_000,
+      childEnvBase: { PATH: process.env.PATH },
+      onEvent: (event) => events.push(event),
+    });
+    const handle = await adapter.startTask({
+      task: { ...task, model: { provider_id: "reject-provider", model_id: "rejected-model" } },
+      workspace: makeWorkspace(runtime.root),
+      attempt: 1,
+    });
+    await assert.rejects(adapter.getResult(handle), /ZCode model setup failed for reject-provider\/rejected-model/u);
+    const requests = (await readFile(runtime.requestLog, "utf8")).trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+    assert.equal(requests.some((request) => request.method === "session/setModel"), true);
+    assert.equal(requests.some((request) => request.method === "session/send"), false);
+    const failure = events.find((event) => event.type === "model_setup_failed");
+    const requestedModel = failure?.details?.requested_model as { provider_id?: string; model_id?: string } | undefined;
+    assert.equal(requestedModel?.provider_id, "reject-provider");
+    assert.equal(requestedModel?.model_id, "rejected-model");
+  } finally {
+    await rm(runtime.root, { recursive: true, force: true });
+  }
+});
+
+test("preserves official cache read/write usage and safe provenance metadata from a turn", async () => {
+  const runtime = await makeFakeRuntime(
+    undefined,
+    true,
+    false,
+    undefined,
+    false,
+    null,
+    undefined,
+    0,
+    false,
+    undefined,
+    {
+      inputTokens: 100,
+      outputTokens: 20,
+      totalTokens: 120,
+      cacheReadTokens: 40,
+      cacheWriteTokens: 0,
+      source: "official_runtime",
+      scope: "session:" + SESSION_ID,
+      observed_at: "2026-11-15T10:00:00.000Z",
+      finality: "reported",
+      conflicts: ["safe_conflict"],
+    },
+  );
+  try {
+    const adapter = new ZCodeAppServerTestAdapter({
+      resolver: { resolve: async () => runtime.config },
+      timeoutMs: 10_000,
+      childEnvBase: { PATH: process.env.PATH },
+      homeDir: runtime.root,
+    });
+    const handle = await adapter.startTask({ task, workspace: makeWorkspace(runtime.root), attempt: 1 });
+    const outcome = await adapter.getResult(handle);
+    assert.deepEqual(outcome.usage, {
+      inputTokens: 100,
+      outputTokens: 20,
+      totalTokens: 120,
+      cacheReadTokens: 40,
+      cacheWriteTokens: 0,
+      source: "official_runtime",
+      scope: "session:" + SESSION_ID,
+      observed_at: "2026-11-15T10:00:00.000Z",
+      finality: "reported",
+      conflicts: ["safe_conflict"],
+    });
   } finally {
     await rm(runtime.root, { recursive: true, force: true });
   }
@@ -1199,7 +1517,7 @@ test("lets the app-server resolve a requested model omitted from the initial cat
 test("resolves an unprefixed provider from the runtime catalog without losing the caller request", async () => {
   const runtime = await makeFakeRuntime({ providerId: "account:plan", modelId: "flash", options: { reasoningLevel: "high" } }, false);
   try {
-    const adapter = new ZCodeAppServerAdapter({ resolver: { resolve: async () => runtime.config }, timeoutMs: 10_000, childEnvBase: { PATH: process.env.PATH }, homeDir: runtime.root });
+    const adapter = new ZCodeAppServerTestAdapter({ resolver: { resolve: async () => runtime.config }, timeoutMs: 10_000, childEnvBase: { PATH: process.env.PATH }, homeDir: runtime.root });
     const handle = await adapter.startTask({ task: { ...task, model: { provider_id: "plan", model_id: "flash", reasoning_level: "high" } }, workspace: makeWorkspace(runtime.root), attempt: 1 });
     const outcome = await adapter.getResult(handle);
     assert.equal(outcome.exitCode, 0);
@@ -1217,7 +1535,7 @@ test("omitting model leaves the ZCode session default untouched", async () => {
   try {
     // homeDir points at an empty directory so the machine's runtime-config.json
     // (which may carry a real user default model) cannot leak into the run.
-    const adapter = new ZCodeAppServerAdapter({
+    const adapter = new ZCodeAppServerTestAdapter({
       resolver: { resolve: async () => runtime.config },
       timeoutMs: 10_000,
       childEnvBase: { PATH: process.env.PATH },
@@ -1237,7 +1555,7 @@ test("omitting model leaves the ZCode session default untouched", async () => {
 test("starts ZCode runtime without a Bridge-specific execution opt-in", async () => {
   const runtime = await makeFakeRuntime();
   try {
-    const adapter = new ZCodeAppServerAdapter({
+    const adapter = new ZCodeAppServerTestAdapter({
       resolver: { resolve: async () => runtime.config },
       childEnvBase: { PATH: process.env.PATH, PRIVATE_API_TOKEN: "not-forwarded" },
     });
@@ -1252,7 +1570,7 @@ test("starts ZCode runtime without a Bridge-specific execution opt-in", async ()
 test("passes an explicit reasoning level when selecting a model that requires it", async () => {
   const runtime = await makeFakeRuntime();
   try {
-    const adapter = new ZCodeAppServerAdapter({ resolver: { resolve: async () => runtime.config }, timeoutMs: 10_000, childEnvBase: { PATH: process.env.PATH } });
+    const adapter = new ZCodeAppServerTestAdapter({ resolver: { resolve: async () => runtime.config }, timeoutMs: 10_000, childEnvBase: { PATH: process.env.PATH } });
     const handle = await adapter.startTask({
       task: { ...task, model: { provider_id: "provider-123", model_id: "reasoning-model", reasoning_level: "high" } },
       workspace: makeWorkspace(runtime.root),
@@ -1277,7 +1595,7 @@ test("keeps the runtime-selected reasoning options when the requested model is a
   const runtime = await makeFakeRuntime({ providerId: "provider-123", modelId: "model-x", options: { reasoningLevel: "high" } });
   const events: Array<{ type: string; summary: string; details?: Record<string, unknown> }> = [];
   try {
-    const adapter = new ZCodeAppServerAdapter({
+    const adapter = new ZCodeAppServerTestAdapter({
       resolver: { resolve: async () => runtime.config },
       onEvent: (event) => events.push(event),
       timeoutMs: 10_000,
@@ -1306,7 +1624,7 @@ test("cancels a pending permission with one verified runtime cleanup", { timeout
   let runtimePid: number | undefined;
   const events: Array<{ type: string; summary: string; details?: Record<string, unknown> }> = [];
   try {
-    const adapter = new ZCodeAppServerAdapter({
+    const adapter = new ZCodeAppServerTestAdapter({
       resolver: { resolve: async () => runtime.config },
       onEvent: (event) => {
         events.push(event);
@@ -1343,7 +1661,7 @@ test("forwards a permission decision to ZCode and resolves duplicate request IDs
   const events: Array<{ type: string; summary: string; details?: Record<string, unknown> }> = [];
   const requests: Array<{ request_id: string; method: string }> = [];
   try {
-    const adapter = new ZCodeAppServerAdapter({
+    const adapter = new ZCodeAppServerTestAdapter({
       resolver: { resolve: async () => runtime.config },
       onEvent: (event) => events.push(event),
       resolveInteraction: async (request) => {
@@ -1373,7 +1691,7 @@ test("ADR-027 successful execution stops its timer while real Windows cleanup us
   const runtime=await makeFakeRuntime(undefined,true,true,undefined,true);
   let signal: AbortSignal|undefined, abortedDuringCleanup: boolean|undefined;
   try{
-    const adapter=new ZCodeAppServerAdapter({resolver:{resolve:async()=>runtime.config},timeoutMs:5000,
+    const adapter=new ZCodeAppServerTestAdapter({resolver:{resolve:async()=>runtime.config},timeoutMs:5000,
       childEnvBase:{PATH:process.env.PATH},homeDir:runtime.root,
       resolveInteraction:async(_request,abort)=>{signal=abort;return {decision:'deny',reason:'controlled test'};},
       terminateProcessTreeImpl:async(pid,options)=>{
@@ -1396,7 +1714,7 @@ test("ADR-027 cleanup deadline publishes one unverified snapshot and ignores lat
   const done=new Promise<void>(resolve=>{finished=resolve;});
   const snapshots:Array<import('../src/adapters/run-outcome.js').ZCodeRunOutcome>=[];
   t.after(async()=>{release();if(entered)await done;await rm(runtime.root,{recursive:true,force:true});});
-  const adapter=new ZCodeAppServerAdapter({resolver:{resolve:async()=>runtime.config},timeoutMs:10000,testCleanupTimeoutMs:100,
+  const adapter=new ZCodeAppServerTestAdapter({resolver:{resolve:async()=>runtime.config},timeoutMs:10000,testCleanupTimeoutMs:100,
     childEnvBase:{PATH:process.env.PATH},homeDir:runtime.root,onOutcomeCheckpoint:o=>snapshots.push(o),
     terminateProcessTreeImpl:async(pid,options)=>{entered=true;await gate;try{return await terminateProcessTree(pid,options);}finally{finished();}}});
   const handle=await adapter.startTask({task,workspace:makeWorkspace(runtime.root),attempt:1});

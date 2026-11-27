@@ -1,0 +1,366 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { build } from "esbuild";
+
+import { SqliteLifecycleMcpAuthority } from "../../../src/manager/sqlite-lifecycle-mcp-authority.js";
+import { createPlatformProbe, PROCESS_IDENTITY_VERSION } from "../../../src/runtime/process-probe.js";
+
+import { createTrustedLocalCandidateContext } from "../../../src/executor/production-composition.js";
+
+import { loadLifecycleCandidateModules } from "../../../src/store/lifecycle-gate.js";
+
+import { projectRoot, workerEntryPath, fixtureRoot, contentObject, syntheticTask, waitForTerminal, waitForLifecycleEvent, waitForInteractionRequest, withRealAdapterMcp, deadlineWorker, operationFor } from "./mvp-real-adapter-harness.js";
+import type { FakeRuntimeFixture } from "./mvp-real-adapter-harness.js";
+
+async function waitForExactWorkerExit(operation: Record<string, unknown>, timeoutMs = 15_000): Promise<void> {
+  const worker = JSON.parse(String(operation.claim_worker_identity_json)) as Record<string, unknown>;
+  const pid = Number(worker.process_id);
+  assert.equal(typeof worker.start_fingerprint, "string");
+  const fingerprint = String(worker.start_fingerprint);
+  assert.ok(Number.isSafeInteger(pid) && pid > 0);
+  assert.equal(typeof worker.captured_at, "string");
+  const identity = {
+    pid,
+    fingerprint,
+    fingerprint_precision: "exact" as const,
+    identity_version: PROCESS_IDENTITY_VERSION,
+    platform: "win32",
+    captured_at: String(worker.captured_at),
+  };
+  const probe = createPlatformProbe({ timeoutMs: 5_000 });
+  const deadline = Date.now() + timeoutMs;
+  let lastState = "unknown";
+  while (Date.now() < deadline) {
+    const [verdict] = await probe.probe([{ pid, identity }]);
+    lastState = verdict?.state ?? "unknown";
+    if (lastState === "exited") return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.fail(`exact Worker ${pid} did not exit before user-authorized Recovery; last state=${lastState}`);
+}
+
+test("test-only fake adapter capability cannot be injected through MCP TaskPackage arguments", { timeout: 60_000 }, async () => {
+  await withRealAdapterMcp(async (client, _manager, _dataRoot, workspace) => {
+    const taskId = `mvp-inject-${randomUUID()}`;
+    const rejected = await client.callTool({ name: "zcode_task", arguments: { ...syntheticTask(workspace, taskId), testOnlyFakeAdapter: true } });
+    assert.equal(rejected.isError, true, "the MCP TaskPackage schema must reject unknown test-adapter fields");
+    const status = await client.callTool({ name: "zcode_status", arguments: { task_id: taskId } });
+    assert.equal(status.isError, true, "a rejected TaskPackage must not create any Operation; status must report TASK_NOT_FOUND");
+  });
+});
+
+test("an adapter turn failure commits a failed Result without faking success", { timeout: 120_000 }, async () => {
+  const lifecycleLines: string[] = [];
+  const stderrLines: string[] = [];
+  let fixtureRuntime: FakeRuntimeFixture | undefined;
+  try {
+    await withRealAdapterMcp(async (client, _manager, _dataRoot, workspace, runtime) => {
+      fixtureRuntime = runtime;
+      const taskId = `mvp-failed-${randomUUID()}`;
+      const created = contentObject(await client.callTool({ name: "zcode_task", arguments: syntheticTask(workspace, taskId) }));
+      assert.equal(created.status, "queued");
+      const status = await waitForTerminal(client, taskId, 1);
+      assert.equal(status.status, "failed", "a turn.failed payload must produce a failed Result, never a synthetic completed");
+      await waitForLifecycleEvent(client, taskId, "result_committed");
+      const result = contentObject(await client.callTool({ name: "zcode_result", arguments: { task_id: taskId } }));
+      assert.equal(result.status, "failed");
+    }, { runtimeVariant: "failure", stderrCollector: { lines: stderrLines }, lifecycleCollector: { lines: lifecycleLines }, preserveFixtureOnFailure: true });
+  } catch (error) {
+    console.error("worker stderr:\n" + stderrLines.join("\n"));
+    if (fixtureRuntime && existsSync(fixtureRuntime.exitLog)) {
+      console.error("fake app-server lifecycle:\n" + readFileSync(fixtureRuntime.exitLog, "utf8"));
+    }
+    throw error;
+  }
+});
+
+test("ADR-011 failure facts cross the Worker stderr diagnostic exit and the Host validator without failure payloads", { timeout: 120_000 }, async () => {
+  const stderr = { lines: [] as string[] };
+  const diagnostics = { lines: [] as string[] };
+  const marker = "[bridge-worker] failure-facts ";
+  const sentinel = "SENTINEL_FF_MESSAGE";
+  try {
+    await withRealAdapterMcp(async (client, _manager, _dataRoot, workspace, runtime) => {
+      const taskId = `mvp-facts-${randomUUID()}`;
+      const created = contentObject(await client.callTool({ name: "zcode_task", arguments: syntheticTask(workspace, taskId) }));
+      assert.equal(created.status, "queued");
+      const status = await waitForTerminal(client, taskId, 1);
+      assert.equal(status.status, "failed");
+      await waitForLifecycleEvent(client, taskId, "result_committed");
+      await waitForLifecycleEvent(client, taskId, "released");
+      const result = contentObject(await client.callTool({ name: "zcode_result", arguments: { task_id: taskId } }));
+      assert.equal(result.status, "failed");
+      // Exactly one validated snapshot leaves the Worker through stderr.
+      const factDeadline = Date.now() + 10_000;
+      const factLines = (): string[] => stderr.lines.join("").split("\n").filter((line) => line.startsWith(marker));
+      while (Date.now() < factDeadline && factLines().length === 0) await new Promise((resolve) => setTimeout(resolve, 50));
+      assert.equal(factLines().length, 1, `exactly one failure-facts line expected: ${JSON.stringify(stderr.lines)}`);
+      const facts = JSON.parse(factLines()[0]!.slice(marker.length)) as Record<string, unknown>;
+      assert.equal(facts.schema_version, "1");
+      assert.equal(facts.source, "turn_event");
+      assert.equal(facts.phase, "turn_terminal");
+      assert.equal(facts.provider_code, "3007");
+      assert.equal(facts.http_status, 429);
+      assert.equal(facts.error_code, "model_request_failed");
+      assert.equal(facts.category, "rate_limited");
+      assert.equal(facts.confidence, "inferred");
+      assert.equal(facts.evidence_basis, "http_status");
+      assert.equal(facts.runtime_retryable, false);
+      assert.equal(facts.accepted_before_error, "yes");
+      // The production Manager wiring forwards the same line once.
+      const forwardDeadline = Date.now() + 10_000;
+      while (Date.now() < forwardDeadline && diagnostics.lines.length === 0) await new Promise((resolve) => setTimeout(resolve, 50));
+      assert.equal(diagnostics.lines.length, 1);
+      assert.equal(JSON.parse(diagnostics.lines[0]!.slice(marker.length)).provider_code, "3007");
+      // Raw failure payloads stay out of every diagnostic or result surface.
+      for (const surface of [stderr.lines.join(""), diagnostics.lines.join(""), JSON.stringify(result), JSON.stringify(status)]) {
+        assert.equal(surface.includes(sentinel), false, "upstream failure text must never reach diagnostics or results");
+      }
+      // Classification never creates a retry: exactly one model send.
+      const requests = readFileSync(runtime.requestLog, "utf8").trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+      assert.equal(requests.filter((message) => message.method === "session/send").length, 1);
+    }, { runtimeVariant: "facts-turn-failure", stderrCollector: stderr, workerDiagnosticCollector: diagnostics, preserveFixtureOnFailure: true });
+  } catch (error) {
+    console.error("worker stderr:\n" + stderr.lines.join("\n") + "\nforwarded diagnostics:\n" + diagnostics.lines.join("\n"));
+    throw error;
+  }
+});
+
+test("ADR-026 real Adapter→Worker→Manager→SQLite preserves large Unicode reports without the old JSON text restrictions", {timeout:120_000}, async()=>{
+  await withRealAdapterMcp(async(client,_manager,dataRoot,workspace,runtime)=>{
+    const taskId=`r2-large-${randomUUID()}`;
+    contentObject(await client.callTool({name:"zcode_task",arguments:syntheticTask(workspace,taskId)}));
+    const interaction=await waitForInteractionRequest(client,taskId);
+    contentObject(await client.callTool({name:"zcode_interaction_reply",arguments:{task_id:taskId,request_id:String((interaction.details as Record<string,unknown>).request_id),decision:"allow"}}));
+    assert.equal((await waitForTerminal(client,taskId,1)).status,"completed");
+    await waitForLifecycleEvent(client,taskId,"released");
+    const result=contentObject(await client.callTool({name:"zcode_result",arguments:{task_id:taskId}}));
+    assert.equal(result.summary,"中文😀\n\u0000\"".repeat(100_000));
+    assert.equal((result.files_changed as unknown[]).length,257);
+    assert.deepEqual(result.tests,[{command:"测试\n命令",status:"passed",details:"\u0000😀"}]);
+    const {DatabaseSync}=await import('node:sqlite');
+    const db=new DatabaseSync(path.join(dataRoot,'operations.sqlite3'),{readOnly:true});
+    try{
+      const row=db.prepare('SELECT result_json,length(CAST(result_json AS BLOB)) AS bytes FROM manager_operations WHERE task_id=?').get(taskId)!;
+      assert.ok(Number(row.bytes)>65_536);
+      assert.deepEqual(JSON.parse(String(row.result_json)),result);
+    }finally{db.close();}
+    const requests=readFileSync(runtime.requestLog,'utf8').trim().split('\n').map(line=>JSON.parse(line) as Record<string,unknown>);
+    assert.equal(requests.filter(x=>x.method==='session/send').length,1);
+  },{runtimeVariant:'large-result'});
+});
+
+test("ADR-026 production Worker Result encoder and Windows pipes deliver exact 32 MiB and converge +1/schema failure", {timeout:120_000}, async()=>{
+  mkdirSync(fixtureRoot,{recursive:true});
+  const controlledWorker=path.join(fixtureRoot,'r2-controlled-worker.mjs');
+  // Only the explicitly enabled synthetic Adapter is substituted. Worker
+  // bootstrap, Claim, encoding, fd6, Manager and Store are production code.
+  await build({entryPoints:[path.join(projectRoot,'src/worker/worker-main.ts')],outfile:controlledWorker,
+    bundle:true,platform:'node',format:'esm',target:'node22.18',packages:'external',logLevel:'silent',
+    plugins:[{name:'r2-controlled-result',setup(build){build.onLoad({filter:/fake-result-adapter\.ts$/},async args=>{
+      let source=readFileSync(args.path,'utf8').replace(/\r\n?/gu,'\n');
+      source=`import {canonical,MAX_TASK_RESULT_BYTES} from ${JSON.stringify(path.join(projectRoot,'src/result-contract.mjs'))};\n`+source;
+      source=source.replace('  return {\n    protocol:',`  if(snapshot.task_id.includes('invalid'))(result as any).tests=[{command:'x',status:'invalid'}];\n  else (result as any).zcode_output='x'.repeat(MAX_TASK_RESULT_BYTES-Buffer.byteLength(canonical({...result,zcode_output:''}))+(snapshot.task_id.includes('oversized')?1:0));\n  return {\n    protocol:`);
+      return {contents:source,loader:'ts',resolveDir:path.dirname(args.path)};
+    });}}]});
+  for(const mode of ['exact','oversized','invalid']){
+    await withRealAdapterMcp(async(client,_manager,dataRoot,workspace)=>{
+      const taskId=`r2-${mode}-${randomUUID()}`;
+      contentObject(await client.callTool({name:'zcode_task',arguments:syntheticTask(workspace,taskId)}));
+      const terminal=await waitForTerminal(client,taskId,1);
+      assert.equal(terminal.status,mode==='exact'?'completed':'failed');
+      await waitForLifecycleEvent(client,taskId,'released');
+      const value=contentObject(await client.callTool({name:'zcode_result',arguments:{task_id:taskId}}));
+      if(mode==='exact'){
+        const {canonical,MAX_TASK_RESULT_BYTES}=await import('../../../src/result-contract.mjs');
+        assert.equal(Buffer.byteLength(canonical(value)),MAX_TASK_RESULT_BYTES);
+        assert.match(String(value.zcode_output),/^x+$/u);
+        const {DatabaseSync}=await import('node:sqlite');const db=new DatabaseSync(path.join(dataRoot,'operations.sqlite3'),{readOnly:true});
+        try{assert.equal(db.prepare('SELECT length(CAST(result_json AS BLOB)) AS n FROM manager_operations WHERE task_id=?').get(taskId)?.n,MAX_TASK_RESULT_BYTES);}finally{db.close();}
+      }else{
+        assert.equal(value.error_code,mode==='oversized'?'result_too_large':'invalid_result_payload');
+        assert.match(String(value.summary),/original report not committed/u);
+      }
+      const modules=await loadLifecycleCandidateModules();const store=modules.Store.open(dataRoot)!;
+      try{
+        const events=store.readTaskEvents(taskId,{afterCursor:0,limit:200});
+        assert.equal(events.events.filter(e=>e.event_type==='claim_committed').length,1);
+        assert.equal(events.events.filter(e=>e.event_type==='result_committed').length,1);
+        assert.equal(events.events.filter(e=>e.event_type==='released').length,1);
+      }finally{store.close();}
+    },{workerOverride:controlledWorker,testOnlyFakeAdapter:true});
+  }
+});
+
+test("ADR-026 Manager distinguishes known rollback from lost COMMIT ACK without replacing or repeating execution", {timeout:120_000},async()=>{
+  for(const fault of ['after_projection','commit_ack_lost'] as const){
+    const lifecycle={lines:[] as string[]};
+    await withRealAdapterMcp(async(client,_manager,dataRoot,workspace)=>{
+      const taskId=`r2-write-${fault}-${randomUUID()}`;
+      contentObject(await client.callTool({name:'zcode_task',arguments:syntheticTask(workspace,taskId)}));
+      const deadline=Date.now()+30000;
+      while(!lifecycle.lines.some(line=>line.includes('run_complete'))){
+        if(Date.now()>deadline)throw new Error('Result fault did not settle: '+lifecycle.lines.join('\n'));
+        await new Promise(resolve=>setTimeout(resolve,25));
+      }
+      const modules=await loadLifecycleCandidateModules();const store=modules.Store.openForRecovery(dataRoot)!;
+      try{
+        const snapshot=store.readTaskLifecycle(taskId)!;
+        const op=snapshot.operation as Record<string,unknown>;
+        const events=store.readTaskEvents(taskId,{afterCursor:0,limit:200}).events;
+        assert.equal(events.filter(e=>e.event_type==='claim_committed').length,1);
+        assert.equal(events.filter(e=>e.event_type==='released').length,0);
+        const status=contentObject(await client.callTool({name:'zcode_status',arguments:{task_id:taskId}}));
+        const result=await client.callTool({name:'zcode_result',arguments:{task_id:taskId}});
+        if(fault==='commit_ack_lost'){
+          assert.equal(op.phase,'result_committed');assert.equal(events.filter(e=>e.event_type==='result_committed').length,1);
+          assert.equal(status.status,'completed');assert.equal(contentObject(result).summary,'Synthetic WP6C FakeAdapter result');
+          assert.ok(existsSync(path.join(dataRoot,'WRITER_INTENT.json')));assert.ok(existsSync(path.join(dataRoot,'ROOT_POISONED.json')));
+          assert.ok(lifecycle.lines.some(line=>line.includes('result_outcome_reconciled_read_only')));
+        }else{
+          assert.equal(op.phase,'running');assert.equal(snapshot.result,null);assert.equal(status.error_code,'injected_failure');
+          assert.equal(result.isError,true);assert.ok(!existsSync(path.join(dataRoot,'ROOT_POISONED.json')));
+          assert.equal(events.filter(e=>e.event_type==='result_committed').length,0);
+        }
+        assert.equal(lifecycle.lines.filter(line=>line.includes('spawn_bootstrap_start')).length,1);
+      }finally{store.close();}
+    },{testOnlyFakeAdapter:true,resultFault:fault,lifecycleCollector:lifecycle});
+  }
+});
+
+test('ADR-027 Manager and actual Worker share the environment default and four-hour Task override', {timeout:60000},async()=>{
+  const worker=await deadlineWorker('budget','budget'),before=process.env['ZCODE_BRIDGE_TIMEOUT_MS'];
+  process.env['ZCODE_BRIDGE_TIMEOUT_MS']='90000';
+  try{for(const override of [undefined,4*60*60_000]){
+    const lifecycle={lines:[] as string[]};
+    await withRealAdapterMcp(async(client,_manager,_dataRoot,workspace)=>{
+      const taskId=`r3-budget-${randomUUID()}`;
+      contentObject(await client.callTool({name:'zcode_task',arguments:{...syntheticTask(workspace,taskId),...(override?{timeout_ms:override}:{})}}));
+      await waitForTerminal(client,taskId,1);await waitForLifecycleEvent(client,taskId,'released');
+      const expected=override??90000;
+      assert.equal(contentObject(await client.callTool({name:'zcode_result',arguments:{task_id:taskId}})).summary,`effective_timeout_ms=${expected}`);
+      const sent=lifecycle.lines.find(line=>line.startsWith('[bridge-lifecycle] claim_continue_sent '));assert.ok(sent);
+      const detail=JSON.parse(sent.slice(sent.indexOf('{')));assert.equal(detail.execution_timeout_ms,expected);assert.equal(detail.result_wait_ms,expected+330000);
+    },{workerOverride:worker,testOnlyFakeAdapter:true,lifecycleCollector:lifecycle});
+  }}finally{if(before===undefined)delete process.env['ZCODE_BRIDGE_TIMEOUT_MS'];else process.env['ZCODE_BRIDGE_TIMEOUT_MS']=before;}
+});
+
+test('ADR-027 actual Worker execution timeout commits a timeout Result and releases only with real Windows cleanup proof', {timeout:120000},async()=>{
+  const worker=await deadlineWorker('timeout','execution-timeout');
+  const workerStderr:string[]=[];const lifecycleLines:string[]=[];
+  try{
+    await withRealAdapterMcp(async(client,_manager,dataRoot,workspace,runtime)=>{
+      const taskId=`r3-timeout-${randomUUID()}`;
+      contentObject(await client.callTool({name:'zcode_task',arguments:syntheticTask(workspace,taskId)}));
+      // The production cleanup path may wait 15s for the prewarmed helper and
+      // then allow a 60s cold helper fallback. The generic 45s test polling
+      // window is shorter than that designed bound.
+      assert.equal((await waitForTerminal(client,taskId,1,90_000)).status,'failed');
+      await waitForLifecycleEvent(client,taskId,'released');
+      const result=contentObject(await client.callTool({name:'zcode_result',arguments:{task_id:taskId}}));
+      assert.equal(result.error_code,'timeout');assert.equal((await operationFor(dataRoot,taskId)).phase,'released');
+      const requests=readFileSync(runtime.requestLog,'utf8').trim().split('\n').map(line=>JSON.parse(line));
+      assert.equal(requests.filter(r=>r.method==='session/send').length,1);
+    },{workerOverride:worker,runtimeVariant:'deadline-hang',stderrCollector:{lines:workerStderr},lifecycleCollector:{lines:lifecycleLines}});
+  }catch(error){
+    console.error('worker stderr:\n'+workerStderr.join('\n'));
+    console.error('worker lifecycle tail:\n'+lifecycleLines.slice(-200).join('\n'));
+    throw error;
+  }
+});
+
+test('ADR-027 cleanup expiry preserves a failed Result while user-authorized Recovery releases only after a fresh clean tree scan', {timeout:90000},async()=>{
+  const worker=await deadlineWorker('cleanup','late-cleanup');
+  await withRealAdapterMcp(async(client,_manager,dataRoot,workspace)=>{
+    const taskId=`r3-cleanup-${randomUUID()}`;
+    contentObject(await client.callTool({name:'zcode_task',arguments:syntheticTask(workspace,taskId)}));
+    assert.equal((await waitForTerminal(client,taskId,1)).status,'failed');
+    await waitForLifecycleEvent(client,taskId,'cleanup_unverified');
+    const result=contentObject(await client.callTool({name:'zcode_result',arguments:{task_id:taskId}}));
+    assert.equal(result.error_code,'cleanup_failed');
+    const operation=await operationFor(dataRoot,taskId);assert.equal(operation.phase,'cleanup_unverified');
+    await waitForExactWorkerExit(operation);
+    // The adapter did not provide resource facts. Recovery must not invent a
+    // Cleanup success from the late close alone. The explicit user cancel may
+    // perform the separately audited administrative Release after a fresh tree
+    // scan, while preserving the original cleanup failure.
+    const cancel=await client.callTool({name:'zcode_cancel',arguments:{task_id:taskId}});
+    assert.equal(contentObject(cancel).status,'failed');
+    const released=await operationFor(dataRoot,taskId);assert.equal(released.phase,'released');
+    assert.deepEqual(contentObject(await client.callTool({name:'zcode_result',arguments:{task_id:taskId}})),result);
+    const modules=await loadLifecycleCandidateModules(),store=modules.Store.openForRecovery(dataRoot)!;
+    try{
+      const snapshot=modules.createPort(store).readRecoverySnapshot() as {operations:Array<Record<string,unknown>>};
+      const occupied=snapshot.operations.find(item=>item.operation_id===operation.operation_id);
+      assert.equal(occupied?.capacity_occupied,false);
+      assert.equal(occupied?.cleanup_state,'unverified_admin_release');
+      const events=modules.createPort(store).readLifecycleEvents(String(operation.operation_id)) as Array<Record<string,unknown>>;
+      assert.equal(events.filter(event=>event.event_type==='cleanup_unverified').length,1);
+      assert.equal(events.some(event=>event.event_type==='cleanup_verified'),false);
+      assert.equal(events.filter(event=>event.event_type==='observation_recorded'
+        &&JSON.parse(String(event.evidence_json)).reason==='user_authorized_release_unverified').length,1);
+    }finally{store.close();}
+  },{workerOverride:worker,runtimeVariant:'deadline-success',workerCloseWaitMs:100});
+});
+
+test('ADR-027 Result survives a late Worker close and Manager restart; completed Result allows cleanup-only cancel', {timeout:90000},async()=>{
+  const worker=await deadlineWorker('close','late-close');
+  await withRealAdapterMcp(async(client,manager,dataRoot,workspace)=>{
+    const taskId=`r3-close-${randomUUID()}`;
+    contentObject(await client.callTool({name:'zcode_task',arguments:syntheticTask(workspace,taskId)}));
+    await waitForTerminal(client,taskId,1);await waitForLifecycleEvent(client,taskId,'cleanup_unverified');
+    const result=contentObject(await client.callTool({name:'zcode_result',arguments:{task_id:taskId}}));assert.equal(result.status,'completed');
+    assert.equal((await operationFor(dataRoot,taskId)).phase,'cleanup_unverified');
+    await manager.shutdown();
+    const host={name:'mvp-real-adapter-test',settingsDirectory:path.join(path.dirname(dataRoot),'settings')};
+    const authority=await SqliteLifecycleMcpAuthority.create({dataRoot,workerEntryPath:worker,bridgeEntryPath:fileURLToPath(import.meta.url),hostProfile:host,trustedLocalContext:createTrustedLocalCandidateContext(host),testOnlyFakeAdapter:true});
+    const restarted=authority;
+    try{
+      assert.deepEqual(await restarted.getResult(taskId),result);
+      const recovered=await restarted.cancelTask(taskId);assert.equal(recovered.status,'completed');
+      assert.equal((await operationFor(dataRoot,taskId)).phase,'released');
+      assert.equal((await restarted.cancelTask(taskId)).status,'completed');
+      assert.deepEqual(await restarted.getResult(taskId),result);
+    }finally{await restarted.shutdown();}
+  },{workerOverride:worker,testOnlyFakeAdapter:true,workerCloseWaitMs:100});
+});
+
+test('ADR-027 Manager result deadline keeps the real claimed Worker cancellable instead of dropping its handle', {timeout:90000},async()=>{
+  const worker=await deadlineWorker('missing','no-result');
+  await withRealAdapterMcp(async(client,_manager,dataRoot,workspace)=>{
+    const taskId=`r3-no-result-${randomUUID()}`;
+    contentObject(await client.callTool({name:'zcode_task',arguments:syntheticTask(workspace,taskId)}));
+    const until=Date.now()+30000;let status:Record<string,unknown>={};
+    while(Date.now()<until){status=contentObject(await client.callTool({name:'zcode_status',arguments:{task_id:taskId}}));if(status.error_code==='private_report_timeout')break;await new Promise(r=>setTimeout(r,30));}
+    assert.equal(status.error_code,'private_report_timeout');assert.equal(status.status,'running');
+    assert.equal((await operationFor(dataRoot,taskId)).phase,'running');
+    contentObject(await client.callTool({name:'zcode_cancel',arguments:{task_id:taskId}}));
+    assert.equal((await waitForTerminal(client,taskId,1)).status,'cancelled');
+    await waitForLifecycleEvent(client,taskId,'released');
+  },{workerOverride:worker,testOnlyFakeAdapter:true,resultWaitMs:500});
+});
+
+test('ADR-027 blocked execution-envelope pipe expires visibly and retains the exact Worker for cancellation', {timeout:90000},async()=>{
+  const worker=await deadlineWorker('delivery','blocked-envelope');
+  const lifecycle={lines:[] as string[]};
+  await withRealAdapterMcp(async(client,_manager,dataRoot,workspace)=>{
+    const taskId=`r3-delivery-${randomUUID()}`;
+    // A valid Task below the existing 1.1 MB envelope cap exceeds the real
+    // Windows pipe buffer. The actual Worker reports identity but never reads fd5.
+    contentObject(await client.callTool({name:'zcode_task',arguments:{...syntheticTask(workspace,taskId),context:'x'.repeat(1_000_000)}}));
+    const until=Date.now()+45000;let status:Record<string,unknown>={};
+    while(Date.now()<until){status=contentObject(await client.callTool({name:'zcode_status',arguments:{task_id:taskId}}));if(status.error_code==='private_execution_delivery_timeout')break;await new Promise(r=>setTimeout(r,30));}
+    assert.equal(status.error_code,'private_execution_delivery_timeout');assert.equal(status.status,'running');
+    assert.equal((await operationFor(dataRoot,taskId)).phase,'running');
+    assert.equal(lifecycle.lines.filter(line=>line.startsWith('[bridge-lifecycle] claim_committed ')).length,1);
+    assert.equal(lifecycle.lines.filter(line=>line.startsWith('[bridge-lifecycle] claim_continue_sent ')).length,0);
+    contentObject(await client.callTool({name:'zcode_cancel',arguments:{task_id:taskId}}));
+    assert.equal((await waitForTerminal(client,taskId,1)).status,'cancelled');
+    await waitForLifecycleEvent(client,taskId,'released');
+  },{workerOverride:worker,testOnlyFakeAdapter:true,workerCloseWaitMs:100,lifecycleCollector:lifecycle});
+});

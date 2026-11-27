@@ -2,16 +2,18 @@
 // InMemoryTransport with an injected fake TaskManager. No real ZCode workers,
 // no model calls, no filesystem access.
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
+import { summarizeTaskResult } from "../src/result-summary.js";
 import type { CallToolResult } from "@modelcontextprotocol/server";
 import {
   createBridgeServer,
   SERVER_NAME,
   SERVER_VERSION,
 } from "../src/mcp/server.js";
-import { TaskManagerError } from "../src/manager/errors.js";
+import { TaskManagerError } from "../src/task-errors.js";
 import type {
   ContinueTaskInput,
   ProgressTaskManager,
@@ -28,6 +30,7 @@ import type {
 import { SESSION_ID, makeTask } from "./helpers.js";
 
 const CREATED_AT = "2026-09-27T00:00:00.000Z";
+const PUBLIC_SCHEMA_SNAPSHOT = path.join(import.meta.dirname, "..", "..", "test", "fixtures", "mcp-public-schema.json");
 
 class FakeTaskManager implements TaskManager {
   readonly calls: Array<{ method: string; args: unknown }> = [];
@@ -98,10 +101,42 @@ class FakeTaskManager implements TaskManager {
     return { ...this.statusRecord, task_id: taskId };
   }
 
-  async getResult(taskId: string): Promise<TaskResult> {
-    this.calls.push({ method: "getResult", args: taskId });
+  async getResult(taskId: string, view?: "summary" | "full"): Promise<TaskResult> {
+    this.calls.push({ method: "getResult", args: view === undefined ? taskId : `${taskId}:${view}` });
     if (this.error) throw this.error;
-    return { ...this.result, task_id: taskId };
+    const full = { ...this.result, task_id: taskId };
+    // Mirror the Executor-side projection so summary assertions hold.
+    return view === "summary" ? summarizeTaskResult(full) as unknown as TaskResult : full;
+  }
+
+  async getResultPage(taskId: string, offsetBytes: number, maxBytes: number): Promise<Record<string, unknown>> {
+    this.calls.push({ method: "getResultPage", args: `${taskId}:${offsetBytes}:${maxBytes}` });
+    if (this.error) throw this.error;
+    return {
+      task_id: taskId,
+      attempt: 1,
+      status: "completed",
+      summary: "paged result",
+      files_changed: [],
+      tests: [],
+      issues: [],
+      needs_master_decision: false,
+      exit_code: 0,
+      session_id: null,
+      started_at: null,
+      finished_at: null,
+      result_status: "completed",
+      result_digest: "a".repeat(64),
+      result_content_digest: "b".repeat(64),
+      result_commit_ref: "result-" + "a".repeat(64),
+      page: {
+        offset_bytes: offsetBytes,
+        next_offset: null,
+        total_bytes: 12,
+        result_content_digest: "b".repeat(64),
+        data: "{\"task_id\":1}",
+      },
+    };
   }
 
   async getFeedback(taskId: string): Promise<TaskFeedbackSnapshotV01> {
@@ -144,11 +179,13 @@ class FakeTaskManager implements TaskManager {
 async function withServer(
   run: (client: Client, manager: FakeTaskManager) => Promise<void>,
   doctor?: () => Promise<{ checked_at: string; execution_mode: string; checks: Array<{ name: string; status: "ok" | "warning" | "error" | "unknown"; summary: string }> }>,
+  supportedProtocolVersions?: string[],
+  modelSettings?: Parameters<typeof createBridgeServer>[0]["modelSettings"],
 ): Promise<void> {
   const manager = new FakeTaskManager();
-  const server = createBridgeServer({ taskManager: manager, doctor });
+  const server = createBridgeServer({ taskManager: manager, doctor, modelSettings });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  const client = new Client({ name: "protocol-test-client", version: "0.0.1" });
+  const client = new Client({ name: "protocol-test-client", version: "0.0.1" }, { supportedProtocolVersions });
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
   try {
     await run(client, manager);
@@ -187,6 +224,21 @@ test("the frozen tools and additive progress, feedback, interaction, and doctor 
   });
 });
 
+test("the public MCP tool schemas match the frozen compatibility snapshot", async () => {
+  await withServer(async (client) => {
+    const { tools } = await client.listTools();
+    const publicSchema = tools
+      .map((tool) => ({
+        name: tool.name,
+        inputSchema: tool.inputSchema,
+        ...(tool.outputSchema ? { outputSchema: tool.outputSchema } : {}),
+      }))
+      .sort((left, right) => left.name.localeCompare(right.name));
+    const expected = JSON.parse(readFileSync(PUBLIC_SCHEMA_SNAPSHOT, "utf8")) as unknown;
+    assert.deepEqual(publicSchema, expected);
+  });
+});
+
 test("zcode_doctor returns read-only setup diagnostics", async () => {
   const report = {
     checked_at: CREATED_AT,
@@ -201,6 +253,44 @@ test("zcode_doctor returns read-only setup diagnostics", async () => {
     assert.equal(result.isError, undefined);
     assert.deepEqual(result.structuredContent, report);
   }, async () => report);
+});
+
+test("the four model tools delegate to the injected settings service", async () => {
+  const calls: string[] = [];
+  await withServer(async (client) => {
+    for (const [name, args] of [
+      ["zcode_model_catalog", { workspace: "C:\\work\\demo" }],
+      ["zcode_default_model", {}],
+      ["zcode_set_default_model", { provider_id: "provider-a", model_id: "model-a" }],
+      ["zcode_clear_default_model", {}],
+    ] as const) {
+      const result = (await client.callTool({ name, arguments: args })) as CallToolResult;
+      assert.notEqual(result.isError, true, `${name}: ${JSON.stringify(result)}`);
+    }
+  }, undefined, undefined, {
+    async listModels(workspace: string) {
+      calls.push(`list:${workspace}`);
+      return { workspace, current_model: null, models: [], account_provider_sync: "not_needed" };
+    },
+    async getDefaultModel() {
+      calls.push("get");
+      return { configured: false, model: null };
+    },
+    async setDefaultModel(selection: { provider_id: string; model_id: string; reasoning_level?: string }) {
+      calls.push(`set:${selection.provider_id}:${selection.model_id}`);
+      return { configured: true as const, model: selection };
+    },
+    async clearDefaultModel() {
+      calls.push("clear");
+      return { configured: false as const, model: null };
+    },
+  });
+  assert.deepEqual(calls, [
+    "list:C:\\work\\demo",
+    "get",
+    "set:provider-a:model-a",
+    "clear",
+  ]);
 });
 
 test("zcode_events maps the optional attention wait and returns the nested snapshot", async () => {
@@ -410,8 +500,16 @@ test("zcode_feedback returns the additive v0.1 snapshot", async () => {
     assert.equal(result.isError, undefined);
     assert.deepEqual(result.structuredContent, manager.feedback);
     const rendered = result.content[0]!.type === "text" ? result.content[0]!.text : "";
-    assert.match(rendered, /ZCode · task_1/);
-    assert.match(rendered, /→ Running/);
+    const projection = JSON.parse(rendered) as {
+      task_id: string;
+      attempt: number;
+      status: string;
+      result: unknown;
+    };
+    assert.equal(projection.task_id, "task_1");
+    assert.equal(projection.attempt, 1);
+    assert.equal(projection.status, "running");
+    assert.equal(projection.result, null);
     assert.equal(manager.calls[0]!.method, "getFeedback");
     assert.equal(manager.calls[0]!.args, "task_1");
   });
@@ -430,8 +528,72 @@ test("zcode_result returns TASK_NOT_FINISHED as a tool error with a stable code"
     const structured = result.structuredContent as { error: { code: string; message: string } };
     assert.equal(structured.error.code, "TASK_NOT_FINISHED");
     assert.match(structured.error.message, /not finished/);
+    assert.deepEqual(await client.callTool({
+      name: "zcode_result",
+      arguments: { task_id: "task_1", view: "summary", expected_attempt: 1 },
+    }), result);
   });
 });
+
+for (const version of ["2025-11-25", "2025-06-18"]) {
+  test(`zcode_result preserves full evidence and adds an object-root summary (${version})`, async () => {
+    await withServer(async (client, manager) => {
+      assert.equal(client.getNegotiatedProtocolVersion(), version);
+      const tools = await client.listTools();
+      assert.equal(tools.tools.filter((tool) => tool.outputSchema !== undefined).length, 12);
+      const schema = tools.tools.find((tool) => tool.name === "zcode_result")!.outputSchema;
+      assert.equal(schema?.type, "object");
+      assert.deepEqual(schema?.oneOf, [{ required: ["zcode_output"] }, { required: ["projection"] }, { required: ["page"] }]);
+      const read = (args: Record<string, unknown> = {}) => client.callTool({
+        name: "zcode_result", arguments: { task_id: "task_1", ...args },
+      }) as Promise<CallToolResult>;
+      assert.deepEqual(await read({ view: "summary" }), await read());
+
+      manager.result = {
+        ...manager.result,
+        attempt: 2,
+        status: "failed",
+        error_code: "execution_side_effect_unverified",
+        needs_master_decision: true,
+        report_candidate: { summary: "unverified claims" },
+        zcode_output: "output\n".repeat(2_000),
+        files_changed: ["intact.txt", "x".repeat(300)],
+        tests: [
+          ...Array.from({ length: 12 }, () => ({ command: "check", status: "passed" as const, details: "log" })),
+          { command: "failed check", status: "failed" },
+          { command: "skipped check", status: "not_run" },
+        ],
+      };
+      const compact = await read({ view: "summary" });
+      assert.equal(compact.isError, undefined);
+      const content = compact.structuredContent as Record<string, unknown>;
+      assert.equal(content.attempt, 2);
+      assert.equal(content.status, "failed");
+      assert.equal(content.error_code, "execution_side_effect_unverified");
+      assert.equal(content.needs_master_decision, true);
+      assert.deepEqual(content.files_changed, ["intact.txt"]);
+      assert.ok(!("zcode_output" in content));
+      assert.deepEqual(content.projection, {
+        omitted_fields: ["zcode_output", "files_changed", "tests", "report_candidate"],
+        test_counts: { passed: 12, failed: 1, not_run: 1 },
+      });
+      assert.deepEqual(JSON.parse((compact.content[0] as { text: string }).text), content);
+
+      const full = await read({ view: "full", expected_attempt: 2 });
+      assert.deepEqual(full.structuredContent, manager.result);
+      assert.deepEqual(full, await read());
+      manager.result.attempt++;
+      const mismatch = await read({ view: "full", expected_attempt: 2 });
+      assert.equal(mismatch.isError, true);
+      assert.match((mismatch.content[0] as { text: string }).text, /^TASK_STATE: Expected Result Attempt 2, found 3/);
+      const callCount = manager.calls.length;
+      for (const args of [{ view: "other" }, { expected_attempt: 0 }, { unknown: true }]) {
+        assert.equal((await read(args)).isError, true);
+      }
+      assert.equal(manager.calls.length, callCount);
+    }, undefined, [version]);
+  });
+}
 
 test("zcode_result for waiting_for_master surfaces the subordinate decision verbatim", async () => {
   await withServer(async (client, manager) => {
@@ -532,6 +694,25 @@ test("calling an unregistered tool is rejected by the MCP protocol", async () =>
   });
 });
 
+test("large zcode_result payloads retain both the compatible text and structured representation", async () => {
+  await withServer(async (client, manager) => {
+    const output = `official-output:${"x".repeat(64 * 1024)}`;
+    manager.result = { ...manager.result, zcode_output: output };
+    const result = (await client.callTool({
+      name: "zcode_result",
+      arguments: { task_id: "task_1" },
+    })) as CallToolResult;
+    assert.equal(result.isError, undefined);
+    const structured = result.structuredContent as unknown as TaskResult;
+    assert.equal(structured.zcode_output.length, output.length);
+    assert.equal(result.content.length, 1);
+    const content = result.content[0];
+    assert.equal(content?.type, "text");
+    const textResult = JSON.parse((content as { type: "text"; text: string }).text) as TaskResult;
+    assert.equal(textResult.zcode_output, output);
+  });
+});
+
 test("server info matches the frozen project identity", async () => {
   await withServer(async (client) => {
     const serverInfo = client.getServerVersion();
@@ -555,4 +736,51 @@ test("task package fixture matches the frozen shape", () => {
   ] as const) {
     assert.ok(Array.isArray(task[field]));
   }
+});
+
+test("zcode_result paging parameters reach the manager and reject partial combinations (ADR-056)", async () => {
+  await withServer(async (client, manager) => {
+    const paged = (await client.callTool({
+      name: "zcode_result",
+      arguments: { task_id: "task_1", offset_bytes: 0, max_bytes: 1024 },
+    })) as CallToolResult;
+    assert.notEqual(paged.isError, true);
+    const structured = paged.structuredContent as { page?: { next_offset: unknown; data: string } };
+    assert.ok(structured.page, "the paged read returns the page object");
+    assert.deepEqual(manager.calls.filter((call) => call.method === "getResultPage").map((call) => call.args), ["task_1:0:1024"]);
+    const partial = await client.callTool({
+      name: "zcode_result",
+      arguments: { task_id: "task_1", offset_bytes: 0 },
+    }) as CallToolResult;
+    assert.equal(partial.isError, true);
+    const summaryCombo = await client.callTool({
+      name: "zcode_result",
+      arguments: { task_id: "task_1", view: "summary", offset_bytes: 0, max_bytes: 1024 },
+    }) as CallToolResult;
+    assert.equal(summaryCombo.isError, true);
+    // View now reaches the manager instead of being projected client-side.
+    await client.callTool({ name: "zcode_result", arguments: { task_id: "task_1", view: "summary" } });
+    assert.ok(manager.calls.some((call) => call.method === "getResult" && call.args === "task_1:summary"));
+  });
+});
+
+test("an oversized okResult keeps structuredContent authoritative and bounds the text channel (P1 §3.4C)", async () => {
+  await withServer(async (client, manager) => {
+    manager.result = {
+      ...manager.result,
+      zcode_output: "y".repeat(1_200_000),
+    } as typeof manager.result;
+    const result = (await client.callTool({
+      name: "zcode_result",
+      arguments: { task_id: "task_1" },
+    })) as CallToolResult;
+    assert.notEqual(result.isError, true);
+    const text = result.content[0]!.type === "text" ? result.content[0]!.text : "";
+    assert.ok(Buffer.byteLength(text, "utf8") < 2_000, "the duplicated text channel must stay bounded for large payloads");
+    const notice = JSON.parse(text) as { notice: string; text_sha256: string };
+    assert.equal(notice.notice, "response_too_large_for_text_channel");
+    assert.match(notice.text_sha256, /^[0-9a-f]{64}$/u);
+    const structured = result.structuredContent as { zcode_output?: string };
+    assert.equal(structured.zcode_output?.length, 1_200_000, "structuredContent still carries the full payload");
+  });
 });

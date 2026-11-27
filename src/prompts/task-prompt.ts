@@ -1,11 +1,24 @@
 // Minimal PromptBuilder per docs/ARCHITECTURE.md: renders the task package and
 // continuation feedback as a complete-delivery coding prompt that requests a
 // JSON AgentReport embedded in the ZCode `response`. Pure functions; no I/O.
-import type { TaskPackage, TaskResult } from "../interfaces.js";
+import type { AgentReport, TaskPackage, TaskResult, TestReport } from "../interfaces.js";
 
-const MAX_PROMPT_CHARS = 60_000;
-const MAX_SECTION_CHARS = 4_000;
-const MAX_CONTEXT_CHARS = 2_000;
+export const MAX_PROMPT_CHARS = 60_000;
+const MAX_EVIDENCE_ITEM_CHARS = 2_000;
+const MAX_REPAIR_RESPONSE_CHARS = 5_000;
+
+export class TaskPromptCapacityError extends Error {
+  readonly code = "task_prompt_exceeds_capacity";
+  readonly actualChars: number;
+  readonly maxChars: number;
+
+  constructor(actualChars: number) {
+    super(`task prompt exceeds ${MAX_PROMPT_CHARS} characters (actual ${actualChars}); shorten the task package without dropping constraints`);
+    this.name = "TaskPromptCapacityError";
+    this.actualChars = actualChars;
+    this.maxChars = MAX_PROMPT_CHARS;
+  }
+}
 
 export interface ContinuePromptInput {
   readonly task: TaskPackage;
@@ -17,13 +30,90 @@ export interface ContinuePromptInput {
 
 export function buildTaskPrompt(task: TaskPackage): string {
   const sections: string[] = [
-    `TASK ID: ${task.task_id}`,
-    "You are the Coding Worker executing one complete task inside the current working directory. Own its delivery end to end. Stay inside the workspace; do not touch files outside it.",
-    `PROJECT WORKSPACE: ${task.workspace}`,
-    ...(task.worktree_path ? [`HOST-SELECTED EXECUTION WORKTREE: ${task.worktree_path}. Make task changes in the current working directory, which is this worktree; the project workspace above identifies its parent project.`] : []),
-    ...(task.model ? [`REQUESTED ZCODE MODEL: ${task.model.provider_id}/${task.model.model_id}${task.model.reasoning_level ? ` (reasoning level: ${task.model.reasoning_level})` : ""}. The Bridge configures this model for the session.`] : []),
-    ...(task.timeout_ms ? [`EXECUTION TIME LIMIT: ${task.timeout_ms} ms for this attempt.`] : []),
     DELIVERY_OWNERSHIP,
+    DECISION_RULE,
+    ...renderTaskPackage(task),
+  ];
+  const context = renderContext(task.context);
+  if (context) sections.push(context);
+  sections.push(OUTPUT_CONTRACT);
+  return joinBoundedPrompt(sections);
+}
+
+export function buildContinuePrompt(input: ContinuePromptInput): string {
+  const { task, feedback, additionalRequirements, previousSessionId, previousResult } = input;
+  if (previousResult?.error_code === "invalid_agent_report") {
+    return buildReportRepairPrompt(input);
+  }
+
+  const core: string[] = [
+    DELIVERY_OWNERSHIP,
+    DECISION_RULE,
+    CONTINUATION_CONTEXT,
+    ...(previousSessionId
+      ? [`PERSISTED SESSION: ${previousSessionId}`]
+      : []),
+    ...renderTaskPackage(task),
+  ];
+  const context = renderContext(task.context);
+  if (context) core.push(context);
+  if (previousResult) {
+    core.push(renderPreviousResultEvidence(previousResult));
+  }
+  // P2 §4.4: the first dispatch and the continuation share one capacity
+  // contract. The core (identical to the accepted first dispatch) keeps its
+  // bytes; the continuation-only feedback and requirements are projected into
+  // the remaining budget with an explicit omission marker instead of letting a
+  // bounded task drift over the limit after acceptance.
+  const feedbackHeader = "MASTER FEEDBACK (address every point";
+  const requirementsSection = additionalRequirements.length > 0
+    ? renderList("ADDITIONAL REQUIREMENTS", [...additionalRequirements])
+    : null;
+  const baseSections = [...core, OUTPUT_CONTRACT, ...(requirementsSection ? [requirementsSection] : [])];
+  const baseLength = baseSections.join("\n\n").length + "\n\n".length;
+  const excerptNotice = "; excerpted to fit the prompt capacity";
+  const headerOverhead = `${feedbackHeader}${excerptNotice})\n`.length + "\n\n".length;
+  const feedbackBudget = MAX_PROMPT_CHARS - baseLength - headerOverhead;
+  const feedbackSection = feedbackBudget <= 0
+    ? `${feedbackHeader})\n[feedback omitted: the task package alone exceeds the prompt capacity]`
+    : `${feedbackHeader}${feedback.length > feedbackBudget ? excerptNotice : ""})\n${excerptEvidence(feedback, feedbackBudget)}`;
+  const sections = [...core, feedbackSection, ...(requirementsSection ? [requirementsSection] : []), OUTPUT_CONTRACT];
+  return joinBoundedPrompt(sections);
+}
+
+function buildReportRepairPrompt(input: ContinuePromptInput): string {
+  const { task, feedback, additionalRequirements, previousResult } = input;
+  if (!previousResult || previousResult.error_code !== "invalid_agent_report") {
+    throw new Error("report repair prompt requires an invalid_agent_report result");
+  }
+  const sections: string[] = [
+    REPORT_REPAIR_MODE,
+    `TASK ID: ${task.task_id}`,
+    `PROJECT WORKSPACE: ${task.workspace}`,
+    ...(task.worktree_path ? [`HOST-SELECTED EXECUTION WORKTREE: ${task.worktree_path}`] : []),
+    `PREVIOUS REPORT ERROR\n${boundedEvidenceText(previousResult.summary)}`,
+    `REPORT CANDIDATE CLAIMS (not independently verified)\n${JSON.stringify(projectReportCandidate(previousResult.report_candidate ?? {}))}`,
+    `PREVIOUS RESPONSE EXCERPT\n${excerptEvidence(previousResult.zcode_output, MAX_REPAIR_RESPONSE_CHARS)}`,
+    `MASTER FEEDBACK (report repair only)\n${feedback}`,
+    ...(additionalRequirements.length
+      ? [renderList("ADDITIONAL REPORT REQUIREMENTS", [...additionalRequirements])]
+      : []),
+    OUTPUT_CONTRACT,
+  ];
+  return joinBoundedPrompt(sections);
+}
+
+function renderTaskPackage(task: TaskPackage): string[] {
+  return [
+    `TASK ID: ${task.task_id}`,
+    `PROJECT WORKSPACE: ${task.workspace}`,
+    ...(task.worktree_path
+      ? [`HOST-SELECTED EXECUTION WORKTREE: ${task.worktree_path}. Make task changes in the current working directory, which is this worktree; the project workspace above identifies its parent project.`]
+      : []),
+    ...(task.model
+      ? [`REQUESTED ZCODE MODEL: ${task.model.provider_id}/${task.model.model_id}${task.model.reasoning_level ? ` (reasoning level: ${task.model.reasoning_level})` : ""}. The Bridge configures this model for the session.`]
+      : []),
+    ...(task.timeout_ms ? [`EXECUTION TIME LIMIT: ${task.timeout_ms} ms for this attempt.`] : []),
     `OBJECTIVE\n${task.objective}`,
     renderList("REQUIREMENTS", task.requirements),
     renderPaths("ALLOWED PATHS (write only inside these when provided; relative paths resolve against the current working directory)", task.allowed_paths),
@@ -36,58 +126,124 @@ export function buildTaskPrompt(task: TaskPackage): string {
       "TEST COMMANDS (run the applicable ones and report a status for each)",
       task.test_commands,
     ),
-    DECISION_RULE,
   ];
-  if (task.context && task.context.trim().length > 0) {
-    sections.push(`CONTEXT\n${bounded(task.context, MAX_CONTEXT_CHARS)}`);
-  }
-  return joinBoundedPreservingTail([...sections, OUTPUT_CONTRACT], OUTPUT_CONTRACT);
 }
 
-export function buildContinuePrompt(input: ContinuePromptInput): string {
-  const { task, feedback, additionalRequirements, previousSessionId, previousResult } = input;
-  const sections: string[] = [
-    `TASK ID: ${task.task_id}`,
-    "You are a subordinate coding agent continuing a previous task in the same workspace. Own the remaining delivery end to end. Stay inside the workspace.",
-    DELIVERY_OWNERSHIP,
-    ...(task.model ? [`REQUESTED ZCODE MODEL: ${task.model.provider_id}/${task.model.model_id}${task.model.reasoning_level ? ` (reasoning level: ${task.model.reasoning_level})` : ""}. The Bridge configures this model for the session.`] : []),
-  ];
-  if (previousSessionId) {
-    sections.push(
-      `This run resumes persisted session ${previousSessionId}; earlier conversation context may be available.`,
-    );
+function renderContext(context: string | undefined): string | null {
+  return context && context.trim().length > 0 ? `CONTEXT\n${context}` : null;
+}
+
+function renderPreviousResultEvidence(result: TaskResult): string {
+  return `PREVIOUS ATTEMPT EVIDENCE (structured; not independently verified)\n${JSON.stringify(projectPreviousResult(result))}`;
+}
+
+function projectPreviousResult(result: TaskResult): Record<string, unknown> {
+  const failedTests = result.tests.filter((test) => test.status === "failed").map(projectTest);
+  const notRunTests = result.tests.filter((test) => test.status === "not_run").map(projectTest);
+  const counts = { passed: 0, failed: failedTests.length, not_run: notRunTests.length };
+  for (const test of result.tests) {
+    if (test.status === "passed") counts.passed += 1;
   }
-  if (previousResult?.error_code === "invalid_agent_report") {
-    // Do not reintroduce implementation instructions or test commands in a
-    // report-only continuation. Candidate claims precede the bounded raw
-    // response so a long response cannot hide the useful structured evidence.
-    sections.push(
-      "REPORT REPAIR MODE: The previous execution has ended. Only its final report failed validation. Do not use tools, edit files, rerun tests, or repeat task work. Return the corrected JSON report from the evidence below. Preserve claims as claims, including not_run and failures. Do not invent tests or missing facts. If needs_master_decision cannot be established, explicitly set it to true and record the uncertainty in issues.",
-      `PROJECT WORKSPACE: ${task.workspace}`,
-      ...(task.worktree_path ? [`HOST-SELECTED EXECUTION WORKTREE: ${task.worktree_path}`] : []),
-      `PREVIOUS REPORT ERROR\n${previousResult.summary}`,
-      `REPORT CANDIDATE CLAIMS (not independently verified)\n${JSON.stringify(previousResult.report_candidate ?? {}, null, 2)}`,
-      `PREVIOUS RESPONSE\n${bounded(previousResult.zcode_output, MAX_SECTION_CHARS)}`,
-      `MASTER FEEDBACK (report repair only)\n${feedback}`,
-      ...(additionalRequirements.length ? [renderList("ADDITIONAL REPORT REQUIREMENTS", [...additionalRequirements])] : []),
-      OUTPUT_CONTRACT,
-    );
-    return joinBoundedPreservingTail(sections, OUTPUT_CONTRACT);
+  // P2 §4.4: when the normalized failure fields carry nothing diagnosable, a
+  // bounded raw-output excerpt (with an error-signal scan of the omitted
+  // middle) keeps the unique root cause recoverable instead of silently lost.
+  const normalizedFailureEmpty = result.status === "failed"
+    && !result.error_code
+    && result.summary.trim().length === 0
+    && result.issues.length === 0
+    && result.zcode_output.trim().length > 0;
+  return {
+    task_id: result.task_id,
+    attempt: result.attempt,
+    status: result.status,
+    ...(result.error_code ? { error_code: result.error_code } : {}),
+    summary: boundedEvidenceText(result.summary),
+    files_changed: result.files_changed.map((file) => boundedEvidenceText(file)),
+    failed_tests: failedTests,
+    not_run_tests: notRunTests,
+    test_counts: counts,
+    issues: result.issues.map((issue) => boundedEvidenceText(issue)),
+    needs_master_decision: result.needs_master_decision,
+    ...(normalizedFailureEmpty ? { raw_output_excerpt: failureEvidenceExcerpt(result.zcode_output, 4_000) } : {}),
+  };
+}
+
+function projectReportCandidate(candidate: Partial<AgentReport>): Record<string, unknown> {
+  const projected: Record<string, unknown> = {};
+  if (typeof candidate.summary === "string") projected.summary = boundedEvidenceText(candidate.summary);
+  if (Array.isArray(candidate.files_changed)) {
+    projected.files_changed = candidate.files_changed.map((file) => boundedEvidenceText(file));
   }
-  if (previousResult) {
-    sections.push(
-      `PREVIOUS RESULT (normalized claims from the previous attempt)\n${bounded(
-        JSON.stringify(previousResult, null, 2),
-        MAX_SECTION_CHARS,
-      )}`,
-    );
+  if (Array.isArray(candidate.tests)) projected.tests = candidate.tests.map(projectTest);
+  if (Array.isArray(candidate.issues)) {
+    projected.issues = candidate.issues.map((issue) => boundedEvidenceText(issue));
   }
-  sections.push(`MASTER FEEDBACK (address every point)\n${feedback}`);
-  if (additionalRequirements.length > 0) {
-    sections.push(renderList("ADDITIONAL REQUIREMENTS", [...additionalRequirements]));
+  if (typeof candidate.needs_master_decision === "boolean") {
+    projected.needs_master_decision = candidate.needs_master_decision;
   }
-  sections.push(`ORIGINAL TASK\n${buildTaskPrompt(task)}`);
-  return joinBoundedPreservingTail(sections, OUTPUT_CONTRACT);
+  return projected;
+}
+
+function projectTest(test: TestReport): TestReport {
+  const details = test.details === undefined ? undefined
+    : test.status === "failed" || test.status === "not_run"
+      ? failureEvidenceExcerpt(test.details, MAX_EVIDENCE_ITEM_CHARS)
+      : boundedEvidenceText(test.details);
+  return {
+    command: boundedEvidenceText(test.command),
+    status: test.status,
+    ...(details === undefined ? {} : { details }),
+  };
+}
+
+function boundedEvidenceText(text: string, maxChars = MAX_EVIDENCE_ITEM_CHARS): string {
+  return excerptEvidence(text, maxChars);
+}
+
+function excerptEvidence(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  const marker = (omitted: number) => `...[${omitted} characters omitted]...`;
+  const markerLength = marker(text.length).length;
+  const available = Math.max(0, maxChars - markerLength);
+  const headChars = Math.ceil(available * 0.6);
+  const tailChars = available - headChars;
+  return `${text.slice(0, headChars)}${marker(text.length - headChars - tailChars)}${text.slice(-tailChars)}`;
+}
+
+const ERROR_SIGNAL_PATTERN = /(?:error|failed|failure|exception|cannot|denied|refused|timeout|timed out|not ok|fatal|panic|errno|exit code [1-9])/iu;
+
+/** P2 §4.4: head/tail excerpt plus a bounded scan of the omitted middle for
+ * error-signal lines. A unique root cause sitting in the middle of a long log
+ * stays recoverable; every selected line is labelled with its line number and
+ * the omission itself stays explicit. */
+function failureEvidenceExcerpt(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  const excerpt = excerptEvidence(text, Math.max(256, Math.floor(maxChars * 0.7)));
+  const omittedStart = excerpt.indexOf("...[");
+  if (omittedStart < 0) return excerpt;
+  // Recover the omitted middle from the marker's position: the head is
+  // everything before the marker, so the middle is the region the marker
+  // replaced. Re-derive it from the original text bounds.
+  const markerMatch = /\.\.\.\[(\d+) characters omitted\]\.\.\./u.exec(excerpt);
+  if (!markerMatch) return excerpt;
+  const omitted = Number(markerMatch[1]);
+  const headChars = omittedStart;
+  const middleStart = headChars;
+  const middleEnd = middleStart + omitted;
+  const middle = text.slice(middleStart, middleEnd);
+  const lines = middle.split(/\r?\n/u);
+  const selected: string[] = [];
+  let used = 0;
+  const budget = Math.max(256, Math.floor(maxChars * 0.3));
+  for (let index = 0; index < lines.length && selected.length < 12; index += 1) {
+    const line = lines[index]!.slice(0, 300);
+    if (ERROR_SIGNAL_PATTERN.test(line) && used + line.length <= budget) {
+      selected.push(`[line ${index + 1} of omitted region] ${line}`);
+      used += line.length + 8;
+    }
+  }
+  if (selected.length === 0) return excerpt;
+  return `${excerpt}\nMIDDLE ERROR SIGNALS (bounded scan of the omitted region)\n${selected.join("\n")}`;
 }
 
 const OUTPUT_CONTRACT = [
@@ -102,14 +258,28 @@ const OUTPUT_CONTRACT = [
 const DECISION_RULE = [
   "DECISION RULE",
   "Use only this task package, this prompt, repository files you inspect, and available tools; do not assume access to the calling host's conversation.",
-  "Do not choose unresolved items explicitly listed under OPEN DECISIONS; a later explicit Master Feedback decision resolves that item. Also escalate conflicting requirements or missing decisions that would materially change externally visible behavior, even when the calling host did not list them. Record the exact question in issues and set needs_master_decision=true. Continue independent work that does not depend on the decision. For low-impact implementation choices, use the simplest consistent option and state the assumption in issues.",
+  "Do not choose unresolved items explicitly listed under OPEN DECISIONS; a later explicit Master feedback or additional requirement resolves that item. Also escalate conflicting requirements or missing decisions that would materially change externally visible behavior, even when the calling host did not list them. Record the exact question in issues and set needs_master_decision=true. Continue independent work that does not depend on the decision. For low-impact implementation choices, use the simplest consistent option and state the assumption in issues.",
 ].join("\n");
 
 const DELIVERY_OWNERSHIP = [
   "DELIVERY OWNERSHIP",
-  "You own this task's complete delivery, not a single step of it. Inspect the repository, plan the work internally, implement every required change, run the applicable tests, fix failures you can resolve within the stated boundaries, and repeat until the acceptance criteria are met or a genuine blocker requires the master.",
+  "You are the Coding Worker for one complete task in the current working directory. Own this task's complete delivery, not a single step of it.",
+  "Inspect the repository, plan the work internally, implement every required change, run the applicable tests, fix failures you can resolve within the stated boundaries, and repeat until the acceptance criteria are met or a genuine blocker requires the master.",
   "Do not stop after a partial step to ask what to do next, and do not wait for the master to list files or functions. Make low-impact implementation choices yourself and record assumptions in issues.",
   "The master independently verifies the final result; your report is evidence of what you did, not a substitute for that review.",
+  "Work only in the current working directory, which is the selected execution root; do not touch files outside it.",
+].join("\n");
+
+const CONTINUATION_CONTEXT = [
+  "CONTINUATION CONTEXT",
+  "This is a continuation of the same task. The original task package below remains authoritative even when a persisted session is available.",
+  "A persisted session may provide earlier context, but it is not assumed complete. Use the original objective and constraints below, the current feedback, and the previous-attempt evidence.",
+].join("\n");
+
+const REPORT_REPAIR_MODE = [
+  "REPORT REPAIR MODE",
+  "The previous execution has ended. Only its final report failed validation. Do not use tools, edit files, rerun tests, or repeat task work.",
+  "Return the corrected five-field JSON report using only the evidence below. Preserve claims as claims, including not_run and failures. Do not invent tests or missing facts. If needs_master_decision cannot be established, set it to true and record the uncertainty in issues.",
 ].join("\n");
 
 function renderList(title: string, items: readonly string[]): string {
@@ -121,19 +291,13 @@ function renderList(title: string, items: readonly string[]): string {
 
 function renderPaths(title: string, paths: readonly string[]): string {
   if (paths.length === 0) {
-    return `${title}\n- (unspecified; still write only within the workspace)`;
+    return `${title}\n- (unspecified; still write only within the current working directory)`;
   }
   return `${title}\n${paths.map((item) => `- ${item}`).join("\n")}`;
 }
 
-function bounded(text: string, maxChars: number): string {
-  if (text.length <= maxChars) return text;
-  return `${text.slice(0, maxChars)}…[truncated]`;
-}
-
-function joinBoundedPreservingTail(sections: readonly string[], requiredTail: string): string {
+function joinBoundedPrompt(sections: readonly string[]): string {
   const joined = sections.join("\n\n");
   if (joined.length <= MAX_PROMPT_CHARS) return joined;
-  void requiredTail;
-  throw new Error(`task prompt exceeds ${MAX_PROMPT_CHARS} characters; shorten the task package without dropping constraints`);
+  throw new TaskPromptCapacityError(joined.length);
 }

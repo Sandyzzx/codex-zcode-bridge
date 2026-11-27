@@ -1,0 +1,1225 @@
+diff --git a/packages/services/src/credential/credentialService.ts b/packages/services/src/credential/credentialService.ts
+index 014853309c5ccfaf4af505d2eee7c4535e2e4c39..a5f1d30f2154d3afcc570838d782fe448df1f0ed 100644
+--- a/packages/services/src/credential/credentialService.ts
++++ b/packages/services/src/credential/credentialService.ts
+@@ -22,6 +22,7 @@ import {
+ } from "@zcode/shared";
+ import type { ICredentialService } from "./credential.js";
+ import { type CredentialCipherProvider } from "./providers/credentialCipherProvider.js";
++import type { CredentialKeyStore } from "@zcode/shared/credential-security";
+ import { createServiceLogger } from "../logger/serviceLogger.js";
+ import { getAppConfigDir } from "../paths.js";
+ 
+@@ -46,9 +47,12 @@ function getErrorCode(error: unknown): string | undefined {
+ async function readAll(
+   credentialsFile = getCredentialsFile(),
+   locked = false,
++  preserveCorrupt = true,
+ ): Promise<Record<string, string>> {
+-  if (locked) return readAllUnchecked(credentialsFile);
+-  return withCredentialFileRead(credentialsFile, () => readAllUnchecked(credentialsFile));
++  if (locked) return readAllUnchecked(credentialsFile, preserveCorrupt);
++  return withCredentialFileRead(credentialsFile, () =>
++    readAllUnchecked(credentialsFile, preserveCorrupt),
++  );
+ }
+ 
+ function parseRecord(raw: Buffer): Record<string, string> {
+@@ -70,7 +74,10 @@ function fingerprint(raw: Buffer): string {
+   return createHash("sha256").update(raw).digest("hex");
+ }
+ 
+-async function readAllUnchecked(credentialsFile: string): Promise<Record<string, string>> {
++async function readAllUnchecked(
++  credentialsFile: string,
++  preserveCorrupt: boolean,
++): Promise<Record<string, string>> {
+   let raw: Buffer;
+   try {
+     raw = await readFile(credentialsFile);
+@@ -84,6 +91,10 @@ async function readAllUnchecked(credentialsFile: string): Promise<Record<string,
+   try {
+     return parseRecord(raw);
+   } catch (error) {
++    // The Host read-only path must not create even a diagnostic backup.
++    if (!preserveCorrupt) {
++      throw new Error(`ZCode credentials are corrupt: ${credentialsFile}`, { cause: error });
++    }
+     // 把损坏 JSON/schema 当成空 store 后继续 save 会清空其他 OAuth 与登录凭据。
+     // 保留损坏文件证据并向上传递错误，禁止自动覆盖。
+     const backupPath = await backupCorruptFile(credentialsFile).catch(() => undefined);
+@@ -105,6 +116,14 @@ async function writeAll(credentialsFile: string, data: Record<string, string>):
+ 
+ interface CredentialServiceDependencies {
+   cipherProvider?: CredentialCipherProvider;
++  env?: Readonly<Record<string, string | undefined>>;
++  keyStore?: CredentialKeyStore;
++  /** Reject every credential-store mutation and disable read-time migration. */
++  readOnly?: boolean;
++  /** Defaults true. Official refresh transactions may disable format migration. */
++  migrateOnRead?: boolean;
++  /** Permit token/session writes without creating a key or source marker. */
++  readOnlyKeyMaterial?: boolean;
+   /** Host 私有的持久化成功通知；不进入 Renderer/RPC 凭据接口。 */
+   onDidMutate?: (event: {
+     operation: "save" | "delete" | "batch" | "recover";
+@@ -144,12 +163,21 @@ export interface LocalCredentialService extends ICredentialService {
+ export function createCredentialService(
+   dependencies: CredentialServiceDependencies = {},
+ ): LocalCredentialService {
++  const readOnly = dependencies.readOnly === true;
++  const migrateOnRead = dependencies.migrateOnRead !== false;
++  const readOnlyKeyMaterial = readOnly || dependencies.readOnlyKeyMaterial === true;
+   const ciphers = new Map<string, CredentialCipherProvider>();
+   function cipherForFile(file: string): CredentialCipherProvider {
+     if (dependencies.cipherProvider) return dependencies.cipherProvider;
+     let cipher = ciphers.get(file);
+     if (!cipher) {
+-      cipher = createSystemCredentialCipher({ filePath: file });
++      cipher = createSystemCredentialCipher({
++        filePath: file,
++        env: dependencies.env,
++        keyStore: dependencies.keyStore,
++        readOnly,
++        readOnlyKeyMaterial,
++      });
+       ciphers.set(file, cipher);
+     }
+     return cipher;
+@@ -157,19 +185,28 @@ export function createCredentialService(
+   /** 调用方必须已在 withCredentialFileMutation 内；迁移写入与恢复共用同一代次屏障。 */
+   async function readCurrentLocked(file: string) {
+     const current = await readAll(file, true);
+-    const migrated = await migrateCredentialRecord(current, cipherForFile(file));
++    const migrated = migrateOnRead
++      ? await migrateCredentialRecord(current, cipherForFile(file))
++      : null;
+     if (migrated) await writeAll(file, migrated);
+     return migrated ?? current;
+   }
+   async function readCurrent(file: string) {
+     // 普通读取不取得写锁（慢写入曾让登录读取等锁超时），由读取前后的恢复代次校验拒绝旧结果。
+     // 只有仍含旧格式值时才进入变更锁迁移一次。
+-    const current = await readAll(file);
++    const current = await readAll(file, false, !readOnly);
++    if (readOnly || !migrateOnRead) return current;
+     const cipher = cipherForFile(file);
+     if (!Object.values(current).some((value) => cipher.needsMigration?.(value))) return current;
+     return withCredentialFileMutation(file, () => readCurrentLocked(file));
+   }
+ 
++  const rejectMutation = async (): Promise<never> => {
++    throw Object.assign(new Error("Credential store is read-only"), {
++      code: "CREDENTIAL_STORE_READ_ONLY",
++    });
++  };
++
+   return {
+     getCredentialsFilePath: () => getCredentialsFile(),
+     captureRecoveryGuard: () => captureCredentialFileGuard(getCredentialsFile()),
+@@ -189,6 +226,7 @@ export function createCredentialService(
+       });
+     },
+     async recoverStore(expected) {
++      if (readOnly) return rejectMutation();
+       if (!/^[a-f0-9]{64}$/.test(expected))
+         throw new Error("Invalid credential recovery fingerprint");
+       const file = getCredentialsFile();
+@@ -229,6 +267,7 @@ export function createCredentialService(
+       return result;
+     },
+     async deleteUnreadable(keys, options) {
++      if (readOnly) return rejectMutation();
+       const credentialsFile = getCredentialsFile();
+       const cipherProvider = cipherForFile(credentialsFile);
+       const validatedKeys = keys.map((key) => credentialKeySchema.parse(key));
+@@ -298,6 +337,7 @@ export function createCredentialService(
+     },
+ 
+     async updateMany(changes, options) {
++      if (readOnly) return rejectMutation();
+       const credentialsFile = getCredentialsFile();
+       const cipherProvider = cipherForFile(credentialsFile);
+       const entries = await Promise.all(
+@@ -340,6 +380,7 @@ export function createCredentialService(
+     },
+ 
+     async recoverUnreadable(key, assertCurrent) {
++      if (readOnly) return rejectMutation();
+       const credentialsFile = getCredentialsFile();
+       const cipherProvider = cipherForFile(credentialsFile);
+       const validatedKey = credentialKeySchema.parse(key);
+@@ -381,6 +422,7 @@ export function createCredentialService(
+     },
+ 
+     async save(key: string, value: string, assertCurrent?: () => void): Promise<void> {
++      if (readOnly) return rejectMutation();
+       const credentialsFile = getCredentialsFile();
+       const cipherProvider = cipherForFile(credentialsFile);
+       const validatedKey = credentialKeySchema.parse(key);
+@@ -399,6 +441,7 @@ export function createCredentialService(
+     },
+ 
+     async delete(key: string, assertCurrent?: () => void): Promise<void> {
++      if (readOnly) return rejectMutation();
+       const credentialsFile = getCredentialsFile();
+       const validatedKey = credentialKeySchema.parse(key);
+       await withCredentialFileMutation(credentialsFile, async () => {
+@@ -411,6 +454,7 @@ export function createCredentialService(
+     },
+ 
+     async saveIfAbsent(key: string, value: string): Promise<string> {
++      if (readOnly) return rejectMutation();
+       const validatedKey = credentialKeySchema.parse(key);
+       const validatedValue = credentialValueSchema.parse(value);
+       const credentialsFile = getCredentialsFile();
+@@ -434,6 +478,7 @@ export function createCredentialService(
+     },
+ 
+     async deleteIfEquals(key: string, expected: string): Promise<void> {
++      if (readOnly) return rejectMutation();
+       const validatedKey = credentialKeySchema.parse(key);
+       const credentialsFile = getCredentialsFile();
+       const cipherProvider = cipherForFile(credentialsFile);
+diff --git a/packages/services/src/model-provider/oauthProviderRuntimeAuthService.ts b/packages/services/src/model-provider/oauthProviderRuntimeAuthService.ts
+index fc7cd94494527210f79721a6cbd753cf95845a66..c32466759936e404cee7b1c0525db0311130498b 100644
+--- a/packages/services/src/model-provider/oauthProviderRuntimeAuthService.ts
++++ b/packages/services/src/model-provider/oauthProviderRuntimeAuthService.ts
+@@ -17,6 +17,7 @@ import { createOAuthService } from "../oauth/oauthService.js";
+ import {
+   OAuthCredentialRepo,
+   type OAuthAccountMaterial,
++  type OAuthStartPlanMaterial,
+ } from "../oauth/repo/oauthCredentialRepo.js";
+ import { setDataBaseDir } from "../paths.js";
+ import { createNodeApiClient } from "../providers/api/nodeApiClient.js";
+@@ -90,6 +91,8 @@ export function createOAuthProviderRuntimeAuthService(
+ 
+   const loadOAuthAccountMaterial = (family: ProviderFamilyDomain) =>
+     oauthCredentialRepo.loadFamilyMaterial(family);
++  const loadStartPlanMaterial = (family: ProviderFamilyDomain) =>
++    oauthCredentialRepo.loadStartPlanMaterial(family);
+   const loadOAuthFamilyTokenSet = async (providerId: string) => {
+     if (providerId !== ZAI_PROVIDER_ID && providerId !== BIGMODEL_PROVIDER_ID) {
+       return null;
+@@ -131,6 +134,8 @@ export function createOAuthProviderRuntimeAuthService(
+   const accountRequestAuthService = createAccountProviderRequestAuthService({
+     resolveCurrentAccountAccess: options.resolveCurrentAccountAccess,
+     loadOAuthTokenSet: loadOAuthFamilyTokenSet,
++    loadStartPlanZcodeJwt: async (family) =>
++      (await loadStartPlanMaterial(family))?.zcodeJwtToken ?? null,
+     async loadIndividualPlanMaterial(providerId, family, rejectedProjectTokenFingerprint) {
+       const accountIdentity = (await loadOAuthAccountMaterial(family))?.accountIdentity;
+       if (!accountIdentity) return null;
+@@ -165,9 +170,16 @@ export function createOAuthProviderRuntimeAuthService(
+         return unavailable();
+       }
+       try {
+-        if (await needsOAuthRefresh(accountAccess, loadOAuthAccountMaterial)) {
++        if (await needsOAuthRefresh(
++          accountAccess,
++          loadOAuthAccountMaterial,
++          loadStartPlanMaterial,
++        )) {
+           const family = accountAccessFamily(accountAccess);
+-          const account = await oauthCredentialRepo.loadFamilyMaterial(family);
++          const mode = accountAccessMode(accountAccess);
++          const account = mode === "start-plan"
++            ? await loadStartPlanMaterial(family)
++            : await loadOAuthAccountMaterial(family);
+           if (!account) return unavailable();
+           await oauthService.refreshToken(account.loginProvider);
+           projectTokenClient.clear();
+@@ -201,17 +213,35 @@ function accountAccessFamily(
+   return "family" in access ? access.family : access.accountType;
+ }
+ 
++function accountAccessMode(
++  access: ZCodeProviderAccountAccess | ZCodeAccountAccess,
++): ZCodeProviderAccountAccess["mode"] | ZCodeAccountAccess["planKind"] {
++  return "planKind" in access ? access.planKind : access.mode;
++}
++
+ async function needsOAuthRefresh(
+   access: ZCodeProviderAccountAccess | ZCodeAccountAccess,
+   loadOAuthAccountMaterial: (family: ProviderFamilyDomain) => Promise<OAuthAccountMaterial | null>,
++  loadStartPlanMaterial: (
++    family: ProviderFamilyDomain,
++  ) => Promise<OAuthStartPlanMaterial | null>,
+ ): Promise<boolean> {
+-  const account = await loadOAuthAccountMaterial(accountAccessFamily(access));
++  const family = accountAccessFamily(access);
++  const mode = accountAccessMode(access);
++  if (mode === "start-plan") {
++    const account = await loadStartPlanMaterial(family);
++    if (!account) return false;
++    const token = account.zcodeJwtToken;
++    return typeof token === "string"
++      && Boolean(token)
++      && resolveJwtExpiration(token).kind === "expired";
++  }
++  const account = await loadOAuthAccountMaterial(family);
+   if (!account) return false;
+-  const mode = "mode" in access ? access.mode : access.planKind;
+   // Start Plan requests use the main ZCode JWT. Coding/Team Plan requests use
+   // the OAuth access token to obtain a project token. Opaque tokens remain
+   // usable; only a standards-compliant JWT whose exp is due rotates here.
+-  const token = mode === "start-plan" ? account.zcodeJwtToken : account.accessToken;
++  const token = account.accessToken;
+   return Boolean(token) && resolveJwtExpiration(token).kind === "expired";
+ }
+ 
+diff --git a/packages/services/src/node.ts b/packages/services/src/node.ts
+index e2197b10858d2c8971d59e4df1c7792f5109d649..66c1577b5f6d7438067afc5a53b028ca41439982 100644
+--- a/packages/services/src/node.ts
++++ b/packages/services/src/node.ts
+@@ -225,7 +225,11 @@ export { createFileWatcherService } from "./fileWatcher/fileWatcherService.js";
+ export { createOAuthService } from "./oauth/oauthService.js";
+ export { createOAuthProviderLogoutHandler } from "./oauth/oauthProviderLogout.js";
+ export { OAuthCredentialRepo } from "./oauth/repo/oauthCredentialRepo.js";
+-export { createTelemetryCore, ensureTelemetryDeviceMid } from "./telemetry/telemetryCore.js";
++export {
++  createTelemetryCore,
++  ensureTelemetryDeviceMid,
++  readTelemetryDeviceMid,
++} from "./telemetry/telemetryCore.js";
+ export type { EnsureTelemetryDeviceMidOptions } from "./telemetry/telemetryCore.js";
+ export type { AccountRequestAuthResolver } from "./model-provider/accountProviderRequestAuthService.js";
+ export { createAccountProviderCredentialStore } from "./model-provider/accountProviderCredentialStore.js";
+diff --git a/packages/services/src/official-host/runtimeHostEntry.ts b/packages/services/src/official-host/runtimeHostEntry.ts
+index 8c3395df059bc782b1a9a73aa48ab4c42ce03a15..6e3e9e46db111b41bf017fa755448dda8d7b6477 100644
+--- a/packages/services/src/official-host/runtimeHostEntry.ts
++++ b/packages/services/src/official-host/runtimeHostEntry.ts
+@@ -10,3 +10,10 @@ export {
+   type OAuthProviderRuntimeAuthServiceOptions,
+   type ResolveProviderRuntimeAuthOptions,
+ } from "../model-provider/oauthProviderRuntimeAuthService.js";
++export {
++  createOfficialStartPlanAuthenticationResolver,
++  type OfficialStartPlanAuthentication,
++  type OfficialStartPlanAuthenticationResolver,
++  type OfficialStartPlanAuthenticationResolverOptions,
++  type ResolveOfficialStartPlanAuthenticationInput,
++} from "./startPlanAuthentication.js";
+diff --git a/packages/services/src/official-host/startPlanAuthentication.ts b/packages/services/src/official-host/startPlanAuthentication.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..f6980937de2ad222591c78854680d52411208f66
+--- /dev/null
++++ b/packages/services/src/official-host/startPlanAuthentication.ts
+@@ -0,0 +1,141 @@
++import type { ApiClient, ProviderFamilyDomain } from "@zcode/shared";
++import { resolveJwtExpiration } from "@zcode/shared";
++import type { SharedFileLockOptions } from "@zcode/shared/node";
++import {
++  createCredentialService,
++  type LocalCredentialService,
++} from "../credential/credentialService.js";
++import { createOAuthService } from "../oauth/oauthService.js";
++import {
++  OAuthCredentialRepo,
++  type OAuthStartPlanMaterial,
++} from "../oauth/repo/oauthCredentialRepo.js";
++import { setDataBaseDir } from "../paths.js";
++import { createNodeApiClient } from "../providers/api/nodeApiClient.js";
++import { readTelemetryDeviceMid } from "../telemetry/telemetryCore.js";
++
++const START_PLAN_FAMILY: ProviderFamilyDomain = "bigmodel";
++
++export interface OfficialStartPlanAuthentication {
++  readonly accountIdentity: string;
++  readonly sessionRevision: string | null;
++  readonly requestCredential: string;
++  readonly credentialExpiresAt: number | null;
++  readonly deviceMid: string;
++}
++
++export interface ResolveOfficialStartPlanAuthenticationInput {
++  readonly family: "bigmodel";
++  readonly signal: AbortSignal;
++}
++
++export interface OfficialStartPlanAuthenticationResolverOptions {
++  /** Base directory containing `.zcode`; never a Desktop install directory. */
++  readonly dataBaseDir: string;
++  readonly now?: () => number;
++  readonly apiClient?: ApiClient;
++  readonly refreshLockOptions?: SharedFileLockOptions;
++  readonly refreshNetworkTimeoutMs?: number;
++  /** Test-only composition hooks; production constructs official modules. */
++  readonly createReadOnlyCredentialService?: () => LocalCredentialService;
++  readonly createRefreshCredentialService?: () => LocalCredentialService;
++  readonly createOAuthService?: (
++    credentialService: LocalCredentialService,
++    apiClient: ApiClient,
++  ) => Pick<ReturnType<typeof createOAuthService>, "refreshToken">;
++  readonly readDeviceMid?: () => Promise<string | null>;
++}
++
++export interface OfficialStartPlanAuthenticationResolver {
++  resolveStartPlanAuthentication(
++    input: ResolveOfficialStartPlanAuthenticationInput,
++  ): Promise<OfficialStartPlanAuthentication | null>;
++}
++
++/**
++ * Narrow Official Host boundary for Start Plan authentication.
++ *
++ * Credential format, key resolution, account identity and family mapping stay
++ * in the official cipher/repo. The returned object is a one-request projection
++ * and deliberately omits access tokens, refresh tokens, raw records and paths.
++ */
++export function createOfficialStartPlanAuthenticationResolver(
++  options: OfficialStartPlanAuthenticationResolverOptions,
++): OfficialStartPlanAuthenticationResolver {
++  setDataBaseDir(options.dataBaseDir);
++  const now = options.now ?? Date.now;
++  const apiClient = options.apiClient ?? createNodeApiClient();
++  let pendingRefresh: { readonly provider: string; readonly promise: Promise<void> } | null = null;
++
++  const readOnlyCredentialService = (): LocalCredentialService =>
++    options.createReadOnlyCredentialService?.() ??
++    createCredentialService({ readOnly: true });
++
++  const loadMaterial = async (): Promise<OAuthStartPlanMaterial | null> => {
++    const repo = new OAuthCredentialRepo(readOnlyCredentialService());
++    return repo.loadStartPlanMaterial(START_PLAN_FAMILY);
++  };
++
++  const refresh = async (material: OAuthStartPlanMaterial): Promise<void> => {
++    if (pendingRefresh?.provider === material.loginProvider) {
++      await pendingRefresh.promise;
++      return;
++    }
++    const credentialService =
++      options.createRefreshCredentialService?.() ??
++      createCredentialService({
++        migrateOnRead: false,
++        readOnlyKeyMaterial: true,
++      });
++    const oauthService =
++      options.createOAuthService?.(credentialService, apiClient) ??
++      createOAuthService(credentialService, {
++        captureCredentialGuard: () => credentialService.captureRecoveryGuard(),
++        apiClient,
++        refreshLockOptions: options.refreshLockOptions,
++        refreshNetworkTimeoutMs: options.refreshNetworkTimeoutMs,
++      });
++    const promise = oauthService.refreshToken(material.loginProvider);
++    const pending = { provider: material.loginProvider, promise };
++    pendingRefresh = pending;
++    try {
++      await promise;
++    } finally {
++      if (pendingRefresh === pending) pendingRefresh = null;
++    }
++  };
++
++  return {
++    async resolveStartPlanAuthentication(input) {
++      if (input.family !== START_PLAN_FAMILY || input.signal.aborted) return null;
++      try {
++        let material = await loadMaterial();
++        if (!material?.accountIdentity.trim() || !material.zcodeJwtToken?.trim()) return null;
++
++        const initialExpiry = resolveJwtExpiration(material.zcodeJwtToken, now());
++        if (initialExpiry.kind === "expired") {
++          if (input.signal.aborted) return null;
++          await refresh(material);
++          if (input.signal.aborted) return null;
++          material = await loadMaterial();
++        }
++
++        if (!material?.accountIdentity.trim() || !material.zcodeJwtToken?.trim()) return null;
++        const expiration = resolveJwtExpiration(material.zcodeJwtToken, now());
++        if (expiration.kind === "expired") return null;
++        const deviceMid = await (options.readDeviceMid?.() ?? readTelemetryDeviceMid());
++        if (!deviceMid?.trim() || input.signal.aborted) return null;
++
++        return {
++          accountIdentity: material.accountIdentity.trim(),
++          sessionRevision: material.sessionRevision,
++          requestCredential: material.zcodeJwtToken.trim(),
++          credentialExpiresAt: expiration.kind === "unknown" ? null : expiration.expiresAt,
++          deviceMid: deviceMid.trim(),
++        };
++      } catch {
++        return null;
++      }
++    },
++  };
++}
+diff --git a/packages/services/src/telemetry/telemetryCore.ts b/packages/services/src/telemetry/telemetryCore.ts
+index 8b54be1af5a3487c56dc05d2280a68b480eda114..9c3a0658abbc1b31d14efb52e0136e7ff27a9ee6 100644
+--- a/packages/services/src/telemetry/telemetryCore.ts
++++ b/packages/services/src/telemetry/telemetryCore.ts
+@@ -283,6 +283,24 @@ export interface EnsureTelemetryDeviceMidOptions {
+   randomUUID?: () => string;
+ }
+ 
++export interface ReadTelemetryDeviceMidOptions {
++  homeDir?: string;
++}
++
++/**
++ * Reads the existing official telemetry device identity without creating or
++ * repairing state. Start Plan authentication needs the same identity as
++ * official requests, while a read path must never mint a replacement.
++ */
++export async function readTelemetryDeviceMid(
++  options: ReadTelemetryDeviceMidOptions = {},
++): Promise<string | null> {
++  const state = await readTelemetryState(options.homeDir);
++  return typeof state.deviceMid === "string" && state.deviceMid.trim()
++    ? state.deviceMid.trim()
++    : null;
++}
++
+ function rememberDeviceMid(telemetryStateFile: string, deviceMid: string): string {
+   deviceMidCacheByStateFile.set(telemetryStateFile, Promise.resolve(deviceMid));
+   return deviceMid;
+diff --git a/packages/services/test/fixtures/official-start-plan-auth-readonly-child.ts b/packages/services/test/fixtures/official-start-plan-auth-readonly-child.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..0c02ff2cd01e98cfa4ee4822105bc854ff5f5c5f
+--- /dev/null
++++ b/packages/services/test/fixtures/official-start-plan-auth-readonly-child.ts
+@@ -0,0 +1,35 @@
++import type { CredentialKeyStore } from "@zcode/shared/credential-security";
++import { createCredentialService } from "../../src/credential/credentialService.js";
++import { createOfficialStartPlanAuthenticationResolver } from "../../src/official-host/startPlanAuthentication.js";
++
++const [dataBaseDir, mode] = process.argv.slice(2);
++if (!dataBaseDir || !mode) throw new Error("dataBaseDir and mode are required");
++
++const encodedKey = process.env.ZCODE_TEST_READ_ONLY_KEY;
++const keyStore: CredentialKeyStore | undefined = mode === "os"
++  ? {
++      get: async () => encodedKey ?? null,
++      set: async () => {
++        throw new Error("cold-process read-only key store must not be written");
++      },
++    }
++  : undefined;
++
++const resolver = createOfficialStartPlanAuthenticationResolver({
++  dataBaseDir,
++  ...(mode === "os"
++    ? {
++        createReadOnlyCredentialService: () => createCredentialService({
++          readOnly: true,
++          env: {},
++          keyStore,
++        }),
++      }
++    : {}),
++});
++
++const result = await resolver.resolveStartPlanAuthentication({
++  family: "bigmodel",
++  signal: new AbortController().signal,
++});
++process.stdout.write(JSON.stringify({ result }));
+diff --git a/packages/services/test/officialStartPlanAuthentication.test.ts b/packages/services/test/officialStartPlanAuthentication.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..dead27923fe549562762a5bd344fccf27b742cc6
+--- /dev/null
++++ b/packages/services/test/officialStartPlanAuthentication.test.ts
+@@ -0,0 +1,599 @@
++import assert from "node:assert/strict";
++import { execFile } from "node:child_process";
++import { randomBytes } from "node:crypto";
++import {
++  mkdirSync,
++  mkdtempSync,
++  readFileSync,
++  readdirSync,
++  rmSync,
++  writeFileSync,
++} from "node:fs";
++import { tmpdir } from "node:os";
++import { join } from "node:path";
++import { promisify } from "node:util";
++import { afterEach, describe, expect, it } from "vitest";
++import type { CredentialKeyStore } from "@zcode/shared/credential-security";
++import {
++  createLegacyCredentialCipher,
++  createSystemCredentialCipher,
++} from "@zcode/shared/credential-security";
++import {
++  createCredentialService,
++  type LocalCredentialService,
++} from "../src/credential/credentialService.js";
++import { createOfficialStartPlanAuthenticationResolver } from "../src/official-host/startPlanAuthentication.js";
++import { setDataBaseDir } from "../src/paths.js";
++
++const ROOTS: string[] = [];
++const CREDENTIAL_SECRET = "synthetic-read-only-credential-secret";
++const DEVICE_MID = "synthetic-device-mid";
++const execFileAsync = promisify(execFile);
++
++afterEach(() => {
++  for (const root of ROOTS.splice(0)) rmSync(root, { recursive: true, force: true });
++  setDataBaseDir(null);
++});
++
++function makeDataRoot(): { baseDir: string; dataDir: string; credentialsPath: string } {
++  const baseDir = mkdtempSync(join(tmpdir(), "zcode-start-auth-"));
++  ROOTS.push(baseDir);
++  const dataDir = join(baseDir, ".zcode", "v2");
++  mkdirSync(dataDir, { recursive: true });
++  return { baseDir, dataDir, credentialsPath: join(dataDir, "credentials.json") };
++}
++
++function syntheticJwt(expiresAt: number): string {
++  const encode = (value: unknown): string =>
++    Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
++  return `${encode({ alg: "none", typ: "JWT" })}.${encode({ exp: Math.floor(expiresAt / 1_000) })}.synthetic`;
++}
++
++function startPlanValues(input: {
++  activeProvider: "bigmodel" | "zai" | "zai_cn";
++  account: string;
++  jwt?: string;
++  linkedBigModel?: unknown;
++  sessionRevision?: string;
++}): Record<string, string> {
++  const provider = input.activeProvider;
++  const values: Record<string, string> = {
++    "oauth:active_provider": provider,
++    "oauth:session_revision": input.sessionRevision ?? "revision-1",
++    [`oauth:${provider}:access_token`]: `access-token-${input.account}`,
++    [`oauth:${provider}:refresh_token`]: `refresh-token-${input.account}`,
++    [`oauth:${provider}:user_info`]: JSON.stringify(provider === "bigmodel"
++      ? {
++          id: input.account,
++          username: input.account,
++          displayName: input.account,
++          rawProfile: { user_id: input.account },
++        }
++      : {
++          user_id: input.account,
++          name: input.account,
++          email: `${input.account}@example.invalid`,
++        }),
++    zcodejwttoken: input.jwt ?? syntheticJwt(Date.now() + 120_000),
++  };
++  if (input.linkedBigModel !== undefined) {
++    values["oauth:linked_bigmodel"] = JSON.stringify(input.linkedBigModel);
++  }
++  return values;
++}
++
++function writeRecord(path: string, values: Readonly<Record<string, string>>): void {
++  writeFileSync(path, `${JSON.stringify(values)}\n`);
++}
++
++function dataDirSnapshot(dataDir: string): {
++  credentials: Buffer;
++  entries: string[];
++} {
++  return {
++    credentials: readFileSync(join(dataDir, "credentials.json")),
++    entries: readdirSync(dataDir).sort(),
++  };
++}
++
++class FakeKeyStore implements CredentialKeyStore {
++  readonly #value: string | null;
++  setCalls = 0;
++
++  constructor(value: string | null) {
++    this.#value = value;
++  }
++
++  async get(): Promise<string | null> {
++    return this.#value;
++  }
++
++  async set(): Promise<void> {
++    this.setCalls += 1;
++    throw new Error("read-only test key store must not be written");
++  }
++}
++
++function fakeCredentialService(
++  initial: Readonly<Record<string, string | null>>,
++): LocalCredentialService {
++  const values = { ...initial };
++  return {
++    getCredentialsFilePath: () => join(tmpdir(), "synthetic-credentials.json"),
++    inspectStore: async () => ({ status: "healthy" }),
++    recoverStore: async () => ({ status: "changed" }),
++    load: async (key) => values[key] ?? null,
++    loadMany: async (keys) => Object.fromEntries(keys.map((key) => [key, values[key] ?? null])),
++    save: async () => undefined,
++    delete: async () => undefined,
++    updateMany: async () => false,
++    deleteUnreadable: async () => false,
++    recoverUnreadable: async () => null,
++    saveIfAbsent: async () => "",
++    deleteIfEquals: async () => undefined,
++    captureRecoveryGuard: async () => {
++      throw new Error("not used");
++    },
++  };
++}
++
++describe("read-only credential compatibility", () => {
++  it("decrypts enc:v1 through the official cipher without migration or key creation", async () => {
++    const { baseDir, credentialsPath, dataDir } = makeDataRoot();
++    const legacy = createLegacyCredentialCipher({
++      ZCODE_CREDENTIAL_SECRET: CREDENTIAL_SECRET,
++    });
++    const plain = startPlanValues({ activeProvider: "bigmodel", account: "account-v1" });
++    writeRecord(
++      credentialsPath,
++      Object.fromEntries(Object.entries(plain).map(([key, value]) => [key, legacy.encrypt(value)])),
++    );
++    const before = dataDirSnapshot(dataDir);
++    const keyStore = new FakeKeyStore(null);
++
++    const resolver = createOfficialStartPlanAuthenticationResolver({
++      dataBaseDir: baseDir,
++      createReadOnlyCredentialService: () => createCredentialService({
++        readOnly: true,
++        env: { ZCODE_CREDENTIAL_SECRET: CREDENTIAL_SECRET },
++        keyStore,
++      }),
++      readDeviceMid: async () => DEVICE_MID,
++    });
++    const result = await resolver.resolveStartPlanAuthentication({
++      family: "bigmodel",
++      signal: new AbortController().signal,
++    });
++
++    assert.equal(result?.accountIdentity, "account-v1");
++    assert.deepEqual(dataDirSnapshot(dataDir), before);
++    assert.equal(keyStore.setCalls, 0);
++  });
++
++  it("reads enc:v2:env without rewriting bytes or creating sidecars", async () => {
++    const { baseDir, credentialsPath, dataDir } = makeDataRoot();
++    const writer = createSystemCredentialCipher({
++      filePath: credentialsPath,
++      env: { ZCODE_CREDENTIAL_SECRET: CREDENTIAL_SECRET },
++    });
++    const plain = startPlanValues({ activeProvider: "bigmodel", account: "account-env" });
++    writeRecord(
++      credentialsPath,
++      Object.fromEntries(await Promise.all(
++        Object.entries(plain).map(async ([key, value]) => [key, await writer.encrypt(value)]),
++      )),
++    );
++    rmSync(join(dataDir, "credential-source"), { force: true });
++    const before = dataDirSnapshot(dataDir);
++
++    const resolver = createOfficialStartPlanAuthenticationResolver({
++      dataBaseDir: baseDir,
++      createReadOnlyCredentialService: () => createCredentialService({
++        readOnly: true,
++        env: { ZCODE_CREDENTIAL_SECRET: CREDENTIAL_SECRET },
++      }),
++      readDeviceMid: async () => DEVICE_MID,
++    });
++    const result = await resolver.resolveStartPlanAuthentication({
++      family: "bigmodel",
++      signal: new AbortController().signal,
++    });
++
++    assert.equal(result?.accountIdentity, "account-env");
++    assert.deepEqual(dataDirSnapshot(dataDir), before);
++  });
++
++  it("reads enc:v2:os without a missing source marker and never creates key material", async () => {
++    const { baseDir, credentialsPath, dataDir } = makeDataRoot();
++    const keyStore = new FakeKeyStore(randomBytes(32).toString("base64url"));
++    const writer = createSystemCredentialCipher({
++      filePath: credentialsPath,
++      env: {},
++      keyStore,
++    });
++    const plain = startPlanValues({ activeProvider: "bigmodel", account: "account-os" });
++    writeRecord(
++      credentialsPath,
++      Object.fromEntries(await Promise.all(
++        Object.entries(plain).map(async ([key, value]) => [key, await writer.encrypt(value)]),
++      )),
++    );
++    rmSync(join(dataDir, "credential-source"), { force: true });
++    const before = dataDirSnapshot(dataDir);
++
++    const resolver = createOfficialStartPlanAuthenticationResolver({
++      dataBaseDir: baseDir,
++      createReadOnlyCredentialService: () => createCredentialService({
++        readOnly: true,
++        env: {},
++        keyStore,
++      }),
++      readDeviceMid: async () => DEVICE_MID,
++    });
++    const result = await resolver.resolveStartPlanAuthentication({
++      family: "bigmodel",
++      signal: new AbortController().signal,
++    });
++
++    assert.equal(result?.accountIdentity, "account-os");
++    assert.deepEqual(dataDirSnapshot(dataDir), before);
++    assert.equal(keyStore.setCalls, 0);
++  });
++
++  it("fails closed for unavailable key material, corrupt ciphertext and unknown formats without mutating the store", async () => {
++    const cases: Array<{
++      name: string;
++      create: () => Promise<{
++        baseDir: string;
++        dataDir: string;
++        keyStore: FakeKeyStore;
++        env: Record<string, string>;
++        before: ReturnType<typeof dataDirSnapshot>;
++      }>;
++    }> = [
++      {
++        name: "keyring unavailable",
++        async create() {
++          const root = makeDataRoot();
++          const sourceStore = new FakeKeyStore(randomBytes(32).toString("base64url"));
++          const writer = createSystemCredentialCipher({
++            filePath: root.credentialsPath,
++            env: {},
++            keyStore: sourceStore,
++          });
++          const plain = startPlanValues({ activeProvider: "bigmodel", account: "account-keyring" });
++          writeRecord(
++            root.credentialsPath,
++            Object.fromEntries(await Promise.all(
++              Object.entries(plain).map(async ([key, value]) => [key, await writer.encrypt(value)]),
++            )),
++          );
++          const keyStore = new FakeKeyStore(null);
++          return {
++            baseDir: root.baseDir,
++            dataDir: root.dataDir,
++            keyStore,
++            env: {},
++            before: dataDirSnapshot(root.dataDir),
++          };
++        },
++      },
++      {
++        name: "corrupt ciphertext",
++        async create() {
++          const root = makeDataRoot();
++          const keyStore = new FakeKeyStore(randomBytes(32).toString("base64url"));
++          const writer = createSystemCredentialCipher({
++            filePath: root.credentialsPath,
++            env: {},
++            keyStore,
++          });
++          const plain = startPlanValues({ activeProvider: "bigmodel", account: "account-corrupt" });
++          const encrypted = Object.fromEntries(await Promise.all(
++            Object.entries(plain).map(async ([key, value]) => [key, await writer.encrypt(value)]),
++          ));
++          const jwtSegments = encrypted.zcodejwttoken!.split(":");
++          const ciphertext = Buffer.from(jwtSegments[3]!, "base64url");
++          ciphertext[0] = ciphertext[0]! ^ 0xff;
++          jwtSegments[3] = ciphertext.toString("base64url");
++          encrypted.zcodejwttoken = jwtSegments.join(":");
++          writeRecord(root.credentialsPath, encrypted);
++          return {
++            baseDir: root.baseDir,
++            dataDir: root.dataDir,
++            keyStore,
++            env: {},
++            before: dataDirSnapshot(root.dataDir),
++          };
++        },
++      },
++      {
++        name: "unknown format",
++        async create() {
++          const root = makeDataRoot();
++          writeRecord(root.credentialsPath, {
++            ...startPlanValues({ activeProvider: "bigmodel", account: "account-unknown" }),
++            zcodejwttoken: "enc:v9:unsupported",
++          });
++          return {
++            baseDir: root.baseDir,
++            dataDir: root.dataDir,
++            keyStore: new FakeKeyStore(null),
++            env: {},
++            before: dataDirSnapshot(root.dataDir),
++          };
++        },
++      },
++      {
++        name: "malformed credential container",
++        async create() {
++          const root = makeDataRoot();
++          writeFileSync(root.credentialsPath, "{\n");
++          return {
++            baseDir: root.baseDir,
++            dataDir: root.dataDir,
++            keyStore: new FakeKeyStore(null),
++            env: {},
++            before: dataDirSnapshot(root.dataDir),
++          };
++        },
++      },
++    ];
++
++    for (const item of cases) {
++      const value = await item.create();
++      const resolver = createOfficialStartPlanAuthenticationResolver({
++        dataBaseDir: value.baseDir,
++        createReadOnlyCredentialService: () => createCredentialService({
++          readOnly: true,
++          env: value.env,
++          keyStore: value.keyStore,
++        }),
++        readDeviceMid: async () => DEVICE_MID,
++      });
++      assert.equal(await resolver.resolveStartPlanAuthentication({
++        family: "bigmodel",
++        signal: new AbortController().signal,
++      }), null, item.name);
++      assert.deepEqual(dataDirSnapshot(value.dataDir), value.before, item.name);
++      assert.equal(value.keyStore.setCalls, 0, item.name);
++    }
++  });
++
++  it("preserves v1, v2:env and v2:os bytes across isolated cold processes", async () => {
++    const cases: Array<{
++      mode: "v1" | "env" | "os";
++      baseDir: string;
++      dataDir: string;
++      env: NodeJS.ProcessEnv;
++      keyStore?: FakeKeyStore;
++    }> = [];
++    const osKey = randomBytes(32).toString("base64url");
++
++    for (const mode of ["v1", "env", "os"] as const) {
++      const root = makeDataRoot();
++      const keyStore = mode === "os" ? new FakeKeyStore(osKey) : undefined;
++      const env = mode === "v1" || mode === "env"
++        ? { ZCODE_CREDENTIAL_SECRET: CREDENTIAL_SECRET }
++        : {};
++      const cipher = mode === "v1"
++        ? createLegacyCredentialCipher({ ZCODE_CREDENTIAL_SECRET: CREDENTIAL_SECRET })
++        : createSystemCredentialCipher({
++            filePath: root.credentialsPath,
++            env,
++            keyStore,
++          });
++      const plain = startPlanValues({
++        activeProvider: "bigmodel",
++        account: `cold-process-${mode}`,
++      });
++      writeRecord(
++        root.credentialsPath,
++        Object.fromEntries(await Promise.all(
++          Object.entries(plain).map(async ([key, value]) => [key, await cipher.encrypt(value)]),
++        )),
++      );
++      writeFileSync(
++        join(root.dataDir, "telemetry-state.json"),
++        JSON.stringify({ deviceMid: DEVICE_MID }),
++      );
++      cases.push({
++        mode,
++        baseDir: root.baseDir,
++        dataDir: root.dataDir,
++        env: {
++          ...process.env,
++          ...env,
++          ...(mode === "os" ? { ZCODE_TEST_READ_ONLY_KEY: osKey } : {}),
++        },
++        keyStore,
++      });
++    }
++
++    for (const testCase of cases) {
++      const account = `cold-process-${testCase.mode}`;
++      const before = dataDirSnapshot(testCase.dataDir);
++      const { stdout, stderr } = await execFileAsync(
++        process.execPath,
++        [
++          "--import",
++          "tsx",
++          join(import.meta.dirname, "fixtures/official-start-plan-auth-readonly-child.ts"),
++          testCase.baseDir,
++          testCase.mode,
++        ],
++        {
++          cwd: join(import.meta.dirname, "../../.."),
++          env: testCase.env,
++          windowsHide: true,
++          timeout: 30_000,
++        },
++      );
++      assert.equal(stderr, "");
++      const payload = JSON.parse(stdout) as {
++        result: { accountIdentity: string; deviceMid: string } | null;
++      };
++      assert.equal(payload.result?.accountIdentity, account);
++      assert.equal(payload.result?.deviceMid, DEVICE_MID);
++      assert.deepEqual(dataDirSnapshot(testCase.dataDir), before, testCase.mode);
++      assert.equal(testCase.keyStore?.setCalls ?? 0, 0, testCase.mode);
++    }
++  });
++});
++
++describe("official Start Plan authentication projection", () => {
++  it("uses BigModel and linked Z.AI identity semantics without exposing tokens", async () => {
++    const { baseDir } = makeDataRoot();
++    const bigmodelJwt = syntheticJwt(Date.now() + 120_000);
++    const bigmodel = createOfficialStartPlanAuthenticationResolver({
++      dataBaseDir: baseDir,
++      createReadOnlyCredentialService: () => fakeCredentialService(startPlanValues({
++        activeProvider: "bigmodel",
++        account: "bigmodel-account",
++        jwt: bigmodelJwt,
++      })),
++      readDeviceMid: async () => DEVICE_MID,
++    });
++    const direct = await bigmodel.resolveStartPlanAuthentication({
++      family: "bigmodel",
++      signal: new AbortController().signal,
++    });
++    assert.equal(direct?.accountIdentity, "bigmodel-account");
++    assert.equal(JSON.stringify(direct).includes("access-token"), false);
++    assert.equal(JSON.stringify(direct).includes("refresh-token"), false);
++
++    const linked = createOfficialStartPlanAuthenticationResolver({
++      dataBaseDir: baseDir,
++      createReadOnlyCredentialService: () => fakeCredentialService(startPlanValues({
++        activeProvider: "zai",
++        account: "zai-account",
++        linkedBigModel: {
++          userId: "zai-account",
++          customerId: "linked-bigmodel-account",
++          accessToken: "linked-token-must-not-escape",
++        },
++      })),
++      readDeviceMid: async () => DEVICE_MID,
++    });
++    const projection = await linked.resolveStartPlanAuthentication({
++      family: "bigmodel",
++      signal: new AbortController().signal,
++    });
++    assert.equal(projection?.accountIdentity, "linked-bigmodel-account");
++    assert.equal(JSON.stringify(projection).includes("linked-token-must-not-escape"), false);
++  });
++
++  it("uses official zai_cn -> bigmodel fallback but keeps an unlinked Z.AI account unavailable", async () => {
++    const { baseDir } = makeDataRoot();
++    const cn = createOfficialStartPlanAuthenticationResolver({
++      dataBaseDir: baseDir,
++      createReadOnlyCredentialService: () => fakeCredentialService(startPlanValues({
++        activeProvider: "zai_cn",
++        account: "cn-account",
++      })),
++      readDeviceMid: async () => DEVICE_MID,
++    });
++    const cnProjection = await cn.resolveStartPlanAuthentication({
++      family: "bigmodel",
++      signal: new AbortController().signal,
++    });
++    assert.equal(cnProjection?.accountIdentity, "cn-account");
++
++    const globalZai = createOfficialStartPlanAuthenticationResolver({
++      dataBaseDir: baseDir,
++      createReadOnlyCredentialService: () => fakeCredentialService(startPlanValues({
++        activeProvider: "zai",
++        account: "unlinked-zai-account",
++      })),
++      readDeviceMid: async () => DEVICE_MID,
++    });
++    assert.equal(await globalZai.resolveStartPlanAuthentication({
++      family: "bigmodel",
++      signal: new AbortController().signal,
++    }), null);
++  });
++
++  it("observes account switches, missing device identity and cancellation fail closed", async () => {
++    const { baseDir } = makeDataRoot();
++    let values = startPlanValues({
++      activeProvider: "bigmodel",
++      account: "account-a",
++      sessionRevision: "revision-a",
++    });
++    let deviceReads = 0;
++    const resolver = createOfficialStartPlanAuthenticationResolver({
++      dataBaseDir: baseDir,
++      createReadOnlyCredentialService: () => fakeCredentialService(values),
++      readDeviceMid: async () => {
++        deviceReads += 1;
++        return DEVICE_MID;
++      },
++    });
++    const first = await resolver.resolveStartPlanAuthentication({
++      family: "bigmodel",
++      signal: new AbortController().signal,
++    });
++    values = startPlanValues({
++      activeProvider: "bigmodel",
++      account: "account-b",
++      sessionRevision: "revision-b",
++    });
++    const second = await resolver.resolveStartPlanAuthentication({
++      family: "bigmodel",
++      signal: new AbortController().signal,
++    });
++    assert.deepEqual(
++      [first?.accountIdentity, first?.sessionRevision, second?.accountIdentity, second?.sessionRevision],
++      ["account-a", "revision-a", "account-b", "revision-b"],
++    );
++
++    const missingDevice = createOfficialStartPlanAuthenticationResolver({
++      dataBaseDir: baseDir,
++      createReadOnlyCredentialService: () => fakeCredentialService(values),
++      readDeviceMid: async () => null,
++    });
++    assert.equal(await missingDevice.resolveStartPlanAuthentication({
++      family: "bigmodel",
++      signal: new AbortController().signal,
++    }), null);
++
++    const controller = new AbortController();
++    controller.abort();
++    const readsBeforeCancellation = deviceReads;
++    assert.equal(await resolver.resolveStartPlanAuthentication({
++      family: "bigmodel",
++      signal: controller.signal,
++    }), null);
++    assert.equal(deviceReads, readsBeforeCancellation);
++  });
++
++  it("refreshes an expired shared JWT once through the official OAuth seam", async () => {
++    const { baseDir } = makeDataRoot();
++    let jwt = syntheticJwt(Date.now() - 60_000);
++    let refreshes = 0;
++    const values = () => startPlanValues({
++      activeProvider: "bigmodel",
++      account: "account-refresh",
++      jwt,
++    });
++    const resolver = createOfficialStartPlanAuthenticationResolver({
++      dataBaseDir: baseDir,
++      createReadOnlyCredentialService: () => fakeCredentialService(values()),
++      createRefreshCredentialService: () => fakeCredentialService(values()),
++      createOAuthService: () => ({
++        refreshToken: async () => {
++          refreshes += 1;
++          jwt = syntheticJwt(Date.now() + 120_000);
++        },
++      }),
++      readDeviceMid: async () => DEVICE_MID,
++    });
++
++    const refreshed = await resolver.resolveStartPlanAuthentication({
++      family: "bigmodel",
++      signal: new AbortController().signal,
++    });
++    assert.equal(refreshes, 1);
++    assert.equal(refreshed?.requestCredential, jwt);
++  });
++});
+diff --git a/packages/shared/src/credential-security/contract.ts b/packages/shared/src/credential-security/contract.ts
+index a709ac74cb9b96373882c75a3d71dff12822a12f..3498cd10516eb9c5b0cd2565a6056a2c05014f09 100644
+--- a/packages/shared/src/credential-security/contract.ts
++++ b/packages/shared/src/credential-security/contract.ts
+@@ -28,6 +28,16 @@ export interface SystemCredentialCipherOptions {
+   filePath: string;
+   env?: Readonly<Record<string, string | undefined>>;
+   keyStore?: CredentialKeyStore;
++  /**
++   * Host-only read path: never create a key or credential-source marker while
++   * resolving existing material. Missing key material fails closed.
++   */
++  readOnly?: boolean;
++  /**
++   * Permit official token/session writes while still forbidding keyring entry
++   * creation and credential-source publication.
++   */
++  readOnlyKeyMaterial?: boolean;
+ }
+ /** Linux Desktop Main 开启私有文件密钥回退时的观察入口；回调不接收密钥或路径内容。 */
+ export interface PrivateFileKeyFallbackOptions {
+diff --git a/packages/shared/src/credential-security/systemCredentialCipher.ts b/packages/shared/src/credential-security/systemCredentialCipher.ts
+index c3207989fb4d53cd029c0518c94d91c8cb6004b2..1f86e45e906622cd67ba0938350081e27eabeecc 100644
+--- a/packages/shared/src/credential-security/systemCredentialCipher.ts
++++ b/packages/shared/src/credential-security/systemCredentialCipher.ts
+@@ -252,6 +252,8 @@ export function createSystemCredentialCipher(
+   options: SystemCredentialCipherOptions,
+ ): SystemCredentialCipher {
+   const env = options.env ?? process.env;
++  const readOnly = options.readOnly === true;
++  const readOnlyKeyMaterial = readOnly || options.readOnlyKeyMaterial === true;
+   let managedSecret: Promise<string | undefined> | undefined;
+   // 此处只解析显式配置；默认文件必须在下方所有调用者共用的 keyring 锁内发现，避免来源竞态。
+   const getManagedSecret = () => (managedSecret ??= resolveManagedSecret(options));
+@@ -291,6 +293,7 @@ export function createSystemCredentialCipher(
+         try {
+           encoded = await store.get();
+           if (encoded === null && unbound) {
++            if (readOnlyKeyMaterial) throw unavailable();
+             encoded = randomBytes(KEY_BYTES).toString("base64url");
+             await store.set(encoded);
+             if ((await store.get()) !== encoded) throw unavailable();
+@@ -311,7 +314,9 @@ export function createSystemCredentialCipher(
+         }
+         const key = Buffer.from(encoded, "base64url");
+         if (key.length !== KEY_BYTES) throw unavailable();
+-        if (!pinnedSource) await atomicWritePrivateTextFile(sourcePath, OS_SOURCE_MARKER);
++        if (!pinnedSource && !readOnlyKeyMaterial) {
++          await atomicWritePrivateTextFile(sourcePath, OS_SOURCE_MARKER);
++        }
+         return { key, source: "os" } as const;
+       } catch {
+         throw unavailable();
+@@ -396,6 +401,7 @@ export function createSystemCredentialCipher(
+       });
+     },
+     async encrypt(value) {
++      if (readOnly) throw unavailable();
+       const { key, source } = await getKey(true);
+       const fingerprint = keyFingerprint(key);
+       return `${SYSTEM_PREFIX}${source}:${fingerprint}:${seal(value, key)}`;
+@@ -403,10 +409,24 @@ export function createSystemCredentialCipher(
+     async decrypt(value) {
+       if (!value.startsWith(SYSTEM_PREFIX)) {
+         if (value.startsWith("enc:") && !value.startsWith(LEGACY_PREFIX)) throw decryptError();
+-        const { legacySecret } = await getKey(true);
++        let legacySecret: string | undefined;
++        if (readOnlyKeyMaterial) {
++          try {
++            legacySecret = (await getKey(false)).legacySecret;
++          } catch (error) {
++            // Historical v1 may use the machine-derived fallback without a
++            // keyring entry. The official legacy decoder validates the GCM tag,
++            // so an unavailable system entry must not force a write.
++            if ((error as { code?: unknown })?.code !== "CREDENTIAL_SECURE_STORAGE_UNAVAILABLE") {
++              throw error;
++            }
++          }
++        } else {
++          ({ legacySecret } = await getKey(true));
++        }
+         return createLegacyCredentialCipher({
+           ...env,
+-          ZCODE_CREDENTIAL_SECRET: legacySecret,
++          ...(legacySecret ? { ZCODE_CREDENTIAL_SECRET: legacySecret } : {}),
+         }).decrypt(value);
+       }
+       const parts = value.slice(SYSTEM_PREFIX.length).split(":");
+diff --git a/scripts/engineering-test-files.json b/scripts/engineering-test-files.json
+index 671ee8cab21aadff828dcf19a62a860992f7bfc6..5cecbf67af89dab4729a2767f2ea31c938ee7201 100644
+--- a/scripts/engineering-test-files.json
++++ b/scripts/engineering-test-files.json
+@@ -159,6 +159,7 @@
+   "packages/desktop/test/windowsInstallerNshSmoke.test.ts",
+   "packages/desktop/test/windowsInstallerPreserveFiles.test.ts",
+   "packages/plugin-api/test/version.test.ts",
++  "packages/services/test/officialStartPlanAuthentication.test.ts",
+   "packages/services/test/oauthRefreshCoordination.test.ts",
+   "packages/server/test/remoteOfficialPluginAssets.test.ts",
+   "packages/server/test/tsupConfig.test.ts",

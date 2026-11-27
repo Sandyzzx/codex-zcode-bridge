@@ -7,12 +7,15 @@
 //
 // Built with the official MCP TypeScript SDK (McpServer / registerTool);
 // the SDK owns all JSON-RPC framing — this module never writes to stdout.
+import { createHash } from "node:crypto";
 import { McpServer, type CallToolResult } from "@modelcontextprotocol/server";
 import type {
+  GetEventsInput,
   ContinueTaskInput,
   ProgressTaskManager,
   TaskManager,
   TaskAttentionSnapshot,
+  TaskAdmission,
   TaskPackage,
   TaskReceipt,
   TaskResult,
@@ -20,16 +23,12 @@ import type {
   TaskFeedbackSnapshotV01,
   ZCodeInteractionReplyInput,
 } from "../interfaces.js";
-import { TaskManagerError } from "../manager/errors.js";
-
-/** Public zcode_task input (ADR-031): model.provider_id is optional and is
- * resolved by the Authority's routing hook before persistence. */
-type ZcodeTaskInput = Omit<TaskPackage, "model"> & {
-  model?: { provider_id?: string; model_id: string; reasoning_level?: string };
-};
+import { TaskManagerError } from "../task-errors.js";
+import type { ZcodeTaskInput } from "../api-schemas.js";
 import {
   taskReceiptSchema,
-  taskResultSchema,
+  zcodeResultInputSchema,
+  zcodeResultOutputSchema,
   taskStatusRecordSchema,
   taskIdOnlyInputSchema,
   zcodeContinueInputSchema,
@@ -45,33 +44,53 @@ import {
   taskFeedbackSnapshotV01Schema,
   zcodeFeedbackInputSchema,
 } from "./schemas.js";
-import type { DoctorReport } from "../runtime/doctor.js";
-import { BridgeError } from "../runtime/errors.js";
-import type { ZCodeModelSettings } from "../runtime/model-settings.js";
-import { registerLedgerTools } from "../ledger/mcp.js";
-import { renderTaskFeedback } from "../feedback/renderer.js";
+import type { McpDoctorReport, McpModelSettings } from "./contracts.js";
 
 export const SERVER_NAME = "codex-zcode-bridge";
-export const SERVER_VERSION = "1.7.2"; // x-release-please-version
+export const SERVER_VERSION = "2.0.0"; // x-release-please-version
 
 export interface BridgeServerOptions {
   taskManager: TaskManager & Partial<Pick<ProgressTaskManager, "getEvents" | "getFeedback" | "getAttention" | "replyToInteraction">>;
-  doctor?: () => Promise<DoctorReport>;
-  modelSettings?: Pick<ZCodeModelSettings, "listModels" | "getDefaultModel" | "setDefaultModel" | "clearDefaultModel">;
+  doctor?: () => Promise<McpDoctorReport>;
+  modelSettings?: McpModelSettings;
   serverInfo?: { name: string; version: string };
   instructions?: string;
-  enableExperiments?: boolean;
-  /** Opt-in project task ledger (C1-C3). Absent = disabled: the frozen core
-   * tools behave exactly as before and no ledger data is ever created. */
-  ledger?: import("../ledger/mcp.js").LedgerToolOptions;
 }
 
 const EXECUTION_NOT_VERDICT =
-  "Results describe Bridge/ZCode execution only: status 'completed' means the invocation and report normalization finished, NOT that the calling host accepted the work. the calling host must independently review the workspace diff and checks before deciding PASS.";
+  "Execution only. 'completed' is NOT calling host acceptance. Independently verify the workspace diff and checks.";
+const CODEX_THREAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+const OWNER_IDENTITY_INPUT_KEYS = new Set([
+  "thread_id",
+  "codex_thread_id",
+  "owner_thread_id",
+  "owner_thread",
+  "owner_binding",
+]);
+
+/** P1 §3.4 / ADR-056: large payloads keep the authoritative structuredContent
+ * channel but replace the duplicated full JSON text with a bounded reference,
+ * so a Result is never serialized twice across the MCP transport. */
+const OK_RESULT_TEXT_CHANNEL_LIMIT_BYTES = 1 << 20;
 
 function okResult(data: Record<string, unknown>): CallToolResult {
+  const text = JSON.stringify(data, null, 2);
+  if (text !== undefined && Buffer.byteLength(text, "utf8") > OK_RESULT_TEXT_CHANNEL_LIMIT_BYTES) {
+    return {
+      content: [{
+        type: "text",
+        text: JSON.stringify({
+          notice: "response_too_large_for_text_channel",
+          text_bytes: Buffer.byteLength(text, "utf8"),
+          text_sha256: createHash("sha256").update(text, "utf8").digest("hex"),
+          hint: "The structuredContent channel carries the full payload; use view=summary or offset_bytes/max_bytes paging for bounded reads.",
+        }),
+      }],
+      structuredContent: data,
+    };
+  }
   return {
-    content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+    content: [{ type: "text", text: text ?? "null" }],
     structuredContent: data,
   };
 }
@@ -85,8 +104,21 @@ function errorResult(code: string, message: string): CallToolResult {
 }
 
 function feedbackResult(snapshot: TaskFeedbackSnapshotV01): CallToolResult {
+  const text = JSON.stringify({
+    task_id: snapshot.task_id,
+    attempt: snapshot.attempt,
+    status: snapshot.status,
+    activity: snapshot.activity,
+    interaction: snapshot.interaction,
+    result: snapshot.result ? {
+      summary: snapshot.result.summary,
+      files_changed: snapshot.result.files_changed.length,
+      tests: snapshot.result.tests.length,
+      issues: snapshot.result.issues.length,
+    } : null,
+  });
   return {
-    content: [{ type: "text", text: renderTaskFeedback(snapshot) }],
+    content: [{ type: "text", text }],
     structuredContent: snapshot as unknown as Record<string, unknown>,
   };
 }
@@ -99,8 +131,39 @@ async function runTool<T>(operation: () => Promise<T>): Promise<CallToolResult> 
     if (error instanceof TaskManagerError) {
       return errorResult(error.code, error.message);
     }
-    if (error instanceof BridgeError) return errorResult(error.code.toUpperCase(), error.message);
+    if (error instanceof Error && "code" in error && typeof error.code === "string"
+      && /^[A-Z][A-Z0-9_]{2,63}$/u.test(error.code)) {
+      return errorResult(error.code, error.message);
+    }
+    if (error instanceof Error && "code" in error && typeof error.code === "string"
+      && /^[a-z][a-z0-9_]{2,63}$/u.test(error.code)) {
+      return errorResult(error.code.toUpperCase(), error.message);
+    }
     throw error;
+  }
+}
+
+function admissionFromMcpContext(context: unknown): TaskAdmission {
+  const meta = context && typeof context === "object"
+    ? (context as { mcpReq?: { _meta?: Record<string, unknown> } }).mcpReq?._meta
+    : undefined;
+  const raw = meta?.threadId;
+  if (raw === undefined || raw === null) {
+    return { owner_thread_id: null, source: "mcp_meta_missing" };
+  }
+  if (typeof raw !== "string" || raw !== raw.trim() || raw !== raw.normalize("NFC")
+    || !CODEX_THREAD_ID.test(raw)) {
+    return { owner_thread_id: null, source: "mcp_meta_invalid" };
+  }
+  return { owner_thread_id: raw, source: "mcp_meta" };
+}
+
+function assertNoOwnerIdentityInput(args: ZcodeTaskInput): void {
+  if (Object.keys(args as Record<string, unknown>).some((key) => OWNER_IDENTITY_INPUT_KEYS.has(key))) {
+    throw new TaskManagerError(
+      "TASK_INVALID",
+      "Owner Thread identity is supplied only by the trusted Host MCP context and cannot be set in zcode_task input",
+    );
   }
 }
 
@@ -113,7 +176,7 @@ export function createBridgeServer(options: BridgeServerOptions): McpServer {
     "zcode_doctor",
     {
       title: "Check ZCode Bridge setup",
-      description: "Run read-only checks for Bridge prerequisites, ZCode runtime/provider configuration, execution mode, task storage, and Desktop task-index availability. It does not start a ZCode session. App-server model availability and real permission approval are reported as unverified until a task runs.",
+      description: "Check Bridge setup, runtime, provider config, execution mode and storage without starting a session. Live model and permission checks remain unverified.",
       inputSchema: {},
       outputSchema: doctorReportSchema,
     },
@@ -127,7 +190,7 @@ export function createBridgeServer(options: BridgeServerOptions): McpServer {
     "zcode_model_catalog",
     {
       title: "Read available ZCode models",
-      description: "Read models and reasoning levels for this workspace. The Bridge caches the catalog for 24 hours, refreshes when provider settings change or the cache expires, and re-reads provider config before retrying a failed refresh. A cache response has current_model=null; use provider_id/model_id from models in zcode_task.model. Start Plan entries appear as <ModelId>-StartPlan aliases and are entitlement-checked live when such a task runs.",
+      description: "List workspace models and reasoning levels. Cached results have current_model=null. Use provider_id/model_id in zcode_task.model. <ModelId>-StartPlan aliases are entitlement-checked at execution.",
       inputSchema: zcodeModelCatalogInputSchema,
       outputSchema: modelCatalogSchema,
     },
@@ -155,7 +218,7 @@ export function createBridgeServer(options: BridgeServerOptions): McpServer {
     "zcode_set_default_model",
     {
       title: "Set the Bridge default model",
-      description: "Persist a default provider/model selection for future tasks that omit zcode_task.model. Use IDs from zcode_model_catalog or the configured ZCode provider/model rules; the app-server validates the selection when a task starts. An optional reasoning_level applies to the configured default model; a per-task model selection can still override it.",
+      description: "Persist the default provider/model and optional reasoning_level. Use catalog or configured IDs. AppServer validates at execution. Explicit task models take priority.",
       inputSchema: zcodeDefaultModelInputSchema,
       outputSchema: defaultModelSchema,
     },
@@ -183,18 +246,21 @@ export function createBridgeServer(options: BridgeServerOptions): McpServer {
     "zcode_task",
     {
       title: "Submit one ZCode coding task",
-      description: `Create one complete, independently acceptable coding task for the local ZCode Coding Worker. Delegate a deliverable with clear constraints and acceptance criteria; the Worker owns implementation, tests, and repair end to end. workspace is the calling host project root and determines the ZCode Desktop project identity. The calling host decides whether to create a worktree; if it does, pass its existing absolute directory as optional worktree_path. The Bridge never creates, selects, or removes a worktree. Without worktree_path, ZCode runs directly in workspace. Optional model: pass provider_id+model_id to force that provider, or omit provider_id with a plain model id or a <ModelId>-StartPlan alias to route once per task (prefer_startplan, default true, prefers Start Plan for plain models). Returns a TaskReceipt; the task runs asynchronously in a detached worker. ${EXECUTION_NOT_VERDICT}`,
+      description: `Queue one complete coding deliverable with constraints and acceptance criteria. Identical task_id and input replay the receipt. Changed input conflicts. workspace identifies the project and is the execution root unless worktree_path names an existing host-prepared worktree. Explicit provider_id+model_id wins. With only model_id, route a plain ID (Start Plan preferred by default) or a <ModelId>-StartPlan alias. ${EXECUTION_NOT_VERDICT}`,
       inputSchema: zcodeTaskInputSchema,
       outputSchema: taskReceiptSchema,
     },
-    async (args: ZcodeTaskInput) => runTool(() => manager.createTask(args as TaskPackage)),
+    async (args: ZcodeTaskInput, context) => runTool(() => {
+      assertNoOwnerIdentityInput(args);
+      return manager.createTask(args as TaskPackage, admissionFromMcpContext(context));
+    }),
   );
 
   server.registerTool(
     "zcode_status",
     {
       title: "Read ZCode task execution status",
-      description: `Read the execution status record for one task. This is execution status only and never contains a PASS/FAIL code-review judgment. ${EXECUTION_NOT_VERDICT}`,
+      description: `Read one task's execution status and any recovery observation. ${EXECUTION_NOT_VERDICT}`,
       inputSchema: taskIdOnlyInputSchema,
       outputSchema: taskStatusRecordSchema,
     },
@@ -205,21 +271,17 @@ export function createBridgeServer(options: BridgeServerOptions): McpServer {
     "zcode_feedback",
     {
       title: "Read concise ZCode task feedback",
-      description: `Read a provenance-aware v0.1 snapshot for one task attempt. Bridge status, runtime-reported model/tool observations, and Agent-reported result claims remain distinct. phase/progress stay null; interaction remains not_observed without reliable current evidence. This snapshot does not replace zcode_events and does not verify or accept the result. ${EXECUTION_NOT_VERDICT}`,
+      description: `Read current Attempt feedback: Bridge status, runtime observations and Agent claims. Progress is unknown. Use zcode_events for interaction details. ${EXECUTION_NOT_VERDICT}`,
       inputSchema: zcodeFeedbackInputSchema,
       outputSchema: taskFeedbackSnapshotV01Schema,
     },
     async (args: { task_id: string }) => {
       const getFeedback = manager.getFeedback;
       if (!getFeedback) return errorResult("FEEDBACK_UNAVAILABLE", "task manager does not provide feedback snapshots");
-      try {
-        const snapshot = await getFeedback.call(manager, args.task_id);
-        return feedbackResult(snapshot);
-      } catch (error) {
-        if (error instanceof TaskManagerError) return errorResult(error.code, error.message);
-        if (error instanceof BridgeError) return errorResult(error.code.toUpperCase(), error.message);
-        throw error;
-      }
+      const result = await runTool(() => getFeedback.call(manager, args.task_id));
+      return result.isError === true ? result : feedbackResult(
+        result.structuredContent as unknown as TaskFeedbackSnapshotV01,
+      );
     },
   );
 
@@ -227,11 +289,11 @@ export function createBridgeServer(options: BridgeServerOptions): McpServer {
     "zcode_events",
     {
       title: "Read live ZCode execution events",
-      description: "Read persisted progress events for a task. Set view to summary to merge adjacent model text chunks; raw is the default. next_seq advances across all scanned events, including merged chunks. Immediately after submission, report the project path, effective execution path (and worktree path when supplied), and queued/running state from the first events. Keep polling until turn_started or startup failure; before longer monitoring, report the ZCode session, runtime-reported selected model, runtime-reported reasoning level when present, and execution mode. Set after_seq to the last next_seq returned and wait_ms up to 25000. Set wait_for to attention to wait only for a current-Attempt pending request, a terminal status, or an Attempt change; ordinary events do not wake this mode. Hidden reasoning is excluded. interaction_requested events include bounded tool/request details needed for a deliberate permission or input decision.",
+      description: "Read persisted events from after_seq. Without max_bytes, each page uses a 32 KiB budget; drain has_more or scan_incomplete using scan_cursor, otherwise next_seq. The default may return one oversized event so cursor progress is possible. Explicit max_bytes is a hard budget. Raw is default. Summary merges adjacent model text. Report project and execution paths and queued/running after submission, then session, runtime model/reasoning and mode at turn_started. wait_ms <= 25000. Attention waits for a current-Attempt pending request, terminal state or Attempt change. Read complete interaction details before replying. Hidden reasoning is excluded.",
       inputSchema: zcodeEventsInputSchema,
       outputSchema: taskProgressPageSchema,
     },
-      async (args: { task_id: string; after_seq?: number; limit?: number; wait_ms?: number; view?: "raw" | "summary"; scan_cursor?: string; max_bytes?: number; wait_for?: "attention" }) => {
+      async (args: GetEventsInput) => {
         if (!manager.getEvents) return errorResult("EVENTS_UNAVAILABLE", "task manager does not provide progress events");
         return runTool(() => manager.getEvents!(args));
       },
@@ -241,7 +303,7 @@ export function createBridgeServer(options: BridgeServerOptions): McpServer {
     "zcode_interaction_reply",
     {
       title: "Reply to a ZCode permission or input request",
-      description: "Reply to a pending ZCode permission or user-input request surfaced by zcode_events. For permission requests, use allow only when the user explicitly authorized the requested action; otherwise deny or ask the user. Do not infer permission from task instructions, worktree use, or ZCode mode. For user-input requests, answer only from known facts or the user's explicit direction. This tool does not approve the task result.",
+      description: "Reply to a pending request from zcode_events. Allow only the specific action explicitly authorized by the user. Otherwise deny or ask. Task instructions, worktree and mode grant no permission. Answer user-input requests from known facts or explicit direction.",
       inputSchema: zcodeInteractionReplyInputSchema,
     },
     async (args: ZCodeInteractionReplyInput) => {
@@ -254,18 +316,38 @@ export function createBridgeServer(options: BridgeServerOptions): McpServer {
     "zcode_result",
     {
       title: "Read the terminal ZCode task result",
-      description: `Read the persisted TaskResult for a finished task. Returns TASK_NOT_FINISHED before a terminal state. 'completed' is not a the calling host PASS: files_changed, tests, and decisions are normalized claims from the subordinate report and must be verified independently. ${EXECUTION_NOT_VERDICT}`,
-      inputSchema: taskIdOnlyInputSchema,
-      outputSchema: taskResultSchema,
+      description: `Read the committed Result. Defaults to full. Use view=summary for a bounded report and expected_attempt to guard a follow-up read. If projection is present, use view=full for omitted evidence. Returns TASK_NOT_FINISHED without a committed Result. Agent file, test, and decision claims require independent review. ${EXECUTION_NOT_VERDICT}`,
+      inputSchema: zcodeResultInputSchema,
+      outputSchema: zcodeResultOutputSchema,
     },
-    async (args: { task_id: string }) => runTool(() => manager.getResult(args.task_id)),
+    async (args: { task_id: string; view?: "summary" | "full"; expected_attempt?: number; offset_bytes?: number; max_bytes?: number }) => runTool(async () => {
+      if ((args.offset_bytes === undefined) !== (args.max_bytes === undefined)) {
+        throw new TaskManagerError("TASK_INVALID", "offset_bytes and max_bytes must be provided together");
+      }
+      if (args.offset_bytes !== undefined && args.view === "summary") {
+        throw new TaskManagerError("TASK_INVALID", "paged reads return stored canonical bytes and cannot be combined with view=summary");
+      }
+      if (args.offset_bytes !== undefined) {
+        if (!("getResultPage" in manager) || typeof (manager as { getResultPage?: unknown }).getResultPage !== "function") {
+          throw new TaskManagerError("TASK_INVALID", "this Task manager does not expose paged Result reads");
+        }
+        return await (manager as unknown as { getResultPage(taskId: string, offsetBytes: number, maxBytes: number): Promise<Record<string, unknown>> })
+          .getResultPage(args.task_id, args.offset_bytes, args.max_bytes!);
+      }
+      // P1 §3.4B: the summary projection already ran Executor-side.
+      const result = await manager.getResult(args.task_id, args.view);
+      if (args.expected_attempt !== undefined && result.attempt !== args.expected_attempt) {
+        throw new TaskManagerError("TASK_STATE", `Expected Result Attempt ${args.expected_attempt}, found ${result.attempt} for ${args.task_id}`);
+      }
+      return result;
+    }),
   );
 
   server.registerTool(
     "zcode_continue",
     {
       title: "Continue a ZCode task with master feedback",
-      description: `Continue a finished task with master feedback: reuses the task ID and workspace, increments the attempt, and preserves prior evidence. Use this for consolidated acceptance rework, a required decision, controlled recovery, or report repair; it is not routine scheduling for the next implementation step. Allowed from completed, failed, or waiting_for_master. Supply a stable operation_id when retrying after a lost response; the same ID and input will not create another attempt. A decision flagged by ZCode is never auto-approved; the calling host must provide the follow-up instruction. ${EXECUTION_NOT_VERDICT}`,
+      description: `Continue completed, failed or waiting_for_master after Release for rework, an explicit decision, controlled recovery or report repair. Reuse task_id and workspace with a new Attempt. Retry a lost response with the same operation_id and input. ${EXECUTION_NOT_VERDICT}`,
       inputSchema: zcodeContinueInputSchema,
       outputSchema: taskReceiptSchema,
     },
@@ -276,57 +358,11 @@ export function createBridgeServer(options: BridgeServerOptions): McpServer {
     "zcode_cancel",
     {
       title: "Cancel or recover a ZCode task",
-      description: `Cancel a queued or running task, or recover a failed SQLite task whose cleanup is unverified. Held-operation recovery may terminate the original Worker by its recorded process identity; callers must obtain explicit user authorization first. Recovery does not replay the task or create an Attempt and returns only the Task status record. ${EXECUTION_NOT_VERDICT}`,
+      description: `Cancel queued/running or retry unverified Cleanup. One call is the explicit user authorization; state decides the internal action, not user eligibility. It may administratively release an already-cancelled historical launch_intent with no durable spawn evidence, or any terminal failed/completed/waiting_for_master/cancelled cleanup_unverified after exact exit and a clean tree while resource closure remains unverified. It never upgrades to cleanup_verified and cannot release a live, unverifiable, or still-running Worker. Held recovery may terminate the recorded Worker without replaying or creating an Attempt. Check Status for Hold and Events for Release. ${EXECUTION_NOT_VERDICT}`,
       inputSchema: taskIdOnlyInputSchema,
       outputSchema: taskStatusRecordSchema,
     },
     async (args: { task_id: string }) => runTool(() => manager.cancelTask(args.task_id)),
-  );
-
-  // Opt-in project task ledger tools (C1-C3); never registered by default.
-  if (options.ledger) {
-    registerLedgerTools(server, options.ledger);
-  }
-
-  // Temporary experiment tool: verify whether the calling host surfaces MCP progress notifications.
-  if (options.enableExperiments) server.registerTool(
-    "zcode_progress_probe",
-    {
-      title: "[Experiment] Check MCP progress display",
-      description: "Temporary read-only experiment. Sends three MCP progress notifications over three seconds to test whether the calling host displays server progress while this tool runs. Does not start or modify a ZCode task.",
-    },
-    async (ctx) => {
-      const progressToken = ctx.mcpReq._meta?.progressToken;
-      let notificationsSent = 0;
-
-      if (progressToken !== undefined) {
-        for (let progress = 1; progress <= 3; progress += 1) {
-          await new Promise((resolve) => setTimeout(resolve, 1_000));
-          await ctx.mcpReq.notify({
-            method: "notifications/progress",
-            params: {
-              progressToken,
-              progress,
-              total: 3,
-              message: `Experiment progress ${progress}/3`,
-            },
-          });
-          notificationsSent += 1;
-        }
-      }
-
-      return {
-        content: [{
-          type: "text",
-          text: JSON.stringify({
-            experiment: "mcp-progress-display",
-            progress_token_received: progressToken !== undefined,
-            notifications_sent: notificationsSent,
-            note: "The tool result confirms server delivery only; check whether the calling host displayed progress while it was running.",
-          }, null, 2),
-        }],
-      };
-    },
   );
 
   return server;

@@ -50,6 +50,8 @@ export interface NormalizedUsage {
   output_tokens: number | null;
   total_tokens: number | null;
   cached_input_tokens: number | null;
+  /** Cache-write tokens are distinct from cache-read/`cached_input_tokens`. */
+  cached_write_input_tokens?: number | null;
   reasoning_tokens: number | null;
   /** Controlled conflict markers (e.g. total_mismatch, duplicate_synonyms). */
   conflicts: string[];
@@ -103,6 +105,34 @@ export interface TaskPackage {
   context?: string;
 }
 
+/** Trusted admission context supplied by the Host boundary, never by a TaskPackage. */
+export interface TaskAdmission {
+  readonly owner_thread_id: string | null;
+  readonly source: "mcp_meta" | "mcp_meta_missing" | "mcp_meta_invalid" | "non_host_admission";
+}
+
+export interface TaskOwnerBinding {
+  readonly task_id: string;
+  readonly state: "bound" | "unavailable";
+  readonly owner_thread_id: string | null;
+  readonly source: "mcp_meta" | "mcp_meta_missing" | "mcp_meta_invalid" | "non_host_admission" | "legacy_unavailable";
+  readonly bound_at: string | null;
+  readonly reason_code: "owner_thread_unavailable" | null;
+}
+
+/**
+ * Additive receipt evidence for the verified Task Console deep link. A link
+ * failure never rejects an accepted Task; it is reported as unavailable with
+ * a stable reason code so the Master can fall back to `task status`.
+ */
+export interface TaskConsoleLink {
+  readonly available: boolean;
+  readonly web_url: string | null;
+  readonly console_id: string | null;
+  readonly console_reused: boolean | null;
+  readonly reason_code: string | null;
+}
+
 export interface ZCodeModelSelection {
   provider_id: string;
   model_id: string;
@@ -114,6 +144,25 @@ export interface TestReport {
   command: string;
   status: "passed" | "failed" | "not_run";
   details?: string;
+}
+
+/**
+ * ADR-066: bounded, redacted diagnostics of one rejected official RPC. Only a
+ * failed Result carries them; they replace a reproduction as the evidence of
+ * a failure that happened before any model turn.
+ */
+export interface RpcDiagnostic {
+  method: string;
+  /** JSON-RPC error code, or null when the rejection carried none. */
+  code: number | null;
+  /** Redacted upstream message, at most 500 characters on one line. */
+  message: string;
+  /** `error.data.name` when it is a plain identifier. */
+  data_name: string | null;
+  /** `error.data.code` when it is a plain token, e.g. `model_not_found`. */
+  data_code: string | null;
+  /** Function names and `basename:line:column` only; every directory is removed. */
+  stack?: string;
 }
 
 export interface TaskResult {
@@ -139,6 +188,8 @@ export interface TaskResult {
   model?: ExecutionProfile | null;
   /** B4 additive: bounded phase timings with explicit boundaries. */
   timing?: AttemptTiming | null;
+  /** ADR-066 additive: at most 4 redacted RPC rejections; `status === "failed"` only. */
+  rpc_diagnostics?: RpcDiagnostic[];
 }
 
 export interface WorkspaceRef {
@@ -224,6 +275,8 @@ export interface TaskReceipt {
   task_id: string;
   status: "queued" | "running";
   created_at: string;
+  owner_binding?: TaskOwnerBinding;
+  console_link?: TaskConsoleLink;
 }
 
 export interface TaskStatusRecord {
@@ -243,6 +296,11 @@ export interface TaskStatusRecord {
   observation?: TaskObservation;
   /** Read-only process/lifecycle observation for Manual-Recovery MVP; never a persisted Task status. */
   execution_observation?: ExecutionObservation;
+  /** Present only for a queued current Attempt whose dispatch is fenced by
+   * another occupied Operation; read-only projection, not a retry command. */
+  dispatch_blocker?: DispatchBlocker;
+  /** Admission-time Codex Thread binding. Missing only for older projections. */
+  owner_binding?: TaskOwnerBinding;
 }
 
 /** Read-only current-attempt view for hosts that only need to know whether the task needs attention. */
@@ -260,12 +318,23 @@ export interface ExecutionObservation {
   readonly evidence_ref: string;
 }
 
+export interface DispatchBlocker {
+  readonly reason: "capacity_occupied" | "workspace_occupied";
+  readonly task_id: string;
+  readonly operation_id: string;
+  readonly phase: string;
+  readonly workspace: string;
+  readonly queued_duration_ms: number;
+  readonly blocked_duration_ms: number;
+}
+
 /** Append-only, user-visible execution evidence. Never includes hidden reasoning; interaction requests may expose bounded tool input for a decision. */
 export interface TaskProgressEvent {
   seq: number;
   at: string;
   type: string;
   summary: string;
+  attempt?: number;
   details?: Record<string, unknown>;
 }
 
@@ -369,20 +438,24 @@ export interface GetEventsInput {
   limit?: number;
   wait_ms?: number;
   view?: "raw" | "summary";
+  /** Include the persisted Attempt number on each Event. */
+  include_attempt?: boolean;
   /** B1 additive: opaque cursor from a previous bounded page. */
   scan_cursor?: string;
-  /** B1 additive: byte budget for the bounded scan path (ignored without scan_cursor semantics). */
+  /** B1 additive: exact byte budget. Omit for the ADR-048 32 KiB default page. */
   max_bytes?: number;
   /** Wait on authoritative current-Attempt attention instead of ordinary events. */
   wait_for?: "attention";
 }
 
 export interface TaskManager {
-  createTask(task: TaskPackage): Promise<TaskReceipt>;
+  createTask(task: TaskPackage, admission?: TaskAdmission): Promise<TaskReceipt>;
   getStatus(taskId: string): Promise<TaskStatusRecord>;
-  getResult(taskId: string): Promise<TaskResult>;
+  /** P1 §3.4: view="summary" runs the ADR-047 projection Executor-side; the
+   * omitted (default) view keeps the frozen full-Result contract. */
+  getResult(taskId: string, view?: "summary" | "full"): Promise<TaskResult>;
   continueTask(input: ContinueTaskInput): Promise<TaskReceipt>;
-  cancelTask(taskId: string): Promise<TaskStatusRecord>;
+  cancelTask(taskId: string, options?: { readonly acceptWorkerRisk?: boolean }): Promise<TaskStatusRecord>;
 }
 
 /** Additive Phase 7 capability; the frozen V0.1 TaskManager contract stays intact. */

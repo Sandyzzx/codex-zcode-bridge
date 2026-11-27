@@ -8,25 +8,24 @@ const pluginRoot = path.join(repoRoot, "plugins", "codex-zcode-bridge");
 const distDir = path.join(pluginRoot, "dist");
 const workerDir = path.join(pluginRoot, "worker");
 const vendorDir = path.join(workerDir, "vendor");
-const skillScriptsDir = path.join(pluginRoot, "skills", "zcode-bridge", "scripts");
 await Promise.all([mkdir(distDir, { recursive: true }), mkdir(vendorDir, { recursive: true })]);
 // The bundled SQLite Store resolves its schemas relative to bridge.mjs.
 await Promise.all([
   copyFile(path.join(repoRoot, "src", "sqlite-candidate", "wp6b2b1", "schema.sql"), path.join(distDir, "schema.sql")),
+  copyFile(path.join(repoRoot, "src", "sqlite-candidate", "wp6b2b1", "runtime-events.sql"), path.join(distDir, "runtime-events.sql")),
   copyFile(
     path.join(repoRoot, "src", "sqlite-candidate", "wp6b2b1", "admin-abandonment.sql"),
     path.join(distDir, "admin-abandonment.sql"),
   ),
 ]);
-await copyFile(path.join(repoRoot,'src/sqlite-candidate/wp6b2b1/schema-v13.sql'),path.join(distDir,'schema-v13.sql'));
-await mkdir(skillScriptsDir, { recursive: true });
-
 const shared = {
   bundle: true,
   platform: "node",
   target: "node22.18",
   sourcemap: false,
   packages: "bundle",
+  // Keep generated path comments stable when a Worktree shares node_modules.
+  preserveSymlinks: true,
   logLevel: "info",
 };
 const waiterAttribution = [
@@ -37,8 +36,10 @@ const waiterAttribution = [
 ].join("\n");
 
 await Promise.all([
-  build({ ...shared, format: "esm", entryPoints: [path.join(repoRoot, "src", "cli", "upgrade-sqlite-v14.ts")], outfile: path.join(distDir, "upgrade-sqlite-v14.mjs") }),
   build({ ...shared, format: "esm", entryPoints: [path.join(repoRoot, "src", "mcp", "main.ts")], outfile: path.join(distDir, "bridge.mjs") }),
+  build({ ...shared, format: "esm", entryPoints: [path.join(repoRoot, "src", "cli", "main.ts")], outfile: path.join(distDir, "task-cli.mjs") }),
+  build({ ...shared, format: "esm", entryPoints: [path.join(repoRoot, "src", "executor", "main.ts")], outfile: path.join(distDir, "executor.mjs") }),
+  build({ ...shared, format: "esm", entryPoints: [path.join(repoRoot, "src", "web", "main.ts")], outfile: path.join(distDir, "web-console.mjs") }),
   build({ ...shared, format: "esm", entryPoints: [path.join(repoRoot, "src", "cli", "admin-abandon-held-operation.ts")], outfile: path.join(distDir, "admin-abandon-held-operation.mjs") }),
   build({
     ...shared,
@@ -48,8 +49,12 @@ await Promise.all([
     outfile: path.join(distDir, "wait-task.mjs"),
   }),
   build({ ...shared, format: "esm", entryPoints: [path.join(repoRoot, "src", "worker", "worker-main.ts")], outfile: path.join(workerDir, "worker-main.mjs") }),
-  build({ ...shared, format: "esm", entryPoints: [path.join(repoRoot, "src", "observability", "codex-master-token-cli.ts")], outfile: path.join(skillScriptsDir, "codex-master-token-usage.mjs") }),
 ]);
+await mkdir(path.join(distDir, "vendor"), { recursive: true });
+await copyFile(
+  path.join(repoRoot, "tools", "cost-lab", "vendor", "official-billing-runtime.mjs"),
+  path.join(distDir, "vendor", "official-billing-runtime.mjs"),
+);
 
 // The managed CDP browser backend ships as a CommonJS bundle next to the ESM
 // worker: playwright-core (pinned in package.json) keeps its CommonJS runtime

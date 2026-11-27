@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { BridgeError } from "../src/runtime/errors.js";
-import { loadPersistedRuntimeEnvironment, NodeRuntimeResolver } from "../src/runtime/resolver.js";
+import { findPackageRoot, loadPersistedRuntimeEnvironment, NodeRuntimeResolver } from "../src/runtime/resolver.js";
 
 const REAL_PERSONAL = JSON.stringify({
   schemaVersion: 1,
@@ -317,6 +317,20 @@ test("ZCODE_BRIDGE_DATA_DIR must be absolute when set", async () => {
       packageRoot: root,
     });
     await assert.rejects(resolver.resolve(), /ZCODE_BRIDGE_DATA_DIR must be an absolute path/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("findPackageRoot recognizes an installed plugin without package.json", () => {
+  const { root, cleanup } = makeFixture();
+  try {
+    const pluginRoot = path.join(root, "plugins", "codex-zcode-bridge");
+    const moduleRoot = path.join(pluginRoot, "dist", "src", "runtime");
+    mkdirSync(moduleRoot, { recursive: true });
+    mkdirSync(path.join(pluginRoot, "worker"), { recursive: true });
+    writeFileSync(path.join(pluginRoot, "plugin.json"), JSON.stringify({ name: "codex-zcode-bridge" }));
+    assert.equal(findPackageRoot(moduleRoot), pluginRoot);
   } finally {
     cleanup();
   }

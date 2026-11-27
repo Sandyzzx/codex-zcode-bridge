@@ -2,15 +2,13 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import type { ZCodeRuntimeConfig } from "../interfaces.js";
+import type { OfficialProviderRuntimeCapability } from "./official-app-server-runtime.js";
 
 type JsonRecord = Record<string, unknown>;
 
 interface ProviderRule {
   providerId?: string;
-  config?: {
-    builtinModelIds?: string[];
-    access?: { type?: string; mode?: string; accountType?: string };
-  };
+  config?: { access?: { type?: string; mode?: string; accountType?: string } };
 }
 
 type AccountPlanKind =
@@ -25,7 +23,7 @@ export const BIGMODEL_START_PLAN_PROVIDER_ID = "account:bigmodel-start-plan" as 
 interface AccountProviderPayload {
   revision: string;
   basedOnZCodeBuiltinRevision: string;
-  providers: Record<string, { builtinModelIds?: string[]; access: { type: string; entitled: boolean } }>;
+  providers: Record<string, { access: { type: string; entitled: boolean } }>;
   states: Record<string, { availability: "available" | "unavailable"; entitled: boolean; current?: boolean }>;
 }
 
@@ -34,7 +32,6 @@ interface AccountProviderSourceEntry {
   readonly legacyId: string;
   readonly planKind: AccountPlanKind | null;
   readonly accessType: string;
-  readonly builtinModelIds: readonly string[];
   readonly entitled: boolean;
   readonly availability: "available" | "unavailable";
   readonly current?: boolean;
@@ -59,7 +56,18 @@ export interface AccountProviderRuleFacts {
   readonly accountType: string | null;
 }
 
-/** Build the account entitlement snapshot expected by hosted ZCode app-server. */
+export interface AccountProviderSelectionCapability {
+  readonly capability: OfficialProviderRuntimeCapability;
+  readonly failure: string | null;
+}
+
+/**
+ * Build the account entitlement snapshot expected by hosted ZCode app-server.
+ * ADR-066: `builtinModelIds` is deliberately omitted. Account model membership
+ * comes from the official Built-in registry the AppServer already loaded;
+ * copying the list from a second read of the same file only adds a way for
+ * the overlay and the registry to disagree.
+ */
 export function buildAccountProviderPayload(
   config: ZCodeRuntimeConfig,
   verifiedSelection?: VerifiedAccountProviderSelection,
@@ -73,7 +81,6 @@ export function buildAccountProviderPayload(
 
   for (const entry of source.entries) {
     providers[entry.providerId] = {
-      ...(entry.builtinModelIds.length ? { builtinModelIds: [...entry.builtinModelIds] } : {}),
       access: { type: entry.accessType, entitled: entry.entitled },
     };
     states[entry.providerId] = {
@@ -126,6 +133,44 @@ export function accountProviderRuleFacts(
   };
 }
 
+/**
+ * Resolve plan-specific capability gates after the runtime has reported its
+ * actual Provider/Model selection. The mapping uses the official builtin
+ * registry and the configured account provider snapshot; aliases and missing
+ * or malformed registry entries never grant a plan-specific capability.
+ */
+export function accountProviderSelectionCapability(
+  providerId: string,
+  _modelId: string,
+  config: ZCodeRuntimeConfig,
+): AccountProviderSelectionCapability {
+  const canonicalProviderId = accountProviderId(providerId, config);
+  const codingPlan = canonicalProviderId === "account:bigmodel-individual-coding-plan";
+  const startPlan = canonicalProviderId === BIGMODEL_START_PLAN_PROVIDER_ID;
+  if (!codingPlan && !startPlan) {
+    return { capability: "installed_runtime", failure: null };
+  }
+
+  const ruleFacts = accountProviderRuleFacts(canonicalProviderId, config);
+  const source = readAccountProviderSource(config, undefined, undefined, canonicalProviderId);
+  const entry = source?.entries.find((candidate) => candidate.providerId === canonicalProviderId);
+  const expectedPlanKind = codingPlan ? "individual-coding-plan" : "start-plan";
+  if (
+    ruleFacts?.planKind !== expectedPlanKind
+    || ruleFacts.accountType !== "bigmodel"
+    || !entry
+  ) {
+    return {
+      capability: codingPlan ? "coding_plan_discount" : "start_plan_static",
+      failure: `${canonicalProviderId} is not configured as the expected BigModel ${expectedPlanKind} provider`,
+    };
+  }
+  return {
+    capability: codingPlan ? "coding_plan_discount" : "start_plan_static",
+    failure: null,
+  };
+}
+
 /** Resolve a legacy config provider id to the provider id used in app-server. */
 export function accountProviderId(providerId: string, config: ZCodeRuntimeConfig): string {
   // The runtime model catalog already uses this namespace for account-backed
@@ -169,8 +214,8 @@ export function catalogProviderId(
   return configured;
 }
 
-/** Supply coding-plan credentials in memory; Start Plan requires a desktop captcha host. */
-export function runtimeAuthReply(
+/** Test-only static credential reply; production Official Host auth must fail closed. */
+export function testOnlyRuntimeAuthReply(
   providerId: string | undefined,
   config: ZCodeRuntimeConfig,
 ): JsonRecord {
@@ -188,12 +233,6 @@ export function runtimeAuthReply(
 export function zcodeDataBaseDir(personalProviderConfigFile: string): string | null {
   const dataDir = zcodeV2DataDir(personalProviderConfigFile);
   return dataDir ? path.dirname(path.dirname(dataDir)) : null;
-}
-
-/** Desktop task index lives alongside provider_config.json in the active v2 data root. */
-export function zcodeTasksIndexPath(personalProviderConfigFile: string): string | null {
-  const dataDir = zcodeV2DataDir(personalProviderConfigFile);
-  return dataDir ? path.join(dataDir, "tasks-index.sqlite") : null;
 }
 
 function zcodeV2DataDir(personalProviderConfigFile: string): string | null {
@@ -220,9 +259,12 @@ function readAccountProviderSource(
     .sort((left, right) => left.providerId!.localeCompare(right.providerId!));
   if (!providerRules.length) return null;
 
-  const officialDataRoot = path.resolve(config.zcodeDataRoot);
-  const officialV2Dir = zcodeV2Dir(officialDataRoot);
+  // Account credentials and Coding Plan cache must be read from the same data
+  // root as the personal provider config. In isolated Workers HOME may point at
+  // a temporary directory while these official files are explicitly inherited.
+  const officialV2Dir = zcodeV2DataDir(config.providerPersonalConfigFile);
   if (!officialV2Dir) return null;
+  const officialDataRoot = path.dirname(officialV2Dir);
   const credentials = readJson(path.join(officialV2Dir, "config.json"));
   const credentialProviders = asRecord(credentials?.provider);
   const cache = readJson(path.join(officialV2Dir, "coding-plan-cache.json"));
@@ -247,12 +289,7 @@ function readAccountProviderSource(
     const legacyConfig = asRecord(credentialProviders[legacyId]);
     const options = asRecord(legacyConfig.options);
     const apiKey = typeof options.apiKey === "string" ? options.apiKey.trim() : "";
-    const selectedEntitled = verifiedSelection?.providerId === providerId
-      && Array.isArray(rule.config?.builtinModelIds)
-      && rule.config.builtinModelIds.includes(verifiedSelection.modelId);
-    if (verifiedSelection?.providerId === providerId && !selectedEntitled) {
-      throw new Error("start_plan_model_not_registered");
-    }
+    const selectedEntitled = verifiedSelection?.providerId === providerId;
     // Start Plan's live Billing verdict is task/model scoped. A legacy cache
     // entry or old apiKey must never make this provider executable or visible
     // as entitled; only the exact verified selection can do so.
@@ -278,7 +315,6 @@ function readAccountProviderSource(
       legacyId,
       planKind,
       accessType: rule.config?.access?.type ?? "zhipu-account",
-      builtinModelIds: [...(rule.config?.builtinModelIds ?? [])],
       entitled,
       availability: entitled ? "available" : "unavailable",
       current,
@@ -290,15 +326,23 @@ function readAccountProviderSource(
   return { officialDataRoot, officialV2Dir, settingFile, builtinRevision, entries };
 }
 
-function zcodeV2Dir(zcodeDataRoot: string): string | null {
-  if (path.basename(zcodeDataRoot).toLowerCase() !== ".zcode") return null;
-  return path.join(zcodeDataRoot, "v2");
-}
-
 function zcodeBuiltinRevision(table: JsonRecord | null, sourceFile: string): string {
   const revision = typeof table?.revision === "number" ? table.revision : 0;
   const sourceDigest = createHash("sha256").update(path.resolve(sourceFile)).digest("hex");
   return `zcode-builtin:${revision}:${sourceDigest}`;
+}
+
+/**
+ * Registry identity the AppServer computes for `config.providerBuiltinConfigFile`
+ * right now: `<revision>:<sha256(path)>`. Used to prove that the file an
+ * Overlay was built from is still the file the started AppServer loaded.
+ * Null when the file can no longer be read.
+ */
+export function currentBuiltinRegistryRevision(
+  config: Pick<ZCodeRuntimeConfig, "providerBuiltinConfigFile">,
+): string | null {
+  const table = readJson(config.providerBuiltinConfigFile);
+  return table ? zcodeBuiltinRevision(table, config.providerBuiltinConfigFile) : null;
 }
 
 function accountProviderRevision(

@@ -1,3 +1,35 @@
 # Generated vendor code includes significant trailing spaces in upstream
 # template literals. Preserve those bytes; keep ordinary source checks strict.
-plugins/codex-zcode-bridge/worker/vendor/pkg/browser-host.cjs linguist-generated=true whitespace=-blank-at-eol
+plugins/codex-zcode-bridge/worker/vendor/pkg/browser-host.cjs linguist-generated=true whitespace=-blank-at-eol text eol=lf
+# Build outputs have deterministic LF bytes on every host. Keep checkout bytes
+# aligned with the generators when Windows Git uses core.autocrlf=true.
+plugins/codex-zcode-bridge/dist/admin-abandon-held-operation.mjs text eol=lf
+plugins/codex-zcode-bridge/dist/admin-abandonment.sql text eol=lf
+plugins/codex-zcode-bridge/dist/bridge.mjs text eol=lf
+plugins/codex-zcode-bridge/dist/executor.mjs text eol=lf
+plugins/codex-zcode-bridge/dist/web-console.mjs text eol=lf
+plugins/codex-zcode-bridge/dist/runtime-events.sql text eol=lf
+plugins/codex-zcode-bridge/dist/schema.sql text eol=lf
+plugins/codex-zcode-bridge/dist/task-cli.mjs text eol=lf
+plugins/codex-zcode-bridge/dist/vendor/official-billing-runtime.mjs text eol=lf
+plugins/codex-zcode-bridge/dist/wait-task.mjs text eol=lf
+plugins/codex-zcode-bridge/worker/worker-main.mjs text eol=lf
+plugins/codex-zcode-bridge/worker/vendor/browsers.json text eol=lf
+plugins/codex-zcode-bridge/worker/vendor/package.json text eol=lf
+# These inputs are copied byte-for-byte into generated SQL artifacts.
+src/sqlite-candidate/wp6b2b1/admin-abandonment.sql text eol=lf
+src/sqlite-candidate/wp6b2b1/runtime-events.sql text eol=lf
+src/sqlite-candidate/wp6b2b1/schema.sql text eol=lf
+# Vendored ZCode artifacts preserve upstream bytes and may contain license text
+# that resembles a conflict marker or templates with significant whitespace.
+# Never rewrite those bytes for Bridge whitespace checks.
+plugins/codex-zcode-bridge/worker/vendor/official-host/** -diff -text -whitespace
+tools/cost-lab/vendor/official-billing-runtime.mjs text eol=lf
+tools/cost-lab/vendor/patches/*.patch -text -whitespace
+tools/cost-lab/vendor/patches/*.sha256 -text -whitespace
+# Fixed-upstream patches and their sidecars must retain exact bytes so their
+# published SHA-256 values survive checkout and artifact verification.
+upstream/zcode-3.18.0/patches/*.patch -text -whitespace
+upstream/zcode-3.18.0/patches/*.sha256 -text -whitespace
+upstream/zcode-3.18.2/patches/*.patch -text -whitespace
+upstream/zcode-3.18.2/patches/*.sha256 -text -whitespace

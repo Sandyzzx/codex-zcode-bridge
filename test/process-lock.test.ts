@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import test from "node:test";
-import { tryAcquireProcessLock } from "../src/store/process-lock.js";
+import { createSelfIdentityResolver, tryAcquireProcessLock } from "../src/store/process-lock.js";
 import { captureSpawnGenerationIdentity, createPlatformProbe, terminateProcessTree } from "../src/adapters/process-spawn.js";
 
 // Windows filesystem timing (2026-10-17 investigation): under real
@@ -114,8 +114,39 @@ const assertDeadPidFixture = (): void => {
 };
 const seedDeadOwner = (lock: string): void => {
   mkdirSync(lock, { recursive: true });
-  writeFileSync(path.join(lock, "owner.json"), JSON.stringify({ pid: IMPOSSIBLE_DEAD_PID, token: "dead-owner", started_at: new Date().toISOString() }));
+  writeFileSync(path.join(lock, "owner.json"), JSON.stringify({
+    pid: IMPOSSIBLE_DEAD_PID,
+    token: "dead-owner",
+    started_at: new Date().toISOString(),
+    identity: { fingerprint: "dead-owner", identity_version: 1, platform: process.platform },
+  }));
 };
+
+test("self identity retries a transient probe and never caches unavailable", () => {
+  let transientCalls = 0;
+  const transient = createSelfIdentityResolver(() => {
+    transientCalls += 1;
+    return transientCalls === 1
+      ? { state: "unknown" }
+      : { state: "live", fingerprint: "stable-process-start" };
+  });
+  assert.equal(transient()?.fingerprint, "stable-process-start");
+  assert.equal(transientCalls, 2, "the second bounded probe attempt must recover a transient unknown");
+  assert.equal(transient()?.fingerprint, "stable-process-start");
+  assert.equal(transientCalls, 2, "a live identity must be cached");
+
+  let unavailableCalls = 0;
+  const unavailableThenLive = createSelfIdentityResolver(() => {
+    unavailableCalls += 1;
+    return unavailableCalls <= 2
+      ? { state: "unknown" }
+      : { state: "live", fingerprint: "eventual-process-start" };
+  });
+  assert.equal(unavailableThenLive(), null, "an exhausted probe fails only the current resolution");
+  assert.equal(unavailableThenLive()?.fingerprint, "eventual-process-start", "the next caller must retry");
+  assert.equal(unavailableThenLive()?.fingerprint, "eventual-process-start");
+  assert.equal(unavailableCalls, 3);
+});
 
 test("ambiguous absent-destination publication failures (EPERM/EACCES/EBUSY) are retried and publish exactly one owner", () => {
   const root = mkdtempSync(path.join(tmpdir(), "bridge-lock-publish-"));
@@ -527,6 +558,38 @@ test("an owner record that turns invalid inside the guarded recheck blocks witho
     assert.equal(existsSync(`${lock}.reclaim`), false, "the invalid-record exit must remove the shared guard");
     assert.equal(existsSync(lock), true, "the unknown lock is preserved for explicit diagnosis");
   } finally { rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
+});
+
+test("PID reuse cannot reclaim a lock; exact absence can", { timeout: 20_000 }, async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "bridge-lock-pid-reuse-"));
+  try {
+    const lock = path.join(root, "state.lock");
+    const child = spawn(process.execPath, ["-e", "setInterval(() => undefined, 1_000);"], {
+      stdio: "ignore", windowsHide: true,
+    });
+    try {
+      const identity = await captureSpawnGenerationIdentity(child, createPlatformProbe());
+      assert.ok(identity?.fingerprint, "the live PID must expose an exact fingerprint");
+      mkdirSync(lock, { recursive: true });
+      const wrongFingerprint = identity.fingerprint === "reused-generation" ? "previous-generation" : "reused-generation";
+      writeFileSync(path.join(lock, "owner.json"), JSON.stringify({
+        pid: child.pid,
+        token: "previous-owner",
+        started_at: new Date().toISOString(),
+        identity: { fingerprint: wrongFingerprint, identity_version: 1, platform: process.platform },
+      }));
+      assert.equal(tryAcquireProcessLock(lock), null, "a reused PID must never authorize reclaim");
+      assert.equal(child.exitCode, null, "the live reused process must remain untouched");
+    } finally {
+      child.kill("SIGKILL");
+      await new Promise((resolve) => child.once("exit", resolve));
+    }
+    const release = tryAcquireProcessLock(lock);
+    assert.ok(release, "a platform-proven absent PID may reclaim");
+    release();
+  } finally {
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  }
 });
 
 test("a lock vanishing at recheck returns to contention, and a guard cleanup failure there stays visible", { timeout: 15_000 }, () => {

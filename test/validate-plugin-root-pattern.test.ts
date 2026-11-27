@@ -7,12 +7,36 @@
 // still be rejected.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import {
+  assertPluginInterfaceBranding,
+  EXPECTED_PLUGIN_BRANDING,
+} from "../scripts/lib/plugin-interface-branding.mjs";
 import { assertNotFilesystemRoot, buildRepoRootLeakPattern } from "../scripts/lib/repo-root-pattern.mjs";
+
+test("plugin branding must live in the top-level interface", () => {
+  assert.doesNotThrow(() => assertPluginInterfaceBranding(
+    { interface: EXPECTED_PLUGIN_BRANDING },
+    ".codex-plugin/plugin.json",
+  ));
+
+  for (const manifest of [
+    {},
+    { extensions: { "com.openai": { interface: EXPECTED_PLUGIN_BRANDING } } },
+    { interface: { logo: "./assets/logo.png", composerIcon: "./assets/other.png" } },
+    { interface: { logo: "./assets/other.png", composerIcon: "./assets/icon.png" } },
+  ]) {
+    assert.throws(
+      () => assertPluginInterfaceBranding(manifest, ".codex-plugin/plugin.json"),
+      /top-level interface\.logo=\.\/assets\/logo\.png and interface\.composerIcon=\.\/assets\/icon\.png/,
+    );
+  }
+});
 
 test("a short root like /app does not match unrelated URL or path segments", () => {
   const pattern = buildRepoRootLeakPattern("/app");
@@ -262,6 +286,7 @@ test("an HTTP URL whose host equals a short root is not a development-path leak 
  */
 test("the real validator rejects injected development-path references and keeps the baseline clean", { timeout: 120_000 }, () => {
   const scriptsDir = fileURLToPath(new URL("../../scripts/", import.meta.url));
+  const repositoryRoot = path.resolve(scriptsDir, "..");
   const tempRoot = path.resolve(tmpdir());
   const tempBase = mkdtempSync(path.join(tempRoot, "bridge-validate-plugin-cli-"));
   const root = path.join(tempBase, `bridge 修订 (v2)[x]`);
@@ -277,8 +302,10 @@ test("the real validator rejects injected development-path references and keeps 
     const pluginRoot = path.join(root, "plugins", "codex-zcode-bridge");
     for (const directory of [
       path.join(root, "scripts", "lib"),
+      path.join(pluginRoot, "assets"),
       path.join(pluginRoot, ".codex-plugin"),
       path.join(pluginRoot, "dist"),
+      path.join(pluginRoot, "dist", "vendor"),
       path.join(pluginRoot, "worker", "vendor", "pkg"),
       path.join(pluginRoot, "hooks"),
       path.join(pluginRoot, "skills", "zcode-bridge"),
@@ -288,13 +315,33 @@ test("the real validator rejects injected development-path references and keeps 
       mkdirSync(directory, { recursive: true });
     }
     copyFileSync(path.join(scriptsDir, "validate-plugin.mjs"), path.join(root, "scripts", "validate-plugin.mjs"));
+    copyFileSync(
+      path.join(scriptsDir, "lib", "plugin-interface-branding.mjs"),
+      path.join(root, "scripts", "lib", "plugin-interface-branding.mjs"),
+    );
     copyFileSync(path.join(scriptsDir, "lib", "repo-root-pattern.mjs"), path.join(root, "scripts", "lib", "repo-root-pattern.mjs"));
 
-    const manifest = { name: "codex-zcode-bridge", version: "1.2.5" };
+    const packageManifest = { name: "codex-zcode-bridge", version: "1.2.5" };
+    const branding = {
+      logo: "./assets/logo.png",
+      composerIcon: "./assets/icon.png",
+    };
+    const pluginManifest = { ...packageManifest, interface: branding };
+    const codexPluginManifest = {
+      ...packageManifest,
+      interface: branding,
+      extensions: { "com.openai": { hooks: "./hooks/hooks.json" } },
+    };
     const mcp = { mcpServers: { zcode_bridge: { command: "node", args: ["./launch-node24.mjs"], env: { ZCODE_BRIDGE_PLUGIN_MODE: "1" } } } };
-    writeFileSync(path.join(root, "package.json"), JSON.stringify(manifest));
-    writeFileSync(path.join(pluginRoot, "plugin.json"), JSON.stringify(manifest));
-    writeFileSync(path.join(pluginRoot, ".codex-plugin", "plugin.json"), JSON.stringify(manifest));
+    writeFileSync(path.join(root, "package.json"), JSON.stringify(packageManifest));
+    writeFileSync(path.join(pluginRoot, "plugin.json"), JSON.stringify(pluginManifest));
+    writeFileSync(path.join(pluginRoot, ".codex-plugin", "plugin.json"), JSON.stringify(codexPluginManifest));
+    for (const asset of ["icon.png", "logo.png"]) {
+      copyFileSync(
+        path.join(repositoryRoot, "plugins", "codex-zcode-bridge", "assets", asset),
+        path.join(pluginRoot, "assets", asset),
+      );
+    }
     writeFileSync(path.join(pluginRoot, "mcp.json"), JSON.stringify(mcp));
     writeFileSync(path.join(pluginRoot, ".mcp.json"), JSON.stringify(mcp));
     writeFileSync(path.join(pluginRoot, "launch-node24.mjs"), "");
@@ -305,19 +352,27 @@ test("the real validator rejects injected development-path references and keeps 
     const adminSchema = "SELECT 2;\n";
     writeFileSync(path.join(root, "src", "sqlite-candidate", "wp6b2b1", "schema.sql"), schema);
     writeFileSync(path.join(pluginRoot, "dist", "schema.sql"), schema);
-    writeFileSync(path.join(root, "src", "sqlite-candidate", "wp6b2b1", "schema-v13.sql"), schema);
-    writeFileSync(path.join(pluginRoot, "dist", "schema-v13.sql"), schema);
-    writeFileSync(path.join(pluginRoot, "dist", "upgrade-sqlite-v14.mjs"), "");
+    writeFileSync(path.join(root, "src", "sqlite-candidate", "wp6b2b1", "runtime-events.sql"), schema);
+    writeFileSync(path.join(pluginRoot, "dist", "runtime-events.sql"), schema);
     writeFileSync(path.join(root, "src", "sqlite-candidate", "wp6b2b1", "admin-abandonment.sql"), adminSchema);
     writeFileSync(path.join(pluginRoot, "dist", "admin-abandonment.sql"), adminSchema);
     writeFileSync(path.join(root, "src", "sqlite-candidate", "wp6b2b1", "store.mjs"), "const SCHEMA_VERSION = 14;\n");
     writeFileSync(path.join(pluginRoot, "dist", "admin-abandon-held-operation.mjs"), "const SCHEMA_VERSION = 14;\n");
+    for (const bundle of ["executor.mjs", "task-cli.mjs", "web-console.mjs"]) {
+      copyFileSync(
+        path.join(repositoryRoot, "plugins", "codex-zcode-bridge", "dist", bundle),
+        path.join(pluginRoot, "dist", bundle),
+      );
+    }
+    copyFileSync(
+      path.join(repositoryRoot, "plugins", "codex-zcode-bridge", "dist", "vendor", "official-billing-runtime.mjs"),
+      path.join(pluginRoot, "dist", "vendor", "official-billing-runtime.mjs"),
+    );
     for (const file of [
       "hooks/hooks.json",
       "hooks/session-start.mjs",
       "hooks/configure-runtime.ps1",
       "skills/zcode-bridge/SKILL.md",
-      "skills/zcode-bridge/scripts/codex-master-token-usage.mjs",
     ]) {
       writeFileSync(path.join(pluginRoot, file), "");
     }
@@ -330,11 +385,138 @@ test("the real validator rejects injected development-path references and keeps 
       `const sibling = ${JSON.stringify(`${root} Backup${path.sep}src${path.sep}main.ts`)};`,
       `const encodedSibling = ${JSON.stringify(pathToFileURL(path.join(`${root} Backup`, "src", "main.ts")).href)};`,
       "// vendor loader keeps worker/vendor/pkg/browser-host.cjs self-contained",
+      "const client = new ExecutorControlClient({ pipeName: executorPipeName(root) });",
+      "const taskManager = new RemoteTaskManager(client);",
+      'console.error("no local SQLite Manager is constructed");',
     ].join("\n");
     const bundlePath = path.join(pluginRoot, "dist", "bridge.mjs");
     const waiterPath = path.join(pluginRoot, "dist", "wait-task.mjs");
+    const officialHostRoot = path.join(
+      pluginRoot,
+      "worker",
+      "vendor",
+      "official-host",
+      "win32-x64-node24.16.0-zcode3.18.2-fec97590",
+    );
+    const patchPath = "upstream/zcode-3.18.2/patches/0001-fixture.patch";
+    const patchBytes = Buffer.from("diff --git a/fixture.ts b/fixture.ts\n");
+    mkdirSync(path.dirname(path.join(root, patchPath)), { recursive: true });
+    mkdirSync(path.join(officialHostRoot, "node_modules", "@napi-rs", "keyring"), { recursive: true });
+    mkdirSync(path.join(officialHostRoot, "node_modules", "@napi-rs", "keyring-win32-x64-msvc"), { recursive: true });
+    writeFileSync(path.join(root, patchPath), patchBytes);
+    const sha256 = (bytes: Buffer): string => createHash("sha256").update(bytes).digest("hex").toUpperCase();
+    const patchSidecarPath = path.join(root, `${patchPath}.sha256`);
+    const patchSidecar = `${sha256(patchBytes)}  ${path.basename(patchPath)}\n`;
+    writeFileSync(patchSidecarPath, patchSidecar);
+    const signedRuntimeHost = readFileSync(path.join(
+      repositoryRoot,
+      "plugins",
+      "codex-zcode-bridge",
+      "worker",
+      "vendor",
+      "official-host",
+      "win32-x64-node24.16.0-zcode3.18.2-fec97590",
+      "zcode-runtime-host.exe",
+    ));
+    const officialHostFiles = new Map<string, Buffer>([
+      ["THIRD-PARTY-NOTICES.md", Buffer.from("fixture notices\n")],
+      ["LICENSE", Buffer.from("fixture license\n")],
+      ["NOTICE.md", Buffer.from("fixture notice\n")],
+      ["node_modules/@napi-rs/keyring/LICENSE", Buffer.from("MIT\n")],
+      ["node_modules/@napi-rs/keyring/index.js", Buffer.from("module.exports = {};\n")],
+      ["node_modules/@napi-rs/keyring/package.json", Buffer.from('{"name":"@napi-rs/keyring"}\n')],
+      ["node_modules/@napi-rs/keyring-win32-x64-msvc/LICENSE.third-party.md", Buffer.from("MIT third party\n")],
+      ["node_modules/@napi-rs/keyring-win32-x64-msvc/keyring.win32-x64-msvc.node", Buffer.from("fixture native bytes")],
+      ["node_modules/@napi-rs/keyring-win32-x64-msvc/package.json", Buffer.from('{"name":"@napi-rs/keyring-win32-x64-msvc"}\n')],
+      ["official-host-runtime.mjs", Buffer.from("export const createOAuthProviderRuntimeAuthService = () => undefined;\nexport const createOfficialStartPlanAuthenticationResolver = () => undefined;\n")],
+      ["zcode-runtime-host.exe", signedRuntimeHost],
+    ]);
+    for (const [relativePath, bytes] of officialHostFiles) {
+      writeFileSync(path.join(officialHostRoot, relativePath), bytes);
+    }
+    const sourceAggregateDiffSha256 =
+      "A3F5B7BD7A653403B8362ADC121323404FB4F334B1CFFA0DF3C3E617F9F09AB2";
+    const officialHostBom = {
+      schemaVersion: 1,
+      scope: {
+        platform: "win32",
+        architecture: "x64",
+        node: "24.16.0",
+        zcodeVersion: "3.18.2",
+      },
+      source: {
+        version: "3.18.2",
+        commit: "fec975905a2abd4c07e35c40d51fa097a2258ec9",
+        tree: "5e90fec80706b8381f94e4eef48cf821b9868916",
+      },
+      patches: [{
+        order: 1,
+        path: patchPath,
+        bytes: patchBytes.length,
+        sha256: sha256(patchBytes),
+      }],
+      build: {
+        sourceAggregateDiffSha256,
+        userDesktopInstallationUsedAsInput: true,
+        runtimeHostProvenance: {
+          sourceKind: "OFFICIAL_INSTALLED_DISTRIBUTION",
+          desktopProductVersion: "3.18.2.10443",
+          zcodeVersion: "3.18.2",
+          zcodeSourceCommit: "fec975905a2abd4c07e35c40d51fa097a2258ec9",
+          bytes: signedRuntimeHost.length,
+          sha256: sha256(signedRuntimeHost),
+          architecture: "win32-x64",
+          peMachine: "0x8664",
+          authenticode: "Valid",
+          signerCommonName: "北京智谱华章科技股份有限公司",
+          signerOrganization: "北京智谱华章科技股份有限公司",
+          reportedVersion: "zcode-runtime-host 1",
+        },
+      },
+      files: [...officialHostFiles].map(([relativePath, bytes]) => ({
+        path: relativePath,
+        bytes: bytes.length,
+        sha256: sha256(bytes),
+        ...(relativePath === "zcode-runtime-host.exe"
+          ? {
+              verification: {
+                architecture: "win32-x64",
+                peMachine: "0x8664",
+                authenticode: "Valid",
+                signerCommonName: "北京智谱华章科技股份有限公司",
+                signerOrganization: "北京智谱华章科技股份有限公司",
+                reportedVersion: "zcode-runtime-host 1",
+              },
+            }
+          : {}),
+      })),
+    };
+    const officialHostBomBytes = Buffer.from(`${JSON.stringify(officialHostBom, null, 2)}\n`);
+    writeFileSync(path.join(officialHostRoot, "ARTIFACT_BOM.json"), officialHostBomBytes);
+    writeFileSync(path.join(officialHostRoot, "BUILD_PROVENANCE.json"), `${JSON.stringify({
+      source: {
+        ...officialHostBom.source,
+        userDesktopInstallationUsedAsInput: true,
+        aggregateDiffSha256: sourceAggregateDiffSha256,
+      },
+      bom: {
+        path: "ARTIFACT_BOM.json",
+        bytes: officialHostBomBytes.length,
+        sha256: sha256(officialHostBomBytes),
+      },
+      output: {
+        sha256: sha256(officialHostFiles.get("official-host-runtime.mjs")!),
+      },
+      build: {
+        runtimeHost: {
+          sha256: sha256(signedRuntimeHost),
+          authenticode: "Valid",
+          redistribution: "APPROVED_BY_REPOSITORY_OWNER",
+        },
+      },
+    }, null, 2)}\n`);
     writeFileSync(waiterPath, "// PR #49 of codex-zcode-bridge 13ab83626a7fa7f35319a21244215c2915ecb112\n");
-    writeFileSync(path.join(pluginRoot, "worker", "worker-main.mjs"), `${baseline}\n`, "utf8");
+    writeFileSync(path.join(pluginRoot, "worker", "worker-main.mjs"), `${baseline}\nOfficialAppServerWorkerAdapter createInstalledOfficialHostSessionFactory official-host-runtime.mjs maxFrameBytes\n`, "utf8");
     writeFileSync(path.join(pluginRoot, "worker", "vendor", "pkg", "browser-host.cjs"), `${baseline}\n`, "utf8");
 
     const variants: Array<[name: string, injection: string, expectLeakDiagnostic: boolean]> = [
@@ -363,6 +545,23 @@ test("the real validator rejects injected development-path references and keeps 
       }
     }
 
+    writeFileSync(bundlePath, `${baseline}\n`, "utf8");
+    writeFileSync(
+      patchSidecarPath,
+      `${"0".repeat(64)}  ${path.basename(patchPath)}\n`,
+    );
+    const sidecarMismatchRun = spawnSync(process.execPath, [path.join(root, "scripts", "validate-plugin.mjs")], {
+      encoding: "utf8",
+      timeout: 60_000,
+      windowsHide: true,
+    });
+    assert.notEqual(sidecarMismatchRun.status, 0, "a stale patch sidecar must be rejected");
+    assert.match(
+      `${sidecarMismatchRun.stdout ?? ""}${sidecarMismatchRun.stderr ?? ""}`,
+      /Official Host patch sidecar disagrees with its BOM/u,
+    );
+    writeFileSync(patchSidecarPath, patchSidecar);
+
     writeFileSync(path.join(pluginRoot, "dist", "admin-abandon-held-operation.mjs"), "const SCHEMA_VERSION = 13;\n");
     const schemaMismatchRun = spawnSync(process.execPath, [path.join(root, "scripts", "validate-plugin.mjs")], {
       encoding: "utf8",
@@ -373,6 +572,22 @@ test("the real validator rejects injected development-path references and keeps 
     assert.match(
       `${schemaMismatchRun.stdout ?? ""}${schemaMismatchRun.stderr ?? ""}`,
       /bundled administrative recovery CLI does not embed SQLite schema v14/u,
+    );
+    writeFileSync(path.join(pluginRoot, "dist", "admin-abandon-held-operation.mjs"), "const SCHEMA_VERSION = 14;\n");
+
+    const iconPath = path.join(pluginRoot, "assets", "icon.png");
+    const changedIcon = readFileSync(iconPath);
+    changedIcon[changedIcon.length - 8] = changedIcon[changedIcon.length - 8]! ^ 0xff;
+    writeFileSync(iconPath, changedIcon);
+    const assetMismatchRun = spawnSync(process.execPath, [path.join(root, "scripts", "validate-plugin.mjs")], {
+      encoding: "utf8",
+      timeout: 60_000,
+      windowsHide: true,
+    });
+    assert.notEqual(assetMismatchRun.status, 0, "changed plugin artwork must be rejected");
+    assert.match(
+      `${assetMismatchRun.stdout ?? ""}${assetMismatchRun.stderr ?? ""}`,
+      /Plugin asset assets\/icon\.png does not match the Owner-selected artwork/u,
     );
   } finally {
     rmSync(tempBase, { recursive: true, force: true });
