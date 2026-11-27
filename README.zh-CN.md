@@ -81,7 +81,7 @@ Bridge 使用官方当前本地 Provider 配置，通过 AppServer 动态发现�
 
 ## 已验证范围
 
-Stable 的运行时基线（Preview.20）通过了 Windows 与 Ubuntu 发布测试矩阵，以及 Windows 上 Coding Plan / GLM-5.4 / low 真实任务测试，包括文件创建、Result、Cleanup、Release 和 Auto Wake。GLM-5.4 / max 也通过了零模型 Turn 的设置与回读。Stable 打包候选只增加发布身份与文档，不重复真实模型执行。此前真实 Host 测试已验证完成 Wake 和验收驱动返工。
+Stable 2.0.0 的发布门禁通过了 Windows 与 Ubuntu 测试矩阵。其未变更的 2.0 运行时基线曾在 Stable 打包前完成 Windows 上 Coding Plan / GLM-5.4 / low 真实任务，包括文件创建、Result、Cleanup、Release 和 Auto Wake。GLM-5.4 / max 也通过了零模型 Turn 的设置与回读。Stable 发布不重复真实模型执行；此前真实 Host 测试已验证完成 Wake 和验收驱动返工。
 
 历史已验证的 ZCode Desktop 版本包括 3.18.2.10443、3.19.0.10774、4.0.0.10870，各自验证范围不同。其他通过安全检查的安装可以尝试运行，不设置静态版本白名单，但不保证兼容。详见[运行环境说明](docs/ZCODE_RUNTIME.md)。
 

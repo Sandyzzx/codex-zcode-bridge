@@ -81,7 +81,7 @@ Explicit plan/model choices take priority. When a model is available in both pla
 
 ## What has been verified?
 
-The Stable runtime baseline (Preview.20) passed the Windows and Ubuntu release test matrix and a real Windows Coding Plan task using GLM-5.4 / low, including file creation, Result, Cleanup, Release and Auto Wake. GLM-5.4 / max model selection and readback also passed without a model turn. The Stable packaging candidate adds release identity and documentation only and does not repeat real model execution. Earlier real Host tests demonstrated completion Wake and acceptance-driven rework.
+The Stable 2.0.0 release gate passed the Windows and Ubuntu test matrix. Its unchanged 2.0 runtime baseline completed a real Windows Coding Plan task using GLM-5.4 / low, including file creation, Result, Cleanup, Release and Auto Wake; that task ran before the Stable packaging. GLM-5.4 / max model selection and readback also passed without a model turn. The Stable release does not repeat real model execution; earlier real Host tests demonstrated completion Wake and acceptance-driven rework.
 
 Historical verified ZCode Desktop installations: 3.18.2.10443, 3.19.0.10774 and 4.0.0.10870, with different verification scopes. Other safe installations may be attempted without a static version whitelist; compatibility is not guaranteed. See [runtime notes](docs/ZCODE_RUNTIME.md).
 
